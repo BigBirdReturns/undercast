@@ -211,6 +211,7 @@ derivative work: Masem (talk), CC BY 2.0 — [source](https://commons.wikimedia.
 - **Spencer Wilding** (UC-226) — Ibsan73, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Spencer_Wilding_at_the_Pan_Premiere.jpg)
 - **Jean Marais** (UC-227) — original: Carl Van Vechten
 derivative work: …trialsanderrors, Public domain — [source](https://commons.wikimedia.org/wiki/File:Flickr_-_%E2%80%A6trialsanderrors_-_Jean_Marais_by_Carl_Van_Vechten,_1949.jpg)
+- **Conrad Veidt** (UC-228) — MGM-photo by Clarence Bull., Public domain — [source](https://commons.wikimedia.org/wiki/File:Conrad_Veidt_1941.jpg)
 - **Bela Lugosi** (UC-229) — Nicholas Ház, Public domain — [source](https://commons.wikimedia.org/wiki/File:Bela_Lugosi_-_Mar_1923_Shadowland.jpg)
 - **Kathryn Mullen** (UC-230) — Pburka, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Kathy_Mullen.jpg)
 - **Karen Prell** (UC-231) — Kris Awesome from San Diego, CA, USA, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Red_and_Karen_Prell_(2712248243).jpg)
@@ -225,11 +226,20 @@ derivative work: …trialsanderrors, Public domain — [source](https://commons.
 - **Lorenzo Music** (UC-243) — Published on zenithcity.com by David Ouse, Public domain — [source](https://commons.wikimedia.org/wiki/File:Lorenzo_and_Henrietta_Music_(cropped).jpg)
 - **Alan Reed** (UC-244) — Film screenshot (United Artists), Public domain — [source](https://commons.wikimedia.org/wiki/File:Alan_Reed_in_Time_Table_(1956).jpg)
 - **Casey Kasem** (UC-246) — Alan Light, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Casey_Kasem.jpg)
+- **Charles Gemora** (UC-249) — Congo Pictures, Public domain — [source](https://commons.wikimedia.org/wiki/File:Ingagi_still_3.jpg)
+- **George Barrows** (UC-250) — film screenshot (Howco Prod.), Public domain — [source](https://commons.wikimedia.org/wiki/File:George_Barrows_in_Mesa_of_Lost_Women.jpg)
+- **Ray Corrigan** (UC-251) — Unknown authorUnknown author, Public domain — [source](https://commons.wikimedia.org/wiki/File:Ray_Corrigan_The_White_Gorilla.jpg)
+- **Mike Edmonds** (UC-252) — Ben Salter from Wales, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Mike_Edmonds.jpg)
+- **Phil Fondacaro** (UC-253) — Fonolli Management, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Phil_Fondacaro_1.jpg)
+- **Debbie Lee Carrington** (UC-254) — Sue Lukenbaugh, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Debbie_Lee_Carrington_2010.jpg)
+- **Paul Winchell** (UC-255) — ABC Television-there is enough of the release left to be able to identify this as ABC by the portion of the logo remaining., Public domain — [source](https://commons.wikimedia.org/wiki/File:Paul_Winchell_1958.JPG)
+- **Hans Conried** (UC-256) — CBS Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Hans_Conried_Uncle_Tonoose_Danny_Thomas_Show_1959.JPG)
+- **Chris Latta** (UC-257) — Procolotor, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:EC1835_C_cut.jpg)
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **214**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **171**
+- Free-licensed portraits (attributed above): **224**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **180**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
