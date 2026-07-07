@@ -52,3 +52,27 @@ it; the provenance is the whole point.
 
 Draft in batches you can vouch for. Prefer the notable and well-documented. When
 your confident pool runs low, stop — don't reach.
+
+## Pinning the best image (vision review)
+
+`retrieve.mjs` picks images by heuristic (mask: live-action over animated,
+original era, in-character; portrait: free, period-appropriate, solo). Heuristics
+read filenames and metadata — **not pixels**. To guarantee the *best-framed* mask
+and face for a card, a model that can actually see has to look at the candidates
+and choose. That's the second layer, and it's what makes a flip feel like a real
+reveal (same framing, mask → face).
+
+If you're a vision-capable model:
+1. List the candidate images on the character's wiki page and the actor's page
+   (`prop=images` + `imageinfo iiurlwidth=...`), and **look at them**.
+2. Pick the best mask (clear, front-facing, in-character, right era) and the best
+   unmasked face (clear, ideally near the role's years).
+3. Pin them — the crawler will never auto-replace a pinned asset:
+   ```bash
+   node scripts/pin.mjs UC-001 --wiki https://memory-alpha.fandom.com/api.php \
+        --still "Morn.jpg" --portrait "Mark Allen Shepherd.jpg"
+   ```
+   (`--still`/`--portrait` take a File name on `--wiki`, or a full image URL.)
+
+Pinned assets carry `"pin": true` in `data/specimens.json`. Reserve the effort
+for the cards that deserve a perfect reveal.

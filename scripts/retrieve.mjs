@@ -166,38 +166,80 @@ async function download(url, out) {
   return true;
 }
 
-const leadFrom = (base, title, page) => ({
-  title, src: page.thumbnail.source, file: page.pageimage,
-  article: `https://${new URL(base).host}/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`,
-});
-
 // The CHARACTER still — prefer the canonical / most-popular (usually live-action)
 // page: try the exact character title first, then a production-scoped search that
 // skips spin-off pages (games, novels, reboots) that outrank the real still.
-async function characterImage(base, s) {
-  const exact = await mw(base, { action: "query", prop: "pageimages", piprop: "thumbnail|name", pithumbsize: "640", titles: s.character }).catch(() => null);
+async function characterPage(base, s) {
+  const exact = await mw(base, { action: "query", prop: "pageimages", piprop: "name", titles: s.character }).catch(() => null);
   const ep = Object.values(exact?.query?.pages || {})[0];
-  if (ep && !("missing" in ep) && ep.thumbnail?.source && !SPINOFF.test(ep.title)) return leadFrom(base, ep.title, ep);
-
+  if (ep && !("missing" in ep) && !SPINOFF.test(ep.title)) return { title: ep.title, lead: ep.pageimage };
   const sr = await mw(base, { action: "query", list: "search", srsearch: `${s.character} ${s.production || ""}`.trim(), srlimit: "8" }).catch(() => null);
   const titles = (sr?.query?.search || []).map((h) => h.title).filter((t) => !SPINOFF.test(t));
   const cl = s.character.toLowerCase();
   const pick = titles.find((t) => t.toLowerCase() === cl) || titles.find((t) => t.toLowerCase().startsWith(cl)) || titles[0];
   if (!pick) return null;
-  const p = await mw(base, { action: "query", prop: "pageimages", piprop: "thumbnail|name", pithumbsize: "640", titles: pick }).catch(() => null);
-  const page = Object.values(p?.query?.pages || {})[0];
-  if (!page?.thumbnail?.source) return null;
-  return leadFrom(base, pick, page);
+  const p = await mw(base, { action: "query", prop: "pageimages", piprop: "name", titles: pick }).catch(() => null);
+  return { title: pick, lead: Object.values(p?.query?.pages || {})[0]?.pageimage };
+}
+
+// a later / other version of a character (an animated cameo, a reboot, a comic)
+const LATER_VER = /lower ?decks|prodigy|\banimated\b|reboot|remaster|mirror|\bcomic\b|novel/i;
+// behind-the-scenes / non-in-character shots
+const BTS = /directing|behind|\bmakeup\b|on set|filming|storyboard|concept|\bart\b|schematic|deleted|blooper/i;
+// Prefer a live-action screencap of the ORIGINAL appearance: animated/CG renders
+// skew PNG and carry a later in-universe (stardate) year; live-action stills are JPG.
+function stillScore(c, isVoice) {
+  let sc = 0;
+  if (LATER_VER.test(c.file)) sc += 800;
+  if (BTS.test(c.file)) sc += 400;
+  if (!isVoice && /\.png$/i.test(c.file)) sc += 250;
+  if (c.lead) sc -= 100;
+  if (c.plain) sc -= 60;
+  if (c.starts) sc -= 40;
+  const y = parseInt((String(c.file).match(/\b\d{4}\b/) || [])[0] || "0", 10);
+  if (y >= 2300) sc += (y - 2300) * 2; // later stardate = less original
+  return sc;
+}
+async function stillCandidates(base, title, leadFile, character) {
+  const j = await mw(base, { action: "query", prop: "images", imlimit: "40", titles: title }).catch(() => null);
+  const files = (Object.values(j?.query?.pages || {})[0]?.images || []).map((i) => i.title.replace(/^File:/, ""));
+  const cl = character.toLowerCase();
+  const words = cl.split(/\s+/).filter((w) => w.length >= 3);
+  const keep = files.filter((t) => /\.(jpe?g|png)$/i.test(t) && !NONPHOTO.test(t) && words.some((w) => t.toLowerCase().includes(w))).slice(0, 10);
+  const out = [];
+  for (const f of keep) {
+    const q = await mw(base, { action: "query", prop: "imageinfo", iiprop: "url", iiurlwidth: "640", titles: "File:" + f }).catch(() => null);
+    const src = Object.values(q?.query?.pages || {})[0]?.imageinfo?.[0]?.thumburl;
+    if (!src) continue;
+    const bare = f.replace(/\.[a-z]+$/i, "").toLowerCase();
+    out.push({ file: f, src, lead: leadFile && f === leadFile, plain: bare === cl, starts: bare.startsWith(cl) });
+  }
+  return out;
+}
+async function bestStill(base, s) {
+  const pg = await characterPage(base, s).catch(() => null);
+  if (!pg) return null;
+  const host = new URL(base).host;
+  const article = `https://${host}/wiki/${encodeURIComponent(pg.title.replace(/ /g, "_"))}`;
+  const cands = await stillCandidates(base, pg.title, pg.lead, s.character).catch(() => []);
+  if (cands.length) {
+    cands.sort((a, b) => stillScore(a, s.kind === "voice") - stillScore(b, s.kind === "voice"));
+    return { src: cands[0].src, article };
+  }
+  if (!pg.lead) return null; // fall back to the page's lead thumbnail
+  const q = await mw(base, { action: "query", prop: "imageinfo", iiprop: "url", iiurlwidth: "640", titles: "File:" + pg.lead }).catch(() => null);
+  const src = Object.values(q?.query?.pages || {})[0]?.imageinfo?.[0]?.thumburl;
+  return src ? { src, article } : null;
 }
 
 async function getStill(s) {
   const wiki = stillApiFor(s);
-  let lead = wiki ? await characterImage(wiki, s).catch(() => null) : null;
-  if (!lead && LOOSE) lead = await characterImage(WIKIPEDIA, s).catch(() => null); // any character page
-  if (!lead) return null;
-  const out = `${IMGDIR}/${s.id.toLowerCase()}-still.${extOf(lead.src)}`;
-  if (!(await download(lead.src, out))) return null;
-  return { src: out, kind: "still", origin: lead.article }; // studio-copyright, shown under fan-use
+  let pick = wiki ? await bestStill(wiki, s).catch(() => null) : null;
+  if (!pick && LOOSE) pick = await bestStill(WIKIPEDIA, s).catch(() => null); // any character page
+  if (!pick) return null;
+  const out = `${IMGDIR}/${s.id.toLowerCase()}-still.${extOf(pick.src)}`;
+  if (!(await download(pick.src, out))) return null;
+  return { src: out, kind: "still", origin: pick.article };
 }
 
 // a performer photo from a Fandom wiki's actor page (copyright, but a real face)
@@ -322,9 +364,11 @@ async function main() {
   let ledger = [];
   try { ledger = JSON.parse(await readFile(LEDGER, "utf8")); } catch {}
   const gaps = [];
+  // RETRIEVE_ONLY=UC-049,UC-054 limits the run to specific cards (targeted re-picks).
+  const only = new Set((process.env.RETRIEVE_ONLY || "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean));
   // process any card missing EITHER side, and fetch only the side it lacks — so a
   // card that already has a still still gets its unmasked portrait filled in.
-  const todo = specimens.filter((s) => !s.still || !s.portrait).slice(0, MAX);
+  const todo = specimens.filter((s) => (only.size ? only.has(s.id.toUpperCase()) : (!s.still || !s.portrait))).slice(0, only.size ? only.size : MAX);
   console.log(`retrieving for ${todo.length} of ${specimens.length} (max ${MAX})`);
 
   let filled = 0;
