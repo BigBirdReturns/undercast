@@ -120,10 +120,15 @@ async function gather(ids) {
     if (!s) { console.log("skip", id, "(no card)"); continue; }
     const entry = { id: s.id, character: s.character, actor: s.actor, still: [], portrait: [] };
     const swiki = stillApiFor(s);
-    // MASK candidates: the character's images on the still-wiki (lead + page + file-search)
-    if (swiki && s.kind !== "voice") {
-      const files = await candidateFiles(swiki, s.character, s.production).catch(() => new Map());
-      for (const f of pick([...files.keys()], s.character)) { const t = await thumb(swiki, f); if (t) entry.still.push(t); }
+    // MASK candidates: the character's images on the franchise still-wiki (if one resolves)
+    // AND — universally — on Wikipedia itself. Many iconic masks (Darth Maul, Boba Fett,
+    // Michael Myers, the Bride of Frankenstein…) live on the character's Wikipedia page even
+    // when production/character text matches no franchise wiki. Merge both, then pick.
+    if (s.kind !== "voice") {
+      const files = new Map(); // file -> base wiki it lives on
+      if (swiki) { try { for (const [f, b] of await candidateFiles(swiki, s.character, s.production)) files.set(f, b); } catch {} }
+      try { for (const [f, b] of await candidateFiles(WIKIPEDIA, s.character, s.production)) if (!files.has(f)) files.set(f, b); } catch {}
+      for (const f of pick([...files.keys()], s.character)) { const t = await thumb(files.get(f), f); if (t) entry.still.push(t); }
     }
     // FACE candidates: the actor's images from their verified Wikipedia page + file-search
     // on Wikipedia and the franchise wiki (Fandom performer photos).
