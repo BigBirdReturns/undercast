@@ -55,7 +55,9 @@ See which wikis the roster will pull from, without touching the network:
 node scripts/retrieve.mjs --audit    # still-wiki coverage, grouped by host
 ```
 
-Deploy: Settings -> Pages -> deploy from `main`, root. Done.
+Deploy: Settings -> Pages -> Source: **GitHub Actions**. The `pages.yml` workflow
+publishes the site on every push to `main` (so it republishes automatically after
+the nightly bots commit new cards and images). Done.
 
 ## Share it
 
