@@ -20,7 +20,7 @@ const UA = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${proce
 const DATA = "data/specimens.json";
 const LEDGER = "data/SOURCES.json";
 const IMGDIR = "images";
-const DIR = "data/_curate";
+const DIR = process.env.CURATE_DIR || "data/_curate"; // set per-agent so parallel runs don't clobber
 const WIKIPEDIA = "https://en.wikipedia.org/w/api.php";
 const FREE = [/cc0/i, /public domain/i, /^\s*pd/i, /cc[-\s]?by([-\s]?sa)?/i];
 const isFree = (s = "") => FREE.some((re) => re.test(s));
@@ -120,10 +120,15 @@ async function gather(ids) {
     if (!s) { console.log("skip", id, "(no card)"); continue; }
     const entry = { id: s.id, character: s.character, actor: s.actor, still: [], portrait: [] };
     const swiki = stillApiFor(s);
-    // MASK candidates: the character's images on the still-wiki (lead + page + file-search)
-    if (swiki && s.kind !== "voice") {
-      const files = await candidateFiles(swiki, s.character, s.production).catch(() => new Map());
-      for (const f of pick([...files.keys()], s.character)) { const t = await thumb(swiki, f); if (t) entry.still.push(t); }
+    // MASK candidates: the character's images on the franchise still-wiki (if one resolves)
+    // AND — universally — on Wikipedia itself. Many iconic masks (Darth Maul, Boba Fett,
+    // Michael Myers, the Bride of Frankenstein…) live on the character's Wikipedia page even
+    // when production/character text matches no franchise wiki. Merge both, then pick.
+    if (s.kind !== "voice") {
+      const files = new Map(); // file -> base wiki it lives on
+      if (swiki) { try { for (const [f, b] of await candidateFiles(swiki, s.character, s.production)) files.set(f, b); } catch {} }
+      try { for (const [f, b] of await candidateFiles(WIKIPEDIA, s.character, s.production)) if (!files.has(f)) files.set(f, b); } catch {}
+      for (const f of pick([...files.keys()], s.character)) { const t = await thumb(files.get(f), f); if (t) entry.still.push(t); }
     }
     // FACE candidates: the actor's images from their verified Wikipedia page + file-search
     // on Wikipedia and the franchise wiki (Fandom performer photos).
@@ -155,6 +160,22 @@ async function gather(ids) {
   console.log(`\ncontact sheet: ${DIR}/sheet.html — render it, look, then write ${DIR}/picks.json and run: node scripts/curate.mjs apply`);
 }
 
+// download with soft-retry on Wikimedia's robot-policy 403 / rate-limit 429,
+// falling back from the full-res file to the (already-proven) thumbnail URL.
+async function dl(urls) {
+  for (const url of urls.filter(Boolean)) {
+    for (let tries = 0; tries < 3; tries++) {
+      try {
+        const r = await fetch(url, { headers: { "User-Agent": UA } });
+        if (r.ok) return { buf: Buffer.from(await r.arrayBuffer()), url };
+        if (r.status === 403 || r.status === 429) { await sleep((tries + 1) * 2500); continue; }
+        break; // other errors: try next url
+      } catch { await sleep((tries + 1) * 1500); }
+    }
+  }
+  return null;
+}
+
 async function apply() {
   const manifest = JSON.parse(await readFile(`${DIR}/manifest.json`, "utf8"));
   const picks = JSON.parse(await readFile(`${DIR}/picks.json`, "utf8"));
@@ -166,9 +187,9 @@ async function apply() {
     for (const side of ["still", "portrait"]) {
       if (!p[side]) continue;
       const c = man[side].find((x) => x.label === p[side]); if (!c) { console.log("no candidate", p.id, side, p[side]); continue; }
-      const out = `${IMGDIR}/${s.id.toLowerCase()}-${side}.${extOf(c.full || c.url)}`;
-      const r = await fetch(c.full || c.url, { headers: { "User-Agent": UA } }); if (!r.ok) { console.log("dl fail", c.file); continue; }
-      await writeFile(out, Buffer.from(await r.arrayBuffer())); await sleep(300);
+      const got = await dl([c.full, c.url]); if (!got) { console.log("dl fail", c.file); continue; }
+      const out = `${IMGDIR}/${s.id.toLowerCase()}-${side}.${extOf(got.url)}`;
+      await writeFile(out, got.buf); await sleep(300);
       s[side] = side === "still" ? { src: out, kind: "still", origin: c.origin, pin: true }
         : { src: out, kind: isFree(c.license) ? "free" : "copyright", origin: c.origin, author: c.author, license: c.license, pin: true };
       console.log(`pinned ${s.id} ${side} = ${c.label} (${c.file})`);
