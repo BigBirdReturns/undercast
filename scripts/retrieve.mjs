@@ -108,6 +108,17 @@ const isFree = (s = "") => FREE.some((re) => re.test(s));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const extOf = (url) => (url.split("?")[0].match(/\.(jpe?g|png|gif|webp)$/i)?.[1] || "jpg").toLowerCase();
 
+// midpoint year of a card's run ("1993–99" -> 1993, "2011–2017" -> 2014) so we can
+// prefer an actor photo taken near when they actually played the role.
+const midYear = (years) => {
+  const ys = (String(years || "").match(/(?:19|20)\d\d/g) || []).map(Number);
+  return ys.length ? Math.round((Math.min(...ys) + Math.max(...ys)) / 2) : 0;
+};
+// titles that mean a lesser/other version of a character (a game, a reboot, a book)
+const SPINOFF = /\b(video ?game|\(game\)|novel|comic|soundtrack|magazine|action figure|lego|\(disambiguation\)|animated series)\b/i;
+// files that are not a person's photo (logos, flags, ui chrome, signatures, svgs)
+const NONPHOTO = /logo|icon|symbol|commons-|edit-|flag|star_full|ambox|question_|padlock|signature|wikimedia|\.svg$/i;
+
 let lastReq = 0;
 async function politeFetch(url, tries = 0) {
   const wait = Math.max(0, DELAY - (Date.now() - lastReq));
@@ -118,6 +129,12 @@ async function politeFetch(url, tries = 0) {
     const back = (tries + 1) * 4000;
     console.log(`  429 — backing off ${back}ms`);
     await sleep(back);
+    return politeFetch(url, tries + 1);
+  }
+  // Wikimedia's media host intermittently 403s under load — that's rate-limiting,
+  // not a hard block, so back off and retry (portraits succeed on a later pass).
+  if (r.status === 403 && /upload\.wikimedia\.org/.test(url) && tries < 3) {
+    await sleep((tries + 1) * 3000);
     return politeFetch(url, tries + 1);
   }
   return r;
@@ -145,56 +162,90 @@ async function download(url, out) {
   return true;
 }
 
-// lead image (thumbnail) + its filename for a page matching `query` on one wiki
-async function leadImage(base, query) {
-  const s = await mw(base, { action: "query", list: "search", srsearch: query, srlimit: "1" }).catch(() => null);
-  const hit = s?.query?.search?.[0]?.title;
-  if (!hit) return null;
-  const p = await mw(base, {
-    action: "query", prop: "pageimages", piprop: "thumbnail|name", pithumbsize: "640", titles: hit,
-  }).catch(() => null);
+const leadFrom = (base, title, page) => ({
+  title, src: page.thumbnail.source, file: page.pageimage,
+  article: `https://${new URL(base).host}/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`,
+});
+
+// The CHARACTER still — prefer the canonical / most-popular (usually live-action)
+// page: try the exact character title first, then a production-scoped search that
+// skips spin-off pages (games, novels, reboots) that outrank the real still.
+async function characterImage(base, s) {
+  const exact = await mw(base, { action: "query", prop: "pageimages", piprop: "thumbnail|name", pithumbsize: "640", titles: s.character }).catch(() => null);
+  const ep = Object.values(exact?.query?.pages || {})[0];
+  if (ep && !("missing" in ep) && ep.thumbnail?.source && !SPINOFF.test(ep.title)) return leadFrom(base, ep.title, ep);
+
+  const sr = await mw(base, { action: "query", list: "search", srsearch: `${s.character} ${s.production || ""}`.trim(), srlimit: "8" }).catch(() => null);
+  const titles = (sr?.query?.search || []).map((h) => h.title).filter((t) => !SPINOFF.test(t));
+  const cl = s.character.toLowerCase();
+  const pick = titles.find((t) => t.toLowerCase() === cl) || titles.find((t) => t.toLowerCase().startsWith(cl)) || titles[0];
+  if (!pick) return null;
+  const p = await mw(base, { action: "query", prop: "pageimages", piprop: "thumbnail|name", pithumbsize: "640", titles: pick }).catch(() => null);
   const page = Object.values(p?.query?.pages || {})[0];
   if (!page?.thumbnail?.source) return null;
-  const host = new URL(base).host;
-  return { title: hit, src: page.thumbnail.source, file: page.pageimage, article: `https://${host}/wiki/${encodeURIComponent(hit.replace(/ /g, "_"))}` };
-}
-
-// license/author for a File on a wiki (used to label actor portraits honestly)
-async function fileMeta(base, file) {
-  if (!file) return {};
-  const q = await mw(base, { action: "query", prop: "imageinfo", iiprop: "extmetadata|url", titles: "File:" + file }).catch(() => null);
-  const info = Object.values(q?.query?.pages || {})[0]?.imageinfo?.[0];
-  const m = info?.extmetadata || {};
-  return {
-    license: (m.LicenseShortName?.value || m.License?.value || "").trim(),
-    author: (m.Artist?.value || "").replace(/<[^>]+>/g, "").trim(),
-    origin: info?.descriptionurl || "",
-  };
+  return leadFrom(base, pick, page);
 }
 
 async function getStill(s) {
   const wiki = stillApiFor(s);
   if (!wiki) return null;
-  const lead = await leadImage(wiki, s.character).catch(() => null);
+  const lead = await characterImage(wiki, s).catch(() => null);
   if (!lead) return null;
   const out = `${IMGDIR}/${s.id.toLowerCase()}-still.${extOf(lead.src)}`;
   if (!(await download(lead.src, out))) return null;
   return { src: out, kind: "still", origin: lead.article }; // studio-copyright, shown under fan-use
 }
 
+// which Wikipedia page is the actor
+async function actorPage(base, actor) {
+  const s = await mw(base, { action: "query", list: "search", srsearch: actor, srlimit: "1" }).catch(() => null);
+  return s?.query?.search?.[0]?.title || null;
+}
+
+// every photo on the actor's page, each with its date + license — the pool we
+// choose a period-appropriate portrait from
+async function portraitCandidates(base, pageTitle) {
+  const j = await mw(base, { action: "query", prop: "images", imlimit: "60", titles: pageTitle }).catch(() => null);
+  const page = Object.values(j?.query?.pages || {})[0];
+  const files = (page?.images || []).map((i) => i.title).filter((t) => /\.(jpe?g|png)$/i.test(t) && !NONPHOTO.test(t)).slice(0, 12);
+  const out = [];
+  for (const f of files) {
+    const q = await mw(base, { action: "query", prop: "imageinfo", iiprop: "url|extmetadata", iiurlwidth: "640", titles: f }).catch(() => null);
+    const info = Object.values(q?.query?.pages || {})[0]?.imageinfo?.[0];
+    if (!info?.thumburl) continue;
+    const m = info.extmetadata || {};
+    const date = (m.DateTimeOriginal?.value || m.DateTime?.value || "").replace(/<[^>]+>/g, "").trim();
+    out.push({
+      src: info.thumburl,
+      year: parseInt((date.match(/(?:19|20)\d\d/) || [])[0] || "0", 10),
+      license: (m.LicenseShortName?.value || m.License?.value || "").trim(),
+      author: (m.Artist?.value || "").replace(/<[^>]+>/g, "").trim(),
+      origin: info.descriptionurl || "",
+    });
+  }
+  return out;
+}
+
+// The ACTOR portrait (the unmasked face) — prefer a freely-licensed photo taken
+// closest to when they played the role, not just the newest picture on the page.
 async function getPortrait(s) {
-  const lead = await leadImage(WIKIPEDIA, s.actor).catch(() => null);
-  if (!lead) return null;
-  const meta = await fileMeta(WIKIPEDIA, lead.file).catch(() => ({}));
-  const out = `${IMGDIR}/${s.id.toLowerCase()}-portrait.${extOf(lead.src)}`;
-  if (!(await download(lead.src, out))) return null;
-  const free = isFree(meta.license);
+  const page = await actorPage(WIKIPEDIA, s.actor);
+  if (!page) return null;
+  const cands = await portraitCandidates(WIKIPEDIA, page).catch(() => []);
+  if (!cands.length) return null;
+  const target = midYear(s.years);
+  const score = (c) => (isFree(c.license) ? 0 : 1000) + (c.year && target ? Math.abs(c.year - target) : 400);
+  cands.sort((a, b) => score(a) - score(b));
+  const best = cands[0];
+  const out = `${IMGDIR}/${s.id.toLowerCase()}-portrait.${extOf(best.src)}`;
+  if (!(await download(best.src, out))) return null;
   return {
     src: out,
-    kind: free ? "free" : "copyright",
-    origin: meta.origin || lead.article,
-    author: meta.author || "",
-    license: meta.license || "",
+    kind: isFree(best.license) ? "free" : "copyright",
+    origin: best.origin || `https://en.wikipedia.org/wiki/${encodeURIComponent(page.replace(/ /g, "_"))}`,
+    author: best.author || "",
+    license: best.license || "",
+    ...(best.year ? { year: best.year } : {}),
   };
 }
 
