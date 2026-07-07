@@ -29,6 +29,7 @@ const MODEL   = process.env.ANTHROPIC_MODEL || "claude-sonnet-5"; // ids move �
 const DATA    = "data/specimens.json";
 const LEDGER  = "data/SOURCES.json"; // one provenance ledger; credits.mjs renders CREDITS.md from it
 const QUEUE   = "data/CANDIDATES.json"; // leads harvested by ingest.mjs, awaiting triage
+const DRAFTS  = "data/drafts.json";     // specimens a coding-session model drafted (keyless path)
 
 const VEINS = {
   "Doctor Who":        "Doctor Who monster & creature performers and the Dalek/Cyberman voice artists",
@@ -175,8 +176,51 @@ async function findImage(actor) {
   return null;
 }
 
+// ── KEYLESS grow: the drafting model IS the compute ─────────────────────────
+// A coding-session model (any of them) reads GROW.md, writes an array of drafted
+// specimens to data/drafts.json (no id/link needed), then runs this. Each draft
+// is Wikipedia-verified, deduped against the wall, given the next UC-id, and
+// merged. No API key: the tokens are spent by whatever model authored the drafts.
+async function growFromDrafts(file) {
+  const drafts = JSON.parse(await readFile(file, "utf8").catch(() => "[]"));
+  if (!Array.isArray(drafts) || !drafts.length) { console.log(`no drafts in ${file} — write an array of cards there first (see GROW.md).`); return; }
+  const specimens = JSON.parse(await readFile(DATA, "utf8"));
+  const have = new Set(specimens.map((s) => norm(s.actor)));
+  let maxN = Math.max(0, ...specimens.map((s) => parseInt((String(s.id).match(/UC-(\d+)/) || [])[1] || "0", 10)));
+  const added = [], dropped = [];
+  for (const c of drafts) {
+    if (!c || !c.actor || !c.character) { dropped.push([(c && c.actor) || "?", "missing actor/character"]); continue; }
+    if (have.has(norm(c.actor))) { dropped.push([c.actor, "already on the wall"]); continue; }
+    const title = await verify({ wiki: c.wiki, actor: c.actor }).catch(() => null);
+    await sleep(300);
+    if (!title) { dropped.push([c.actor, "unverified on Wikipedia"]); continue; }
+    const row = {
+      id: "UC-" + String(++maxN).padStart(3, "0"),
+      ...(c.kind === "voice" ? { kind: "voice" } : {}),
+      character: c.character, actor: c.actor, production: c.production || "",
+      universe: SHELVES.includes(c.universe) ? c.universe : "Film",
+      years: c.years || "", designer: c.designer || "—",
+      transform: Math.max(1, Math.min(5, parseInt(c.transform) || 4)),
+      knownFor: c.knownFor || "", reveal: c.reveal || "",
+      link: c.wiki || ("https://en.wikipedia.org/wiki/" + encodeURIComponent(String(title).replace(/ /g, "_"))),
+    };
+    specimens.push(row); have.add(norm(c.actor)); added.push(row.id + "  " + row.actor + " — " + row.character);
+  }
+  await writeFile(DATA, JSON.stringify(specimens, null, 2) + "\n");
+  await writeFile(file, "[]\n"); // consume the drafts so a re-run can't double-add
+  console.log(`grown from drafts: +${added.length} verified, ${dropped.length} dropped. ${specimens.length} total.`);
+  added.forEach((a) => console.log("  + " + a));
+  if (dropped.length) dropped.forEach(([a, why]) => console.log("  - " + a + " (" + why + ")"));
+  console.log(`\nnext: fill their faces with  IMAGE_MODE=loose node scripts/retrieve.mjs`);
+}
+
 async function main() {
-  if (!API_KEY) { console.error("missing ANTHROPIC_API_KEY"); process.exit(1); }
+  const di = process.argv.indexOf("--drafts");
+  if (di !== -1) {
+    const arg = process.argv[di + 1];
+    return growFromDrafts(arg && !arg.startsWith("--") ? arg : DRAFTS);
+  }
+  if (!API_KEY) { console.error("no ANTHROPIC_API_KEY. Keyless path: write drafts to data/drafts.json and run `node scripts/grow.mjs --drafts` (see GROW.md)."); process.exit(1); }
 
   let specimens = [];
   try { specimens = JSON.parse(await readFile(DATA, "utf8")); } catch { specimens = []; }
