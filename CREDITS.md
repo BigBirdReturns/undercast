@@ -11,7 +11,7 @@ _None yet — run `node scripts/retrieve.mjs`._
 ## Ledger summary
 
 - Free-licensed portraits (attributed above): **0**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **0**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **23**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —

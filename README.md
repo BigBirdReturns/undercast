@@ -10,7 +10,7 @@ Non-commercial fan project.
 index.html            the wall — a static page, reads data/specimens.json
 og.png                social-share preview card (1200×630)
 data/
-  specimens.json      the roster (175 verified cards and counting)
+  specimens.json      the roster (200 verified cards and counting)
   SOURCES.json        the provenance ledger — every asset, its origin and kind
   GAPS.json           cards with no image yet — the worklist for hand/gen fills
   CANDIDATES.json     the ingest queue — harvested leads awaiting triage
