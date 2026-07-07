@@ -225,13 +225,16 @@ async function portraitCandidates(base, pageTitle) {
   const files = (page?.images || []).map((i) => i.title).filter((t) => /\.(jpe?g|png)$/i.test(t) && !NONPHOTO.test(t)).slice(0, 12);
   const out = [];
   for (const f of files) {
-    const q = await mw(base, { action: "query", prop: "imageinfo", iiprop: "url|extmetadata", iiurlwidth: "640", titles: f }).catch(() => null);
+    const q = await mw(base, { action: "query", prop: "imageinfo", iiprop: "url|size|extmetadata", iiurlwidth: "640", titles: f }).catch(() => null);
     const info = Object.values(q?.query?.pages || {})[0]?.imageinfo?.[0];
     if (!info?.thumburl) continue;
     const m = info.extmetadata || {};
     const date = (m.DateTimeOriginal?.value || m.DateTime?.value || "").replace(/<[^>]+>/g, "").trim();
     out.push({
+      file: f,
       src: info.thumburl,
+      w: info.width || 0,
+      h: info.height || 0,
       year: parseInt((date.match(/(?:19|20)\d\d/) || [])[0] || "0", 10),
       license: (m.LicenseShortName?.value || m.License?.value || "").trim(),
       author: (m.Artist?.value || "").replace(/<[^>]+>/g, "").trim(),
@@ -239,6 +242,21 @@ async function portraitCandidates(base, pageTitle) {
     });
   }
   return out;
+}
+
+// filenames that betray a group / event shot rather than a solo headshot
+const GROUP = /\b(and|with|cast|group|panel|others|amp)\b|,| ?& ?/i;
+// score a portrait candidate: lower is better. Prefer free, close to the role
+// year, portrait-orientation (headshots are usually taller than wide), a solo
+// photo, and one named after the actor.
+function portraitScore(c, target, surname) {
+  let sc = 0;
+  if (!isFree(c.license)) sc += 1000;
+  sc += c.year && target ? Math.abs(c.year - target) : 400;
+  if (c.w && c.h && c.w > c.h * 1.05) sc += 350;              // landscape → probably not a headshot
+  if (GROUP.test(c.file || "")) sc += 450;                    // group / event photo
+  if (surname && (c.file || "").toLowerCase().includes(surname)) sc -= 150; // named after them
+  return sc;
 }
 
 // The ACTOR portrait (the unmasked face). First a Wikipedia/Commons photo, chosen
@@ -249,8 +267,8 @@ async function wikipediaPortrait(s) {
   const cands = await portraitCandidates(WIKIPEDIA, page).catch(() => []);
   if (!cands.length) return null;
   const target = midYear(s.years);
-  const score = (c) => (isFree(c.license) ? 0 : 1000) + (c.year && target ? Math.abs(c.year - target) : 400);
-  cands.sort((a, b) => score(a) - score(b));
+  const surname = (s.actor.split(/\s+/).pop() || "").toLowerCase();
+  cands.sort((a, b) => portraitScore(a, target, surname) - portraitScore(b, target, surname));
   const best = cands[0];
   const out = `${IMGDIR}/${s.id.toLowerCase()}-portrait.${extOf(best.src)}`;
   if (!(await download(best.src, out))) return null;
