@@ -28,6 +28,7 @@ const BUDGET  = parseInt(process.env.GROW_BUDGET || "6", 10);
 const MODEL   = process.env.ANTHROPIC_MODEL || "claude-sonnet-5"; // ids move — see docs.claude.com
 const DATA    = "data/specimens.json";
 const LEDGER  = "data/SOURCES.json"; // one provenance ledger; credits.mjs renders CREDITS.md from it
+const QUEUE   = "data/CANDIDATES.json"; // leads harvested by ingest.mjs, awaiting triage
 
 const VEINS = {
   "Doctor Who":        "Doctor Who monster & creature performers and the Dalek/Cyberman voice artists",
@@ -77,13 +78,50 @@ function parseCard(text) {
   return JSON.parse(t);
 }
 
+const CARD_KEYS = `{"character":"","actor":"","production":"","years":"YYYY or YYYY-YY","universe":one of ${JSON.stringify(SHELVES)},"designer":"makeup/creature/costume designer or studio","transform":1-5,"kind":"face"|"voice","knownFor":"one sentence","reveal":"two sentences","wiki":"https://en.wikipedia.org/wiki/Name"}`;
+
 function prompt(vein, exclude) {
   return `You curate UNDERCAST, a catalog of performers who vanish under a designed face — heavy prosthetics, a mask, a full creature suit, motion capture, or (kind:"voice") an unseen voice-only role.
 Vein: ${VEINS[vein]}.
 Pick ONE real, verifiable, reasonably well-known performer from that vein who is NOT in this list: ${exclude.join(", ")}.
 Return ONLY a JSON object, no prose, no code fences, with exactly these keys:
-{"character":"","actor":"","production":"","years":"YYYY or YYYY-YY","universe":one of ${JSON.stringify(SHELVES)},"designer":"makeup/creature/costume designer or studio","transform":1-5,"kind":"face"|"voice","knownFor":"one sentence","reveal":"two sentences","wiki":"https://en.wikipedia.org/wiki/Name"}
+${CARD_KEYS}
 Real people only. Facts must be accurate. JSON only.`;
+}
+
+// triage a harvested lead: qualify-or-skip, and if it qualifies, write the card
+function candidatePrompt(name, wiki) {
+  return `You curate UNDERCAST, a catalog of performers who vanish under a designed face — heavy prosthetics, a mask, a full creature suit, motion capture, or (kind:"voice") an unseen voice-only role.
+Candidate performer: ${name}${wiki ? " — " + wiki : ""}.
+The bar is strict: they must be primarily known for DISAPPEARING into a built/masked/suited/mo-capped role or an unseen voice — NOT for appearing as themselves. If they don't clearly qualify, or you can't verify accurate facts, return exactly {"skip":true,"reason":"..."}.
+Otherwise return ONLY a JSON object (no prose, no code fences), with "actor" set to "${name}", and exactly these keys:
+${CARD_KEYS}
+Real, accurate facts only. JSON only.`;
+}
+
+function upsertLedger(ledger, row) { const i = ledger.findIndex((r) => r.id === row.id); if (i >= 0) ledger.splice(i, 1); ledger.push(row); }
+
+// verify -> attach schema fields (matching index.html) -> push. Mutates ctx in place.
+async function tryEmit(card, ctx) {
+  const { specimens, ledger, have } = ctx;
+  if (!card || card.skip || !card.actor || !card.character || have.has(norm(card.actor))) { console.log("skip:", card && (card.reason || card.actor)); return false; }
+  const title = await verify(card);
+  if (!title) { console.log("unverified, skip:", card.actor); return false; }
+  const img = await findImage(card.actor).catch(() => null);
+  card.id = "UC-G" + String(specimens.filter((s) => s._grown).length + 1).padStart(3, "0");
+  card._grown = true;
+  card._verified = true;
+  card.link = card.wiki || `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`;
+  delete card.wiki; delete card.skip; delete card.reason;
+  card.universe = SHELVES.includes(card.universe) ? card.universe : "Film";
+  card.kind = card.kind === "voice" ? "voice" : "face";
+  card.transform = Math.max(1, Math.min(5, parseInt(card.transform) || 4));
+  if (img) card.portrait = { src: img.url, kind: "free", origin: img.source, author: img.author, license: img.license };
+  specimens.push(card);
+  have.add(norm(card.actor));
+  console.log("grown:", card.actor, "—", card.character, img ? `(+free image via ${img.via})` : "(no free image)");
+  if (img) upsertLedger(ledger, { id: card.id, actor: card.actor, character: card.character, universe: card.universe, still: null, portrait: card.portrait, fetched_at: new Date().toISOString().slice(0, 10) });
+  return true;
 }
 
 // existence check → canonical Wikipedia title
@@ -144,51 +182,41 @@ async function main() {
   try { specimens = JSON.parse(await readFile(DATA, "utf8")); } catch { specimens = []; }
   let ledger = [];
   try { ledger = JSON.parse(await readFile(LEDGER, "utf8")); } catch { ledger = []; }
+  let queue = [];
+  try { queue = JSON.parse(await readFile(QUEUE, "utf8")); } catch { queue = []; }
   const have = new Set(specimens.map((s) => norm(s.actor)));
+  const ctx = { specimens, ledger, have };
   const veins = Object.keys(VEINS);
   let added = 0, tries = 0;
 
+  // PHASE 1 — triage the harvested-lead queue (ingest.mjs fills it, keyless).
+  // Every lead is looked at exactly once: it becomes a card or it's dropped.
+  while (added < BUDGET && queue.length) {
+    const lead = queue.shift();
+    if (have.has(norm(lead.name))) continue; // already on the wall since harvest
+    try {
+      const card = parseCard(await claude(candidatePrompt(lead.name, lead.wiki)));
+      if (card && !card.skip && !card.universe && lead.universe) card.universe = lead.universe;
+      if (await tryEmit(card, ctx)) added++;
+      await sleep(400);
+    } catch (e) { console.log("error, skip lead:", lead.name, "-", e.message); }
+  }
+
+  // PHASE 2 — if the queue ran dry and we're still under budget, invent from veins.
   while (added < BUDGET && tries < BUDGET * 4) {
     tries++;
     const vein = veins[tries % veins.length];
     try {
       const card = parseCard(await claude(prompt(vein, [...have])));
-      if (!card.actor || !card.character || have.has(norm(card.actor))) { console.log("skip:", card.actor); continue; }
-
-      const title = await verify(card);
-      if (!title) { console.log("unverified, skip:", card.actor); continue; }
-
-      const img = await findImage(card.actor).catch(() => null);
-
-      // field names below MUST match what index.html reads: _grown, _verified, link, portrait
-      card.id = "UC-G" + String(specimens.filter((s) => s._grown).length + 1).padStart(3, "0");
-      card._grown = true;
-      card._verified = true;
-      card.link = card.wiki || `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`;
-      delete card.wiki;
-      card.universe = SHELVES.includes(card.universe) ? card.universe : "Film";
-      card.kind = card.kind === "voice" ? "voice" : "face";
-      card.transform = Math.max(1, Math.min(5, parseInt(card.transform) || 4));
-      // only FREE portraits ever reach here (findImage gates on license), so kind:"free"
-      if (img) card.portrait = { src: img.url, kind: "free", origin: img.source, author: img.author, license: img.license };
-
-      specimens.push(card);
-      have.add(norm(card.actor));
-      added++;
-      console.log("grown:", card.actor, "—", card.character, img ? `(+free image via ${img.via})` : "(no free image)");
-      // record provenance in the one ledger; credits.mjs turns free portraits into CREDITS.md
-      if (img) {
-        ledger = ledger.filter((r) => r.id !== card.id);
-        ledger.push({ id: card.id, actor: card.actor, character: card.character, universe: card.universe, still: null, portrait: card.portrait, fetched_at: new Date().toISOString().slice(0, 10) });
-      }
-
+      if (await tryEmit(card, ctx)) added++;
       await sleep(400);
     } catch (e) { console.log("error, skip:", e.message); }
   }
 
   await writeFile(DATA, JSON.stringify(specimens, null, 2) + "\n");
   await writeFile(LEDGER, JSON.stringify(ledger, null, 2) + "\n");
-  console.log(`done: +${added} this run (budget ${BUDGET}). ${specimens.length} total, ${ledger.length} ledger rows.`);
+  await writeFile(QUEUE, JSON.stringify(queue, null, 2) + "\n");
+  console.log(`done: +${added} this run (budget ${BUDGET}). ${specimens.length} total, ${ledger.length} ledger rows, ${queue.length} leads left in queue.`);
 }
 
 main();

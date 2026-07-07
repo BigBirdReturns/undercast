@@ -156,6 +156,8 @@
     display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));
     gap:20px;padding-bottom:60px;
   }
+  .loadmore-wrap{display:flex;align-items:center;justify-content:center;gap:16px;padding:8px 0 60px;}
+  .loadmore-note{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-faint);}
   .empty{
     grid-column:1/-1;border:1px dashed var(--line);padding:48px 24px;text-align:center;
     color:var(--ink-soft);font-size:13px;line-height:1.7;
@@ -357,6 +359,7 @@
   <div class="maker-active" id="makerActive" hidden></div>
 
   <div class="grid" id="grid" aria-live="polite"></div>
+  <div class="loadmore-wrap" id="loadmore" hidden></div>
 </div>
 
 <footer>
@@ -375,7 +378,7 @@
         schema: no entry without a designed face behind it.
       </p>
     </div>
-    <div class="colophon">Undercast · turn a cast to read who's underneath · catalog grows by pull request</div>
+    <div class="colophon">Undercast · turn a cast to read who's underneath · catalog grows by pull request<span id="queue"></span></div>
   </div>
 </footer>
 
@@ -478,6 +481,7 @@ const chipsEl=document.getElementById("chips");
 const decadesEl=document.getElementById("decades");
 const makerChipsEl=document.getElementById("makerChips");
 const makerActiveEl=document.getElementById("makerActive");
+const loadmoreEl=document.getElementById("loadmore");
 let universeFilter="All";
 let decadeFilter="All";
 let makerFilter="";
@@ -638,7 +642,13 @@ function card(s){
 
 let GROWN=[];
 
-function render(){
+// Render cap: only ever put PAGE cards in the DOM at once, "load more" for the
+// rest. Keeps the browser fast whether the roster is 175 or 175,000.
+const PAGE=120;
+let shownCount=PAGE;
+
+function render(reset=true){
+  if(reset) shownCount=PAGE;
   const q=qEl.value.trim().toLowerCase();
   const ALL=SPECIMENS.concat(GROWN);
   const mf=makerFilter.toLowerCase();
@@ -659,7 +669,16 @@ function render(){
   if(rows.length===0){
     grid.innerHTML=`<div class="empty"><b>No cast on this shelf.</b>Nobody in the index matches that yet — the wall only holds performers with a designed face. Clear the search, or grow the shelf below.</div>`;
   } else {
-    rows.forEach(s=>grid.appendChild(card(s)));
+    rows.slice(0,shownCount).forEach(s=>grid.appendChild(card(s)));
+  }
+  // load-more control when the filtered set exceeds what's on screen
+  if(rows.length>shownCount){
+    const remain=rows.length-shownCount;
+    loadmoreEl.hidden=false;
+    loadmoreEl.innerHTML=`<button class="rep-btn" type="button" id="loadmoreBtn">Load ${Math.min(PAGE,remain)} more</button><span class="loadmore-note">showing ${shownCount} of ${rows.length}</span>`;
+    document.getElementById("loadmoreBtn").addEventListener("click",()=>{ shownCount+=PAGE; render(false); });
+  } else {
+    loadmoreEl.hidden=true; loadmoreEl.innerHTML="";
   }
   // active-maker banner (also works when the makers strip is scrolled off screen)
   if(makerFilter){
@@ -702,11 +721,13 @@ function applyURLState(){
 /* ---------- deep link: #UC-042 opens, scrolls to, and rings a specimen ---------- */
 function focusSpecimen(id){
   if(!id) return;
-  let el=grid.querySelector('[data-uid="'+(window.CSS&&CSS.escape?CSS.escape(id):id)+'"]');
-  if(!el){ // it's filtered out — clear filters so a shared link always lands
+  const sel='[data-uid="'+(window.CSS&&CSS.escape?CSS.escape(id):id)+'"]';
+  let el=grid.querySelector(sel);
+  if(!el){ // filtered out or past the page cap — clear filters and render enough
     universeFilter="All";decadeFilter="All";makerFilter="";qEl.value="";
-    buildFilters();reflectMakerChips();render();
-    el=grid.querySelector('[data-uid="'+(window.CSS&&CSS.escape?CSS.escape(id):id)+'"]');
+    shownCount=Math.max(shownCount,SPECIMENS.length+GROWN.length);
+    buildFilters();reflectMakerChips();render(false);
+    el=grid.querySelector(sel);
   }
   if(!el) return;
   el.setAttribute("aria-pressed","true"); // show the human side of a shared card
@@ -743,6 +764,10 @@ fetch("./data/specimens.json").then(function(r){return r.json();}).then(function
   buildMakers();
   render();
   if(location.hash) focusSpecimen(location.hash.replace(/^#/,""));
+  // living pipeline: show how many harvested leads are queued for triage (optional file)
+  fetch("./data/CANDIDATES.json").then(function(r){return r.ok?r.json():[];}).then(function(c){
+    if(Array.isArray(c)&&c.length) document.getElementById("queue").textContent=" · "+c.length+" leads in the ingest queue";
+  }).catch(function(){});
 }).catch(function(){ grid.innerHTML="<div class=\"empty\"><b>Couldn&#39;t load the roster.</b>Serve this over http (not file://) and make sure data/specimens.json is present.</div>"; });
 </script>
 </body>

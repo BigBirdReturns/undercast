@@ -10,17 +10,21 @@ Non-commercial fan project.
 index.html            the wall — a static page, reads data/specimens.json
 og.png                social-share preview card (1200×630)
 data/
-  specimens.json      the roster (139 hand-built cards to start)
+  specimens.json      the roster (175 verified cards and counting)
   SOURCES.json        the provenance ledger — every asset, its origin and kind
   GAPS.json           cards with no image yet — the worklist for hand/gen fills
+  CANDIDATES.json     the ingest queue — harvested leads awaiting triage
 images/               cached image files (populated by the crawler)
 scripts/
+  ingest.mjs          KEYLESS lead harvester: wiki categories -> CANDIDATES.json
   retrieve.mjs        KEYLESS crawler: stills + portraits -> images/ + ledger
   credits.mjs         builds CREDITS.md from the ledger
-  grow.mjs            OPTIONAL model drafting of new cards (needs an API key)
+  grow.mjs            model triage/drafting of new cards (needs a key, or run it
+                      from a Claude coding session)
 .github/workflows/
   retrieve.yml        nightly keyless image + provenance crawl
-  nightly.yml         optional model drafting (gated on ANTHROPIC_API_KEY)
+  ingest.yml          nightly keyless lead harvest
+  nightly.yml         ingest + optional model triage (gated on ANTHROPIC_API_KEY)
 CREDITS.md            attribution for free-licensed images (generated)
 ```
 
@@ -129,18 +133,40 @@ Note: Wikimedia occasionally 403s automated fetches of Commons media ("robot
 policy"). Free portraits may be skipped when that happens — the crawler logs it
 and moves on; character stills (served from Fandom's CDN) are unaffected.
 
-## Growing new cards (optional, needs a key)
+## Growing the wall — the pipeline
 
-`scripts/grow.mjs` asks a model to draft new specimens and verifies each person
-on Wikipedia. It needs an **Anthropic API key** (a separate console.anthropic.com
-account with its own metered billing — your Claude subscription is **not** an API
-key). Set it as the `ANTHROPIC_API_KEY` repo secret; the `nightly.yml` workflow
-runs it.
+The wall grows through a **harvest → triage → card** pipeline, built so it can
+ingest for years and never lie about what it holds:
 
-Prefer keyless? Draft batches in the Claude app, eyeball them, and paste the JSON
-into `data/specimens.json` by hand. Slower cadence, human-in-the-loop — arguably
-the right cadence for a wall where provenance is the point. Only `retrieve.mjs`
-and `credits.mjs` run for free.
+1. **Harvest (keyless).** `scripts/ingest.mjs` walks a curated set of wiki
+   categories that skew toward performers who vanish under a designed face
+   (tokusatsu suit actors, kaiju casts, …), dedups every name against the wall
+   and the queue, and appends new **leads** to `data/CANDIDATES.json`. Add
+   sources freely — that's the 20-year part. Runs nightly via `ingest.yml`.
+
+   > A lead is **not** a card. Category membership can't tell "disappeared under
+   > a built face" from "played the lead as himself," so nothing here ever lands
+   > on the wall automatically. The queue is a worklist.
+
+2. **Triage → card.** `scripts/grow.mjs` reads the queue, and for each lead asks
+   a model to either write a full, accurate specimen or reject it (strict bar:
+   real disappearing role, verifiable facts). Survivors are checked against
+   Wikipedia, get free-portrait provenance where available, and join the roster;
+   the lead leaves the queue either way. If the queue is empty it falls back to
+   inventing from themed *veins*.
+
+Two ways to run the triage step:
+
+- **Unattended:** set an **`ANTHROPIC_API_KEY`** repo secret (a metered
+  console.anthropic.com key — a Claude subscription is **not** one) and
+  `nightly.yml` does ingest + triage every night.
+- **From a coding session:** open the repo in Claude Code / the Claude app and
+  have it triage `CANDIDATES.json` into `specimens.json` directly — the model in
+  the session *is* the drafting engine, no key required. Human-in-the-loop, which
+  is arguably the right cadence for a wall where provenance is the point.
+
+`scripts/retrieve.mjs`, `scripts/credits.mjs` and `scripts/ingest.mjs` all run
+for free; only the model triage in `grow.mjs` needs a key (or a session).
 
 ## Takedown
 
