@@ -239,11 +239,12 @@ derivative work: …trialsanderrors, Public domain — [source](https://commons.
 - **Townsend Coleman** (UC-263) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Townsend_Coleman_Photo_Op_Animate!_Columbus_2024.jpg)
 - **Jeff Bennett** (UC-264) — Kevin Paul, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:Jeff_Bennett_at_Fan_Expo_Anaheim_2026-1.jpg)
 - **Gregg Berger** (UC-265) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Gregg_Berger_by_Gage_Skidmore.jpg)
+- **Brian Bonsall** (UC-266) — LilMissDetroit at English Wikipedia, Public domain — [source](https://commons.wikimedia.org/wiki/File:Brian_Bonsall.jpg)
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **226**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **219**
+- Free-licensed portraits (attributed above): **227**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **220**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
