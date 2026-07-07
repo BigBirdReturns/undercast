@@ -131,9 +131,24 @@ an explicit `"wiki"` hint on the specimen (a full URL or a Fandom slug like
 `--audit` to see the split. To pin a card to a specific wiki, just add
 `"wiki": "https://…/api.php"` (or a bare slug) to its row.
 
-Note: Wikimedia occasionally 403s automated fetches of Commons media ("robot
-policy"). Free portraits may be skipped when that happens — the crawler logs it
-and moves on; character stills (served from Fandom's CDN) are unaffected.
+**Picking the right image.** The still prefers the canonical page — it tries the
+exact character title first and skips spin-off pages (a video game, a reboot) so
+Gollum resolves to the film, not the game. The portrait prefers a freely-licensed
+photo taken *closest to when the actor played the role* (via each file's
+`DateTimeOriginal`), not just the newest picture on the page.
+
+**How dense to source (`IMAGE_MODE`).** Default is free-first: portraits come from
+Wikipedia/Commons. Set `IMAGE_MODE=loose` to also pull performer photos from the
+franchise **Fandom** pages when Commons has none — far denser coverage (and it
+downloads reliably, since Fandom's CDN isn't rate-limited like Wikimedia). Those
+are copyright headshots shown under fan-use and **logged in the ledger with their
+origin**, exactly like tier-2 stills — the provenance never lies about where a
+face came from. `nightly` retrieve runs in `loose`.
+
+Note: Wikimedia intermittently rate-limits automated fetches of Commons media
+("robot policy") from shared/datacenter IPs — the crawler backs off and retries,
+and in `loose` mode falls through to Fandom. Nightly runs on a fresh runner IP,
+a few cards at a time, which mostly avoids it.
 
 ## Growing the wall — the pipeline
 
