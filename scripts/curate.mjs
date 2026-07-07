@@ -20,7 +20,7 @@ const UA = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${proce
 const DATA = "data/specimens.json";
 const LEDGER = "data/SOURCES.json";
 const IMGDIR = "images";
-const DIR = "data/_curate";
+const DIR = process.env.CURATE_DIR || "data/_curate"; // set per-agent so parallel runs don't clobber
 const WIKIPEDIA = "https://en.wikipedia.org/w/api.php";
 const FREE = [/cc0/i, /public domain/i, /^\s*pd/i, /cc[-\s]?by([-\s]?sa)?/i];
 const isFree = (s = "") => FREE.some((re) => re.test(s));
