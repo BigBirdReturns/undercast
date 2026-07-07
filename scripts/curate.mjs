@@ -155,6 +155,22 @@ async function gather(ids) {
   console.log(`\ncontact sheet: ${DIR}/sheet.html — render it, look, then write ${DIR}/picks.json and run: node scripts/curate.mjs apply`);
 }
 
+// download with soft-retry on Wikimedia's robot-policy 403 / rate-limit 429,
+// falling back from the full-res file to the (already-proven) thumbnail URL.
+async function dl(urls) {
+  for (const url of urls.filter(Boolean)) {
+    for (let tries = 0; tries < 3; tries++) {
+      try {
+        const r = await fetch(url, { headers: { "User-Agent": UA } });
+        if (r.ok) return { buf: Buffer.from(await r.arrayBuffer()), url };
+        if (r.status === 403 || r.status === 429) { await sleep((tries + 1) * 2500); continue; }
+        break; // other errors: try next url
+      } catch { await sleep((tries + 1) * 1500); }
+    }
+  }
+  return null;
+}
+
 async function apply() {
   const manifest = JSON.parse(await readFile(`${DIR}/manifest.json`, "utf8"));
   const picks = JSON.parse(await readFile(`${DIR}/picks.json`, "utf8"));
@@ -166,9 +182,9 @@ async function apply() {
     for (const side of ["still", "portrait"]) {
       if (!p[side]) continue;
       const c = man[side].find((x) => x.label === p[side]); if (!c) { console.log("no candidate", p.id, side, p[side]); continue; }
-      const out = `${IMGDIR}/${s.id.toLowerCase()}-${side}.${extOf(c.full || c.url)}`;
-      const r = await fetch(c.full || c.url, { headers: { "User-Agent": UA } }); if (!r.ok) { console.log("dl fail", c.file); continue; }
-      await writeFile(out, Buffer.from(await r.arrayBuffer())); await sleep(300);
+      const got = await dl([c.full, c.url]); if (!got) { console.log("dl fail", c.file); continue; }
+      const out = `${IMGDIR}/${s.id.toLowerCase()}-${side}.${extOf(got.url)}`;
+      await writeFile(out, got.buf); await sleep(300);
       s[side] = side === "still" ? { src: out, kind: "still", origin: c.origin, pin: true }
         : { src: out, kind: isFree(c.license) ? "free" : "copyright", origin: c.origin, author: c.author, license: c.license, pin: true };
       console.log(`pinned ${s.id} ${side} = ${c.label} (${c.file})`);

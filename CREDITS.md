@@ -9,14 +9,15 @@ carry a free license requiring visible attribution.
 - **Marc Alaimo** (UC-002) — Alaimo,_Shimerman_and_Meany.jpg: Beth Madison
 derivative work: Gyrobo (talk), CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Marc_Alaimo.jpg)
 - **Casey Biggs** (UC-003) — Salvatore Capalbi from Italy, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Casey_Biggs.jpg)
-- **Jeffrey Combs** (UC-004) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Jeffrey_Combs_Photo_Op_GalaxyCon_Richmond_2022.jpg)
+- **Jeffrey Combs** (UC-004) — Super Festivals, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:Jeffrey_Combs_Photo_Op_Nightmare_Weekend_Cleveland_2025.jpg)
 - **Andrew Robinson** (UC-005) — Diane Krauss (DianeAnna), CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Andrew_Robinson.jpg)
-- **René Auberjonois** (UC-006) — Beth Madison, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Shimerman,_Visitor_and_Auberjonois_by_Beth_Madison,_2.jpg)
-- **Doug Jones** (UC-007) — Judson University, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Doug_Jones_2015.jpg)
+- **René Auberjonois** (UC-006) — Rene-Auberjonois-by-kyle-cassidy-DSC_8245.jpg: Kyle Cassidy
+derivative work: nagualdesign, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Rene_Auberjonois,_by_Kyle_Cassidy_(Cropped).jpg)
+- **Doug Jones** (UC-007) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Doug_Jones_by_Gage_Skidmore_4.jpg)
 - **Andy Serkis** (UC-008) — Stefan Servos, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Andy_Serkis_2003.jpg)
 - **David Prowse & James Earl Jones** (UC-010) — Xanathon, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:David_Prowse_2013_(cropped).jpg)
 - **Andreas Katsulas** (UC-011) — Dianne Krauss, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Andreas_Katsulas_crop.jpg)
-- **Mira Furlan** (UC-012) — Crosa from Nuernberg, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Mira_Furlan_(48066192941).jpg)
+- **Mira Furlan** (UC-012) — User:Izolita, Public domain — [source](https://commons.wikimedia.org/wiki/File:Mira_Furlan_(headshot).jpg)
 - **Peter Jurasik** (UC-013) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Peter_Jurasik_by_Gage_Skidmore.jpg)
 - **Bill Mumy** (UC-014) — Senix (talk), CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Sf-userbox.png)
 - **Anthony Simcoe** (UC-015) — sheldonpax, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Anthony_Simcoe_2.jpg)
@@ -244,7 +245,7 @@ derivative work: …trialsanderrors, Public domain — [source](https://commons.
 ## Ledger summary
 
 - Free-licensed portraits (attributed above): **229**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **185**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **186**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
