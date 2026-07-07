@@ -62,17 +62,30 @@ and face for a card, a model that can actually see has to look at the candidates
 and choose. That's the second layer, and it's what makes a flip feel like a real
 reveal (same framing, mask → face).
 
-If you're a vision-capable model:
-1. List the candidate images on the character's wiki page and the actor's page
-   (`prop=images` + `imageinfo iiurlwidth=...`), and **look at them**.
-2. Pick the best mask (clear, front-facing, in-character, right era) and the best
-   unmasked face (clear, ideally near the role's years).
-3. Pin them — the crawler will never auto-replace a pinned asset:
+**The efficient way — `scripts/curate.mjs` (batch, automated):**
+1. Gather candidate masks + faces for a batch of cards into one contact sheet
+   (lead image + page images + File-namespace search, junk filtered, thumbnails
+   cached locally so any renderer can load them):
    ```bash
-   node scripts/pin.mjs UC-001 --wiki https://memory-alpha.fandom.com/api.php \
-        --still "Morn.jpg" --portrait "Mark Allen Shepherd.jpg"
+   node scripts/curate.mjs gather UC-008 UC-010 UC-009 UC-026 UC-067
    ```
-   (`--still`/`--portrait` take a File name on `--wiki`, or a full image URL.)
+2. **Render `data/_curate/sheet.html` and look at it** (screenshot it). Each card
+   shows its mask candidates (labelled `m1,m2,…`) and face candidates (`f1,f2,…`).
+   Judge at a glance: a film screencap beats artwork/a poster/a cartoon; a clear
+   front-facing face beats a group or a tiny cameo; prefer the role's era.
+   *(Thumbnails are small — when a candidate is ambiguous, open its cached file in
+   `data/_curate/thumbs/` to be sure. Art can look like a still at 150px.)*
+3. Write your picks to `data/_curate/picks.json` and apply — the crawler will
+   never auto-replace a pinned asset:
+   ```json
+   [{"id":"UC-008","still":"m3","portrait":"f2"}, {"id":"UC-067","portrait":"f1"}]
+   ```
+   ```bash
+   node scripts/curate.mjs apply      # downloads the chosen images, pins them
+   ```
 
-Pinned assets carry `"pin": true` in `data/specimens.json`. Reserve the effort
-for the cards that deserve a perfect reveal.
+**One-off pin** (when you already know the file): `node scripts/pin.mjs UC-001
+--wiki <api> --still "Morn.jpg" --portrait "Mark Allen Shepherd.jpg"`.
+
+Pinned assets carry `"pin": true` in `data/specimens.json`. Do a curate pass over
+the marquee cards first; the crawler's heuristics are fine for the long tail.
