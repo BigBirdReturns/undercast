@@ -1,0 +1,48 @@
+name: grow-cards
+
+# OPTIONAL. Drafts new specimens with a model and verifies each person on
+# Wikipedia, then rebuilds credits. Needs an ANTHROPIC_API_KEY repo secret
+# (a metered console.anthropic.com key — a Claude subscription is NOT one).
+# With no key set, the run skips cleanly instead of failing — so it's safe to
+# leave enabled on a fork that hasn't added the secret.
+
+on:
+  schedule:
+    - cron: "41 5 * * *"     # nightly, offset from retrieve.yml (07:23)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: grow
+  cancel-in-progress: false
+
+jobs:
+  grow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Grow new cards (only if a key is present)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GROW_BUDGET: "6"            # cap new cards per run
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "No ANTHROPIC_API_KEY secret set — skipping grow (this is fine)."
+            exit 0
+          fi
+          node scripts/grow.mjs
+          node scripts/credits.mjs
+
+      - name: Commit
+        run: |
+          git config user.name  "undercast-bot"
+          git config user.email "undercast-bot@users.noreply.github.com"
+          git add data/specimens.json data/SOURCES.json CREDITS.md
+          git diff --cached --quiet || git commit -m "grow: new specimens + provenance ($(date -u +%F))"
+          git push

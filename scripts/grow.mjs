@@ -10,7 +10,8 @@
  *      image whose license is free (PD / CC0 / CC-BY / CC-BY-SA). Everything
  *      else (fair-use studio stills, "all rights reserved") is rejected.
  *   4. The card is appended to data/specimens.json with full provenance, and any
- *      image's license + author is logged to data/CREDITS.md.
+ *      free image's license + author is recorded in data/SOURCES.json — the same
+ *      ledger retrieve.mjs uses. credits.mjs renders CREDITS.md from that ledger.
  *
  * On sources: use ANY wiki you like for facts and rosters — their TEXT is
  * CC-BY-SA. But a Fandom wiki's CC-BY-SA covers its text, NOT its images, which
@@ -20,13 +21,13 @@
  * Guardrails: GROW_BUDGET caps new cards per run; existing actors are skipped;
  * character / production stills are never requested.
  */
-import { readFile, writeFile, appendFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 const BUDGET  = parseInt(process.env.GROW_BUDGET || "6", 10);
 const MODEL   = process.env.ANTHROPIC_MODEL || "claude-sonnet-5"; // ids move — see docs.claude.com
 const DATA    = "data/specimens.json";
-const CREDITS = "data/CREDITS.md";
+const LEDGER  = "data/SOURCES.json"; // one provenance ledger; credits.mjs renders CREDITS.md from it
 
 const VEINS = {
   "Doctor Who":        "Doctor Who monster & creature performers and the Dalek/Cyberman voice artists",
@@ -141,6 +142,8 @@ async function main() {
 
   let specimens = [];
   try { specimens = JSON.parse(await readFile(DATA, "utf8")); } catch { specimens = []; }
+  let ledger = [];
+  try { ledger = JSON.parse(await readFile(LEDGER, "utf8")); } catch { ledger = []; }
   const have = new Set(specimens.map((s) => norm(s.actor)));
   const veins = Object.keys(VEINS);
   let added = 0, tries = 0;
@@ -157,27 +160,35 @@ async function main() {
 
       const img = await findImage(card.actor).catch(() => null);
 
-      card.id = "UC-G" + String(specimens.filter((s) => s.grown).length + 1).padStart(3, "0");
-      card.grown = true;
-      card.verified = true;
-      card.source = card.wiki;
+      // field names below MUST match what index.html reads: _grown, _verified, link, portrait
+      card.id = "UC-G" + String(specimens.filter((s) => s._grown).length + 1).padStart(3, "0");
+      card._grown = true;
+      card._verified = true;
+      card.link = card.wiki || `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`;
+      delete card.wiki;
       card.universe = SHELVES.includes(card.universe) ? card.universe : "Film";
       card.kind = card.kind === "voice" ? "voice" : "face";
       card.transform = Math.max(1, Math.min(5, parseInt(card.transform) || 4));
-      if (img) card.image = img;
+      // only FREE portraits ever reach here (findImage gates on license), so kind:"free"
+      if (img) card.portrait = { src: img.url, kind: "free", origin: img.source, author: img.author, license: img.license };
 
       specimens.push(card);
       have.add(norm(card.actor));
       added++;
       console.log("grown:", card.actor, "—", card.character, img ? `(+free image via ${img.via})` : "(no free image)");
-      if (img) await appendFile(CREDITS, `- **${card.actor}** portrait — ${img.author}, ${img.license} (via ${img.via}). ${img.source}\n`);
+      // record provenance in the one ledger; credits.mjs turns free portraits into CREDITS.md
+      if (img) {
+        ledger = ledger.filter((r) => r.id !== card.id);
+        ledger.push({ id: card.id, actor: card.actor, character: card.character, universe: card.universe, still: null, portrait: card.portrait, fetched_at: new Date().toISOString().slice(0, 10) });
+      }
 
       await sleep(400);
     } catch (e) { console.log("error, skip:", e.message); }
   }
 
   await writeFile(DATA, JSON.stringify(specimens, null, 2) + "\n");
-  console.log(`done: +${added} this run (budget ${BUDGET}). ${specimens.length} total.`);
+  await writeFile(LEDGER, JSON.stringify(ledger, null, 2) + "\n");
+  console.log(`done: +${added} this run (budget ${BUDGET}). ${specimens.length} total, ${ledger.length} ledger rows.`);
 }
 
 main();
