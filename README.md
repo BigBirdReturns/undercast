@@ -70,6 +70,19 @@ The wall is built to be linked, not just visited:
 
 `og.png` is a static asset — regenerate it only if you restyle the masthead.
 
+## The makers are undercast too
+
+The performer vanishes into the face — but so does the person who *built* it. So
+the wall surfaces them: **Also undercast — the makers** is a ranked strip of
+every crew, shop and artist credited on two or more cards (Michael Westmore,
+Stan Winston, Rick Baker, Jim Henson's Creature Shop, Weta, ILM, Toho, Ve Neill,
+Rob Bottin, Jack Pierce…). Click one to see everything they made; the designer
+credit on each card is a link to the same view, and `?maker=…` is shareable.
+
+Makers are parsed from each specimen's free-form `designer` field, so the way to
+credit a maker is simply to name them there — `"Rick Baker"`, `"KNB EFX"`,
+`"sculpt by …"`. No separate list to maintain; the leaderboard rebuilds itself.
+
 ## Images — the three tiers
 
 Every asset lands in `data/SOURCES.json` with a `kind`, and the card shows what
