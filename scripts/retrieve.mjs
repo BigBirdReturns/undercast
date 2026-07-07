@@ -30,6 +30,10 @@ const CONTACT = process.env.CONTACT || "maintainer";
 const UA      = `undercast/0.1 (+${REPO}; ${CONTACT})`;
 const MAX     = parseInt(process.env.RETRIEVE_MAX || "20", 10);
 const DELAY   = parseInt(process.env.CRAWL_DELAY_MS || "1500", 10); // be gentle
+// IMAGE_MODE=loose broadens portrait sourcing beyond free Commons photos to the
+// franchise Fandom performer pages too (copyright headshots, still logged with
+// honest provenance). Fills far denser; default stays free-first ("clean").
+const LOOSE   = /^(loose|dense|1|true)$/i.test(process.env.IMAGE_MODE || "");
 const DATA    = "data/specimens.json";
 const LEDGER  = "data/SOURCES.json";
 const GAPS    = "data/GAPS.json";
@@ -188,12 +192,23 @@ async function characterImage(base, s) {
 
 async function getStill(s) {
   const wiki = stillApiFor(s);
-  if (!wiki) return null;
-  const lead = await characterImage(wiki, s).catch(() => null);
+  let lead = wiki ? await characterImage(wiki, s).catch(() => null) : null;
+  if (!lead && LOOSE) lead = await characterImage(WIKIPEDIA, s).catch(() => null); // any character page
   if (!lead) return null;
   const out = `${IMGDIR}/${s.id.toLowerCase()}-still.${extOf(lead.src)}`;
   if (!(await download(lead.src, out))) return null;
   return { src: out, kind: "still", origin: lead.article }; // studio-copyright, shown under fan-use
+}
+
+// a performer photo from a Fandom wiki's actor page (copyright, but a real face)
+async function fandomActorPhoto(base, actor) {
+  const s = await mw(base, { action: "query", list: "search", srsearch: actor, srlimit: "1" }).catch(() => null);
+  const hit = s?.query?.search?.[0]?.title;
+  if (!hit) return null;
+  const p = await mw(base, { action: "query", prop: "pageimages", piprop: "thumbnail|name", pithumbsize: "640", titles: hit }).catch(() => null);
+  const page = Object.values(p?.query?.pages || {})[0];
+  if (!page?.thumbnail?.source) return null;
+  return { src: page.thumbnail.source, origin: `https://${new URL(base).host}/wiki/${encodeURIComponent(hit.replace(/ /g, "_"))}` };
 }
 
 // which Wikipedia page is the actor
@@ -226,9 +241,9 @@ async function portraitCandidates(base, pageTitle) {
   return out;
 }
 
-// The ACTOR portrait (the unmasked face) — prefer a freely-licensed photo taken
-// closest to when they played the role, not just the newest picture on the page.
-async function getPortrait(s) {
+// The ACTOR portrait (the unmasked face). First a Wikipedia/Commons photo, chosen
+// to prefer a freely-licensed one taken closest to when they played the role.
+async function wikipediaPortrait(s) {
   const page = await actorPage(WIKIPEDIA, s.actor);
   if (!page) return null;
   const cands = await portraitCandidates(WIKIPEDIA, page).catch(() => []);
@@ -247,6 +262,21 @@ async function getPortrait(s) {
     license: best.license || "",
     ...(best.year ? { year: best.year } : {}),
   };
+}
+
+async function getPortrait(s) {
+  const wp = await wikipediaPortrait(s).catch(() => null);
+  if (wp) return wp;
+  // LOOSE: fall back to the franchise Fandom wiki's performer photo (copyright).
+  if (LOOSE) {
+    const wiki = stillApiFor(s);
+    const cand = wiki ? await fandomActorPhoto(wiki, s.actor).catch(() => null) : null;
+    if (cand) {
+      const out = `${IMGDIR}/${s.id.toLowerCase()}-portrait.${extOf(cand.src)}`;
+      if (await download(cand.src, out)) return { src: out, kind: "copyright", origin: cand.origin, author: "", license: "" };
+    }
+  }
+  return null;
 }
 
 // `node scripts/retrieve.mjs --audit` — no network; just report which still-wiki
@@ -274,14 +304,16 @@ async function main() {
   let ledger = [];
   try { ledger = JSON.parse(await readFile(LEDGER, "utf8")); } catch {}
   const gaps = [];
-  const todo = specimens.filter((s) => !s.still && !s.portrait).slice(0, MAX);
+  // process any card missing EITHER side, and fetch only the side it lacks — so a
+  // card that already has a still still gets its unmasked portrait filled in.
+  const todo = specimens.filter((s) => !s.still || !s.portrait).slice(0, MAX);
   console.log(`retrieving for ${todo.length} of ${specimens.length} (max ${MAX})`);
 
   let filled = 0;
   for (const s of todo) {
     try {
-      const still = await getStill(s).catch(() => null);
-      const portrait = await getPortrait(s).catch(() => null);
+      const still = s.still || await getStill(s).catch(() => null);
+      const portrait = s.portrait || await getPortrait(s).catch(() => null);
       if (still) s.still = still;
       if (portrait) s.portrait = portrait;
 
