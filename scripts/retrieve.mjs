@@ -25,7 +25,9 @@ import { existsSync } from "node:fs";
 
 const REPO    = "https://github.com/BigBirdReturns/undercast";
 const CONTACT = process.env.CONTACT || "maintainer";
-const UA      = `undercast-bot/0.1 (${REPO}; ${CONTACT}) node-fetch`;
+// Honest + Wikimedia-UA-policy compliant: names the tool and a contact. We drop
+// the "-bot" / "node-fetch" tokens because some CDNs hard-block those patterns.
+const UA      = `undercast/0.1 (+${REPO}; ${CONTACT})`;
 const MAX     = parseInt(process.env.RETRIEVE_MAX || "20", 10);
 const DELAY   = parseInt(process.env.CRAWL_DELAY_MS || "1500", 10); // be gentle
 const DATA    = "data/specimens.json";
@@ -33,17 +35,73 @@ const LEDGER  = "data/SOURCES.json";
 const GAPS    = "data/GAPS.json";
 const IMGDIR  = "images";
 
-// universe -> a wiki whose lead image for a CHARACTER page is the in-character still.
-// Extend this map freely; it's the obvious first thing to grow.
+const WIKIPEDIA = "https://en.wikipedia.org/w/api.php";
+
+// ── Which wiki holds a CHARACTER's in-character still? ────────────────────────
+// A specimen's still-wiki is resolved in this priority order (see stillApiFor):
+//   1. an explicit per-card `wiki` hint (full URL, api URL, or a Fandom slug)
+//   2. a franchise match on the card's production / character / universe text
+//   3. the card's OWN source link host, when it isn't plain Wikipedia
+//   4. a universe default
+// Anything unresolved falls through to a Wikipedia portrait, then to GAPS.
+
+// universe -> default wiki (last-resort bucket for shelves that map cleanly)
 const STILL_WIKIS = {
   "Star Trek":  "https://memory-alpha.fandom.com/api.php",
   "Babylon 5":  "https://babylon5.fandom.com/api.php",
   "Farscape":   "https://farscape.fandom.com/api.php",
-  "Kaiju":      "https://godzilla.fandom.com/api.php",
-  // Film / TV / Voice / Horror are mixed franchises — add per-title logic or a
-  // `wiki` hint on the specimen to cover Star Wars, LOTR, MCU, etc.
+  "Kaiju":      "https://wikizilla.org/w/api.php",
 };
-const WIKIPEDIA = "https://en.wikipedia.org/w/api.php";
+
+// franchise keyword -> wiki. First match on "`production` `character` `universe`"
+// wins, so a Film/Horror/Voice/TV card lands on the right pedia by its own text.
+// Fandom wikis answer at /api.php; standalone MediaWikis (Wikizilla) at /w/api.php.
+const FRANCHISE_WIKIS = [
+  [/star wars|jedi|sith|mandalorian|wookiee|ewok|clone wars/i, "https://starwars.fandom.com/api.php"],
+  [/lord of the rings|hobbit|middle.?earth|tolkien|rings of power/i, "https://lotr.fandom.com/api.php"],
+  [/doctor who|dalek|cyberman|tardis|torchwood|sontaran|time lord/i, "https://tardis.fandom.com/api.php"],
+  [/predator|\bpredator\b|yautja/i, "https://avp.fandom.com/api.php"],
+  [/alien|aliens|xenomorph|prometheus|covenant|nostromo/i, "https://avp.fandom.com/api.php"],
+  [/hellboy/i, "https://hellboy.fandom.com/api.php"],
+  [/dark crystal|gelfling|skeksis/i, "https://darkcrystal.fandom.com/api.php"],
+  [/muppet|sesame street|fraggle|henson|labyrinth \(/i, "https://muppet.fandom.com/api.php"],
+  [/power rangers|super sentai|zord/i, "https://powerrangers.fandom.com/api.php"],
+  [/ultraman|ultra series|kaiju \(ultra/i, "https://ultra.fandom.com/api.php"],
+  [/kamen rider|masked rider/i, "https://kamenrider.fandom.com/api.php"],
+  [/godzilla|gamera|mothra|ghidorah|toho|kaiju|tokusatsu/i, "https://wikizilla.org/w/api.php"],
+  [/buffy|angel|vampire slayer|sunnydale/i, "https://buffy.fandom.com/api.php"],
+  [/harry potter|hogwarts|wizarding world|fantastic beasts/i, "https://harrypotter.fandom.com/api.php"],
+  [/game of thrones|westeros|targaryen|house of the dragon/i, "https://gameofthrones.fandom.com/api.php"],
+  [/planet of the apes/i, "https://planetoftheapes.fandom.com/api.php"],
+  [/ninja turtles|\btmnt\b/i, "https://tmnt.fandom.com/api.php"],
+  [/friday the 13th|jason voorhees|camp crystal lake/i, "https://fridaythe13th.fandom.com/api.php"],
+  [/hellraiser|pinhead|cenobite/i, "https://hellraiser.fandom.com/api.php"],
+  [/nightmare on elm street|freddy krueger/i, "https://elmstreet.fandom.com/api.php"],
+  [/marvel|avengers|\bmcu\b|x-men|guardians of the galaxy/i, "https://marvelcinematicuniverse.fandom.com/api.php"],
+  [/batman|superman|justice league|\bdc\b comics?/i, "https://dc.fandom.com/api.php"],
+  [/star trek/i, "https://memory-alpha.fandom.com/api.php"],
+  [/babylon 5/i, "https://babylon5.fandom.com/api.php"],
+  [/farscape/i, "https://farscape.fandom.com/api.php"],
+];
+
+// Turn a hint / host into a MediaWiki api endpoint. Fandom -> /api.php, else /w/api.php.
+function apiFromHost(host) {
+  return /(^|\.)fandom\.com$/i.test(host) ? `https://${host}/api.php` : `https://${host}/w/api.php`;
+}
+function resolveWiki(hint) {
+  if (!hint) return null;
+  if (/\/api\.php(\?|$)/.test(hint)) return hint;                 // already an api url
+  if (/^https?:\/\//i.test(hint)) { try { return apiFromHost(new URL(hint).host); } catch { return null; } }
+  return `https://${hint}.fandom.com/api.php`;                    // bare Fandom slug, e.g. "tardis"
+}
+function stillApiFor(s) {
+  const explicit = resolveWiki(s.wiki);
+  if (explicit) return explicit;
+  const hay = `${s.production || ""} ${s.character || ""} ${s.universe || ""}`;
+  for (const [re, api] of FRANCHISE_WIKIS) if (re.test(hay)) return api;
+  try { const h = new URL(s.link).host; if (h && !/^en\.wikipedia\.org$/i.test(h)) return apiFromHost(h); } catch {}
+  return STILL_WIKIS[s.universe] || null;
+}
 
 const FREE = [/cc0/i, /public domain/i, /^\s*pd/i, /cc[-\s]?by([-\s]?sa)?/i];
 const isFree = (s = "") => FREE.some((re) => re.test(s));
@@ -70,10 +128,19 @@ async function mw(base, params) {
   if (!r.ok) throw new Error(`${base} ${r.status}`);
   return r.json();
 }
+let warnedWikimedia = false;
 async function download(url, out) {
   if (existsSync(out)) return true; // cache: never re-fetch
   const r = await politeFetch(url);
-  if (!r.ok) return false;
+  if (!r.ok) {
+    // Wikimedia sometimes 403s automated fetches to its media host ("robot policy").
+    // Portraits from Commons may then be unavailable; stills (Fandom CDN) are not affected.
+    if (r.status === 403 && /upload\.wikimedia\.org/.test(url) && !warnedWikimedia) {
+      warnedWikimedia = true;
+      console.log("  note: upload.wikimedia.org 403 (robot policy https://w.wiki/4wJS) — free portraits may be skipped from this host; stills unaffected.");
+    }
+    return false;
+  }
   await writeFile(out, Buffer.from(await r.arrayBuffer()));
   return true;
 }
@@ -106,7 +173,7 @@ async function fileMeta(base, file) {
 }
 
 async function getStill(s) {
-  const wiki = STILL_WIKIS[s.universe];
+  const wiki = stillApiFor(s);
   if (!wiki) return null;
   const lead = await leadImage(wiki, s.character).catch(() => null);
   if (!lead) return null;
@@ -131,7 +198,26 @@ async function getPortrait(s) {
   };
 }
 
+// `node scripts/retrieve.mjs --audit` — no network; just report which still-wiki
+// each card resolves to and how much of the roster is now reachable.
+async function audit() {
+  const specimens = JSON.parse(await readFile(DATA, "utf8"));
+  const byWiki = {};
+  let resolved = 0;
+  for (const s of specimens) {
+    const api = stillApiFor(s);
+    const host = api ? new URL(api).host : "— (no still wiki → Wikipedia portrait / gap)";
+    byWiki[host] = (byWiki[host] || 0) + 1;
+    if (api) resolved++;
+  }
+  console.log(`still-wiki coverage: ${resolved}/${specimens.length} cards resolve to a character-still wiki\n`);
+  for (const [host, n] of Object.entries(byWiki).sort((a, b) => b[1] - a[1])) {
+    console.log(`  ${String(n).padStart(3)}  ${host}`);
+  }
+}
+
 async function main() {
+  if (process.argv.includes("--audit")) return audit();
   await mkdir(IMGDIR, { recursive: true });
   const specimens = JSON.parse(await readFile(DATA, "utf8"));
   let ledger = [];

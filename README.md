@@ -8,6 +8,7 @@ Non-commercial fan project.
 
 ```
 index.html            the wall — a static page, reads data/specimens.json
+og.png                social-share preview card (1200×630)
 data/
   specimens.json      the roster (139 hand-built cards to start)
   SOURCES.json        the provenance ledger — every asset, its origin and kind
@@ -17,6 +18,9 @@ scripts/
   retrieve.mjs        KEYLESS crawler: stills + portraits -> images/ + ledger
   credits.mjs         builds CREDITS.md from the ledger
   grow.mjs            OPTIONAL model drafting of new cards (needs an API key)
+.github/workflows/
+  retrieve.yml        nightly keyless image + provenance crawl
+  nightly.yml         optional model drafting (gated on ANTHROPIC_API_KEY)
 CREDITS.md            attribution for free-licensed images (generated)
 ```
 
@@ -41,7 +45,30 @@ node scripts/credits.mjs
 any card that already has an image, so it's incremental — run it as often as you
 like. Point `CONTACT` at a real email; it goes in the crawler's User-Agent.
 
+See which wikis the roster will pull from, without touching the network:
+
+```bash
+node scripts/retrieve.mjs --audit    # still-wiki coverage, grouped by host
+```
+
 Deploy: Settings -> Pages -> deploy from `main`, root. Done.
+
+## Share it
+
+The wall is built to be linked, not just visited:
+
+- **Every specimen is a permalink.** `…/#UC-042` opens the wall, scrolls to that
+  card, flips it to the human side, and rings it. The `⌗ UC-042` button on a
+  card's back copies its link.
+- **Filtered views are shareable.** Shelf, decade, search and sort live in the
+  URL — `…/?shelf=Star%20Trek&decade=90s&sort=transform` reopens exactly that.
+- **⚄ Random** pulls a specimen at random (great for "show me someone I don't
+  know").
+- **Links unfurl.** OpenGraph/Twitter tags + `og.png` give a real preview card
+  on socials. If you deploy somewhere other than the default Pages URL, update
+  the absolute `og:*`/`canonical` URLs in `index.html`'s `<head>`.
+
+`og.png` is a static asset — regenerate it only if you restyle the masthead.
 
 ## Images — the three tiers
 
@@ -76,6 +103,18 @@ For **facts and rosters**, pull from any wiki you like (Memory Alpha,
 Wookieepedia, Wikizilla...): their *text* is CC-BY-SA. Just remember a wiki's
 text license does **not** cover its images — those stay studio-copyright, which
 is why they're tier 2, not tier 1.
+
+**Which wiki a card's still comes from** is resolved automatically, in order:
+an explicit `"wiki"` hint on the specimen (a full URL or a Fandom slug like
+`"tardis"`) → a franchise match on the card's production/character/universe
+(Star Wars, LOTR, Doctor Who, MCU, kaiju, and ~20 more) → the card's own
+`link` host when it isn't plain Wikipedia → a per-universe default. Run
+`--audit` to see the split. To pin a card to a specific wiki, just add
+`"wiki": "https://…/api.php"` (or a bare slug) to its row.
+
+Note: Wikimedia occasionally 403s automated fetches of Commons media ("robot
+policy"). Free portraits may be skipped when that happens — the crawler logs it
+and moves on; character stills (served from Fandom's CDN) are unaffected.
 
 ## Growing new cards (optional, needs a key)
 
