@@ -243,7 +243,7 @@ derivative work: …trialsanderrors, Public domain — [source](https://commons.
 ## Ledger summary
 
 - Free-licensed portraits (attributed above): **226**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **207**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **219**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
