@@ -9,11 +9,13 @@ Non-commercial fan project.
 ```
 index.html            the wall — a static page, reads data/specimens.json
 og.png                social-share preview card (1200×630)
+GROW.md               how any model grows the roster (keyless) · AGENTS.md points here
 data/
-  specimens.json      the roster (200 verified cards and counting)
+  specimens.json      the roster (verified cards and counting)
   SOURCES.json        the provenance ledger — every asset, its origin and kind
   GAPS.json           cards with no image yet — the worklist for hand/gen fills
   CANDIDATES.json     the ingest queue — harvested leads awaiting triage
+  drafts.json         model-drafted specimens waiting for `grow --drafts` to merge
 images/               cached image files (populated by the crawler)
 scripts/
   ingest.mjs          KEYLESS lead harvester: wiki categories -> CANDIDATES.json
@@ -172,18 +174,24 @@ ingest for years and never lie about what it holds:
    the lead leaves the queue either way. If the queue is empty it falls back to
    inventing from themed *veins*.
 
-Two ways to run the triage step:
+Three ways to grow the roster:
 
-- **Unattended:** set an **`ANTHROPIC_API_KEY`** repo secret (a metered
-  console.anthropic.com key — a Claude subscription is **not** one) and
-  `nightly.yml` does ingest + triage every night.
-- **From a coding session:** open the repo in Claude Code / the Claude app and
-  have it triage `CANDIDATES.json` into `specimens.json` directly — the model in
-  the session *is* the drafting engine, no key required. Human-in-the-loop, which
-  is arguably the right cadence for a wall where provenance is the point.
+- **Model-drafted, keyless (the main way) — see [`GROW.md`](GROW.md).** Any
+  coding-session model (Claude Code, an agent, anything that can read the repo)
+  drafts specimens into `data/drafts.json`, then runs `node scripts/grow.mjs
+  --drafts`. Each draft is Wikipedia-verified, deduped, given the next `UC-###`
+  and merged. **No API key** — the tokens are spent by whatever model authored
+  the drafts, and *any* model can call the repo the same way. `AGENTS.md` points
+  every agent at the protocol.
+- **Unattended, with a key:** set an **`ANTHROPIC_API_KEY`** repo secret and
+  `nightly.yml` drafts + verifies from themed veins and the `CANDIDATES.json`
+  queue every night. Optional — the keyless path above needs no key.
+- **By hand:** drop images and add rows yourself (`scripts/adopt.mjs`,
+  `scripts/needs.mjs`).
 
-`scripts/retrieve.mjs`, `scripts/credits.mjs` and `scripts/ingest.mjs` all run
-for free; only the model triage in `grow.mjs` needs a key (or a session).
+`scripts/retrieve.mjs`, `scripts/credits.mjs`, `scripts/ingest.mjs` and the
+keyless `grow --drafts` path all run for free. Whatever the path, the rule never
+changes: **real, verifiable people only — accuracy over volume.**
 
 ## Takedown
 
