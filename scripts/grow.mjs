@@ -125,15 +125,26 @@ async function tryEmit(card, ctx) {
   return true;
 }
 
-// existence check → canonical Wikipedia title
+// existence check → canonical Wikipedia title.
+// Retries on rate-limit / transient errors so a burst of drafts can't be wrongly
+// marked "unverified": a real 404 means no such page, but a 429/5xx/network blip
+// must not masquerade as one. Identifies itself with a UA (Wikimedia prefers it).
 async function verify(card) {
   let title = (card.wiki || "").split("/wiki/")[1];
   title = title ? decodeURIComponent(title).replace(/_/g, " ") : card.actor;
-  const r = await fetch("https://en.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(title));
-  if (!r.ok) return null;
-  const j = await r.json();
-  if (j.type === "disambiguation") return null;
-  return j.title || title;
+  const url = "https://en.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(title);
+  const UA = "undercast/0.1 (+https://github.com/BigBirdReturns/undercast; " + (process.env.CONTACT || "grow") + ")";
+  for (let t = 0; t < 5; t++) {
+    let r;
+    try { r = await fetch(url, { headers: { "User-Agent": UA } }); }
+    catch { await sleep((t + 1) * 1500); continue; }
+    if (r.status === 429 || r.status >= 500) { await sleep((t + 1) * 2500); continue; }
+    if (!r.ok) return null; // genuine 404 → no such page, honestly unverified
+    const j = await r.json();
+    if (j.type === "disambiguation") return null;
+    return j.title || title;
+  }
+  return null; // exhausted retries
 }
 
 async function mw(base, params) {
@@ -192,7 +203,7 @@ async function growFromDrafts(file) {
     if (!c || !c.actor || !c.character) { dropped.push([(c && c.actor) || "?", "missing actor/character"]); continue; }
     if (have.has(norm(c.actor))) { dropped.push([c.actor, "already on the wall"]); continue; }
     const title = await verify({ wiki: c.wiki, actor: c.actor }).catch(() => null);
-    await sleep(300);
+    await sleep(700);
     if (!title) { dropped.push([c.actor, "unverified on Wikipedia"]); continue; }
     const row = {
       id: "UC-" + String(++maxN).padStart(3, "0"),
