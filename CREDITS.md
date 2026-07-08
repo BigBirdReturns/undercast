@@ -240,7 +240,9 @@ derivative work: …trialsanderrors, Public domain — [source](https://commons.
 - **Jeff Bennett** (UC-264) — Kevin Paul, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:Jeff_Bennett_at_Fan_Expo_Anaheim_2026-1.jpg)
 - **Gregg Berger** (UC-265) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Gregg_Berger_by_Gage_Skidmore.jpg)
 - **Brian Bonsall** (UC-266) — LilMissDetroit at English Wikipedia, Public domain — [source](https://commons.wikimedia.org/wiki/File:Brian_Bonsall.jpg)
+- **John Fleck** (UC-267) — Анна Джалалян, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:John_Fleck_2019_(cropped).jpg)
 - **Cecily Adams** (UC-270) — Jim Beaver (her husband), CC BY-SA 2.5 — [source](https://commons.wikimedia.org/wiki/File:Cecily_Adams.jpg)
+- **Charles Cooper** (UC-273) — U.S. Navy, Public domain — [source](https://commons.wikimedia.org/wiki/File:Charles_B._Cooper_II_(1989_cadet_photo).jpg)
 - **W. Morgan Sheppard** (UC-275) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Morgan_Sheppard_by_Gage_Skidmore.jpg)
 - **John Schuck** (UC-276) — User:Alansafe5, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:John_Schuck_in_2011.jpg)
 - **Robert Kazinsky** (UC-277) — Gage Skidmore from Peoria, AZ, United States of America, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Rob_Kazinsky_by_Gage_Skidmore.jpg)
@@ -504,8 +506,8 @@ Later versions were uploaded by Rdcarter, Staecker at en.wikipedia.
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **481**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **495**
+- Free-licensed portraits (attributed above): **483**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **497**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
