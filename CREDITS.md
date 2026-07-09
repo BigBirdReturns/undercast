@@ -263,6 +263,7 @@ derivative work: …trialsanderrors, Public domain — [source](https://commons.
 - **El Hijo del Santo** (UC-292) — danksy, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:El_Hijo_De_Santo_vs_Blue_Demon_Jr.jpg)
 - **Dr. Wagner Jr.** (UC-293) — ExtraTNA, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Dr-Wagner-Jr.jpg)
 - **Rey Mysterio** (UC-294) — static, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:ReyMysterio.jpg)
+- **Atlantis** (UC-295) — Unknown, Public domain — [source](https://commons.wikimedia.org/wiki/File:Faroe_stamp_493_Djurhuus_poems_-_atlantis.jpg)
 - **L.A. Park** (UC-296) — Joshua W from The Americas, China, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:L.A._Park_Cuernavaca_2005.jpg)
 - **Lee Arenberg** (UC-298) — steve cranston, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Lee_Arenberg_January_2015.jpg)
 - **Mary Chieffo** (UC-299) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Mary_Chieffo_by_Gage_Skidmore.jpg)
@@ -506,8 +507,8 @@ Later versions were uploaded by Rdcarter, Staecker at en.wikipedia.
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **483**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **497**
+- Free-licensed portraits (attributed above): **484**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **499**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
