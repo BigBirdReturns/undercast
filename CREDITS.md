@@ -513,12 +513,9 @@ derivative work: Hic et nunc, CC BY-SA 3.0 — [source](https://commons.wikimedi
 Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.wikimedia.org/wiki/File:James_Sloyan.jpg)
 - **Nana Visitor** (UC-686) — Salvatore Capalbi (Sheldon Pax) from Italy, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Nana_Visitor_STICCon_2004_crop.jpg)
 - **Tomokazu Seki** (UC-693) — Tokyo, Japan, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Seki_Tomokazu_from_%22PSYCHO-PASS_Sinners_of_the_System_Case.1_%26_Case.2%22_at_Opening_Ceremony_of_the_Tokyo_International_Film_Festival_2018_(44705229685).jpg)
-- **Bob Stutt** (UC-698) — True Williams, Public domain — [source](https://commons.wikimedia.org/wiki/File:Tom_Sawyer_1876_frontispiece.jpg)
-- **Yoshio Kawai** (UC-702) — No machine-readable author provided. Millinda CHAT assumed (based on copyright claims)., Public domain — [source](https://commons.wikimedia.org/wiki/File:Seiyu.png)
 - **Brett Gray** (UC-712) — PhilipRomanoPhoto, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:BrettGray-byPhilipRomano.jpg)
 - **Matt Robinson** (UC-713) — Unknown authorUnknown author, Public domain — [source](https://commons.wikimedia.org/wiki/File:Matt_Robinson_1970b.jpg)
 - **Hidekatsu Shibata** (UC-717) — Pedro Taneda, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Hidekatsu_Shibata_at_Anime_North_20140711.jpg)
-- **Ryuzou Ishino** (UC-720) — No machine-readable author provided. Millinda CHAT assumed (based on copyright claims)., Public domain — [source](https://commons.wikimedia.org/wiki/File:Seiyu.png)
 - **Daisuke Sakaguchi** (UC-723) — Kashiwazaki, Japan, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:FanimeCon_2016_(Daisuke_Sakaguchi).jpg)
 - **George Takei** (UC-725) — None listed, Public domain — [source](https://commons.wikimedia.org/wiki/File:George_Takei_-_Los_Angeles_High_School_-_1956.jpg)
 - **Tim Russ** (UC-728) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Tim_Russ_(32382294283).jpg)
@@ -531,8 +528,6 @@ Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.
 - **Cheryl Wagner** (UC-736) — Mare6868, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Cheryl_Wagner_.jpg)
 - **Marilyn Sokol** (UC-737) — The Shukat Company, Ltd., CC0 — [source](https://commons.wikimedia.org/wiki/File:Marilyn_Sokol_headshot.jpg)
 - **Wendy Froud** (UC-740) — VIGNERON, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Wendy_Froud_-_Rencontres_de_l%E2%80%99imaginaire_de_Broc%C3%A9liande_2014.JPG)
-- **Kōichi Tōchika** (UC-744) — No machine-readable author provided. Millinda CHAT assumed (based on copyright claims)., Public domain — [source](https://commons.wikimedia.org/wiki/File:Seiyu.png)
-- **Tetsu Shiratori** (UC-746) — No machine-readable author provided. Millinda CHAT assumed (based on copyright claims)., Public domain — [source](https://commons.wikimedia.org/wiki/File:Seiyu.png)
 - **David Warner (actor)** (UC-747) — Rory Lewis Photographer, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:David_Warner_(Actor)_Rory_Lewis_Photographer.jpg)
 - **Colm Meaney** (UC-748) — Gordon  Correll, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Colm_Meaney_(29865699455).jpg)
 - **Phil Morris (actor)** (UC-749) — pinguino k from North Hollywood, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Morris,_Phil_(2009)_crop.jpg)
@@ -556,12 +551,9 @@ Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.
 - **Akira Ishida** (UC-775) — M.A.LasTroniN910, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Akira_Ishida_in_2020.jpg)
 - **Victor Yerrid** (UC-779) — Cornstalker, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:Victor_Yerrid.jpg)
 - **Hideo Ishikawa** (UC-780) — Michael Ocampo, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:FanimeCon_2017_126_Hideo_Ishikawa.jpg)
-- **Takahiro Yoshimizu** (UC-782) — No machine-readable author provided. Millinda CHAT assumed (based on copyright claims)., Public domain — [source](https://commons.wikimedia.org/wiki/File:Seiyu.png)
 - **Ryōta Ōsaka** (UC-794) — https://m.youtube.com/@liverpool_official, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Ryota_Osaka_%E9%80%A2%E5%9D%82%E8%89%AF%E5%A4%AA_2020.jpg)
 - **Yukihiro Nozuyama** (UC-795) — numan ch-ヌーマンチャンネル-【公式】, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Yukihiro_Noduyama_20181003.jpg)
-- **Nobuyuki Kobushi** (UC-798) — No machine-readable author provided. Millinda CHAT assumed (based on copyright claims)., Public domain — [source](https://commons.wikimedia.org/wiki/File:Seiyu.png)
 - **Taku Yashiro** (UC-800) — 総務省消防庁, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:Taku_Yashiro.jpg)
-- **Masahiro Anzai** (UC-803) — No machine-readable author provided. Millinda CHAT assumed (based on copyright claims)., Public domain — [source](https://commons.wikimedia.org/wiki/File:Seiyu.png)
 - **Issey Takahashi** (UC-809) — マイナビニュース【エンタメ・ホビー】, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Issey_Takahashi_20190723.jpg)
 - **Christopher Plummer** (UC-811) — President (1981-1989 : Reagan). White House Photographic Office. 1981-1989, Public domain — [source](https://commons.wikimedia.org/wiki/File:Ronald_Reagan_Meets_Christopher_Plummer_C31162-24_(cropped).jpg)
 - **Paul Giamatti** (UC-812) — Raph_PH, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Paul_Giamatti_2024_(cropped).jpg)
@@ -582,14 +574,12 @@ Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.
 - **Linda Thorson** (UC-845) — ABC Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Patrick_MacNee_Linda_Thorson_1968.JPG)
 - **Andrew Prine** (UC-846) — Toglenn, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Andrew_Prine_2010.jpg)
 - **Frank Collison** (UC-848) — Daniel N. Butler, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Frank_Collison_(cropped).jpg)
-- **Marco Rodríguez** (UC-851) — Hefebreo, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Marco_Antonio_Rodriguez.jpg)
 - **Billy Burke** (UC-852) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Billy_Burke_by_Gage_Skidmore.jpg)
 - **Gina Yashere** (UC-857) — Rhododendrites, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Gina_Yashere_(82006).jpg)
 - **James Frain** (UC-860) — uncle_shoggoth, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:James_Frain_2010_(cropped_2).jpg)
 - **Tawny Newsome** (UC-862) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Tawny_Newsome_by_Gage_Skidmore.jpg)
 - **Michaela Dietz** (UC-863) — steve cranston, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Michaela_Dietz_at_the_Florida_Supercon_2016_(4)_(cropped).jpg)
 - **Robert Foxworth** (UC-864) — CBS Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Robert_Foxworth_1975.JPG)
-- **Tom Wright** (UC-865) — Gareth Saunders, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:NTWright071220.jpg)
 - **Dina Meyer** (UC-867) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Dina_Meyer_by_Gage_Skidmore.jpg)
 - **Nicholas Kepros** (UC-868) — Unknown authorUnknown author, Public domain — [source](https://commons.wikimedia.org/wiki/File:Tony_Shalhoub_and_Nicholas_Kepros.jpg)
 - **Denise Crosby** (UC-869) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Denise_Crosby_(53373315035).jpg)
@@ -598,7 +588,6 @@ Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.
 - **Stephen Macht** (UC-882) — Unknown authorUnknown author, Public domain — [source](https://commons.wikimedia.org/wiki/File:Stephen_Macht_1981.jpg)
 - **Richard Beymer** (UC-883) — Frank Bez [1], Public domain — [source](https://commons.wikimedia.org/wiki/File:Dick_Beymer_by_Frank_Bez,_1961.jpg)
 - **John Doman** (UC-884) — LMVTouw, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:John_Doman_2013_(cropped_2).jpg)
-- **Robin Christopher** (UC-885) — Georges Biard, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Ewan_McGregor_Cannes_2012.jpg)
 - **Kimberly Brooks** (UC-886) — Supercon Conventions, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Kimberly_Brooks_2018_(cropped).jpg)
 - **Tracey Walter** (UC-887) — David Zaugh, CC BY-SA 2.5 — [source](https://commons.wikimedia.org/wiki/File:Traceywalter.jpg)
 - **Bill Irwin** (UC-889) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Bill_Irwin_by_Gage_Skidmore.jpg)
@@ -608,14 +597,9 @@ Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.
 - **Scott McNeil** (UC-896) — Simon Chambers from Toronto, Canada, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Scott_McNeil_at_Fan_Expo_2009.jpg)
 - **Todd Haberkorn** (UC-897) — Thaberkorn, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Todd_Haberkorn.jpg)
 - **Trina Nishimura** (UC-898) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Trina_Nishimura_by_Gage_Skidmore_2.jpg)
-- **Percy Edwards** (UC-900) — Tedster007, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:The_grave_of_Percy_Edwards_in_the_churchyard_of_St_Mary,_Polstead,_Suffolk.jpg)
 - **David Shaughnessy** (UC-901) — Davidbiz0303, CC0 — [source](https://commons.wikimedia.org/wiki/File:New_David_Shaughnessy.jpg)
 - **Takeshi Kusao** (UC-903) — Saitama, Japan, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Takeshi_Kusao.jpg)
-- **Kazunari Tanaka** (UC-906) — No machine-readable author provided. Millinda CHAT assumed (based on copyright claims)., Public domain — [source](https://commons.wikimedia.org/wiki/File:Seiyu.png)
 - **Jun'ichi Kanemaru** (UC-909) — SEGA, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Jun%27ichi_Kanemaru_2021.png)
-- **Kan Tanaka** (UC-914) — No machine-readable author provided. Millinda CHAT assumed (based on copyright claims)., Public domain — [source](https://commons.wikimedia.org/wiki/File:Seiyu.png)
-- **Keiichi Noda** (UC-917) — No machine-readable author provided. Millinda CHAT assumed (based on copyright claims)., Public domain — [source](https://commons.wikimedia.org/wiki/File:Seiyu.png)
-- **Yukimasa Kishino** (UC-920) — No machine-readable author provided. Millinda CHAT assumed (based on copyright claims)., Public domain — [source](https://commons.wikimedia.org/wiki/File:Seiyu.png)
 - **Arata Furuta** (UC-922) — Dick Thomas Johnson from Tokyo, Japan, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Furuta_Arata_from_%22Stray_Nightingale%22_at_Opening_Ceremony_of_the_Tokyo_International_Film_Festival_2016_(33260116030).jpg)
 - **Takahiro Sakurai** (UC-925) — Okazaki, Japan, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Sakurai_Takahiro_from_%22GODZILLA_The_Planet_Eater%22_at_Opening_Ceremony_of_the_Tokyo_International_Film_Festival_2018_(31747117738).jpg)
 - **Aoi Yūki** (UC-928) — SEGA, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Aoi_Yuki_2021.png)
@@ -628,7 +612,6 @@ Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.
 - **Cristine Rose** (UC-954) — Kristin Dos Santos, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Cristine_Rose_2009.jpg)
 - **James Sie** (UC-955) — John Manard, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:James_Sie_Animate!_Columbus_062026-1.jpg)
 - **Toshiyuki Morikawa** (UC-956) — ( . Y . ), CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Toshiyuki_Morikawa_(cropped).jpg)
-- **Christopher Collins** (UC-959) — Procolotor, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:EC1835_C_cut.jpg)
 - **Lawrence Dobkin** (UC-960) — Albert C. Gannaway, Public domain — [source](https://commons.wikimedia.org/wiki/File:Lawrence_Dobkin-RaidersofOldCalifornia.jpg)
 - **James Worthy** (UC-961) — Joe Kennedy, Los Angeles Times, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:James_Worthy_attempting_layup_vs_Houston_Rockets_1986-05-17.jpg)
 - **David Graf** (UC-962) — Towpilot, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:David_Graf_in_Stockholm_(cropped).jpg)
@@ -646,8 +629,8 @@ Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **624**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **733**
+- Free-licensed portraits (attributed above): **607**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **716**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
