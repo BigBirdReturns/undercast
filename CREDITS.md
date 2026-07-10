@@ -501,11 +501,12 @@ derivative work: Hic et nunc, CC BY-SA 3.0 — [source](https://commons.wikimedi
 - **Richard Steven Horvitz** (UC-665) — Super Festivals, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Richard_Steven_Horvitz_Photo_Op_GalaxyCon_Richmond_2020.jpg)
 - **Robert Axelrod** (UC-666) — Robert Farley, Jr., CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Robert_Axelrod_8x10v3-TCr.jpg)
 - **Ardwight Chamberlain** (UC-671) — Grosscha at English Wikipedia, Public domain — [source](https://commons.wikimedia.org/wiki/File:Ardwight.jpg)
+- **Wallace Shawn** (UC-674) — Sam Felder, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Wallace_Shawn.jpg)
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **484**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **528**
+- Free-licensed portraits (attributed above): **485**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **529**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
