@@ -502,11 +502,14 @@ derivative work: Hic et nunc, CC BY-SA 3.0 — [source](https://commons.wikimedi
 - **Robert Axelrod** (UC-666) — Robert Farley, Jr., CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Robert_Axelrod_8x10v3-TCr.jpg)
 - **Ardwight Chamberlain** (UC-671) — Grosscha at English Wikipedia, Public domain — [source](https://commons.wikimedia.org/wiki/File:Ardwight.jpg)
 - **Wallace Shawn** (UC-674) — Sam Felder, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Wallace_Shawn.jpg)
+- **Lou Wagner** (UC-675) — Florida Supercon, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Lou_Wagner_2015.jpg)
+- **Andrea Martin** (UC-676) — PhilipRomanoPhoto, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:AndreaMartin-byPhilipRomano.jpg)
+- **Jason Marsden** (UC-678) — https://www.flickr.com/photos/greg2600, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Jason_Marsden_(43904363590).jpg)
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **485**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **529**
+- Free-licensed portraits (attributed above): **488**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **534**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
