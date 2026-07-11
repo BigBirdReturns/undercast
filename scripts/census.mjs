@@ -60,6 +60,13 @@ const FRANCHISES = {
       "Actors who appeared in Super Sentai", "Actors who appeared in Garo",
       "Actors who appeared in Metal Heroes", "Actors who appeared in Godzilla"],
   },
+  "star-wars": {
+    label: "Star Wars", api: "https://starwars.fandom.com/api.php",
+    // Wookieepedia keys performers under "Actors who have portrayed <Character>"
+    // subcategories — the members are the real people; the suffix is the character.
+    portrayalPrefix: "Actors who have portrayed",
+    performerCategories: ["Puppeteers"],
+  },
 };
 
 let lastReq = 0;
@@ -99,6 +106,25 @@ function namesFrom(value) {
 
 async function censusFranchise(key, cfg, rows) {
   console.log(`\n== ${cfg.label} (${cfg.api}) ==`);
+  // portrayal subcategories: "Actors who have portrayed <Character>" — members are
+  // the real performers, the suffix names the character they wore.
+  if (cfg.portrayalPrefix) {
+    let subs = [], cont = {};
+    do {
+      const j = await mw(cfg.api, { action: "query", list: "allcategories", acprefix: cfg.portrayalPrefix, aclimit: "500", ...cont }).catch(() => null);
+      subs.push(...(j?.query?.allcategories || []).map((c) => c["*"]));
+      cont = j?.continue || null;
+    } while (cont);
+    let people = 0;
+    for (const sub of subs) {
+      const character = sub.slice(cfg.portrayalPrefix.length).trim().replace(/\/Legends$/, "");
+      const members = (await categoryMembers(cfg.api, sub).catch(() => []))
+        .filter((t) => PERSONISH.test(t.replace(/\/Legends$/, "")) && !/[()\d]/.test(t))
+        .map((t) => t.replace(/\/Legends$/, ""));
+      for (const p of members) { rows.push({ franchise: cfg.label, category: "portrayed " + character, character, performers: [p] }); people++; }
+    }
+    console.log(`  [portrayal] ${subs.length} characters, ${people} performer credits`);
+  }
   // direct performer categories: every member page IS a performer
   for (const cat of cfg.performerCategories || []) {
     const people = (await categoryMembers(cfg.api, cat).catch(() => []))
