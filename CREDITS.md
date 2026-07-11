@@ -321,6 +321,7 @@ derivative work: …trialsanderrors, Public domain — [source](https://commons.
 - **Anthony De Longis** (UC-307) — Dawna Lee Heising, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Anthony_DeLongis_by_Dawna_Lee_Heising.jpg)
 - **Lawrence Pressman** (UC-311) — CBS Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Lawrence_Pressman_%22Ladies%27_Man%22_(1980_CBS_press_photo).jpg)
 - **Spice Williams-Crosby** (UC-313) — Raven Underwood, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Spice_Williams.jpg)
+- **James Horan** (UC-314) — marcen27 from Glasgow, UK, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Niall_Horan_1_(27137634098).jpg)
 - **Barnaby Edwards** (UC-319) — Steve, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Barnaby_Edwards.jpg)
 - **David Graham** (UC-321) — Valder Beebe Show, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:David_Graham_(actor)_in_2016.png)
 - **John Leeson** (UC-323) — Jamesplay10 (talk)James Dimelow, Public domain — [source](https://commons.wikimedia.org/wiki/File:John_Leeson_(cropped).jpg)
@@ -671,8 +672,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **648**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **795**
+- Free-licensed portraits (attributed above): **649**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **798**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
