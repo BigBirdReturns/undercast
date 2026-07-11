@@ -373,7 +373,6 @@ derivative work: …trialsanderrors, Public domain — [source](https://commons.
 - **James Jude Courtney** (UC-458) — Wikipeepsss, CC0 — [source](https://commons.wikimedia.org/wiki/File:James_Jude_Courtney.jpg)
 - **Brad Loree** (UC-459) — Tim Blackmon for Galaxy Con, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Brad_Loree_(54214983681).jpg)
 - **Richard Brooker** (UC-461) — Brownchristopher1969, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Richard_Brooker_2013_Full_Moon_Tattoo_%26_Horror_Convention_(March_30,_2013).JPG)
-- **Ted White** (UC-462) — Brownchristopher1969, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Ted_White_at_horror_convention_in_nashville_tn_april_2012.jpg)
 - **Steve Daskewisz** (UC-463) — Brownchristopher1969, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Steve_Dash_(cropped).jpg)
 - **Bill Johnson** (UC-465) — Ryota Nakanishi, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Actor_Bill_Johnson.jpg)
 - **Kiwi Kingston** (UC-467) — Hammer, Public domain — [source](https://commons.wikimedia.org/wiki/File:The_Evil_of_Frankenstein_(1964)_trailer_-_Frankenstein%27s_monster_1.png)
@@ -665,8 +664,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **642**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **720**
+- Free-licensed portraits (attributed above): **641**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **716**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
