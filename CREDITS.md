@@ -185,7 +185,6 @@ derivative work: RanZag (talk), CC BY 2.0 — [source](https://commons.wikimedia
 - **Mark Lenard** (UC-143) — NBC Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Spock_and_parents_1968.jpg)
 - **Michael Ansara** (UC-144) — There is a very faint NBC Photo stamp on back but am not able to make out who the NBC photographer was., Public domain — [source](https://commons.wikimedia.org/wiki/File:Michael_Ansara_Law_of_the_Plainsman_1959.JPG)
 - **Tony Todd** (UC-145) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Tony_Todd_(36141902441).jpg)
-- **Tim Rose** (UC-146) — Edward Hands, CC BY 2.5 — [source](https://commons.wikimedia.org/wiki/File:TimRoseBrompton.jpg)
 - **Alan Tudyk** (UC-148) — PhilipRomanoPhoto, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:AlanTudyk-byPhilipRomano.jpg)
 - **Manu Bennett** (UC-150) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Manu_Bennett_by_Gage_Skidmore.jpg)
 - **David Howard Thornton** (UC-151) — Tim Blackmon for Galaxy Con, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:David_Howard_Thornton_(54215255373).jpg)
@@ -262,9 +261,7 @@ derivative work: …trialsanderrors, Public domain — [source](https://commons.
 - **Bela Lugosi** (UC-229) — Nicholas Ház, Public domain — [source](https://commons.wikimedia.org/wiki/File:Bela_Lugosi_-_Mar_1923_Shadowland.jpg)
 - **Kathryn Mullen** (UC-230) — Pburka, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Kathy_Mullen.jpg)
 - **Karen Prell** (UC-231) — Kris Awesome from San Diego, CA, USA, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Red_and_Karen_Prell_(2712248243).jpg)
-- **Troy James** (UC-232) — Mike Morbeck, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Troy_Smith_(cropped).jpg)
 - **Clarence Nash** (UC-233) — Alan Light; cropped by Beyond My Ken (talk) 03:00, 27 July 2015 (UTC), CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Clarence_Nash_San_Diego_Comic_Con_1982_crop.jpg)
-- **Pinto Colvig** (UC-234) — Pinto Colvig, Public domain — [source](https://commons.wikimedia.org/wiki/File:Pinto_Colvig_Bolivar_The_Talking_Ostrich.jpg)
 - **Paul Frees** (UC-236) — Film screenshot (United Artists), Public domain — [source](https://commons.wikimedia.org/wiki/File:Paul_Frees_in_Suddenly_(1954).jpg)
 - **Daws Butler** (UC-237) — Alan Light, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Daws_Butler_(1976).jpg)
 - **Sterling Holloway** (UC-240) — CBS Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Andy_Griffith_Sterling_Holloway_Andy_Griffith_Show_1962.JPG)
@@ -281,7 +278,6 @@ derivative work: …trialsanderrors, Public domain — [source](https://commons.
 - **Debbie Lee Carrington** (UC-254) — BennyOnTheLoose, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Debbie_Lee_Carrington_(2011).jpg)
 - **Paul Winchell** (UC-255) — ABC Television-there is enough of the release left to be able to identify this as ABC by the portion of the logo remaining., Public domain — [source](https://commons.wikimedia.org/wiki/File:Paul_Winchell_1958.JPG)
 - **Hans Conried** (UC-256) — CBS Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Hans_Conried_Uncle_Tonoose_Danny_Thomas_Show_1959.JPG)
-- **Chris Latta** (UC-257) — Procolotor, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:EC1835_C_cut.jpg)
 - **Cam Clarke** (UC-261) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Cam_Clarke_Photo_Op_Animate!_Columbus_2024.jpg)
 - **Barry Gordon** (UC-262) — Barry Gordon, Public domain — [source](https://commons.wikimedia.org/wiki/File:Barrygordonheadshot2.JPG)
 - **Townsend Coleman** (UC-263) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Townsend_Coleman_Photo_Op_Animate!_Columbus_2024.jpg)
@@ -310,7 +306,6 @@ derivative work: …trialsanderrors, Public domain — [source](https://commons.
 - **El Hijo del Santo** (UC-292) — danksy, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:El_Hijo_De_Santo_vs_Blue_Demon_Jr.jpg)
 - **Dr. Wagner Jr.** (UC-293) — ExtraTNA, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Dr-Wagner-Jr.jpg)
 - **Rey Mysterio** (UC-294) — static, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:ReyMysterio.jpg)
-- **Atlantis** (UC-295) — Unknown, Public domain — [source](https://commons.wikimedia.org/wiki/File:Faroe_stamp_493_Djurhuus_poems_-_atlantis.jpg)
 - **L.A. Park** (UC-296) — Joshua W from The Americas, China, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:L.A._Park_Cuernavaca_2005.jpg)
 - **Brian Thompson** (UC-297) — Thane of Ross, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Brian_Thompson_Interview_Photo.jpg)
 - **Lee Arenberg** (UC-298) — Diane Rooney at https://www.flickr.com/photos/dianesf/, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:LeeArenbergMay07.jpg)
@@ -321,7 +316,6 @@ derivative work: …trialsanderrors, Public domain — [source](https://commons.
 - **Anthony De Longis** (UC-307) — Dawna Lee Heising, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Anthony_DeLongis_by_Dawna_Lee_Heising.jpg)
 - **Lawrence Pressman** (UC-311) — CBS Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Lawrence_Pressman_%22Ladies%27_Man%22_(1980_CBS_press_photo).jpg)
 - **Spice Williams-Crosby** (UC-313) — Raven Underwood, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Spice_Williams.jpg)
-- **James Horan** (UC-314) — marcen27 from Glasgow, UK, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Niall_Horan_1_(27137634098).jpg)
 - **Barnaby Edwards** (UC-319) — Steve, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Barnaby_Edwards.jpg)
 - **David Graham** (UC-321) — Valder Beebe Show, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:David_Graham_(actor)_in_2016.png)
 - **John Leeson** (UC-323) — Jamesplay10 (talk)James Dimelow, Public domain — [source](https://commons.wikimedia.org/wiki/File:John_Leeson_(cropped).jpg)
@@ -346,7 +340,6 @@ derivative work: …trialsanderrors, Public domain — [source](https://commons.
 - **Paul Blake (actor, born 1949)** (UC-389) — Raboe001, CC BY-SA 3.0 de — [source](https://commons.wikimedia.org/wiki/File:Stuttgart_2025_-_ComicCon_-_Paul_Blake_-_by-RaBoe_010.jpg)
 - **Femi Taylor** (UC-390) — Oolafan, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Feminew.jpg)
 - **Matthew Wood (sound editor)** (UC-391) — Miguel Discart, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Matthew_Wood_Brussels_Comic_Con_2019.jpg)
-- **Peter Diamond** (UC-394) — The White House from Washington, DC, Public domain — [source](https://commons.wikimedia.org/wiki/File:Peter_Diamond_(economist).jpg)
 - **Alan Ruscoe** (UC-396) — Clodion, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Alan_Ruscoe.JPG)
 - **Tim Dry** (UC-398) — User:Jo!Hannes, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Sean_Crawford_Celebration_Europe_II.jpg)
 - **Lewis MacLeod** (UC-402) — Raph_PH, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:PrivateEyeCriterion041223_(5_of_8)_(53377500198)_(cropped).jpg)
@@ -672,8 +665,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **649**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **798**
+- Free-licensed portraits (attributed above): **642**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **716**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
