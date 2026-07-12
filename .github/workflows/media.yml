@@ -1,0 +1,55 @@
+name: media-upload
+
+# Uploads staged photographic bytes to GitHub Releases and flips the media manifest
+# so the wall serves them from there instead of Pages. Manual, deliberate — you stage
+# a batch with scripts/media-stage.mjs, commit the manifest, then run this to publish.
+#
+# Idempotent: re-running only uploads what's still pending. Additive: local image
+# bytes are left in place; freeing Pages space is a separate later step.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Plan only — list pending assets, create/upload nothing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # create releases + upload assets + push the updated manifest
+
+concurrency:
+  group: media-upload
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Upload staged media to Releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            node scripts/media-upload.mjs --dry-run
+          else
+            node scripts/media-upload.mjs
+          fi
+
+      - name: Validate invariants (gate — manifest must stay consistent)
+        if: ${{ inputs.dry_run != true }}
+        run: node scripts/validate.mjs
+
+      - name: Commit the flipped manifest
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          git config user.name  "undercast-bot"
+          git config user.email "undercast-bot@users.noreply.github.com"
+          git add data/media-manifest.json
+          git diff --cached --quiet || git commit -m "media: publish staged assets to Releases ($(date -u +%F))"
+          git push

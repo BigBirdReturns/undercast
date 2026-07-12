@@ -2,6 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
+<!-- Content-Security-Policy: defence-in-depth. The app is a single inline script
+     with inline onclick handlers, so 'unsafe-inline' scripts are required — the CSP
+     is NOT the primary XSS control (that's the esc()/safeUrl()/safeId() helpers that
+     sanitise every value written into innerHTML). What it DOES buy: no external or
+     injected <script src>, no plugins, no <base> hijack, no form posts, and fetch
+     limited to same-origin. Fonts are allow-listed to Google's hosts. (Clickjacking
+     protection would need a frame-ancestors HTTP header — a <meta> CSP can't carry
+     it, and GitHub Pages can't set headers — so it's out of scope here.) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>UNDERCAST — a field index of the performers who vanish under the design</title>
 <meta name="description" content="A field index of the performers who vanish under a designed face — heavy prosthetics, a mask, a creature suit, motion capture, an unseen voice. Every card flips: the character on the front, the human underneath on the back." />
@@ -374,10 +383,11 @@
         whole point, and it lands harder than a thumbnail.
       </p>
       <p>
-        <b>Fork the wall.</b> Every specimen is one object in a plain <code>SPECIMENS</code> array at the top
-        of the script. Add a row — character, actor, production, the <b>designer credit</b>, a transformation
-        rating, a "known for," and one good reveal — and it appears. No build step. The benchmark is the
-        schema: no entry without a designed face behind it.
+        <b>Fork the wall.</b> Every specimen is one object in the canonical <code>data/specimens.json</code> —
+        character, actor, production, the <b>designer credit</b>, a transformation rating, a "known for," and
+        one good reveal. Add a row and run <code>node scripts/shard.mjs</code> to rebuild the lean index + shards
+        the page loads (so it stays fast past a million cards). The benchmark is the schema: no entry without a
+        designed face behind it.
       </p>
     </div>
     <div class="colophon">Undercast · turn a cast to read who's underneath · catalog grows by pull request<span id="queue"></span></div>
@@ -386,10 +396,19 @@
 
 <script>
 /* ============================================================
-   SPECIMENS — the wall. One object per performer who vanished.
-   Field rule: no entry without a *designed* face behind it.
+   The wall loads as two tiers so it stays fast whether the roster is 1,000 or
+   1,000,000: a lean INDEX (one small entry per card — facets + sort + search)
+   is fetched on boot, and the heavy full records live in numbered SHARDS that
+   load only for the cards actually on screen. Projections are built from the
+   canonical data/specimens.json by scripts/shard.mjs; if they're missing we
+   fall back to reading specimens.json directly, so the site never hard-fails.
    ============================================================ */
-let SPECIMENS = [];
+let INDEX = [];               // lean entries: {id,sh,u,y,d,a,c,p,tf,k?,kw?,_hay}
+let MANIFEST = null;          // data/shard-manifest.json — the shard load map
+let MEDIA = {};               // localSrc -> {url,location}: images living on GitHub Releases
+const RECORDS = new Map();    // id -> full record (populated lazily from shards)
+const SHARDS = new Map();     // shard# -> in-flight/settled load promise (dedupe)
+let renderSeq = 0;            // guards against a stale async render clobbering a newer one
 
 /* ---------- deterministic pseudo-random from an id ---------- */
 function seedRand(str){
@@ -476,6 +495,33 @@ function voiceGlyph(rand){
     ${grad}${head}${band}${bars}${stamp}
   </svg>`;
 }
+
+/* The blank state for a photo that FAILED to load (e.g. a release asset went away).
+   Deliberately distinct from the generated life-cast a card shows when it simply
+   has no photo — a broken remote asset must not masquerade as an intentional
+   "no cast", show a browser broken-image icon, or draw a fake humanoid face. */
+function blankCast(){
+  return `<svg class="portrait" viewBox="0 0 268 176" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg" aria-label="image unavailable" role="img">
+    <rect width="268" height="176" fill="var(--relief)"/>
+    <rect x="1" y="1" width="266" height="174" fill="none" stroke="var(--relief-lo)" stroke-width="2"/>
+    <line x1="134" y1="16" x2="134" y2="150" stroke="var(--seam)" stroke-width="1" stroke-dasharray="1 5" opacity=".6"/>
+    <g fill="none" stroke="var(--relief-lo)" stroke-width="2" opacity=".75">
+      <rect x="97" y="52" width="74" height="52" rx="3"/>
+      <circle cx="150" cy="68" r="5"/>
+      <path d="M103 98l16-18 13 11 11-14 16 21"/>
+    </g>
+    <text x="134" y="132" text-anchor="middle" font-family="Space Mono, monospace" font-size="11" letter-spacing="2" fill="var(--grease)">IMAGE OFFLINE</text>
+  </svg>`;
+}
+// swap a failed <img> for the blank state (onerror can fire more than once — guard it)
+function undercastBlank(img){
+  if(!img||img.dataset.blanked) return;
+  img.dataset.blanked="1";
+  const holder=document.createElement("div");
+  holder.innerHTML=blankCast();
+  const el=holder.firstElementChild;
+  if(el) img.replaceWith(el);
+}
 const grid=document.getElementById("grid");
 const qEl=document.getElementById("q");
 const sortEl=document.getElementById("sort");
@@ -508,7 +554,7 @@ function parseMakers(str){
 }
 function buildMakerIndex(list){
   const idx={};
-  for(const s of list) for(const m of parseMakers(s.designer)) idx[m]=(idx[m]||0)+1;
+  for(const s of list) for(const m of parseMakers(s.d)) idx[m]=(idx[m]||0)+1;
   return idx;
 }
 /* a card's headline maker = the parsed name that appears on the most cards overall */
@@ -518,6 +564,15 @@ function primaryMakerOf(designer){
   return ms.slice().sort((a,b)=>(MAKER_INDEX[b]||0)-(MAKER_INDEX[a]||0))[0];
 }
 function escAttr(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+// ── injection guards: every value that reaches innerHTML goes through one of these ──
+// esc: text + double-quoted attributes (also escapes ' so it's safe inside single-quoted attrs).
+function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
+// safeId: only our catalog-id charset — safe to drop into a single-quoted onclick or a #fragment.
+function safeId(s){return /^[A-Za-z0-9_-]+$/.test(String(s==null?"":s))?String(s):"";}
+// safeUrl: an href we hand to the browser — http(s) only, so javascript:/data:/relative can't ride in.
+function safeUrl(u){u=String(u==null?"":u).trim();return /^https?:\/\//i.test(u)&&!/[\s"'<>]/.test(u)?u:"#";}
+// safeSrc: a local image path (or http image) for a src="" — neutralise attribute breakout.
+function safeSrc(u){u=String(u==null?"":u).trim();return /["'<>]/.test(u)?"":u;}
 
 /* first 4-digit year in the years string → a decade label */
 function decadeOf(years){
@@ -533,7 +588,7 @@ const DECADE_ORDER=["70s","80s","90s","00s","10s","pre-70s"];
 function buildFilters(){
   chipsEl.innerHTML="";
   decadesEl.innerHTML="";
-  const universes=["All",...Array.from(new Set(SPECIMENS.map(s=>s.universe)))];
+  const universes=["All",...Array.from(new Set(INDEX.map(e=>e.u)))];
   universes.forEach(u=>{
     const b=document.createElement("button");
     b.className="chip";b.textContent=u;b.setAttribute("aria-pressed",u===universeFilter);
@@ -541,7 +596,7 @@ function buildFilters(){
     chipsEl.appendChild(b);
   });
 
-  const present=new Set(SPECIMENS.map(s=>decadeOf(s.years)));
+  const present=new Set(INDEX.map(e=>decadeOf(e.y)));
   const decades=["All",...DECADE_ORDER.filter(d=>present.has(d))];
   decades.forEach(d=>{
     const b=document.createElement("button");
@@ -553,14 +608,14 @@ function buildFilters(){
 
 /* the makers strip: every hand that built >=2 faces, ranked, click to filter */
 function buildMakers(){
-  MAKER_INDEX=buildMakerIndex(SPECIMENS.concat(GROWN));
+  MAKER_INDEX=buildMakerIndex(INDEX);
   const ranked=Object.entries(MAKER_INDEX).filter(([,n])=>n>=2).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]));
   makerChipsEl.innerHTML="";
   for(const [name,n] of ranked){
     const b=document.createElement("button");
     b.className="mchip";b.type="button";b.dataset.maker=name;
     b.setAttribute("aria-pressed",String(name===makerFilter));
-    b.innerHTML=`<span class="mname">${name}</span><span class="mn">${n}</span>`;
+    b.innerHTML=`<span class="mname">${esc(name)}</span><span class="mn">${esc(n)}</span>`;
     b.addEventListener("click",()=>setMaker(name));
     makerChipsEl.appendChild(b);
   }
@@ -588,13 +643,13 @@ function card(s){
   const still = s.still && s.still.src;
   const portrait = s.portrait && s.portrait.src;
   const front = still
-    ? `<img class="shot" src="${s.still.src}" alt="${s.character}" loading="lazy">`
+    ? `<img class="shot" src="${safeSrc(mediaSrc(s.still.src))}" alt="${esc(s.character)}" loading="lazy" onerror="undercastBlank(this)">`
     : castSvg;
   // the reveal image, in the SAME box as the front: the real photo, or — with no
   // photo yet — the BARE-face relief (mask off), so the flip is always face→face.
   const bareSvg = isVoice ? voiceGlyph(seedRand(s.id+"vb")) : reliefBase(seedRand(s.id+"b"), false);
   const back = portrait
-    ? `<img class="shot" src="${s.portrait.src}" alt="${s.actor}" loading="lazy">`
+    ? `<img class="shot" src="${safeSrc(mediaSrc(s.portrait.src))}" alt="${esc(s.actor)}" loading="lazy" onerror="undercastBlank(this)">`
     : bareSvg;
   const genMark = ((s.still&&s.still.kind==="generated")||(s.portrait&&s.portrait.kind==="generated"))
     ? `<span class="gen-badge">gen</span>` : "";
@@ -606,8 +661,8 @@ function card(s){
   const creditBlock = isVoice
     ? `<div class="designed"><span class="lab">On file</span><span class="who">Voice only · no cast taken</span></div>`
     : `<div class="designed"><span class="lab">Face designed by</span>${pm
-        ? `<a class="who" href="#" data-maker="${escAttr(pm)}" title="See other faces built by ${escAttr(pm)}" onclick="return makerClick(event,this)">${s.designer}</a>`
-        : `<span class="who">${s.designer}</span>`}</div>`;
+        ? `<a class="who" href="#" data-maker="${escAttr(pm)}" title="See other faces built by ${escAttr(pm)}" onclick="return makerClick(event,this)">${esc(s.designer)}</a>`
+        : `<span class="who">${esc(s.designer)}</span>`}</div>`;
   if(s._grown){
     btn.classList.add("grown");
     const vb = s._verified ? "grown-badge" : "grown-badge unverified";
@@ -618,26 +673,26 @@ function card(s){
   btn.innerHTML+=`
     <div class="inner">
       <div class="face front">
-        <div class="cat"><span class="id">${s.id}</span><span>${s.universe} · ${decadeOf(s.years)}</span></div>
+        <div class="cat"><span class="id">${esc(s.id)}</span><span>${esc(s.universe)} · ${esc(decadeOf(s.years))}</span></div>
         ${front}
         <div class="frontmeta">
-          <div class="charname">${s.character}</div>
-          <div class="prod">${s.production} · ${s.years}</div>
+          <div class="charname">${esc(s.character)}</div>
+          <div class="prod">${esc(s.production)} · ${esc(s.years)}</div>
           ${creditBlock}
           ${pips(s.transform, isVoice?"unseen":"vanished")}
           <div class="turnhint">▸ turn the ${isVoice?"card":"cast"}</div>
         </div>
       </div>
       <div class="face back">
-        <div class="cat"><span class="id">${s.id}</span><span>underneath</span></div>
+        <div class="cat"><span class="id">${esc(s.id)}</span><span>underneath</span></div>
         ${back}
         <div class="back-body">
-          <div class="under-row"><span class="under-lab">${isVoice?"The voice":"The performer"}</span><a class="permalink" href="#${s.id}" title="Copy a link to this specimen" onclick="return copyPermalink(event,'${s.id}')">⌗ ${s.id}</a></div>
-          <div class="actor">${s.actor}</div>
-          <div class="knownfor"><span class="k">You've also ${isVoice?"heard":"seen"} them</span>${s.knownFor}</div>
-          <div class="reveal">${s.reveal}</div>
-          ${portrait && (s.portrait.author||s.portrait.license) ? `<div class="credit">${s.portrait.author||""}${s.portrait.license?" · "+s.portrait.license:""}${s.portrait.origin?` · <a href="${s.portrait.origin}" target="_blank" rel="noopener" onclick="event.stopPropagation()">source</a>`:""}</div>` : ""}
-          <a class="backlink" href="${s.link}" target="_blank" rel="noopener" onclick="event.stopPropagation()">See the real face →</a>
+          <div class="under-row"><span class="under-lab">${isVoice?"The voice":"The performer"}</span><a class="permalink" href="#${safeId(s.id)}" title="Copy a link to this specimen" onclick="return copyPermalink(event,'${safeId(s.id)}')">⌗ ${esc(s.id)}</a></div>
+          <div class="actor">${esc(s.actor)}</div>
+          <div class="knownfor"><span class="k">You've also ${isVoice?"heard":"seen"} them</span>${esc(s.knownFor)}</div>
+          <div class="reveal">${esc(s.reveal)}</div>
+          ${portrait && (s.portrait.author||s.portrait.license) ? `<div class="credit">${esc(s.portrait.author||"")}${s.portrait.license?" · "+esc(s.portrait.license):""}${s.portrait.origin?` · <a href="${safeUrl(s.portrait.origin)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">source</a>`:""}</div>` : ""}
+          <a class="backlink" href="${safeUrl(s.link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">See the real face →</a>
         </div>
       </div>
     </div>`;
@@ -647,8 +702,6 @@ function card(s){
   });
   return btn;
 }
-
-let GROWN=[];
 
 // Render cap: only ever put PAGE cards in the DOM at once, "load more" for the
 // rest. Keeps the browser fast whether the roster is 175 or 175,000.
@@ -666,30 +719,79 @@ const ALIAS={tng:"the next generation",ds9:"deep space nine",tos:"the original s
 const ALIAS_RE=new RegExp("\\b("+Object.keys(ALIAS).join("|")+")\\b","g");
 const expandAliases=t=>t.replace(ALIAS_RE,m=>m+" "+ALIAS[m]);
 
-function render(reset=true){
-  if(reset) shownCount=PAGE;
+/* ---------- media resolution ---------- */
+// An image's bytes live either in the repo (Pages) or on a GitHub Release. The
+// manifest is the ONLY source of that fact — the wall knows a resolved url and
+// whether it's live, never the release layout. Absent/pending => serve local.
+function mediaSrc(src){ const e=MEDIA[src]; return (e&&e.location==="release"&&e.url)?e.url:src; }
+
+/* ---------- the two-tier data layer ---------- */
+// Precompute an index entry's search haystack once (per-keystroke search is then
+// just a substring test, not a rebuild-the-string over the whole roster each time).
+function hydrate(e){
+  e._hay = expandAliases((e.a+" "+e.c+" "+e.p+" "+e.u+" "+e.d+" "+(e.kw||"")).toLowerCase());
+  return e;
+}
+// A grown/full record → an index-shaped entry (used only in the specimens.json
+// fallback and for any in-page grown cards). Carries full prose into the haystack.
+function asEntry(s){
+  const e={id:s.id,sh:-1,u:s.universe,y:s.years||"",d:s.designer||"",a:s.actor||"",c:s.character||"",p:s.production||"",tf:s.transform||0};
+  if(s.kind==="voice") e.k=1;
+  e._hay=expandAliases((s.actor+" "+s.character+" "+s.production+" "+s.universe+" "+s.designer+" "+(s.knownFor||"")+" "+(s.reveal||"")).toLowerCase());
+  return e;
+}
+// Load one shard's full records into RECORDS, deduping concurrent requests.
+function loadShard(sh){
+  if(SHARDS.has(sh)) return SHARDS.get(sh);
+  const meta=MANIFEST&&MANIFEST.shards&&MANIFEST.shards[sh];
+  if(!meta){ const p=Promise.resolve([]); SHARDS.set(sh,p); return p; }
+  const p=fetch("./data/"+meta.file).then(r=>{if(!r.ok)throw new Error("shard "+sh);return r.json();})
+    .then(recs=>{ for(const rec of recs) RECORDS.set(rec.id,rec); return recs; })
+    .catch(err=>{ SHARDS.delete(sh); throw err; }); // let a later render retry
+  SHARDS.set(sh,p);
+  return p;
+}
+// Make sure every entry in the list has its full record in memory before we render it.
+async function ensureRecords(entries){
+  const need=new Set();
+  for(const e of entries) if(!RECORDS.has(e.id)) need.add(e.sh);
+  if(need.size) await Promise.all([...need].map(sh=>loadShard(sh).catch(()=>null)));
+}
+// The filtered + sorted index entries — shared by render() and focusSpecimen().
+function computeRows(){
   const q=qEl.value.trim().toLowerCase();
   const terms=[q,ALIAS[q]].filter(Boolean); // a bare acronym query also tries its expansion
-  const ALL=SPECIMENS.concat(GROWN);
   const mf=makerFilter.toLowerCase();
-  let rows=ALL.filter(s=>{
-    const inU = universeFilter==="All"||s.universe===universeFilter;
-    const inD = decadeFilter==="All"||decadeOf(s.years)===decadeFilter;
-    const inM = !mf || (s.designer||"").toLowerCase().includes(mf);
-    const hay=expandAliases((s.character+" "+s.actor+" "+s.production+" "+s.universe+" "+s.designer+" "+(s.knownFor||"")+" "+(s.reveal||"")).toLowerCase());
-    return inU && inD && inM && (q===""||terms.some(t=>hay.includes(t)));
+  const list=INDEX;
+  let rows=list.filter(e=>{
+    const inU = universeFilter==="All"||e.u===universeFilter;
+    const inD = decadeFilter==="All"||decadeOf(e.y)===decadeFilter;
+    const inM = !mf || (e.d||"").toLowerCase().includes(mf);
+    return inU && inD && inM && (q===""||terms.some(t=>e._hay.includes(t)));
   });
   const mode=sortEl.value;
   rows.sort((a,b)=>{
-    if(mode==="transform") return b.transform-a.transform || a.id.localeCompare(b.id);
-    if(mode==="actor") return a.actor.localeCompare(b.actor);
-    return a.id.localeCompare(b.id);
+    if(mode==="transform") return b.tf-a.tf || String(a.id).localeCompare(String(b.id));
+    if(mode==="actor") return String(a.a).localeCompare(String(b.a));
+    return String(a.id).localeCompare(String(b.id));
   });
+  return rows;
+}
+
+async function render(reset=true){
+  if(reset) shownCount=PAGE;
+  const rows=computeRows();
+  const visible=rows.slice(0,shownCount);
+  // fetch only the shards the visible cards live in, then guard against a newer
+  // render (a later keystroke) having superseded us while we awaited the fetch.
+  const seq=++renderSeq;
+  await ensureRecords(visible);
+  if(seq!==renderSeq) return;
   grid.innerHTML="";
   if(rows.length===0){
     grid.innerHTML=`<div class="empty"><b>No cast on this shelf.</b>Nobody in the index matches that yet — the wall only holds performers with a designed face. Clear the search, or grow the shelf below.</div>`;
   } else {
-    rows.slice(0,shownCount).forEach(s=>grid.appendChild(card(s)));
+    for(const e of visible){ const rec=RECORDS.get(e.id); if(rec) grid.appendChild(card(rec)); }
   }
   // load-more control when the filtered set exceeds what's on screen
   if(rows.length>shownCount){
@@ -703,16 +805,15 @@ function render(reset=true){
   // active-maker banner (also works when the makers strip is scrolled off screen)
   if(makerFilter){
     makerActiveEl.hidden=false;
-    makerActiveEl.innerHTML=`<span>Built by <b>${makerFilter}</b> · ${rows.length} ${rows.length===1?"face":"faces"} on the wall</span><button class="clearmaker" type="button" onclick="setMaker('')">clear ✕</button>`;
+    makerActiveEl.innerHTML=`<span>Built by <b>${esc(makerFilter)}</b> · ${rows.length} ${rows.length===1?"face":"faces"} on the wall</span><button class="clearmaker" type="button" onclick="setMaker('')">clear ✕</button>`;
   } else {
     makerActiveEl.hidden=true;
     makerActiveEl.innerHTML="";
   }
-  const shown=rows.length, total=ALL.length;
-  const label = GROWN.length ? ` · ${GROWN.length} grown` : "";
-  document.getElementById("count").innerHTML = ((shown===total)
+  const shown=rows.length, total=INDEX.length;
+  document.getElementById("count").innerHTML = (shown===total)
     ? String(total).padStart(2,"0")
-    : shown+"/"+total) + (label?`<span style="font-size:11px;letter-spacing:.1em;color:var(--grease)">${label}</span>`:"");
+    : shown+"/"+total;
   syncURL();
 }
 
@@ -739,14 +840,18 @@ function applyURLState(){
 }
 
 /* ---------- deep link: #UC-042 opens, scrolls to, and rings a specimen ---------- */
-function focusSpecimen(id){
+async function focusSpecimen(id){
   if(!id) return;
   const sel='[data-uid="'+(window.CSS&&CSS.escape?CSS.escape(id):id)+'"]';
   let el=grid.querySelector(sel);
-  if(!el){ // filtered out or past the page cap — clear filters and render enough
+  if(!el){ // filtered out or past the page cap — clear filters and page in far enough
     universeFilter="All";decadeFilter="All";makerFilter="";qEl.value="";
-    shownCount=Math.max(shownCount,SPECIMENS.length+GROWN.length);
-    buildFilters();reflectMakerChips();render(false);
+    const rows=computeRows();
+    const pos=rows.findIndex(e=>e.id===id);
+    if(pos<0) return; // no such specimen in the index
+    shownCount=Math.max(shownCount, Math.ceil((pos+1)/PAGE)*PAGE); // enough pages to include it
+    buildFilters();reflectMakerChips();
+    await render(false); // loads the shards up to that page
     el=grid.querySelector(sel);
   }
   if(!el) return;
@@ -768,27 +873,47 @@ function copyPermalink(ev,id){
 }
 
 document.getElementById("random").addEventListener("click",function(){
-  const ALL=SPECIMENS.concat(GROWN);
-  if(!ALL.length) return;
-  const s=ALL[Math.floor(Math.random()*ALL.length)];
-  location.hash=s.id; // triggers hashchange -> focusSpecimen
+  if(!INDEX.length) return;
+  const e=INDEX[Math.floor(Math.random()*INDEX.length)];
+  location.hash=e.id; // triggers hashchange -> focusSpecimen
 });
 window.addEventListener("hashchange",function(){ focusSpecimen(location.hash.replace(/^#/,"")); });
 
-qEl.addEventListener("input",render);
-sortEl.addEventListener("change",render);
-fetch("./data/specimens.json").then(function(r){return r.json();}).then(function(d){
-  SPECIMENS=d;
+qEl.addEventListener("input",()=>render());
+sortEl.addEventListener("change",()=>render());
+
+// Boot: load the lean index + shard map. If the projections aren't built (a fresh
+// fork, or mid-migration), fall back to reading the canonical specimens.json whole
+// so the wall still works — just without the lazy-loading win.
+async function boot(){
   applyURLState();
+  try{
+    const [idx,man]=await Promise.all([
+      fetch("./data/index.json").then(r=>{if(!r.ok)throw new Error("index");return r.json();}),
+      fetch("./data/shard-manifest.json").then(r=>{if(!r.ok)throw new Error("manifest");return r.json();}),
+    ]);
+    INDEX=idx.map(hydrate);
+    MANIFEST=man;
+  }catch(_){
+    const specs=await fetch("./data/specimens.json").then(function(r){return r.json();});
+    MANIFEST={shards:[]};
+    INDEX=specs.map(function(s){ RECORDS.set(s.id,s); return asEntry(s); }); // every record already resident
+  }
+  // optional media manifest: which images have moved to GitHub Releases (absent is fine)
+  try{
+    const media=await fetch("./data/media-manifest.json").then(function(r){return r.ok?r.json():null;});
+    if(media&&media.assets) for(const src in media.assets){ const e=media.assets[src]; MEDIA[src]={url:e.url,location:e.location}; }
+  }catch(_){}
   buildFilters();
   buildMakers();
-  render();
+  await render();
   if(location.hash) focusSpecimen(location.hash.replace(/^#/,""));
   // living pipeline: show how many harvested leads are queued for triage (optional file)
   fetch("./data/CANDIDATES.json").then(function(r){return r.ok?r.json():[];}).then(function(c){
     if(Array.isArray(c)&&c.length) document.getElementById("queue").textContent=" · "+c.length+" leads in the ingest queue";
   }).catch(function(){});
-}).catch(function(){ grid.innerHTML="<div class=\"empty\"><b>Couldn&#39;t load the roster.</b>Serve this over http (not file://) and make sure data/specimens.json is present.</div>"; });
+}
+boot().catch(function(){ grid.innerHTML="<div class=\"empty\"><b>Couldn&#39;t load the roster.</b>Serve this over http (not file://) and make sure data/index.json (or data/specimens.json) is present.</div>"; });
 </script>
 </body>
 </html>
