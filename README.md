@@ -10,6 +10,9 @@ Non-commercial fan project.
 index.html            the wall — a static page; boots from the generated projections
                       (data/index.json + data/shards/ via data/shard-manifest.json),
                       falling back to data/specimens.json if they're absent
+recognition.html      one live catalog record at a time — character, performer,
+                      credited work, and evidence-backed connection rails
+assets/               light/dark topology marks for explicitly missing evidence
 og.png                social-share preview card (1200×630)
 GROW.md               how any model grows the roster (keyless) · AGENTS.md points here
 data/
@@ -72,6 +75,9 @@ The wall is built to be linked, not just visited:
 - **Every specimen is a permalink.** `…/#UC-042` opens the wall, scrolls to that
   card, flips it to the human side, and rings it. The `⌗ UC-042` button on a
   card's back copies its link.
+- **Every specimen has a Recognition Loop.** `…/recognition.html#UC-042` opens
+  the focused record and connects it to shared performers, parsed maker credits,
+  and conservative method signals. Missing evidence stays visibly missing.
 - **Filtered views are shareable.** Shelf, decade, search and sort live in the
   URL — `…/?shelf=Star%20Trek&decade=90s&sort=transform` reopens exactly that.
 - **⚄ Random** pulls a specimen at random (great for "show me someone I don't
