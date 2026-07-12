@@ -12,6 +12,8 @@ index.html            the wall — a static page; boots from the generated proje
                       falling back to data/specimens.json if they're absent
 recognition.html      one live catalog record at a time — character, performer,
                       credited work, and evidence-backed connection rails
+records/UC-…/         generated permanent, no-JavaScript record routes; built for
+                      deployment by scripts/build-record-pages.mjs
 assets/               light/dark topology marks for explicitly missing evidence
 og.png                social-share preview card (1200×630)
 GROW.md               how any model grows the roster (keyless) · AGENTS.md points here
@@ -65,8 +67,9 @@ node scripts/retrieve.mjs --audit    # still-wiki coverage, grouped by host
 ```
 
 Deploy: Settings -> Pages -> Source: **GitHub Actions**. The `pages.yml` workflow
-publishes the site on every push to `main` (so it republishes automatically after
-the nightly bots commit new cards and images). Done.
+builds the permanent record routes and publishes the site on every push to `main`
+(so it republishes automatically after the nightly bots commit new cards and
+images). Done.
 
 ## Share it
 
