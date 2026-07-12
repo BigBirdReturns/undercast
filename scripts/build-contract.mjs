@@ -5,7 +5,10 @@ import { createHash } from "node:crypto";
 
 const ORIGIN="https://bigbirdreturns.github.io/undercast";
 const sha256=value=>createHash("sha256").update(value).digest("hex");
-const fileMeta=async path=>{const body=await readFile(path);return {path,bytes:body.length,sha256:sha256(body)};};
+// GitHub Pages serves repository text with LF endings. Hash that published form
+// even when a Windows checkout has core.autocrlf enabled.
+const publishedText=async path=>Buffer.from((await readFile(path,"utf8")).replace(/\r\n/g,"\n"),"utf8");
+const fileMeta=async path=>{const body=await publishedText(path);return {path,bytes:body.length,sha256:sha256(body)};};
 const slug=value=>String(value||"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/&/g," and ").replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,48)||"unknown";
 const entityKey=(kind,label)=>`${kind}:${slug(label)}-${sha256(String(label).normalize("NFKC").toLowerCase()).slice(0,8)}`;
 const tokens=value=>[...new Set(String(value||"").normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}]{2,}/gu)||[])];

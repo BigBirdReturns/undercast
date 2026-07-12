@@ -128,6 +128,7 @@ const media = existsSync("data/media-manifest.json") ? load("data/media-manifest
 const mediaAssets = (media && media.assets) || {};
 const onRelease = (src) => mediaAssets[src] && mediaAssets[src].location === "release"; // resolvable without a local file
 const hashBytes = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
+const publishedTextBytes = (p) => Buffer.from(readFileSync(p, "utf8").replace(/\r\n/g, "\n"), "utf8");
 
 // ── profile: schema conformance ───────────────────────────────────────────────
 if (existsSync("schema/specimen.schema.json")) conformProfile("schema.specimen", specimens, load("schema/specimen.schema.json"), "specimen");
@@ -357,8 +358,9 @@ if (existsSync("data/archive.json")) {
   if (archive.canonical?.records?.content_sha256 !== manifest.source_sha256) fail("contract.consistency", "canonical content hash drift");
   for (const item of [archive.canonical?.records, archive.canonical?.sources, archive.projections?.lean_index, archive.projections?.shard_manifest, archive.projections?.entities, archive.projections?.search, archive.projections?.media_live, archive.vocabularies?.conditions, ...(archive.web_assets || [])]) {
     if (!item?.path || !existsSync(item.path)) { fail("contract.consistency", `contract path missing: ${item?.path || "undefined"}`); continue; }
-    if (item.sha256 !== hashBytes(item.path)) fail("contract.consistency", `${item.path} sha256 drift — rebuild contract`);
-    if (item.bytes !== statSync(item.path).size) fail("contract.consistency", `${item.path} byte count drift`);
+    const published = publishedTextBytes(item.path);
+    if (item.sha256 !== createHash("sha256").update(published).digest("hex")) fail("contract.consistency", `${item.path} sha256 drift — rebuild contract`);
+    if (item.bytes !== published.length) fail("contract.consistency", `${item.path} published byte count drift`);
   }
   const search = load("data/search/manifest.json");
   if (search.generated_from !== manifest.source_sha256) fail("contract.consistency", "search projection was not built from current truth");
