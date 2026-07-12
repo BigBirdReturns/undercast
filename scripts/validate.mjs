@@ -76,10 +76,20 @@ function validate(value, schema, root, path, errs) {
   if (typeof value === "string") {
     if (schema.minLength != null && value.length < schema.minLength) errs.push(`${path}: shorter than minLength ${schema.minLength}`);
     if (schema.pattern && !new RegExp(schema.pattern).test(value)) errs.push(`${path}: "${value.slice(0, 60)}" fails pattern ${schema.pattern}`);
+    if (schema.format === "uri") { try { new URL(value); } catch { errs.push(`${path}: is not a valid URI`); } }
   }
   if (typeof value === "number") {
     if (schema.minimum != null && value < schema.minimum) errs.push(`${path}: ${value} < minimum ${schema.minimum}`);
     if (schema.maximum != null && value > schema.maximum) errs.push(`${path}: ${value} > maximum ${schema.maximum}`);
+  }
+  if (Array.isArray(value)) {
+    if (schema.minItems != null && value.length < schema.minItems) errs.push(`${path}: fewer than minItems ${schema.minItems}`);
+    if (schema.maxItems != null && value.length > schema.maxItems) errs.push(`${path}: more than maxItems ${schema.maxItems}`);
+    if (schema.uniqueItems) {
+      const serialised = value.map((item) => JSON.stringify(item));
+      if (new Set(serialised).size !== serialised.length) errs.push(`${path}: duplicate array item`);
+    }
+    if (schema.items) value.forEach((item, index) => validate(item, schema.items, root, `${path}[${index}]`, errs));
   }
   if (schema.type === "object" || schema.properties) {
     if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -101,6 +111,13 @@ function conformProfile(code, rows, schema, keyName) {
   }
   if (bad > 8) fail(code, `…and ${bad - 8} more ${keyName} records fail schema (${bad} total)`);
 }
+function conformObjectProfile(code, value, schema, label) {
+  mark(code);
+  const errs = [];
+  validate(value, schema, schema, label, errs);
+  for (const message of errs.slice(0, 20)) fail(code, message);
+  if (errs.length > 20) fail(code, `and ${errs.length - 20} more schema errors`);
+}
 
 // ── load the catalog ──────────────────────────────────────────────────────────
 const specimens = load("data/specimens.json");
@@ -110,12 +127,18 @@ if (!Array.isArray(specimens) || !Array.isArray(sources)) { console.error("FATAL
 const media = existsSync("data/media-manifest.json") ? load("data/media-manifest.json") : null;
 const mediaAssets = (media && media.assets) || {};
 const onRelease = (src) => mediaAssets[src] && mediaAssets[src].location === "release"; // resolvable without a local file
+const hashBytes = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
+const publishedTextBytes = (p) => Buffer.from(readFileSync(p, "utf8").replace(/\r\n/g, "\n"), "utf8");
 
 // ── profile: schema conformance ───────────────────────────────────────────────
 if (existsSync("schema/specimen.schema.json")) conformProfile("schema.specimen", specimens, load("schema/specimen.schema.json"), "specimen");
 else skip("schema.specimen", "schema/specimen.schema.json not found");
 if (existsSync("schema/source.schema.json")) conformProfile("schema.source", sources, load("schema/source.schema.json"), "source");
 else skip("schema.source", "schema/source.schema.json not found");
+if (existsSync("data/archive.json") && existsSync("schema/archive.schema.json")) conformObjectProfile("schema.archive", load("data/archive.json"), load("schema/archive.schema.json"), "archive");
+else skip("schema.archive", "archive contract or schema missing");
+if (existsSync("data/entities.json") && existsSync("schema/entities.schema.json")) conformObjectProfile("schema.entities", load("data/entities.json"), load("schema/entities.schema.json"), "entities");
+else skip("schema.entities", "entity projection or schema missing");
 
 // ── profile: unique ids ───────────────────────────────────────────────────────
 mark("id.unique");
@@ -190,6 +213,23 @@ for (const s of specimens) {
   for (const side of ["still", "portrait"]) {
     const o = s[side]?.origin;
     if (o != null && !safeUrl(o)) fail("url.safety", `${s.id}.${side}.origin is not a safe http(s) URL: ${String(o).slice(0, 60)}`);
+  }
+}
+
+// Evidence-scoped production conditions: controlled vocabulary + a source per claim.
+mark("claims.evidence");
+const conditionVocabulary = existsSync("data/vocabularies/conditions.json") ? load("data/vocabularies/conditions.json") : null;
+if (!conditionVocabulary) fail("claims.evidence", "data/vocabularies/conditions.json is missing");
+const conditionTerms = new Set(Object.keys(conditionVocabulary?.terms || {}));
+for (const s of specimens) {
+  const conditionKeys = new Set();
+  for (const [index, condition] of (s.conditions || []).entries()) {
+    if (!conditionTerms.has(condition.type)) fail("claims.evidence", `${s.id}.conditions[${index}] uses unknown type ${condition.type}`);
+    if (!safeUrl(condition.source)) fail("claims.evidence", `${s.id}.conditions[${index}] lacks a safe evidence URL`);
+    if (["episode", "scene"].includes(condition.scope) && !condition.episode) fail("claims.evidence", `${s.id}.conditions[${index}] scope ${condition.scope} requires episode`);
+    const key = [condition.type, condition.scope, condition.episode || ""].join("|");
+    if (conditionKeys.has(key)) fail("claims.evidence", `${s.id} duplicates condition claim ${key}`);
+    conditionKeys.add(key);
   }
 }
 
@@ -283,6 +323,70 @@ if (media) {
   }
 } else {
   skip("media.consistency", "no media manifest (data/media-manifest.json absent) — all images served from Pages");
+}
+
+// Derived entity projection: complete exact-label groupings without identity guesses.
+if (existsSync("data/entities.json")) {
+  mark("entities.consistency");
+  const entities = load("data/entities.json");
+  if (entities.generated_from?.content_sha256 !== load("data/shard-manifest.json").source_sha256) fail("entities.consistency", "entities projection was not built from current canonical truth");
+  for (const group of ["performers", "productions", "makers"]) {
+    const keys = new Set();
+    for (const entity of entities[group] || []) {
+      if (keys.has(entity.key)) fail("entities.consistency", `duplicate ${group} key ${entity.key}`);
+      keys.add(entity.key);
+      if (!Array.isArray(entity.record_ids) || !entity.record_ids.length) fail("entities.consistency", `${entity.key} has no record_ids`);
+      for (const id of entity.record_ids || []) if (!specIds.has(id)) fail("entities.consistency", `${entity.key} references missing ${id}`);
+    }
+  }
+  for (const s of specimens) {
+    const normalEntityLabel = (value) => String(value || "").normalize("NFKC").toLowerCase();
+    if (!(entities.performers || []).some((entity) => normalEntityLabel(entity.label) === normalEntityLabel(s.actor) && entity.record_ids.includes(s.id))) fail("entities.consistency", `${s.id} missing normalized performer-credit entity`);
+    if (!(entities.productions || []).some((entity) => normalEntityLabel(entity.label) === normalEntityLabel(s.production) && entity.record_ids.includes(s.id))) fail("entities.consistency", `${s.id} missing normalized production entity`);
+  }
+} else skip("entities.consistency", "data/entities.json missing — run node scripts/shard.mjs");
+
+// Versioned archive contract + every advertised checksum.
+if (existsSync("data/archive.json")) {
+  mark("contract.consistency");
+  const archive = load("data/archive.json");
+  const manifest = load("data/shard-manifest.json");
+  if (archive.version !== 1 || archive.catalog_id !== "undercast") fail("contract.consistency", "unsupported archive contract identity/version");
+  if (archive.identifiers?.record_pattern !== "^UC-G?\\d+$" || archive.identifiers?.never_reuse_ids !== true) fail("contract.consistency", "durable identifier policy changed");
+  if (archive.canonical?.records?.count !== specimens.length) fail("contract.consistency", "canonical record count drift");
+  if (archive.canonical?.sources?.count !== sources.length) fail("contract.consistency", "canonical source count drift");
+  if (archive.canonical?.records?.content_sha256 !== manifest.source_sha256) fail("contract.consistency", "canonical content hash drift");
+  for (const item of [archive.canonical?.records, archive.canonical?.sources, archive.projections?.lean_index, archive.projections?.shard_manifest, archive.projections?.entities, archive.projections?.search, archive.projections?.media_live, archive.vocabularies?.conditions, ...(archive.web_assets || [])]) {
+    if (!item?.path || !existsSync(item.path)) { fail("contract.consistency", `contract path missing: ${item?.path || "undefined"}`); continue; }
+    const published = publishedTextBytes(item.path);
+    if (item.sha256 !== createHash("sha256").update(published).digest("hex")) fail("contract.consistency", `${item.path} sha256 drift — rebuild contract`);
+    if (item.bytes !== published.length) fail("contract.consistency", `${item.path} published byte count drift`);
+  }
+  const search = load("data/search/manifest.json");
+  if (search.generated_from !== manifest.source_sha256) fail("contract.consistency", "search projection was not built from current truth");
+  for (const shard of search.shards || []) {
+    if (!existsSync(shard.file)) fail("contract.consistency", `search shard missing: ${shard.file}`);
+    else if (shard.sha256 !== hashFile(shard.file)) fail("contract.consistency", `search shard hash drift: ${shard.file}`);
+  }
+} else skip("contract.consistency", "data/archive.json missing — run node scripts/shard.mjs");
+
+// Standards-based crawler discovery must continue to point at the machine contract.
+mark("crawler.discovery");
+for (const path of ["robots.txt", "sitemap.xml", "CRAWLERS.md", "data/dataset.jsonld"]) if (!existsSync(path)) fail("crawler.discovery", `${path} missing`);
+if (existsSync("robots.txt")) {
+  const robots = readFileSync("robots.txt", "utf8");
+  if (!/^User-agent:\s*\*/mi.test(robots) || !/^Allow:\s*\//mi.test(robots)) fail("crawler.discovery", "robots.txt does not explicitly allow public crawling");
+  if (!/^Sitemap:\s*https:\/\/bigbirdreturns\.github\.io\/undercast\/sitemap\.xml/mi.test(robots)) fail("crawler.discovery", "robots.txt does not advertise the canonical sitemap");
+}
+if (existsSync("sitemap.xml")) {
+  const sitemap = readFileSync("sitemap.xml", "utf8");
+  const recordUrls = (sitemap.match(/<loc>https:\/\/bigbirdreturns\.github\.io\/undercast\/records\/UC-G?\d+\/<\/loc>/g) || []).length;
+  if (recordUrls !== specimens.length) fail("crawler.discovery", `sitemap exposes ${recordUrls} record routes, expected ${specimens.length}`);
+}
+for (const pagePath of ["index.html", "recognition.html"]) {
+  const html = readFileSync(pagePath, "utf8");
+  if (!/rel="describedby"[^>]+data\/archive\.json/.test(html)) fail("crawler.discovery", `${pagePath} does not link the archive contract`);
+  if (!/application\/ld\+json[^>]+data\/dataset\.jsonld/.test(html)) fail("crawler.discovery", `${pagePath} does not advertise Dataset JSON-LD`);
 }
 
 // ── emit the result envelope ──────────────────────────────────────────────────

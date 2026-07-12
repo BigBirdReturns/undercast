@@ -18,6 +18,11 @@ assets/               light/dark topology marks for explicitly missing evidence
 og.png                social-share preview card (1200×630)
 GROW.md               how any model grows the roster (keyless) · AGENTS.md points here
 data/
+  archive.json        versioned crawler contract: truth, schemas, hashes, routes,
+                      projections, evidence/cache/privacy policy
+  entities.json       derived exact-credit navigation groups (not identity claims)
+  search/             prefix-sharded inverted token index for future-scale clients
+  dataset.jsonld      Schema.org Dataset discovery metadata
   specimens.json      the CANONICAL roster (verified cards and counting) — edit this
   index.json + shards/ generated serving projections, rebuilt by scripts/shard.mjs
   media-manifest.json / media-live.json  images on GitHub Releases (see MEDIA.md)

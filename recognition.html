@@ -8,6 +8,8 @@
 <meta name="description" content="Hold one UNDERCAST association in view: the remembered character, the performer underneath, the credited makers, and the paths connecting them to the archive." />
 <meta name="theme-color" id="theme-color" content="#E8E3D9" />
 <link rel="canonical" href="https://bigbirdreturns.github.io/undercast/recognition.html" />
+<link rel="describedby" type="application/json" href="./data/archive.json" />
+<link rel="alternate" type="application/ld+json" href="./data/dataset.jsonld" title="UNDERCAST dataset description" />
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="UNDERCAST" />
 <meta property="og:title" content="UNDERCAST — Recognition Loop" />
@@ -279,7 +281,8 @@ function asEntry(record){
   return {
     id:record.id,sh:-1,u:record.universe,y:record.years||"",d:record.designer||"",
     a:record.actor||"",c:record.character||"",p:record.production||"",tf:record.transform||0,
-    kw:[record.knownFor,record.reveal].filter(Boolean).join(" "),kind:record.kind||"",k:record.kind==="voice"?1:0
+    kw:[record.knownFor,record.reveal].filter(Boolean).join(" "),kind:record.kind||"",k:record.kind==="voice"?1:0,
+    co:Array.isArray(record.conditions)?record.conditions.map((condition)=>condition.type).filter(Boolean).join(" "):""
   };
 }
 function parseMakers(value){
@@ -308,6 +311,12 @@ const METHOD_RULES=[
   {key:"prosthetic",label:"Prosthetic makeup",pattern:/\bprosthetic(?:s)?\b|\bmakeup\b|\bappliance(?:s)?\b|\bfoam latex\b|\bsilicone\b|\blife cast\b|\bhours? (?:in|the) (?:makeup )?chair\b/i},
   {key:"body-led",label:"Body-led creature work",pattern:/\bbody cast\b|\bcast (?:him|her|them) for (?:his|her|their) (?:body|frame)\b|\bcreature performer\b|\bhyper[- ]?flexible\b|\bcontortion(?:ist|ism)?\b/i}
 ];
+const CONDITION_LABELS={
+  "athletic-performance":"Athletic performance","cold":"Cold","constrained-mobility":"Constrained mobility",
+  "extended-application":"Extended application","full-body-enclosure":"Full-body enclosure","heat":"Heat",
+  "restricted-breathing":"Restricted breathing","restricted-vision":"Restricted vision","stunt-movement":"Stunt movement",
+  "suspension-or-harness":"Suspension or harness","voice-strain":"Voice strain","water":"Water","other":"Other documented condition"
+};
 function methodOf(entry,record){
   if((record&&record.kind)==="voice"||entry.kind==="voice"||entry.k===1||entry.u==="Voice") return {key:"voice",label:"Unseen voice performance"};
   const hay=[entry.d,entry.kw,record&&record.designer,record&&record.reveal,record&&record.knownFor].filter(Boolean).join(" ");
@@ -325,7 +334,7 @@ function loadShard(number){
   if(SHARDS.has(number)) return SHARDS.get(number);
   const meta=MANIFEST&&MANIFEST.shards&&MANIFEST.shards[number];
   if(!meta) return Promise.resolve([]);
-  const promise=fetch("./data/"+meta.file)
+  const promise=fetch("./data/"+meta.file+"?v="+encodeURIComponent(meta.sha256||""))
     .then((response)=>{ if(!response.ok) throw new Error("Could not load shard "+number); return response.json(); })
     .then((records)=>{ for(const record of records) RECORDS.set(record.id,record); return records; })
     .catch((error)=>{ SHARDS.delete(number); throw error; });
@@ -349,10 +358,8 @@ async function ensureRecords(entries){
 }
 async function loadProjection(){
   try{
-    const [index,manifest]=await Promise.all([
-      fetch("./data/index.json").then((response)=>{ if(!response.ok) throw new Error("index"); return response.json(); }),
-      fetch("./data/shard-manifest.json").then((response)=>{ if(!response.ok) throw new Error("manifest"); return response.json(); })
-    ]);
+    const manifest=await fetch("./data/shard-manifest.json",{cache:"no-cache"}).then((response)=>{ if(!response.ok) throw new Error("manifest"); return response.json(); });
+    const index=await fetch("./data/index.json?v="+encodeURIComponent(manifest.index_sha256||"")).then((response)=>{ if(!response.ok) throw new Error("index"); return response.json(); });
     if(!Array.isArray(index)||!manifest||!Array.isArray(manifest.shards)) throw new Error("invalid projections");
     INDEX=index;
     MANIFEST=manifest;
@@ -364,7 +371,7 @@ async function loadProjection(){
 }
 async function loadMedia(){
   try{
-    const live=await fetch("./data/media-live.json").then((response)=>response.ok?response.json():null);
+    const live=await fetch("./data/media-live.json?v="+encodeURIComponent(MANIFEST?.media_live_sha256||"")).then((response)=>response.ok?response.json():null);
     if(live&&live.urls){
       for(const src in live.urls) MEDIA[src]={url:live.urls[src],location:"release"};
     }
@@ -457,6 +464,7 @@ function renderRecord(record,entry,position){
   const creditLedger=creditPresent(record.designer)?record.designer:"Maker credit not yet on file";
   const reference=safeUrl(record.link);
   const methodRow=method?`<div class="uc-spec-row"><div class="uc-spec-k">Method signal</div><div class="uc-spec-v">${esc(method.label)} · inferred from the filed record copy</div></div>`:"";
+  const conditionRows=Array.isArray(record.conditions)?record.conditions.map((condition)=>`<div class="uc-spec-row"><div class="uc-spec-k">Condition</div><div class="uc-spec-v"><b>${esc(CONDITION_LABELS[condition.type]||condition.type)}</b>${condition.episode?` · ${esc(condition.episode)}`:""}<br>${esc(condition.note)} · <a href="${esc(safeUrl(condition.source))}" target="_blank" rel="noopener">source</a></div></div>`).join(""):"";
   const memoryVisual=record.still&&record.still.src?imageNode(record.still,record.character,"uc-memory-image"):absenceGraphic(record.character+" still is not on file");
   const compare=record.kind==="voice"
     ? `<span class="uc-compare-note">No visual comparison: this record restores an unseen voice, not a mask or cast.</span>`
@@ -486,7 +494,7 @@ function renderRecord(record,entry,position){
           <div class="uc-spec-row"><div class="uc-spec-k">Years</div><div class="uc-spec-v">${esc(record.years)}</div></div>
           <div class="uc-spec-row"><div class="uc-spec-k">Shelf</div><div class="uc-spec-v">${esc(record.universe)}</div></div>
           <div class="uc-spec-row"><div class="uc-spec-k">Transformation</div><div class="uc-spec-v">${esc(record.transform)} / 5 — ${esc(transformLabel(record.transform))}</div></div>
-          <div class="uc-spec-row"><div class="uc-spec-k">Design & build</div><div class="uc-spec-v">${esc(creditLedger)}</div></div>${methodRow}
+          <div class="uc-spec-row"><div class="uc-spec-k">Design & build</div><div class="uc-spec-v">${esc(creditLedger)}</div></div>${methodRow}${conditionRows}
         </div></section>
         <section class="uc-section"><div class="uc-section-head"><span class="uc-section-no">05</span><span class="uc-section-title">The reveal</span></div><p class="uc-body">${esc(record.reveal)}</p>${reference!=="#"?`<a class="uc-source-action" href="${esc(reference)}" target="_blank" rel="noopener">Open the filed reference →</a>`:""}</section>
         <section class="uc-section"><div class="uc-section-head"><span class="uc-section-no">06</span><span class="uc-section-title">You already knew them</span></div><p class="uc-known">${esc(record.knownFor)}</p></section>
@@ -600,10 +608,14 @@ function buildConnectionPlan(entry,position){
   const method=methodOf(entry,null);
   const methodMatches=method?rankConnections(INDEX.filter((candidate)=>candidate.id!==entry.id&&methodOf(candidate,null)?.key===method.key),entry,position).slice(0,8):[];
 
+  const condition=String(entry.co||"").split(/\s+/).filter(Boolean)[0]||"";
+  const conditionMatches=condition?rankConnections(INDEX.filter((candidate)=>candidate.id!==entry.id&&String(candidate.co||"").split(/\s+/).includes(condition)),entry,position).slice(0,8):[];
+
   return [
     {kind:"performer",lead:"Same performer",key:sharedName?sharedName.display:(currentParts[0]?.display||entry.a),reason:performerMatches.length?"A credited person is the thread across characters that otherwise appear unrelated.":"No other record names this performer exactly enough to make a safe connection yet.",entries:performerMatches},
     {kind:"maker",lead:"Same maker",key:primary||"No structured maker",reason:makerMatches.length?"The filed maker credit stays visible across the faces it helped build.":(primary?`No other live record shares the parsed maker credit “${primary}” yet.`:"This free-form credit cannot be reduced to a maker name without guessing."),entries:makerMatches},
-    {kind:"method",lead:"Same method signal",key:method?method.label:"Not confidently named",reason:methodMatches.length?"This connection is conservatively inferred from words already filed in each record; it is a navigation signal, not new canonical metadata.":(method?"No other record carries the same conservative method signal yet.":"The record does not name a method clearly enough for an honest connection."),entries:methodMatches}
+    {kind:"method",lead:"Same method signal",key:method?method.label:"Not confidently named",reason:methodMatches.length?"This connection is conservatively inferred from words already filed in each record; it is a navigation signal, not new canonical metadata.":(method?"No other record carries the same conservative method signal yet.":"The record does not name a method clearly enough for an honest connection."),entries:methodMatches},
+    ...(condition?[{kind:"condition",lead:"Same performance condition",key:CONDITION_LABELS[condition]||condition,reason:conditionMatches.length?"These records share an evidence-backed physical or environmental condition.":"No other sourced record carries this condition yet.",entries:conditionMatches}]:[])
   ];
 }
 function thumb(record){
@@ -719,7 +731,8 @@ window.addEventListener("keydown",(event)=>{
 
 async function boot(){
   setTheme(initialTheme(),false);
-  await Promise.all([loadProjection(),loadMedia()]);
+  await loadProjection();
+  await loadMedia();
   let id=requestedId();
   if(!id){
     id=INDEX.some((entry)=>entry.id==="UC-025")?"UC-025":INDEX[0]?.id;

@@ -46,10 +46,12 @@ but they're the next walls, in order:
    images migrate, `media-live.json` (~150 B/released-image, `src → url`). They're lean
    (the full 700 KB media manifest is **not** shipped — only the release URLs are), but
    they still grow with N: comfortable to ~100–200K cards, ~30–45 MB at that point. Past
-   that both need the same treatment as the records — **chunked/paginated on demand** (and
-   search wants an **inverted index**: token → postings, sharded by prefix, so the browser
-   fetches postings per query instead of the whole corpus). That's the next serving pass;
-   until then boot is bounded for the realistic roster, not for a literal million.
+   that both need the same treatment as the records — **chunked/paginated on demand**.
+   The deterministic prefix-sharded inverted index now exists at `data/search/`
+   (token → record-id postings, advertised and checksummed by `data/archive.json`),
+   so a future client can switch search without redefining the projection. The current
+   wall still boots the whole lean index; replacing that boot path remains the next
+   serving pass. Until then boot is bounded for the realistic roster, not a literal million.
 2. **Images (~30 KB each → ~40 GB at 1M).** GitHub Pages soft-caps around 1 GB.
    Real scale needs a **content-addressed asset store off Pages** (object store /
    CDN), with the wall referencing content hashes. See `preservation/` for how the

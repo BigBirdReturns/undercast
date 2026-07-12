@@ -31,6 +31,7 @@ themselves*, they don't belong here.
      "kind": "face" | "voice",
      "knownFor": "one sentence",
      "reveal": "two sentences — the human under the design",
+     "conditions": "optional array; each item needs type, scope, note and its own source URL — see data/vocabularies/conditions.json",
      "wiki": "optional https://en.wikipedia.org/wiki/Name"
    }
    ```
@@ -41,7 +42,8 @@ themselves*, they don't belong here.
    ```
 4. **Fill their faces**: `IMAGE_MODE=loose node scripts/retrieve.mjs`
    then `node scripts/credits.mjs && node scripts/needs.mjs`.
-5. **Commit** on a branch and open a PR.
+5. **Rebuild and validate every contract**: `node scripts/shard.mjs && node scripts/validate.mjs`.
+6. **Commit** on a branch and open a PR.
 
 ## The non-negotiable
 **Accuracy over volume. Never invent a person, a role, or a fact.** The
@@ -52,6 +54,11 @@ it; the provenance is the whole point.
 
 Draft in batches you can vouch for. Prefer the notable and well-documented. When
 your confident pool runs low, stop — don't reach.
+
+Production conditions are held to the same bar. Do not infer heat, restricted
+vision, physical strain, application time, or danger from an image or costume.
+Every `conditions[]` item carries its own source; if the source does not state the
+condition, leave it out.
 
 ## Pinning the best image (vision review)
 

@@ -6,10 +6,13 @@ card flips: the character on the front, the human underneath on the back. It's a
 static site (index.html reads data/specimens.json) deployed to GitHub Pages by
 Actions; keyless crawlers fill images and harvest leads. No servers, no keys.
 
-**To grow the roster, read [GROW.md](GROW.md).** The drafting model is the
+**To grow the roster, read [GROW.md](GROW.md).** To consume or extend the
+machine-facing archive, read [CRAWLERS.md](CRAWLERS.md) and
+`data/archive.json`. The drafting model is the
 compute — you draft verified specimens, a keyless script merges them. Accuracy
 over volume, always: never invent a person or a fact. The provenance is the point.
 
-Key files: `GROW.md` (how to add cards), `README.md` (the whole system),
+Key files: `GROW.md` (how to add cards), `CRAWLERS.md` (crawler/evidence
+contract), `README.md` (the whole system),
 `scripts/` (retrieve = images, ingest = lead harvest, grow = merge model drafts,
 credits/needs/adopt = helpers).
