@@ -132,7 +132,9 @@ async function tryEmit(card, ctx) {
     return false;
   }
   const img = await findImage(card.actor).catch(() => null);
-  card.id = "UC-G" + String(specimens.filter((s) => s._grown).length + 1).padStart(3, "0");
+  // max+1 over existing grown ids (NOT a count — a later deletion would otherwise reproduce an id)
+  const maxG = Math.max(0, ...specimens.map((s) => parseInt((String(s.id).match(/^UC-G(\d+)$/) || [])[1] || "0", 10)));
+  card.id = "UC-G" + String(maxG + 1).padStart(3, "0");
   card._grown = true;
   card._verified = true;
   card.link = card.wiki || `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`;

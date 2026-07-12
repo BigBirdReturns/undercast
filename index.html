@@ -723,7 +723,11 @@ const expandAliases=t=>t.replace(ALIAS_RE,m=>m+" "+ALIAS[m]);
 // An image's bytes live either in the repo (Pages) or on a GitHub Release. The
 // manifest is the ONLY source of that fact — the wall knows a resolved url and
 // whether it's live, never the release layout. Absent/pending => serve local.
-function mediaSrc(src){ const e=MEDIA[src]; return (e&&e.location==="release"&&e.url)?e.url:src; }
+// Only serve a release url that is exactly a github.com releases-download URL; anything
+// else (a tampered/injected manifest entry pointing at a tracker or foreign host) falls
+// back to the local path. Defence-in-depth on top of the CSP's broad img-src https:.
+const RELEASE_URL=/^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\/[^/]+\/[^/?#]+$/;
+function mediaSrc(src){ const e=MEDIA[src]; return (e&&e.location==="release"&&RELEASE_URL.test(e.url||""))?e.url:src; }
 
 /* ---------- the two-tier data layer ---------- */
 // Precompute an index entry's search haystack once (per-keystroke search is then
@@ -791,7 +795,16 @@ async function render(reset=true){
   if(rows.length===0){
     grid.innerHTML=`<div class="empty"><b>No cast on this shelf.</b>Nobody in the index matches that yet — the wall only holds performers with a designed face. Clear the search, or grow the shelf below.</div>`;
   } else {
-    for(const e of visible){ const rec=RECORDS.get(e.id); if(rec) grid.appendChild(card(rec)); }
+    let got=0;
+    for(const e of visible){ const rec=RECORDS.get(e.id); if(rec){ grid.appendChild(card(rec)); got++; } }
+    // a transient shard fetch failure would leave records empty — don't show a blank wall
+    // under a confident count; surface a retry (loadShard cleared its cache so this refetches).
+    if(got===0){
+      grid.innerHTML=`<div class="empty"><b>Couldn't load this page.</b>A data shard didn't arrive — likely a network blip. <button class="rep-btn" type="button" id="retryBtn">Retry</button></div>`;
+      document.getElementById("retryBtn").addEventListener("click",()=>render(false));
+      loadmoreEl.hidden=true; loadmoreEl.innerHTML="";
+      return;
+    }
   }
   // load-more control when the filtered set exceeds what's on screen
   if(rows.length>shownCount){
@@ -875,7 +888,8 @@ function copyPermalink(ev,id){
 document.getElementById("random").addEventListener("click",function(){
   if(!INDEX.length) return;
   const e=INDEX[Math.floor(Math.random()*INDEX.length)];
-  location.hash=e.id; // triggers hashchange -> focusSpecimen
+  if(location.hash==="#"+e.id) focusSpecimen(e.id); // re-drew the current id: hashchange won't fire, focus directly
+  else location.hash=e.id;                          // new id: hashchange -> focusSpecimen
 });
 window.addEventListener("hashchange",function(){ focusSpecimen(location.hash.replace(/^#/,"")); });
 
@@ -899,10 +913,11 @@ async function boot(){
     MANIFEST={shards:[]};
     INDEX=specs.map(function(s){ RECORDS.set(s.id,s); return asEntry(s); }); // every record already resident
   }
-  // optional media manifest: which images have moved to GitHub Releases (absent is fine)
+  // lean media map: only images actually on a Release (src -> url). The full durability
+  // manifest (data/media-manifest.json) is a CI artifact and is deliberately NOT fetched.
   try{
-    const media=await fetch("./data/media-manifest.json").then(function(r){return r.ok?r.json():null;});
-    if(media&&media.assets) for(const src in media.assets){ const e=media.assets[src]; MEDIA[src]={url:e.url,location:e.location}; }
+    const live=await fetch("./data/media-live.json").then(function(r){return r.ok?r.json():null;});
+    if(live&&live.urls) for(const src in live.urls){ MEDIA[src]={url:live.urls[src],location:"release"}; }
   }catch(_){}
   buildFilters();
   buildMakers();

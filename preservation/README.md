@@ -25,7 +25,12 @@ history still holds the originals. Keep it that way until the bag exists elsewhe
 
 - `baseline-manifest.json` — inventory of pre-R1 originals recoverable from history:
   `{id, side, current{path,sha256,bytes}, original{path,sha256,bytes}, transform, origin, license}`.
-  Regenerate with `node ../scripts/... ` (see the phase-0 tooling). Committable (hashes + metadata only, no image bytes).
+  Regenerate from the repo root with `node scripts/preserve-baseline.mjs` (never from
+  inside this dir — it reads cwd-relative `data/`). It pins the baseline to the fixed
+  pre-R1 SHA (17cc010) and REFUSES to run if that tree isn't the ~1 GB of originals, so
+  a re-run can't silently record today's resized derivatives. Committable (hashes +
+  metadata only, no image bytes). Do not re-run casually — the BagIt export and the
+  gc gate depend on this inventory.
 - `../scripts/preserve-bag.mjs` — extracts + verifies the originals from history into a
   portable BagIt (RFC 8493) bag for offload. The bag itself does NOT live in this repo.
 

@@ -40,11 +40,16 @@ for the ~120 cards actually rendered.
 These are real and un-fixed. They don't bite at the current or near-future roster,
 but they're the next walls, in order:
 
-1. **Boot index size (~200 B/card).** Client-side search needs its corpus on the
-   client, so the boot index grows with N. Comfortable to ~100–200K cards; past
-   that it wants an **inverted index** (token → postings, sharded by token prefix)
-   so the browser downloads a small dictionary and fetches postings per query
-   instead of the whole index. That's the next serving pass.
+1. **The whole-file boot loads (`index.json` + `media-live.json`) are O(N).** The heavy
+   per-card records shard and load lazily, but two files are still fetched and parsed
+   *whole* on boot: `index.json` (~290 B/card — facets, sort, search corpus) and, once
+   images migrate, `media-live.json` (~150 B/released-image, `src → url`). They're lean
+   (the full 700 KB media manifest is **not** shipped — only the release URLs are), but
+   they still grow with N: comfortable to ~100–200K cards, ~30–45 MB at that point. Past
+   that both need the same treatment as the records — **chunked/paginated on demand** (and
+   search wants an **inverted index**: token → postings, sharded by prefix, so the browser
+   fetches postings per query instead of the whole corpus). That's the next serving pass;
+   until then boot is bounded for the realistic roster, not for a literal million.
 2. **Images (~30 KB each → ~40 GB at 1M).** GitHub Pages soft-caps around 1 GB.
    Real scale needs a **content-addressed asset store off Pages** (object store /
    CDN), with the wall referencing content hashes. See `preservation/` for how the

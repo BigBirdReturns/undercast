@@ -19,6 +19,7 @@
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 const MANIFEST = "data/media-manifest.json";
 const DRY = process.argv.includes("--dry-run");
@@ -63,9 +64,23 @@ async function ensureRelease(tag) {
   return { id: rel.id, assets: rel.assets || [] };
 }
 
+const persist = async () => { await writeFile(MANIFEST, JSON.stringify(manifest, null, 1) + "\n"); };
+// download the served asset and confirm its bytes hash to the content-addressed name —
+// size equality is not integrity; the sha8 in the filename must actually hold.
+async function verifyServed(url, wantSha) {
+  const r = await fetch(url); // github.com/... 302-redirects to the CDN; fetch follows it
+  if (!r.ok) throw new Error(`download ${r.status}`);
+  const got = createHash("sha256").update(Buffer.from(await r.arrayBuffer())).digest("hex");
+  if (got !== wantSha) throw new Error(`served bytes hash ${got.slice(0, 8)} ≠ manifest ${wantSha.slice(0, 8)}`);
+}
+
 let uploaded = 0, already = 0, flipped = 0, failed = 0;
 for (const [tag, items] of Object.entries(byRelease)) {
-  const rel = await ensureRelease(tag);
+  // A release-level failure (create/fetch throws) must NOT discard other releases'
+  // already-persisted progress — skip this shard's items and keep going.
+  let rel;
+  try { rel = await ensureRelease(tag); }
+  catch (err) { failed += items.length; console.error(`release ${tag} unavailable: ${err.message} — ${items.length} asset(s) left pending this run`); continue; }
   const have = new Map(rel.assets.map((a) => [a.name, a]));
   for (const { src, e } of items) {
     try {
@@ -85,8 +100,8 @@ for (const [tag, items] of Object.entries(byRelease)) {
         asset = await up.json();
         uploaded++;
       }
-      // verify size on the release before trusting it
       if (asset.size !== e.bytes) throw new Error(`size mismatch ${e.asset}: release ${asset.size} vs manifest ${e.bytes}`);
+      await verifyServed(e.url, e.sha256); // integrity: the served bytes MUST hash to the name
       manifest.assets[src].location = "release";
       flipped++;
     } catch (err) {
@@ -94,9 +109,10 @@ for (const [tag, items] of Object.entries(byRelease)) {
       console.error("FAIL", e.asset, "-", err.message);
     }
   }
+  await persist(); // incremental: a completed release's flips survive a later release throwing
 }
 
-await writeFile(MANIFEST, JSON.stringify(manifest, null, 1) + "\n");
+await persist();
 console.log(`uploaded ${uploaded}, already-present ${already}, flipped→release ${flipped}, failed ${failed}`);
-if (failed) { console.error("some assets failed — manifest left with those still pending (front end keeps serving them locally)."); process.exit(1); }
+if (failed) { console.error("some assets failed — manifest left with those still pending (front end keeps serving them locally). Re-run to retry (idempotent)."); process.exit(1); }
 console.log("done. commit data/media-manifest.json; migrated images now load from Releases.");

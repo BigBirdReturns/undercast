@@ -8,7 +8,14 @@ import { createHash } from 'node:crypto';
 
 const REPO = process.cwd();
 const TMP = require('node:os').tmpdir() + '/undercast-orig';
-const PREV = 'origin/main~1'; // last commit before R1 resize (17cc010)
+// The pre-R1 baseline is a FIXED commit — NEVER a moving ref. `origin/main~1` drifts as
+// new commits land, and would inventory today's RESIZED derivatives as "originals",
+// defeating the HISTORY GUARD (a later BagIt export would bag resized bytes and green-light
+// destroying the real originals). Pin it: prefer the committed manifest's recorded SHA,
+// else the known baseline SHA.
+const PINNED_BASELINE = '17cc010a5ec6cba29189ce92165d1f226961b33f';
+let PREV = PINNED_BASELINE;
+try { PREV = JSON.parse(readFileSync(REPO + '/preservation/baseline-manifest.json', 'utf8')).baseline_commit_pre_r1 || PINNED_BASELINE; } catch {}
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
 process.chdir(REPO);
@@ -26,6 +33,16 @@ for (const f of origFiles) {
   const stem = f.replace(/\.(jpe?g|png|gif|webp)$/i, '');
   origByStem[stem] = { path: 'images/' + f, sha256: sha256(buf), bytes: buf.length };
   origBytes += buf.length;
+}
+
+// GUARD: the pre-R1 tree is ~1GB of originals. If what we extracted is small, PREV is
+// pointed at resized derivatives — REFUSE to overwrite the inventory rather than silently
+// record the resized bytes as the "originals" to preserve.
+if (origBytes < 500e6) {
+  console.error(`REFUSING: images/ at ${PREV.slice(0, 12)} is only ${(origBytes / 1e6).toFixed(0)}MB — expected ~1GB of pre-R1 originals.`);
+  console.error('The baseline commit is wrong (resized derivatives?). preservation/baseline-manifest.json left untouched.');
+  rmSync(TMP, { recursive: true, force: true });
+  process.exit(1);
 }
 
 // current (resized) assets referenced by the wall

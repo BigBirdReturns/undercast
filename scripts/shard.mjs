@@ -79,8 +79,23 @@ const manifest = {
 };
 await writeFile("data/shard-manifest.json", JSON.stringify(manifest, null, 1) + "\n");
 
+// media-live.json: the LEAN boot-facing media map — only images actually on a Release,
+// as {src: url}. The full data/media-manifest.json (sha256/bytes/dims/prov, all 1542
+// entries incl. pending) is a build/CI artifact and must NOT be shipped to the browser:
+// the frontend only needs the resolved url of migrated images. Regenerated here so any
+// data-change or upload flow refreshes it from the manifest's current location flags.
+let liveCount = 0;
+try {
+  const media = JSON.parse(await readFile("data/media-manifest.json", "utf8"));
+  const urls = {};
+  for (const [src, e] of Object.entries(media.assets || {})) if (e.location === "release") urls[src] = e.url;
+  liveCount = Object.keys(urls).length;
+  await writeFile("data/media-live.json", JSON.stringify({ version: 1, urls }) + "\n");
+} catch { /* no media manifest yet — no media-live to emit */ }
+
 const kb = (n) => (n / 1e3).toFixed(0) + "KB";
 console.log(`sharded ${ordered.length} cards → ${shardMeta.length} shard(s) (≤${SHARD_SIZE} each)`);
 console.log(`  index.json ${kb(indexBody.length)} (${Math.round(indexBody.length / ordered.length)} B/card) — loaded on boot`);
 console.log(`  ${shardMeta.length} shard file(s), ${shardMeta.reduce((a, s) => a + s.n, 0)} records total — loaded lazily`);
+if (liveCount) console.log(`  media-live.json: ${liveCount} image(s) on Releases — loaded on boot (lean)`);
 console.log(`  rebuild any time: node scripts/shard.mjs   (projections are disposable)`);

@@ -27,8 +27,13 @@ It maps each local image path to its immutable, content-addressed release asset:
 }
 ```
 
-The front end reads only `url` + `location` — it has **no knowledge of the release
-layout**. Resolution per image:
+The full `media-manifest.json` (sha256/bytes/dims/prov for **all** images, pending and
+released) is a build/CI artifact and is **not shipped to the browser**. `scripts/shard.mjs`
+emits a lean **`data/media-live.json`** — only the `release`-located images as `{src: url}`
+— and that (a few KB) is what the wall loads on boot, not the ~700 KB manifest. The front
+end has **no knowledge of the release layout**; `mediaSrc` also pins the host (only an
+exact `github.com/<owner>/<repo>/releases/download/...` URL is served, else the local path).
+Resolution per image:
 
 - entry `location:"release"` → load `url` (from `github.com`, allowed by the existing
   `img-src … https:` CSP). On failure → the **blank state** (a face-less "IMAGE OFFLINE"
@@ -69,6 +74,25 @@ flips an image to release-served.
 5. **Free Pages space (separate, later).** Only after the store is proven and a verified
    backup exists, remove migrated local bytes from `images/`. `ref.integrity` keeps
    passing because those images are `location:"release"`.
+
+   ⚠️ **Verify before you delete.** The gate is offline: once local bytes are gone it can
+   no longer re-hash an image, so `location:"release"` becomes an *assertion*, not a
+   proof. `media-upload.mjs` downloads and sha256-verifies every asset against its
+   content-addressed name at publish time — but a Release asset can be deleted and
+   re-uploaded later by anyone with `contents:write`. Before deleting any local copy, run
+   a networked audit that GETs each `release` url and confirms the served bytes still hash
+   to the manifest `sha256`; never delete the local copy of an image whose release bytes
+   haven't just been verified. (Size equality is not integrity.)
+
+## Capacity & housekeeping
+
+- Shards fill to **800 assets** (200 headroom under GitHub's 1,000/release limit) to
+  absorb future **corrections** — a re-curated image is a *new* content-addressed asset in
+  the same shard, and the old one is left in place (immutable). The headroom bounds how
+  many corrections a shard can take before it must roll to the next; heavy re-curation over
+  time may warrant lowering the fill target or reaping superseded assets.
+- Deleting a card **orphans** its manifest entry. That's harmless (the wall keys by live
+  card src, so an orphan is never served) and `media-stage.mjs` prunes it on its next run.
 
 ## History cleanup is a separate operation
 
