@@ -10,6 +10,11 @@ Non-commercial fan project.
 index.html            the wall — a static page; boots from the generated projections
                       (data/index.json + data/shards/ via data/shard-manifest.json),
                       falling back to data/specimens.json if they're absent
+recognition.html      the loop — a single-record reader over the same data: one
+                      association at a time (character / performer / hands), with the
+                      connection "rails" (same performer, same maker, same shelf)
+                      computed from the roster. Deep-links as recognition.html#UC-042
+assets/               UI chrome (the neutral topology mark shown for a missing image)
 og.png                social-share preview card (1200×630)
 GROW.md               how any model grows the roster (keyless) · AGENTS.md points here
 data/
@@ -81,6 +86,28 @@ The wall is built to be linked, not just visited:
   the absolute `og:*`/`canonical` URLs in `index.html`'s `<head>`.
 
 `og.png` is a static asset — regenerate it only if you restyle the masthead.
+
+## The recognition loop
+
+The wall is built to browse a thousand faces. `recognition.html` is the opposite
+gesture: **one record at a time**, laid out to make a single association stay in
+memory — the character on file, the performer underneath, the hands that built
+the face, and, below, the **recognition paths**: rails of related cards computed
+live from the roster (*the same performer*, *the same maker*, *the same shelf*).
+The connection is named before the visitor is invited to follow it, and each
+rail thumbnail loops on to that record.
+
+It reads the exact same two-tier data as the wall (`data/index.json` +
+`data/shards/`, falling back to `data/specimens.json`) and resolves images
+through `data/media-live.json` the same way, so it needs no build step of its
+own — new cards appear in the loop the moment they're on the wall. Every record
+is a permalink (`recognition.html#UC-042`); the wall links into it from the
+masthead and from a `◎ loop` link on each card's back.
+
+The honesty rule carries over intact: a character with **no still** is shown as a
+neutral topology mark (`assets/placeholder-*.png`) — missing evidence, never a
+fabricated photo — and a voice-only role says so plainly. Keyboard: `←`/`→` to
+move, `r` random, `t` light/dark.
 
 ## The makers are undercast too
 
