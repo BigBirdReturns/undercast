@@ -61,6 +61,15 @@ function imgSize(buf) {
       o += 2 + buf.readUInt16BE(o + 2);
     }
   }
+  if (buf.length > 10 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) // GIF
+    return { w: buf.readUInt16LE(6), h: buf.readUInt16LE(8) };
+  if (buf.length > 30 && buf.toString("latin1", 0, 4) === "RIFF" && buf.toString("latin1", 8, 12) === "WEBP") { // WebP
+    const cc = buf.toString("latin1", 12, 16);
+    if (cc === "VP8 ") return { w: buf.readUInt16LE(26) & 0x3fff, h: buf.readUInt16LE(28) & 0x3fff };
+    if (cc === "VP8L") { const b0 = buf[21], b1 = buf[22], b2 = buf[23], b3 = buf[24];
+      return { w: 1 + (((b1 & 0x3f) << 8) | b0), h: 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6)) }; }
+    if (cc === "VP8X") return { w: 1 + (buf[24] | (buf[25] << 8) | (buf[26] << 16)), h: 1 + (buf[27] | (buf[28] << 8) | (buf[29] << 16)) };
+  }
   return { w: 0, h: 0 };
 }
 
@@ -117,7 +126,12 @@ for (const r of want) {
   const buf = readFileSync(r.src);
   const hash = sha256(buf), sha8 = hash.slice(0, 8);
   const prev = manifest.assets[r.src];
-  if (prev && prev.sha256 === hash) { skipped++; continue; }         // already staged, unchanged
+  if (prev && prev.sha256 === hash) {                                // already staged, unchanged bytes
+    const { w, h } = imgSize(buf);                                   // but refresh dims (parser may have improved)
+    if (prev.w !== w || prev.h !== h || prev.bytes !== buf.length) { prev.w = w; prev.h = h; prev.bytes = buf.length; updated++; }
+    else skipped++;
+    continue;
+  }
   const asset = `${r.id.toLowerCase()}-${r.side}-${sha8}.${extOf(r.src)}`;
   const release = prev ? prev.release : nextRelease();               // corrections stay in their shard
   const { w, h } = imgSize(buf);
@@ -131,6 +145,12 @@ for (const r of want) {
   prev ? updated++ : added++;
 }
 
+// prune orphaned entries — a card (or a side) that no longer exists on the wall. Keeps
+// the manifest honest and stops the cap accounting from counting dead entries.
+const liveSrc = new Set(refs.map((r) => r.src));
+let pruned = 0;
+for (const src of Object.keys(manifest.assets)) if (!liveSrc.has(src)) { delete manifest.assets[src]; pruned++; }
+
 // stable key order for a clean, reviewable diff
 const sorted = {};
 for (const k of Object.keys(manifest.assets).sort()) sorted[k] = manifest.assets[k];
@@ -138,6 +158,6 @@ manifest.assets = sorted;
 await writeFile(MANIFEST, JSON.stringify(manifest, null, 1) + "\n");
 
 const rels = [...new Set(Object.values(manifest.assets).map((e) => e.release))].sort();
-console.log(`staged: +${added} new, ${updated} corrected, ${skipped} unchanged, ${missing} missing-locally`);
+console.log(`staged: +${added} new, ${updated} corrected/refreshed, ${skipped} unchanged, ${pruned} pruned, ${missing} missing-locally`);
 console.log(`manifest now maps ${Object.keys(manifest.assets).length} image(s) across ${rels.length} release shard(s): ${rels.join(", ")}`);
 console.log(`next: upload with a token — node scripts/media-upload.mjs   (or dispatch .github/workflows/media.yml)`);

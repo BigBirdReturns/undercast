@@ -242,10 +242,14 @@ if (media) {
   const refSrcSet = new Set(imgRefs.map((r) => r.src));
   const perRelease = {};
   const byAsset = new Map();
+  let orphans = 0;
   if (!/^[\w.-]+\/[\w.-]+$/.test(String(media.repo || ""))) fail("media.consistency", `manifest.repo "${media.repo}" is not owner/repo`);
   const cap = media.release_capacity || 800;
   for (const [src, e] of Object.entries(mediaAssets)) {
-    if (!refSrcSet.has(src)) fail("media.consistency", `${src}: manifest entry references no specimen image`);
+    // An orphaned entry (its card was deleted) is harmless dead weight — the wall keys
+    // by live card src, so it's never served — and `media-stage.mjs` prunes it on its next
+    // run. Do NOT hard-fail here: that would wedge unrelated nightly commits after a dedup.
+    if (!refSrcSet.has(src)) orphans++;
     const sha8 = String(e.sha256 || "").slice(0, 8);
     if (!/^[0-9a-f]{64}$/.test(e.sha256 || "")) fail("media.consistency", `${src}: bad sha256`);
     if (e.asset !== `${String(e.id).toLowerCase()}-${e.side}-${sha8}.${String(e.asset).split(".").pop()}`)
@@ -258,7 +262,7 @@ if (media) {
     if (e.url && !e.url.endsWith(`/${e.release}/${e.asset}`)) fail("media.consistency", `${src}: url does not resolve to ${e.release}/${e.asset}`);
     if (!["pending", "release"].includes(e.location)) fail("media.consistency", `${src}: bad location "${e.location}"`);
     if (!(Number.isInteger(e.bytes) && e.bytes > 0)) fail("media.consistency", `${src}: bad byte size`);
-    if (!(Number.isInteger(e.w) && Number.isInteger(e.h))) fail("media.consistency", `${src}: bad dimensions`);
+    if (!(Number.isInteger(e.w) && e.w > 0 && Number.isInteger(e.h) && e.h > 0)) fail("media.consistency", `${src}: bad/zero dimensions ${e.w}x${e.h}`);
     if (!specIdSet.has(e.prov)) fail("media.consistency", `${src}: provenance id ${e.prov} matches no specimen`);
     // integrity: if the local file is still present, its bytes must match the recorded hash
     if (existsSync(src)) {
@@ -268,6 +272,15 @@ if (media) {
     }
   }
   for (const [tag, n] of Object.entries(perRelease)) if (n > cap) fail("media.consistency", `release ${tag} holds ${n} assets, over capacity ${cap}`);
+  // media-live.json is the lean boot map the WALL loads — it must exactly mirror the
+  // release-located manifest entries (a drift means the site serves a stale image set).
+  if (existsSync("data/media-live.json")) {
+    const live = (load("data/media-live.json").urls) || {};
+    for (const [src, e] of Object.entries(mediaAssets)) {
+      if (e.location === "release" && live[src] !== e.url) fail("media.consistency", `media-live.json missing/wrong url for ${src} — rebuild: node scripts/shard.mjs`);
+    }
+    for (const src of Object.keys(live)) if (!(mediaAssets[src] && mediaAssets[src].location === "release")) fail("media.consistency", `media-live.json has stale entry ${src}`);
+  }
 } else {
   skip("media.consistency", "no media manifest (data/media-manifest.json absent) — all images served from Pages");
 }

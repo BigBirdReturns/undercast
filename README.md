@@ -7,11 +7,15 @@ Every card flips: the character on the front, the human underneath on the back.
 Non-commercial fan project.
 
 ```
-index.html            the wall — a static page, reads data/specimens.json
+index.html            the wall — a static page; boots from the generated projections
+                      (data/index.json + data/shards/ via data/shard-manifest.json),
+                      falling back to data/specimens.json if they're absent
 og.png                social-share preview card (1200×630)
 GROW.md               how any model grows the roster (keyless) · AGENTS.md points here
 data/
-  specimens.json      the roster (verified cards and counting)
+  specimens.json      the CANONICAL roster (verified cards and counting) — edit this
+  index.json + shards/ generated serving projections, rebuilt by scripts/shard.mjs
+  media-manifest.json / media-live.json  images on GitHub Releases (see MEDIA.md)
   SOURCES.json        the provenance ledger — every asset, its origin and kind
   GAPS.json           cards with no image yet — the worklist for hand/gen fills
   CANDIDATES.json     the ingest queue — harvested leads awaiting triage
