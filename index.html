@@ -18,6 +18,8 @@
 <!-- Social preview. Absolute URLs so link scrapers can resolve them.
      Update the origin if you deploy somewhere other than the default Pages URL. -->
 <link rel="canonical" href="https://bigbirdreturns.github.io/undercast/" />
+<link rel="describedby" type="application/json" href="./data/archive.json" />
+<link rel="alternate" type="application/ld+json" href="./data/dataset.jsonld" title="UNDERCAST dataset description" />
 <meta name="theme-color" content="#E4DFD5" />
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="UNDERCAST" />
@@ -803,7 +805,7 @@ function mediaSrc(src){ const e=MEDIA[src]; return (e&&e.location==="release"&&R
 // Precompute an index entry's search haystack once (per-keystroke search is then
 // just a substring test, not a rebuild-the-string over the whole roster each time).
 function hydrate(e){
-  e._hay = expandAliases((e.a+" "+e.c+" "+e.p+" "+e.u+" "+e.d+" "+(e.kw||"")).toLowerCase());
+  e._hay = expandAliases((e.a+" "+e.c+" "+e.p+" "+e.u+" "+e.d+" "+(e.co||"")+" "+(e.kw||"")).toLowerCase());
   return e;
 }
 // A grown/full record → an index-shaped entry (used only in the specimens.json
@@ -811,7 +813,8 @@ function hydrate(e){
 function asEntry(s){
   const e={id:s.id,sh:-1,u:s.universe,y:s.years||"",d:s.designer||"",a:s.actor||"",c:s.character||"",p:s.production||"",tf:s.transform||0};
   if(s.kind==="voice") e.k=1;
-  e._hay=expandAliases((s.actor+" "+s.character+" "+s.production+" "+s.universe+" "+s.designer+" "+(s.knownFor||"")+" "+(s.reveal||"")).toLowerCase());
+  if(Array.isArray(s.conditions)&&s.conditions.length) e.co=[...new Set(s.conditions.map(condition=>condition.type).filter(Boolean))].join(" ");
+  e._hay=expandAliases((s.actor+" "+s.character+" "+s.production+" "+s.universe+" "+s.designer+" "+(e.co||"")+" "+(s.knownFor||"")+" "+(s.reveal||"")).toLowerCase());
   return e;
 }
 // Load one shard's full records into RECORDS, deduping concurrent requests.
@@ -819,7 +822,7 @@ function loadShard(sh){
   if(SHARDS.has(sh)) return SHARDS.get(sh);
   const meta=MANIFEST&&MANIFEST.shards&&MANIFEST.shards[sh];
   if(!meta){ const p=Promise.resolve([]); SHARDS.set(sh,p); return p; }
-  const p=fetch("./data/"+meta.file).then(r=>{if(!r.ok)throw new Error("shard "+sh);return r.json();})
+  const p=fetch("./data/"+meta.file+"?v="+encodeURIComponent(meta.sha256||"")).then(r=>{if(!r.ok)throw new Error("shard "+sh);return r.json();})
     .then(recs=>{ for(const rec of recs) RECORDS.set(rec.id,rec); return recs; })
     .catch(err=>{ SHARDS.delete(sh); throw err; }); // let a later render retry
   SHARDS.set(sh,p);
@@ -972,10 +975,8 @@ sortEl.addEventListener("change",()=>render());
 async function boot(){
   applyURLState();
   try{
-    const [idx,man]=await Promise.all([
-      fetch("./data/index.json").then(r=>{if(!r.ok)throw new Error("index");return r.json();}),
-      fetch("./data/shard-manifest.json").then(r=>{if(!r.ok)throw new Error("manifest");return r.json();}),
-    ]);
+    const man=await fetch("./data/shard-manifest.json",{cache:"no-cache"}).then(r=>{if(!r.ok)throw new Error("manifest");return r.json();});
+    const idx=await fetch("./data/index.json?v="+encodeURIComponent(man.index_sha256||"")).then(r=>{if(!r.ok)throw new Error("index");return r.json();});
     INDEX=idx.map(hydrate);
     MANIFEST=man;
   }catch(_){
@@ -986,7 +987,7 @@ async function boot(){
   // lean media map: only images actually on a Release (src -> url). The full durability
   // manifest (data/media-manifest.json) is a CI artifact and is deliberately NOT fetched.
   try{
-    const live=await fetch("./data/media-live.json").then(function(r){return r.ok?r.json():null;});
+    const live=await fetch("./data/media-live.json?v="+encodeURIComponent(MANIFEST.media_live_sha256||"")).then(function(r){return r.ok?r.json():null;});
     if(live&&live.urls) for(const src in live.urls){ MEDIA[src]={url:live.urls[src],location:"release"}; }
   }catch(_){}
   buildFilters();

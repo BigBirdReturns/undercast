@@ -48,6 +48,7 @@ const index = ordered.map((s, gi) => {
     a: s.actor || "", c: s.character || "", p: s.production || "", tf: s.transform || 0,
   };
   if (s.kind === "voice") e.k = 1;
+  if (Array.isArray(s.conditions) && s.conditions.length) e.co = [...new Set(s.conditions.map((condition) => condition.type).filter(Boolean))].join(" ");
   if (kw.length) e.kw = kw.join(" ");
   return e;
 });
@@ -90,8 +91,15 @@ try {
   const urls = {};
   for (const [src, e] of Object.entries(media.assets || {})) if (e.location === "release") urls[src] = e.url;
   liveCount = Object.keys(urls).length;
-  await writeFile("data/media-live.json", JSON.stringify({ version: 1, urls }) + "\n");
+  const liveBody = JSON.stringify({ version: 1, urls });
+  await writeFile("data/media-live.json", liveBody + "\n");
+  manifest.media_live_bytes = liveBody.length;
+  manifest.media_live_sha256 = sha256(liveBody);
 } catch { /* no media manifest yet — no media-live to emit */ }
+
+// Rewrite after the media projection so clients can version every cached payload
+// by its advertised content hash.
+await writeFile("data/shard-manifest.json", JSON.stringify(manifest, null, 1) + "\n");
 
 const kb = (n) => (n / 1e3).toFixed(0) + "KB";
 console.log(`sharded ${ordered.length} cards → ${shardMeta.length} shard(s) (≤${SHARD_SIZE} each)`);
@@ -99,3 +107,7 @@ console.log(`  index.json ${kb(indexBody.length)} (${Math.round(indexBody.length
 console.log(`  ${shardMeta.length} shard file(s), ${shardMeta.reduce((a, s) => a + s.n, 0)} records total — loaded lazily`);
 if (liveCount) console.log(`  media-live.json: ${liveCount} image(s) on Releases — loaded on boot (lean)`);
 console.log(`  rebuild any time: node scripts/shard.mjs   (projections are disposable)`);
+
+// Machine-facing discovery, entity and search projections are part of the same
+// deterministic build. Future crawlers get one contract tied to this exact truth hash.
+await import("./build-contract.mjs");

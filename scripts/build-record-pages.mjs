@@ -25,9 +25,10 @@ function page(record){
   const liveImage=record.still?.src?media.urls?.[record.still.src]:"";
   const mainImage=RELEASE.test(liveImage||"")?liveImage:record.still?.src?`${ORIGIN}/${record.still.src}`:`${ORIGIN}/og.png`;
   const source=url(record.link);
+  const conditionRows=Array.isArray(record.conditions)?record.conditions.map(condition=>`<div class="record-row"><span>Performance condition · ${esc(condition.scope)}</span><b>${esc(condition.type.replace(/-/g," "))}${condition.episode?` · ${esc(condition.episode)}`:""}</b><div>${esc(condition.note)} · <a href="${esc(url(condition.source))}" rel="noopener">source</a></div></div>`).join(""):"";
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; img-src 'self' https:; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(record.character)} — ${esc(record.actor)} | UNDERCAST</title><meta name="description" content="${esc(description)}"><link rel="canonical" href="${canonical}">
+<title>${esc(record.character)} — ${esc(record.actor)} | UNDERCAST</title><meta name="description" content="${esc(description)}"><link rel="canonical" href="${canonical}"><link rel="describedby" type="application/json" href="../../data/archive.json"><link rel="alternate" type="application/ld+json" href="../../data/dataset.jsonld" title="UNDERCAST dataset description">
 <meta property="og:type" content="article"><meta property="og:site_name" content="UNDERCAST"><meta property="og:title" content="${esc(record.character)} — ${esc(record.actor)}"><meta property="og:description" content="${esc(description)}"><meta property="og:url" content="${canonical}"><meta property="og:image" content="${esc(mainImage)}">
 <link rel="stylesheet" href="../../assets/site-shell.css"><link rel="stylesheet" href="../../assets/record-page.css"></head>
 <body><div class="record-wrap"><header class="site-shell"><a class="site-brand" href="../../index.html"><span class="site-wordmark">UNDERCAST</span><span class="site-tagline">the people behind the faces culture remembers</span></a><nav class="site-nav" aria-label="Archive navigation"><a href="../../index.html#archive">Browse</a><a class="site-primary" href="../../recognition.html#${esc(id)}">Interactive record</a><a href="../../index.html#makers">Makers</a><a href="../../index.html#about">About</a></nav></header>
@@ -36,7 +37,7 @@ function page(record){
 <h1>${esc(record.character)}</h1><div class="record-sub">${record.kind==="voice"?"Voice performance":"Character performance"}</div>
 <div class="record-pair">${figure(record.still,"Character",record.character)}${figure(record.portrait,"Performer",record.actor)}</div>
 <section class="record-columns"><div><p class="record-reveal">${esc(record.reveal)}</p><p class="record-source">This permanent record is readable without JavaScript. The interactive view adds comparison and live connection paths.</p><div class="record-actions"><a class="record-action primary" href="../../recognition.html#${esc(id)}">Open interactive record <span>→</span></a><a class="record-action" href="../../index.html#${esc(id)}">Find on the wall <span>→</span></a></div></div>
-<aside class="record-ledger" aria-label="Record details"><div class="record-row"><span>Performed by</span><b>${esc(record.actor)}</b></div><div class="record-row"><span>Design and build credit</span><b>${esc(record.designer)}</b></div><div class="record-row"><span>You already knew them</span><b>${esc(record.knownFor)}</b></div>${source!=="#"?`<div class="record-row"><span>Filed reference</span><b><a href="${esc(source)}" rel="noopener">Open source</a></b></div>`:""}</aside></section>
+<aside class="record-ledger" aria-label="Record details"><div class="record-row"><span>Performed by</span><b>${esc(record.actor)}</b></div><div class="record-row"><span>Design and build credit</span><b>${esc(record.designer)}</b></div>${conditionRows}<div class="record-row"><span>You already knew them</span><b>${esc(record.knownFor)}</b></div>${source!=="#"?`<div class="record-row"><span>Filed reference</span><b><a href="${esc(source)}" rel="noopener">Open source</a></b></div>`:""}</aside></section>
 </main></div></body></html>`;
 }
 
@@ -47,7 +48,4 @@ for(const record of records){
   await mkdir(dir,{recursive:true});
   await writeFile(path.join(dir,"index.html"),page(record),"utf8");
 }
-const urls=[`${ORIGIN}/`,`${ORIGIN}/recognition.html`,...records.map(record=>`${ORIGIN}/records/${record.id}/`)];
-const sitemap=`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map(loc=>`  <url><loc>${esc(loc)}</loc></url>`).join("\n")}\n</urlset>\n`;
-await writeFile(path.join(ROOT,"sitemap.xml"),sitemap,"utf8");
 console.log(`built ${records.length} permanent record pages`);
