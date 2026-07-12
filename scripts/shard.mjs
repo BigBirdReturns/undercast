@@ -26,6 +26,7 @@ import { createHash } from "node:crypto";
 
 const SHARD_SIZE = parseInt(process.env.SHARD_SIZE || "1000", 10);
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");
+const jsonBytes = (value, space) => Buffer.from(JSON.stringify(value, null, space) + "\n", "utf8");
 const idNum = (id) => { const m = String(id).match(/(\d+)/); return m ? parseInt(m[1], 10) : 0; };
 
 // stopwords + the boilerplate that recurs across reveals — dropped from kw so the
@@ -35,6 +36,7 @@ const STOP = new Set(("the a an and or of to in on for with as at by from is was
 const tokens = (t) => [...new Set(String(t || "").toLowerCase().match(/[a-z0-9]{3,}/g) || [])].filter((w) => !STOP.has(w));
 
 const specimens = JSON.parse(await readFile("data/specimens.json", "utf8"));
+const tombstones = JSON.parse(await readFile("data/tombstones.json", "utf8").catch(() => '{"records":[]}'));
 // stable, human-legible shard order: by catalog number
 const ordered = specimens.slice().sort((a, b) => idNum(a.id) - idNum(b.id) || String(a.id).localeCompare(String(b.id)));
 
@@ -60,13 +62,13 @@ const shardMeta = [];
 for (let i = 0, sh = 0; i < ordered.length; i += SHARD_SIZE, sh++) {
   const slice = ordered.slice(i, i + SHARD_SIZE);
   const file = `shards/${String(sh).padStart(4, "0")}.json`;
-  const body = JSON.stringify(slice);
-  await writeFile("data/" + file, body + "\n");
-  shardMeta.push({ file, n: slice.length, sha256: sha256(body) });
+  const bytes = jsonBytes(slice);
+  await writeFile("data/" + file, bytes);
+  shardMeta.push({ file, n: slice.length, bytes: bytes.length, sha256: sha256(bytes) });
 }
 
-const indexBody = JSON.stringify(index);
-await writeFile("data/index.json", indexBody + "\n");
+const indexBytes = jsonBytes(index);
+await writeFile("data/index.json", indexBytes);
 
 const manifest = {
   version: 1,
@@ -74,9 +76,10 @@ const manifest = {
   source_sha256: sha256(JSON.stringify(specimens)),
   count: ordered.length,
   shard_size: SHARD_SIZE,
-  index_bytes: indexBody.length,
-  index_sha256: sha256(indexBody),
+  index_bytes: indexBytes.length,
+  index_sha256: sha256(indexBytes),
   shards: shardMeta,
+  redirects: Object.fromEntries((tombstones.records || []).filter((row) => row.status === "merged" && row.successor).map((row) => [row.id, row.successor])),
 };
 await writeFile("data/shard-manifest.json", JSON.stringify(manifest, null, 1) + "\n");
 
@@ -91,19 +94,19 @@ try {
   const urls = {};
   for (const [src, e] of Object.entries(media.assets || {})) if (e.location === "release") urls[src] = e.url;
   liveCount = Object.keys(urls).length;
-  const liveBody = JSON.stringify({ version: 1, urls });
-  await writeFile("data/media-live.json", liveBody + "\n");
-  manifest.media_live_bytes = liveBody.length;
-  manifest.media_live_sha256 = sha256(liveBody);
+  const liveBytes = jsonBytes({ version: 1, urls });
+  await writeFile("data/media-live.json", liveBytes);
+  manifest.media_live_bytes = liveBytes.length;
+  manifest.media_live_sha256 = sha256(liveBytes);
 } catch { /* no media manifest yet — no media-live to emit */ }
 
 // Rewrite after the media projection so clients can version every cached payload
 // by its advertised content hash.
-await writeFile("data/shard-manifest.json", JSON.stringify(manifest, null, 1) + "\n");
+await writeFile("data/shard-manifest.json", jsonBytes(manifest, 1));
 
 const kb = (n) => (n / 1e3).toFixed(0) + "KB";
 console.log(`sharded ${ordered.length} cards → ${shardMeta.length} shard(s) (≤${SHARD_SIZE} each)`);
-console.log(`  index.json ${kb(indexBody.length)} (${Math.round(indexBody.length / ordered.length)} B/card) — loaded on boot`);
+console.log(`  index.json ${kb(indexBytes.length)} (${Math.round(indexBytes.length / ordered.length)} B/card) — loaded on boot`);
 console.log(`  ${shardMeta.length} shard file(s), ${shardMeta.reduce((a, s) => a + s.n, 0)} records total — loaded lazily`);
 if (liveCount) console.log(`  media-live.json: ${liveCount} image(s) on Releases — loaded on boot (lean)`);
 console.log(`  rebuild any time: node scripts/shard.mjs   (projections are disposable)`);

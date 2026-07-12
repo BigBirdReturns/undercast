@@ -6,11 +6,14 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
 
 ## Truth and projections
 
-- `data/specimens.json` and `data/SOURCES.json` are canonical truth.
+- `data/specimens.json`, `data/SOURCES.json` and `data/tombstones.json` are
+  maintained truth: live records, image provenance and retired-ID continuity.
 - `data/index.json`, `data/shards/`, `data/entities.json`, `data/search/` and the
   permanent HTML record routes are generated projections. They are disposable.
 - Verify the SHA-256 values in `data/archive.json` before treating a cached
   projection as current.
+- `data/quality.json` publishes current completeness and claim-evidence coverage
+  with non-regression floors; a gap remains a gap, not an inferred fact.
 - `data/entities.json` groups exact credit labels for navigation. Its keys are
   stable derived keys, not assertions that two similarly named humans are the
   same legal identity.
@@ -20,12 +23,17 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
 - Never invent or infer a performer, role, maker, image, production condition or
   identity link.
 - `conditions[]` is allowed only when its note is supported by its own `source`.
+- `references[]` ties performance, design, production, biography and interview
+  claims to the source that actually supports them. A performer profile alone
+  is not evidence for every claim on a card.
 - Missing, disputed and unknown evidence must remain missing, disputed or unknown.
 - Image origin and license fields describe provenance; they do not transfer rights.
 
 ## Durable identifiers
 
 - Specimen IDs match `^UC-G?\d+$` and are never reused.
+- Merged duplicates remain in `data/tombstones.json`; clients resolve them
+  through `shard-manifest.json.redirects` rather than treating them as missing.
 - Permanent record: `/undercast/records/{id}/`
 - Interactive record: `/undercast/recognition.html#{id}`
 - Wall record: `/undercast/index.html#{id}`
