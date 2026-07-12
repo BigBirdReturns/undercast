@@ -652,7 +652,7 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 ## Ledger summary
 
 - Free-licensed portraits (attributed above): **629**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **646**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **666**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
