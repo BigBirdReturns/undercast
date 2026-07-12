@@ -187,7 +187,10 @@ async function apply() {
     for (const side of ["still", "portrait"]) {
       if (!p[side]) continue;
       const c = man[side].find((x) => x.label === p[side]); if (!c) { console.log("no candidate", p.id, side, p[side]); continue; }
-      const got = await dl([c.full, c.url]); if (!got) { console.log("dl fail", c.file); continue; }
+      // store a card-sized (640px) thumbnail, NOT the full-res original — durability:
+      // a flip card renders ~300px, so full-res is 10x wasted weight at scale.
+      const t640 = c.file && c.wiki ? await thumb(c.wiki, c.file, 640).catch(() => null) : null;
+      const got = await dl([t640?.url, c.url, c.full]); if (!got) { console.log("dl fail", c.file); continue; }
       const out = `${IMGDIR}/${s.id.toLowerCase()}-${side}.${extOf(got.url)}`;
       await writeFile(out, got.buf); await sleep(300);
       s[side] = side === "still" ? { src: out, kind: "still", origin: c.origin, pin: true }
