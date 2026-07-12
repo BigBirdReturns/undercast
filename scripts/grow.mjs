@@ -21,7 +21,8 @@
  * Guardrails: GROW_BUDGET caps new cards per run; existing actors are skipped;
  * character / production stills are never requested.
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, appendFile, mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
 
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 const BUDGET  = parseInt(process.env.GROW_BUDGET || "6", 10);
@@ -60,6 +61,20 @@ const WIKIS = [
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const norm  = (s) => String(s || "").trim().toLowerCase();
+
+// ── the buffalo journal ──────────────────────────────────────────────────────
+// Growth is a filter: most candidates are rejected (already on the wall, not
+// verifiable, no free image). The rejection record is the critical field — it is
+// how we prove a name was CONSIDERED and why it isn't a card, so no one re-drafts
+// it and no reviewer mistakes absence for oversight. axm-shaped canonical JSONL:
+// closed keys, no nulls ("" for absent), RFC3339 ts, content-derived id.
+const ACTOR = "grow.mjs@0.1";
+async function journal(file, rec) {
+  const body = { ts: new Date().toISOString(), actor: ACTOR, ...rec };
+  const id = "jr_" + createHash("sha256").update(ACTOR + "|" + JSON.stringify(body)).digest("base64url").slice(0, 22);
+  await mkdir("data/journal", { recursive: true });
+  await appendFile(`data/journal/${file}`, JSON.stringify({ id, ...body }) + "\n");
+}
 
 async function claude(prompt) {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -105,9 +120,17 @@ function upsertLedger(ledger, row) { const i = ledger.findIndex((r) => r.id === 
 // verify -> attach schema fields (matching index.html) -> push. Mutates ctx in place.
 async function tryEmit(card, ctx) {
   const { specimens, ledger, have } = ctx;
-  if (!card || card.skip || !card.actor || !card.character || have.has(norm(card.actor))) { console.log("skip:", card && (card.reason || card.actor)); return false; }
+  if (!card || card.skip || !card.actor || !card.character || have.has(norm(card.actor))) {
+    console.log("skip:", card && (card.reason || card.actor));
+    await journal("rejections.jsonl", { op: "lead.reject", reason: !card ? "no card parsed" : card.skip ? (card.reason || "model declined") : !card.actor ? "missing actor" : !card.character ? "missing character" : "already on the wall", actor_name: (card && card.actor) || "", character: (card && card.character) || "", wiki: (card && card.wiki) || "" });
+    return false;
+  }
   const title = await verify(card);
-  if (!title) { console.log("unverified, skip:", card.actor); return false; }
+  if (!title) {
+    console.log("unverified, skip:", card.actor);
+    await journal("rejections.jsonl", { op: "lead.reject", reason: "unverified on Wikipedia", actor_name: card.actor, character: card.character || "", wiki: card.wiki || "" });
+    return false;
+  }
   const img = await findImage(card.actor).catch(() => null);
   card.id = "UC-G" + String(specimens.filter((s) => s._grown).length + 1).padStart(3, "0");
   card._grown = true;
@@ -120,6 +143,7 @@ async function tryEmit(card, ctx) {
   if (img) card.portrait = { src: img.url, kind: "free", origin: img.source, author: img.author, license: img.license };
   specimens.push(card);
   have.add(norm(card.actor));
+  await journal("candidates.jsonl", { op: "lead.accept", specimen: card.id, actor_name: card.actor, character: card.character, universe: card.universe, production: card.production || "", link: card.link, image_via: img ? img.via : "", image_license: img ? img.license : "" });
   console.log("grown:", card.actor, "—", card.character, img ? `(+free image via ${img.via})` : "(no free image)");
   if (img) upsertLedger(ledger, { id: card.id, actor: card.actor, character: card.character, universe: card.universe, still: null, portrait: card.portrait, fetched_at: new Date().toISOString().slice(0, 10) });
   return true;
@@ -200,11 +224,23 @@ async function growFromDrafts(file) {
   let maxN = Math.max(0, ...specimens.map((s) => parseInt((String(s.id).match(/UC-(\d+)/) || [])[1] || "0", 10)));
   const added = [], dropped = [];
   for (const c of drafts) {
-    if (!c || !c.actor || !c.character) { dropped.push([(c && c.actor) || "?", "missing actor/character"]); continue; }
-    if (have.has(norm(c.actor))) { dropped.push([c.actor, "already on the wall"]); continue; }
+    if (!c || !c.actor || !c.character) {
+      dropped.push([(c && c.actor) || "?", "missing actor/character"]);
+      await journal("rejections.jsonl", { op: "draft.reject", reason: "missing actor/character", actor_name: (c && c.actor) || "", character: (c && c.character) || "", wiki: (c && c.wiki) || "" });
+      continue;
+    }
+    if (have.has(norm(c.actor))) {
+      dropped.push([c.actor, "already on the wall"]);
+      await journal("rejections.jsonl", { op: "draft.reject", reason: "already on the wall", actor_name: c.actor, character: c.character || "", wiki: c.wiki || "" });
+      continue;
+    }
     const title = await verify({ wiki: c.wiki, actor: c.actor }).catch(() => null);
     await sleep(700);
-    if (!title) { dropped.push([c.actor, "unverified on Wikipedia"]); continue; }
+    if (!title) {
+      dropped.push([c.actor, "unverified on Wikipedia"]);
+      await journal("rejections.jsonl", { op: "draft.reject", reason: "unverified on Wikipedia", actor_name: c.actor, character: c.character || "", wiki: c.wiki || "" });
+      continue;
+    }
     const row = {
       id: "UC-" + String(++maxN).padStart(3, "0"),
       ...(c.kind === "voice" ? { kind: "voice" } : {}),
@@ -216,6 +252,7 @@ async function growFromDrafts(file) {
       link: c.wiki || ("https://en.wikipedia.org/wiki/" + encodeURIComponent(String(title).replace(/ /g, "_"))),
     };
     specimens.push(row); have.add(norm(c.actor)); added.push(row.id + "  " + row.actor + " — " + row.character);
+    await journal("candidates.jsonl", { op: "draft.accept", specimen: row.id, actor_name: row.actor, character: row.character, universe: row.universe, production: row.production || "", link: row.link });
   }
   await writeFile(DATA, JSON.stringify(specimens, null, 2) + "\n");
   await writeFile(file, "[]\n"); // consume the drafts so a re-run can't double-add
@@ -248,13 +285,16 @@ async function main() {
   // Every lead is looked at exactly once: it becomes a card or it's dropped.
   while (added < BUDGET && queue.length) {
     const lead = queue.shift();
-    if (have.has(norm(lead.name))) continue; // already on the wall since harvest
+    if (have.has(norm(lead.name))) { await journal("rejections.jsonl", { op: "lead.reject", reason: "already on the wall since harvest", actor_name: lead.name || "", character: "", wiki: lead.wiki || "" }); continue; }
     try {
       const card = parseCard(await claude(candidatePrompt(lead.name, lead.wiki)));
       if (card && !card.skip && !card.universe && lead.universe) card.universe = lead.universe;
       if (await tryEmit(card, ctx)) added++;
       await sleep(400);
-    } catch (e) { console.log("error, skip lead:", lead.name, "-", e.message); }
+    } catch (e) {
+      console.log("error, skip lead:", lead.name, "-", e.message);
+      await journal("rejections.jsonl", { op: "lead.reject", reason: "error: " + e.message, actor_name: lead.name || "", character: "", wiki: lead.wiki || "" });
+    }
   }
 
   // PHASE 2 — if the queue ran dry and we're still under budget, invent from veins.

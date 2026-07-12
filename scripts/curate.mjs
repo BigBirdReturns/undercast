@@ -14,7 +14,8 @@
  *
  * Reads the same wiki resolution as retrieve.mjs (copied — scripts stay self-contained).
  */
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 
 const UA = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT || "curate"})`;
 const DATA = "data/specimens.json";
@@ -26,6 +27,19 @@ const FREE = [/cc0/i, /public domain/i, /^\s*pd/i, /cc[-\s]?by([-\s]?sa)?/i];
 const isFree = (s = "") => FREE.some((re) => re.test(s));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const extOf = (u) => (u.split("?")[0].match(/\.(jpe?g|png|gif|webp)$/i)?.[1] || "jpg").toLowerCase();
+
+// ── the buffalo journal ──────────────────────────────────────────────────────
+// Every curation decision is retained as an append-only record — the pick AND the
+// candidates it beat. A rejected still is not noise; it is the evidence the chosen
+// one was chosen over something. axm-shaped canonical JSONL: closed keys, no nulls
+// ("" for absent), RFC3339 timestamp, content-derived id (never random/stored).
+const ACTOR = "curate.mjs@0.1";
+async function journal(file, rec) {
+  const body = { ts: new Date().toISOString(), actor: ACTOR, ...rec };
+  const id = "jr_" + createHash("sha256").update(ACTOR + "|" + JSON.stringify(body)).digest("base64url").slice(0, 22);
+  await mkdir("data/journal", { recursive: true });
+  await appendFile(`data/journal/${file}`, JSON.stringify({ id, ...body }) + "\n");
+}
 
 // ── wiki resolution (mirrors retrieve.mjs) ──
 const STILL_WIKIS = { "Star Trek": "https://memory-alpha.fandom.com/api.php", "Babylon 5": "https://babylon5.fandom.com/api.php", "Farscape": "https://farscape.fandom.com/api.php", "Kaiju": "https://wikizilla.org/w/api.php" };
@@ -196,6 +210,13 @@ async function apply() {
       s[side] = side === "still" ? { src: out, kind: "still", origin: c.origin, pin: true }
         : { src: out, kind: isFree(c.license) ? "free" : "copyright", origin: c.origin, author: c.author, license: c.license, pin: true };
       console.log(`pinned ${s.id} ${side} = ${c.label} (${c.file})`);
+      await journal("reviews.jsonl", {
+        op: "curate.apply", specimen: s.id, actor_name: s.actor || "", character: s.character || "", side,
+        picked_label: c.label, chosen_file: c.file || "", chosen_origin: c.origin || "",
+        chosen_license: c.license || "", chosen_author: c.author || "",
+        rejected: man[side].filter((x) => x.label !== c.label)
+          .map((x) => ({ label: x.label, file: x.file || "", license: x.license || "", author: x.author || "", origin: x.origin || "" })),
+      });
     }
     const i = ledger.findIndex((r) => r.id === s.id);
     const row = i >= 0 ? ledger[i] : { id: s.id, actor: s.actor, character: s.character, universe: s.universe, still: null, portrait: null };

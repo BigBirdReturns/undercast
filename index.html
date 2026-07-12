@@ -2,6 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
+<!-- Content-Security-Policy: defence-in-depth. The app is a single inline script
+     with inline onclick handlers, so 'unsafe-inline' scripts are required — the CSP
+     is NOT the primary XSS control (that's the esc()/safeUrl()/safeId() helpers that
+     sanitise every value written into innerHTML). What it DOES buy: no external or
+     injected <script src>, no plugins, no <base> hijack, no form posts, and fetch
+     limited to same-origin. Fonts are allow-listed to Google's hosts. (Clickjacking
+     protection would need a frame-ancestors HTTP header — a <meta> CSP can't carry
+     it, and GitHub Pages can't set headers — so it's out of scope here.) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>UNDERCAST — a field index of the performers who vanish under the design</title>
 <meta name="description" content="A field index of the performers who vanish under a designed face — heavy prosthetics, a mask, a creature suit, motion capture, an unseen voice. Every card flips: the character on the front, the human underneath on the back." />
@@ -518,6 +527,15 @@ function primaryMakerOf(designer){
   return ms.slice().sort((a,b)=>(MAKER_INDEX[b]||0)-(MAKER_INDEX[a]||0))[0];
 }
 function escAttr(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+// ── injection guards: every value that reaches innerHTML goes through one of these ──
+// esc: text + double-quoted attributes (also escapes ' so it's safe inside single-quoted attrs).
+function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
+// safeId: only our catalog-id charset — safe to drop into a single-quoted onclick or a #fragment.
+function safeId(s){return /^[A-Za-z0-9_-]+$/.test(String(s==null?"":s))?String(s):"";}
+// safeUrl: an href we hand to the browser — http(s) only, so javascript:/data:/relative can't ride in.
+function safeUrl(u){u=String(u==null?"":u).trim();return /^https?:\/\//i.test(u)&&!/[\s"'<>]/.test(u)?u:"#";}
+// safeSrc: a local image path (or http image) for a src="" — neutralise attribute breakout.
+function safeSrc(u){u=String(u==null?"":u).trim();return /["'<>]/.test(u)?"":u;}
 
 /* first 4-digit year in the years string → a decade label */
 function decadeOf(years){
@@ -560,7 +578,7 @@ function buildMakers(){
     const b=document.createElement("button");
     b.className="mchip";b.type="button";b.dataset.maker=name;
     b.setAttribute("aria-pressed",String(name===makerFilter));
-    b.innerHTML=`<span class="mname">${name}</span><span class="mn">${n}</span>`;
+    b.innerHTML=`<span class="mname">${esc(name)}</span><span class="mn">${esc(n)}</span>`;
     b.addEventListener("click",()=>setMaker(name));
     makerChipsEl.appendChild(b);
   }
@@ -588,13 +606,13 @@ function card(s){
   const still = s.still && s.still.src;
   const portrait = s.portrait && s.portrait.src;
   const front = still
-    ? `<img class="shot" src="${s.still.src}" alt="${s.character}" loading="lazy">`
+    ? `<img class="shot" src="${safeSrc(s.still.src)}" alt="${esc(s.character)}" loading="lazy">`
     : castSvg;
   // the reveal image, in the SAME box as the front: the real photo, or — with no
   // photo yet — the BARE-face relief (mask off), so the flip is always face→face.
   const bareSvg = isVoice ? voiceGlyph(seedRand(s.id+"vb")) : reliefBase(seedRand(s.id+"b"), false);
   const back = portrait
-    ? `<img class="shot" src="${s.portrait.src}" alt="${s.actor}" loading="lazy">`
+    ? `<img class="shot" src="${safeSrc(s.portrait.src)}" alt="${esc(s.actor)}" loading="lazy">`
     : bareSvg;
   const genMark = ((s.still&&s.still.kind==="generated")||(s.portrait&&s.portrait.kind==="generated"))
     ? `<span class="gen-badge">gen</span>` : "";
@@ -606,8 +624,8 @@ function card(s){
   const creditBlock = isVoice
     ? `<div class="designed"><span class="lab">On file</span><span class="who">Voice only · no cast taken</span></div>`
     : `<div class="designed"><span class="lab">Face designed by</span>${pm
-        ? `<a class="who" href="#" data-maker="${escAttr(pm)}" title="See other faces built by ${escAttr(pm)}" onclick="return makerClick(event,this)">${s.designer}</a>`
-        : `<span class="who">${s.designer}</span>`}</div>`;
+        ? `<a class="who" href="#" data-maker="${escAttr(pm)}" title="See other faces built by ${escAttr(pm)}" onclick="return makerClick(event,this)">${esc(s.designer)}</a>`
+        : `<span class="who">${esc(s.designer)}</span>`}</div>`;
   if(s._grown){
     btn.classList.add("grown");
     const vb = s._verified ? "grown-badge" : "grown-badge unverified";
@@ -618,26 +636,26 @@ function card(s){
   btn.innerHTML+=`
     <div class="inner">
       <div class="face front">
-        <div class="cat"><span class="id">${s.id}</span><span>${s.universe} · ${decadeOf(s.years)}</span></div>
+        <div class="cat"><span class="id">${esc(s.id)}</span><span>${esc(s.universe)} · ${esc(decadeOf(s.years))}</span></div>
         ${front}
         <div class="frontmeta">
-          <div class="charname">${s.character}</div>
-          <div class="prod">${s.production} · ${s.years}</div>
+          <div class="charname">${esc(s.character)}</div>
+          <div class="prod">${esc(s.production)} · ${esc(s.years)}</div>
           ${creditBlock}
           ${pips(s.transform, isVoice?"unseen":"vanished")}
           <div class="turnhint">▸ turn the ${isVoice?"card":"cast"}</div>
         </div>
       </div>
       <div class="face back">
-        <div class="cat"><span class="id">${s.id}</span><span>underneath</span></div>
+        <div class="cat"><span class="id">${esc(s.id)}</span><span>underneath</span></div>
         ${back}
         <div class="back-body">
-          <div class="under-row"><span class="under-lab">${isVoice?"The voice":"The performer"}</span><a class="permalink" href="#${s.id}" title="Copy a link to this specimen" onclick="return copyPermalink(event,'${s.id}')">⌗ ${s.id}</a></div>
-          <div class="actor">${s.actor}</div>
-          <div class="knownfor"><span class="k">You've also ${isVoice?"heard":"seen"} them</span>${s.knownFor}</div>
-          <div class="reveal">${s.reveal}</div>
-          ${portrait && (s.portrait.author||s.portrait.license) ? `<div class="credit">${s.portrait.author||""}${s.portrait.license?" · "+s.portrait.license:""}${s.portrait.origin?` · <a href="${s.portrait.origin}" target="_blank" rel="noopener" onclick="event.stopPropagation()">source</a>`:""}</div>` : ""}
-          <a class="backlink" href="${s.link}" target="_blank" rel="noopener" onclick="event.stopPropagation()">See the real face →</a>
+          <div class="under-row"><span class="under-lab">${isVoice?"The voice":"The performer"}</span><a class="permalink" href="#${safeId(s.id)}" title="Copy a link to this specimen" onclick="return copyPermalink(event,'${safeId(s.id)}')">⌗ ${esc(s.id)}</a></div>
+          <div class="actor">${esc(s.actor)}</div>
+          <div class="knownfor"><span class="k">You've also ${isVoice?"heard":"seen"} them</span>${esc(s.knownFor)}</div>
+          <div class="reveal">${esc(s.reveal)}</div>
+          ${portrait && (s.portrait.author||s.portrait.license) ? `<div class="credit">${esc(s.portrait.author||"")}${s.portrait.license?" · "+esc(s.portrait.license):""}${s.portrait.origin?` · <a href="${safeUrl(s.portrait.origin)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">source</a>`:""}</div>` : ""}
+          <a class="backlink" href="${safeUrl(s.link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">See the real face →</a>
         </div>
       </div>
     </div>`;
@@ -703,7 +721,7 @@ function render(reset=true){
   // active-maker banner (also works when the makers strip is scrolled off screen)
   if(makerFilter){
     makerActiveEl.hidden=false;
-    makerActiveEl.innerHTML=`<span>Built by <b>${makerFilter}</b> · ${rows.length} ${rows.length===1?"face":"faces"} on the wall</span><button class="clearmaker" type="button" onclick="setMaker('')">clear ✕</button>`;
+    makerActiveEl.innerHTML=`<span>Built by <b>${esc(makerFilter)}</b> · ${rows.length} ${rows.length===1?"face":"faces"} on the wall</span><button class="clearmaker" type="button" onclick="setMaker('')">clear ✕</button>`;
   } else {
     makerActiveEl.hidden=true;
     makerActiveEl.innerHTML="";
