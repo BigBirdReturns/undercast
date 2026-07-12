@@ -174,6 +174,21 @@ Note: Wikimedia intermittently rate-limits automated fetches of Commons media
 and in `loose` mode falls through to Fandom. Nightly runs on a fresh runner IP,
 a few cards at a time, which mostly avoids it.
 
+## Auditing a franchise seam
+
+`npm run census:ferengi` walks Memory Alpha's Ferengi and unnamed-Ferengi
+categories, reads credited performer fields, and updates four durable snapshots:
+`CENSUS.json`, `CENSUS-COVERAGE.json`, `CENSUS-GAPS.json`,
+`CENSUS-UNRESOLVED.json`, and `CENSUS-SUMMARY.json`. Coverage is measured by **performer plus role**: a Weyoun
+card does not make Jeffrey Combs's Brunt performance covered. Scoped census runs
+replace only their franchise/category and preserve every other snapshot. Source
+failure aborts the run instead of manufacturing an empty category.
+
+The summary separates physical prosthetic performances, animation/voice, mixed
+appearances, and source pages with no named performer. It is a sourced community-wiki snapshot,
+not a claim that uncredited background performers or every licensed tie-in have
+already been identified.
+
 ## Growing the wall — the pipeline
 
 The wall grows through a **harvest → triage → card** pipeline, built so it can

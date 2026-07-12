@@ -23,6 +23,7 @@ themselves*, they don't belong here.
    {
      "character": "the in-character role",
      "actor": "the real performer's name (exact — it's verified against Wikipedia)",
+     "aliases": "optional verified alternate professional names for identity matching",
      "production": "film / series",
      "universe": "one of: Star Trek, Film, Babylon 5, Farscape, Horror, TV, Voice, Kaiju",
      "years": "YYYY or YYYY–YY",

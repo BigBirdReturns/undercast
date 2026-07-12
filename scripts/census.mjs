@@ -9,10 +9,17 @@
  *
  *   node scripts/census.mjs                 # all franchises -> data/CENSUS.json
  *   node scripts/census.mjs star-trek       # one franchise
+ *   node scripts/census.mjs star-trek --category Ferengi
  *
  * Output: data/CENSUS.json  [{franchise, category, character, performers[]}]
- *         data/CENSUS-GAPS.json  performers NOT on the wall, ranked by how many
- *         characters they wore (multi-role performers are prime UNDERCAST).
+ *         data/CENSUS-COVERAGE.json  every performer-role credit and its wall IDs
+ *         data/CENSUS-GAPS.json  performer-role credits NOT on the wall, ranked
+ *         by how many characters they wore (multi-role performers are prime).
+ *         data/CENSUS-UNRESOLVED.json  source pages with no named performer
+ *
+ * Scoped runs replace only that franchise/category snapshot; they never erase
+ * census results for unrelated franchises. Source failures stop the run rather
+ * than publishing a false zero.
  *
  * The census only DISCOVERS names; nothing lands on the wall without the usual
  * gates (Wikipedia verification in grow.mjs --drafts, then vision image audit).
@@ -21,6 +28,9 @@ import { readFile, writeFile } from "node:fs/promises";
 
 const UA = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT || "census"})`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const normalize = (value) => String(value || "").normalize("NFKD").replace(/\p{M}+/gu, "").toLowerCase()
+  .replace(/\s*\((?:ferengi|mirror|character|actor|actress|performer|puppeteer)\)\s*$/i, "")
+  .replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
 // Actor-ish infobox fields, in rough order of trust. Different wikis use
 // different keys; all of these mean "the human behind the character".
@@ -72,19 +82,32 @@ const FRANCHISES = {
 let lastReq = 0;
 async function mw(base, params) {
   const wait = Math.max(0, 600 - (Date.now() - lastReq)); if (wait) await sleep(wait); lastReq = Date.now();
-  const r = await fetch(base + "?" + new URLSearchParams({ format: "json", origin: "*", ...params }), { headers: { "User-Agent": UA } });
-  if (!r.ok) throw new Error(base + " " + r.status);
-  return r.json();
+  const url = base + "?" + new URLSearchParams({ format: "json", origin: "*", ...params });
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const r = await fetch(url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(20_000) });
+      if (!r.ok) throw new Error(base + " " + r.status);
+      return await r.json();
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await sleep(attempt * 1_000);
+    }
+  }
+  throw new Error(`census source unavailable after 3 attempts: ${url}\n${lastError}`);
 }
 
 // category members; walks one level of subcategories too (namespace 14)
-async function categoryMembers(api, cat, depth = 0) {
+async function categoryMembers(api, cat, depth = 0, subcategoryMode = "all") {
   const pages = []; let cont = {};
   do {
-    const j = await mw(api, { action: "query", list: "categorymembers", cmtitle: "Category:" + cat, cmlimit: "500", ...cont }).catch(() => null);
+    const j = await mw(api, { action: "query", list: "categorymembers", cmtitle: "Category:" + cat, cmlimit: "500", ...cont });
     for (const m of j?.query?.categorymembers || []) {
       if (m.ns === 0) pages.push(m.title);
-      else if (m.ns === 14 && depth === 0) pages.push(...await categoryMembers(api, m.title.replace(/^Category:/, ""), 1));
+      else if (m.ns === 14 && depth === 0
+        && (subcategoryMode === "all" || /^Category:Unnamed /i.test(m.title))) {
+        pages.push(...await categoryMembers(api, m.title.replace(/^Category:/, ""), 1, subcategoryMode));
+      }
     }
     cont = j?.continue || null;
   } while (cont);
@@ -104,77 +127,183 @@ function namesFrom(value) {
     && PERSONISH.test(n) && n.length < 40);
 }
 
-async function censusFranchise(key, cfg, rows) {
+async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
   console.log(`\n== ${cfg.label} (${cfg.api}) ==`);
   // portrayal subcategories: "Actors who have portrayed <Character>" — members are
   // the real performers, the suffix names the character they wore.
   if (cfg.portrayalPrefix) {
     let subs = [], cont = {};
     do {
-      const j = await mw(cfg.api, { action: "query", list: "allcategories", acprefix: cfg.portrayalPrefix, aclimit: "500", ...cont }).catch(() => null);
+      const j = await mw(cfg.api, { action: "query", list: "allcategories", acprefix: cfg.portrayalPrefix, aclimit: "500", ...cont });
       subs.push(...(j?.query?.allcategories || []).map((c) => c["*"]));
       cont = j?.continue || null;
     } while (cont);
     let people = 0;
     for (const sub of subs) {
       const character = sub.slice(cfg.portrayalPrefix.length).trim().replace(/\/Legends$/, "");
-      const members = (await categoryMembers(cfg.api, sub).catch(() => []))
+      const members = (await categoryMembers(cfg.api, sub))
         .filter((t) => PERSONISH.test(t.replace(/\/Legends$/, "")) && !/[()\d]/.test(t))
         .map((t) => t.replace(/\/Legends$/, ""));
-      for (const p of members) { rows.push({ franchise: cfg.label, category: "portrayed " + character, character, performers: [p] }); people++; }
+      for (const p of members) { rows.push({ franchise: cfg.label, category: "portrayed " + character, character, performers: [p], source: cfg.api }); people++; }
     }
     console.log(`  [portrayal] ${subs.length} characters, ${people} performer credits`);
   }
   // direct performer categories: every member page IS a performer
-  for (const cat of cfg.performerCategories || []) {
-    const people = (await categoryMembers(cfg.api, cat).catch(() => []))
+  for (const cat of (cfg.performerCategories || []).filter((cat) => !onlyCategory || normalize(cat) === normalize(onlyCategory))) {
+    const people = (await categoryMembers(cfg.api, cat))
       .filter((t) => PERSONISH.test(t) && !/[()\d]/.test(t));
-    for (const p of people) rows.push({ franchise: cfg.label, category: cat, character: "—", performers: [p] });
+    for (const p of people) rows.push({ franchise: cfg.label, category: cat, character: "—", performers: [p], source: cfg.api });
     console.log(`  [performers] ${cat}: ${people.length} people`);
   }
-  for (const cat of cfg.categories || []) {
-    const pages = await categoryMembers(cfg.api, cat).catch(() => []);
-    if (!pages.length) { console.log(`  ${cat}: 0 pages (category missing or empty — skipped)`); continue; }
+  for (const cat of (cfg.categories || []).filter((cat) => !onlyCategory || normalize(cat) === normalize(onlyCategory))) {
+    const pages = await categoryMembers(cfg.api, cat, 0, cfg.label === "Star Trek" ? "unnamed" : "all");
+    if (!pages.length) throw new Error(`${cfg.label} category ${cat} returned no pages; refusing to publish a false zero`);
     let found = 0;
     for (let i = 0; i < pages.length; i += 20) {
-      const j = await mw(cfg.api, { action: "query", prop: "revisions", rvprop: "content", rvslots: "main", titles: pages.slice(i, i + 20).join("|") }).catch(() => null);
+      const j = await mw(cfg.api, { action: "query", prop: "revisions", rvprop: "content", rvslots: "main", titles: pages.slice(i, i + 20).join("|") });
       for (const p of Object.values(j?.query?.pages || {})) {
         // scan only the page head (infobox lives there) — actor-ish phrases in
         // body prose link to stories and planets, not people.
-        const wt = (p?.revisions?.[0]?.slots?.main?.["*"] || "").split(/\n==/)[0].slice(0, 4000);
+        const fullWikitext = p?.revisions?.[0]?.slots?.main?.["*"] || "";
+        const wt = fullWikitext.split(/\n==/)[0].slice(0, 4000);
+        if (cfg.label === "Star Trek" && normalize(cat) === "ferengi"
+          && !/\|\s*species\s*=.*\[\[Ferengi(?:\||\]\])/i.test(wt)) continue;
         const performers = new Set();
         for (const m of wt.matchAll(ACTOR_FIELDS)) for (const n of namesFrom(m[2])) performers.add(n);
-        if (performers.size) { rows.push({ franchise: cfg.label, category: cat, character: p.title, performers: [...performers] }); found++; }
+        const source = cfg.api.replace(/api\.php$/, `wiki/${encodeURIComponent(p.title.replace(/ /g, "_"))}`);
+        if (performers.size) {
+          rows.push({ franchise: cfg.label, category: cat, character: p.title, performers: [...performers],
+            performance_mode: performanceMode(fullWikitext),
+            source });
+          found++;
+        } else {
+          unresolvedRows.push({ franchise: cfg.label, category: cat, character: p.title,
+            performance_mode: performanceMode(fullWikitext), source,
+            reason: "source page has no credited performer field" });
+        }
       }
     }
     console.log(`  ${cat}: ${pages.length} pages, ${found} with credited performers`);
   }
 }
 
-const keys = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(FRANCHISES);
-const rows = [];
+const args = process.argv.slice(2);
+const categoryAt = args.indexOf("--category");
+const onlyCategory = categoryAt >= 0 ? args[categoryAt + 1] : null;
+if (categoryAt >= 0 && !onlyCategory) throw new Error("--category requires a category name");
+const requested = args.filter((arg, index) => !arg.startsWith("--") && index !== categoryAt + 1);
+const keys = requested.length ? requested : Object.keys(FRANCHISES);
+const freshRows = [];
+const freshUnresolved = [];
 for (const k of keys) {
   const cfg = FRANCHISES[k];
   if (!cfg) { console.log("unknown franchise:", k, "— known:", Object.keys(FRANCHISES).join(", ")); continue; }
-  await censusFranchise(k, cfg, rows);
+  await censusFranchise(k, cfg, freshRows, freshUnresolved, onlyCategory);
 }
-await writeFile("data/CENSUS.json", JSON.stringify(rows, null, 1) + "\n");
 
-// diff against the wall -> ranked gap list
-const specimens = JSON.parse(await readFile("data/specimens.json", "utf8"));
-const have = new Set(specimens.map((s) => s.actor.toLowerCase().trim()));
-const byPerformer = new Map();
-for (const r of rows) for (const p of r.performers) {
-  const k = p.toLowerCase().trim();
-  if (!byPerformer.has(k)) byPerformer.set(k, { performer: p, franchises: new Set(), characters: [] });
-  const e = byPerformer.get(k); e.franchises.add(r.franchise); e.characters.push(r.character);
+function performanceMode(wikitext) {
+  const live = /\{\{(?:TOS|TNG|DS9|VOY|ENT|DIS|PIC|SNW|ST\d+)(?=\s*[|}])/.test(wikitext);
+  const voice = /\{\{(?:TAS|LD|PRO)(?=\s*[|}])/.test(wikitext);
+  if (live && voice) return "physical-and-voice";
+  if (live) return "physical-prosthetic";
+  if (voice) return "voice-animation";
+  return "unresolved";
 }
-const gaps = [...byPerformer.values()].filter((e) => !have.has(e.performer.toLowerCase().trim()))
-  .map((e) => ({ performer: e.performer, franchises: [...e.franchises], roles: e.characters.length, characters: e.characters.slice(0, 8) }))
-  .sort((a, b) => b.roles - a.roles);
+let previous = [];
+try { previous = JSON.parse(await readFile("data/CENSUS.json", "utf8")); } catch {}
+const targetedLabels = new Set(keys.map((key) => FRANCHISES[key]?.label).filter(Boolean));
+const retained = previous.filter((row) => !targetedLabels.has(row.franchise)
+  || (onlyCategory && normalize(row.category) !== normalize(onlyCategory)));
+const sourceByFranchise = new Map(Object.values(FRANCHISES).map((cfg) => [cfg.label, cfg.api]));
+const rows = [...retained, ...freshRows].map((row) => ({ ...row, source: row.source || sourceByFranchise.get(row.franchise) || null })).sort((a, b) =>
+  a.franchise.localeCompare(b.franchise) || a.category.localeCompare(b.category)
+  || a.character.localeCompare(b.character) || a.performers.join().localeCompare(b.performers.join()));
+await writeFile("data/CENSUS.json", JSON.stringify(rows, null, 1) + "\n");
+let previousUnresolved = [];
+try { previousUnresolved = JSON.parse(await readFile("data/CENSUS-UNRESOLVED.json", "utf8")); } catch {}
+const retainedUnresolved = previousUnresolved.filter((row) => !targetedLabels.has(row.franchise)
+  || (onlyCategory && normalize(row.category) !== normalize(onlyCategory)));
+const unresolved = [...retainedUnresolved, ...freshUnresolved].sort((a, b) =>
+  a.franchise.localeCompare(b.franchise) || a.category.localeCompare(b.category) || a.character.localeCompare(b.character));
+await writeFile("data/CENSUS-UNRESOLVED.json", JSON.stringify(unresolved, null, 1) + "\n");
+
+// Diff at performer+role granularity. Having Jeffrey Combs on the wall as
+// Weyoun does not cover his separate Ferengi role as Brunt.
+const specimens = JSON.parse(await readFile("data/specimens.json", "utf8"));
+const coverage = [];
+const seen = new Set();
+for (const row of rows) for (const performer of row.performers) {
+  const key = [row.franchise, row.category, row.character, performer].map(normalize).join("|");
+  if (seen.has(key)) continue;
+  seen.add(key);
+  const performerRecords = specimens.filter((record) => [record.actor, ...(record.aliases || [])]
+    .some((name) => normalize(name) === normalize(performer)));
+  const roleRecords = performerRecords.filter((record) => {
+    const cardRole = normalize(record.character);
+    const censusRole = normalize(row.character);
+    return !censusRole || censusRole === "—" || cardRole === censusRole
+      || cardRole.includes(censusRole) || censusRole.includes(cardRole);
+  });
+  coverage.push({ franchise: row.franchise, category: row.category, character: row.character,
+    performer, performance_mode: row.performance_mode || "unresolved", source: row.source || null,
+    performer_on_wall: performerRecords.length > 0,
+    role_on_wall: roleRecords.length > 0, wall_ids: roleRecords.map((record) => record.id) });
+}
+coverage.sort((a, b) => a.franchise.localeCompare(b.franchise) || a.category.localeCompare(b.category)
+  || a.character.localeCompare(b.character) || a.performer.localeCompare(b.performer));
+await writeFile("data/CENSUS-COVERAGE.json", JSON.stringify(coverage, null, 1) + "\n");
+
+const summaryGroups = new Map();
+for (const row of coverage) {
+  const key = `${row.franchise}|${row.category}`;
+  if (!summaryGroups.has(key)) summaryGroups.set(key, { franchise: row.franchise, category: row.category,
+    credits: 0, performers: new Set(), covered_roles: 0, modes: {}, sources: new Set() });
+  const group = summaryGroups.get(key);
+  group.credits++;
+  group.performers.add(normalize(row.performer));
+  if (row.role_on_wall) group.covered_roles++;
+  group.modes[row.performance_mode] = (group.modes[row.performance_mode] || 0) + 1;
+  if (row.source) group.sources.add(new URL(row.source).origin);
+}
+for (const row of unresolved) {
+  const key = `${row.franchise}|${row.category}`;
+  if (!summaryGroups.has(key)) summaryGroups.set(key, { franchise: row.franchise, category: row.category,
+    credits: 0, performers: new Set(), covered_roles: 0, modes: {}, sources: new Set() });
+  const group = summaryGroups.get(key);
+  group.unresolved_characters = (group.unresolved_characters || 0) + 1;
+  if (row.source) group.sources.add(new URL(row.source).origin);
+}
+const summary = {
+  version: 1,
+  coverage_unit: "one credited performer in one designed-character role",
+  scope_note: "Community-wiki snapshot. Uncredited background performers and works outside each source wiki remain unresolved; zero is never inferred from a failed source.",
+  groups: [...summaryGroups.values()].map((group) => ({ franchise: group.franchise, category: group.category,
+    credits: group.credits, distinct_performers: group.performers.size, covered_roles: group.covered_roles,
+    missing_roles: group.credits - group.covered_roles, performance_modes: group.modes,
+    unresolved_characters: group.unresolved_characters || 0,
+    source_origins: [...group.sources].sort() }))
+    .sort((a, b) => a.franchise.localeCompare(b.franchise) || a.category.localeCompare(b.category)),
+};
+await writeFile("data/CENSUS-SUMMARY.json", JSON.stringify(summary, null, 1) + "\n");
+
+const byPerformer = new Map();
+for (const row of coverage.filter((entry) => !entry.role_on_wall)) {
+  const key = normalize(row.performer);
+  if (!byPerformer.has(key)) byPerformer.set(key, { performer: row.performer, franchises: new Set(), characters: [], sources: [] });
+  const entry = byPerformer.get(key);
+  entry.franchises.add(row.franchise);
+  entry.characters.push(row.character);
+  if (row.source) entry.sources.push(row.source);
+}
+const gaps = [...byPerformer.values()]
+  .map((entry) => ({ performer: entry.performer, franchises: [...entry.franchises], missing_roles: entry.characters.length,
+    characters: [...new Set(entry.characters)].slice(0, 12), sources: [...new Set(entry.sources)].slice(0, 12) }))
+  .sort((a, b) => b.missing_roles - a.missing_roles || a.performer.localeCompare(b.performer));
 await writeFile("data/CENSUS-GAPS.json", JSON.stringify(gaps, null, 1) + "\n");
 
-const censusPerformers = byPerformer.size;
-console.log(`\ncensus: ${rows.length} characters with credited performers, ${censusPerformers} distinct performers`);
-console.log(`gaps (not on the wall): ${gaps.length}  ->  data/CENSUS-GAPS.json (ranked by roles worn)`);
-console.log("top 20:", gaps.slice(0, 20).map((g) => `${g.performer}(${g.roles})`).join(", "));
+const censusPerformers = new Set(coverage.map((entry) => normalize(entry.performer))).size;
+const missingRoles = coverage.filter((entry) => !entry.role_on_wall).length;
+console.log(`\ncensus: ${rows.length} character rows, ${censusPerformers} distinct performers`);
+console.log(`coverage: ${coverage.length - missingRoles}/${coverage.length} performer-role credits on wall`);
+console.log(`gaps: ${missingRoles} roles across ${gaps.length} performers -> data/CENSUS-GAPS.json`);
+console.log("top 20:", gaps.slice(0, 20).map((g) => `${g.performer}(${g.missing_roles})`).join(", "));

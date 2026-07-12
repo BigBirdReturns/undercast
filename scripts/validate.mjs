@@ -388,6 +388,34 @@ if (existsSync("data/quality.json")) {
   if (metrics.claim_evidence_ratio < baseline.minimum_claim_evidence_ratio) fail("quality.non_regression", "claim-evidence ratio fell below baseline");
 } else skip("quality.non_regression", "data/quality.json missing — run node scripts/shard.mjs");
 
+// Franchise/species census: coverage is performer+role, never merely a name
+// appearing somewhere else on the wall. A failed source must not become zero.
+if (["data/CENSUS.json", "data/CENSUS-COVERAGE.json", "data/CENSUS-GAPS.json", "data/CENSUS-SUMMARY.json", "data/CENSUS-UNRESOLVED.json"].every(existsSync)) {
+  mark("census.consistency");
+  const census = load("data/CENSUS.json");
+  const coverage = load("data/CENSUS-COVERAGE.json");
+  const summary = load("data/CENSUS-SUMMARY.json");
+  const unresolved = load("data/CENSUS-UNRESOLVED.json");
+  if (!Array.isArray(census) || !Array.isArray(coverage) || !Array.isArray(summary.groups)) fail("census.consistency", "census projections have invalid envelopes");
+  const coverageKeys = new Set();
+  for (const row of coverage || []) {
+    const key = [row.franchise, row.category, row.character, row.performer].map((value) => String(value || "").normalize("NFKC").toLowerCase()).join("|");
+    if (coverageKeys.has(key)) fail("census.consistency", `duplicate census credit ${key}`);
+    coverageKeys.add(key);
+    if (!/^https:\/\//.test(row.source || "")) fail("census.consistency", `${row.performer} / ${row.character} lacks an HTTPS census source`);
+    if (!Array.isArray(row.wall_ids)) fail("census.consistency", `${row.performer} / ${row.character} lacks wall_ids`);
+    for (const id of row.wall_ids || []) if (!specIds.has(id)) fail("census.consistency", `${row.performer} / ${row.character} references missing ${id}`);
+    if (row.role_on_wall !== Boolean(row.wall_ids?.length)) fail("census.consistency", `${row.performer} / ${row.character} role_on_wall disagrees with wall_ids`);
+  }
+  const ferengi = coverage.filter((row) => row.franchise === "Star Trek" && row.category === "Ferengi");
+  if (ferengi.length < 1) fail("census.consistency", "Ferengi census is empty; source failure must never publish a false zero");
+  const ferengiSummary = summary.groups.find((row) => row.franchise === "Star Trek" && row.category === "Ferengi");
+  if (!ferengiSummary || ferengiSummary.credits !== ferengi.length) fail("census.consistency", "Ferengi census summary count drift");
+  const unresolvedFerengi = unresolved.filter((row) => row.franchise === "Star Trek" && row.category === "Ferengi");
+  if (ferengiSummary?.unresolved_characters !== unresolvedFerengi.length) fail("census.consistency", "Ferengi unresolved-character count drift");
+  for (const row of unresolved) if (!/^https:\/\//.test(row.source || "")) fail("census.consistency", `${row.character} unresolved census row lacks an HTTPS source`);
+} else skip("census.consistency", "census projections missing — run npm run census:ferengi");
+
 // Versioned archive contract + every advertised checksum.
 if (existsSync("data/archive.json")) {
   mark("contract.consistency");
@@ -398,7 +426,7 @@ if (existsSync("data/archive.json")) {
   if (archive.canonical?.records?.count !== specimens.length) fail("contract.consistency", "canonical record count drift");
   if (archive.canonical?.sources?.count !== sources.length) fail("contract.consistency", "canonical source count drift");
   if (archive.canonical?.records?.content_sha256 !== manifest.source_sha256) fail("contract.consistency", "canonical content hash drift");
-  for (const item of [archive.canonical?.records, archive.canonical?.sources, archive.canonical?.tombstones, ...Object.values(archive.schemas || {}), archive.projections?.lean_index, archive.projections?.shard_manifest, archive.projections?.entities, archive.projections?.search, archive.projections?.media_live, archive.projections?.quality, archive.vocabularies?.conditions, ...(archive.web_assets || [])]) {
+  for (const item of [archive.canonical?.records, archive.canonical?.sources, archive.canonical?.tombstones, ...Object.values(archive.schemas || {}), archive.projections?.lean_index, archive.projections?.shard_manifest, archive.projections?.entities, archive.projections?.search, archive.projections?.media_live, archive.projections?.quality, ...Object.values(archive.projections?.census || {}), archive.vocabularies?.conditions, ...(archive.web_assets || [])]) {
     if (!item?.path || !existsSync(item.path)) { fail("contract.consistency", `contract path missing: ${item?.path || "undefined"}`); continue; }
     const published = publishedTextBytes(item.path);
     if (item.sha256 !== createHash("sha256").update(published).digest("hex")) fail("contract.consistency", `${item.path} sha256 drift — rebuild contract`);
@@ -431,7 +459,7 @@ if (existsSync("sitemap.xml")) {
   const expectedRoutes = specimens.length + (tombstones.records || []).length;
   if (recordUrls !== expectedRoutes) fail("crawler.discovery", `sitemap exposes ${recordUrls} record routes, expected ${expectedRoutes}`);
 }
-for (const pagePath of ["index.html", "recognition.html"]) {
+for (const pagePath of ["index.html", "recognition.html", "coverage.html"]) {
   const html = readFileSync(pagePath, "utf8");
   if (!/rel="describedby"[^>]+data\/archive\.json/.test(html)) fail("crawler.discovery", `${pagePath} does not link the archive contract`);
   if (!/application\/ld\+json[^>]+data\/dataset\.jsonld/.test(html)) fail("crawler.discovery", `${pagePath} does not advertise Dataset JSON-LD`);

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Coverage census | UNDERCAST</title>
+  <meta name="description" content="Auditable performer-plus-role coverage across UNDERCAST franchise and species censuses.">
+  <link rel="canonical" href="https://bigbirdreturns.github.io/undercast/coverage.html">
+  <link rel="describedby" type="application/json" href="data/archive.json">
+  <link rel="alternate" type="application/ld+json" href="data/dataset.jsonld" title="UNDERCAST dataset description">
+  <link rel="stylesheet" href="assets/site-shell.css">
+  <link rel="stylesheet" href="assets/coverage.css">
+</head>
+<body>
+  <header class="site-shell">
+    <a class="site-brand" href="index.html"><span class="site-wordmark">UNDERCAST</span><span class="site-tagline">the people behind the faces culture remembers</span></a>
+    <nav class="site-nav" aria-label="Archive navigation"><a href="index.html#archive">Browse</a><a href="recognition.html">Recognition Loop</a><a class="site-primary" href="coverage.html">Coverage</a><a href="index.html#about">About</a></nav>
+  </header>
+  <main class="coverage-wrap">
+    <p class="eyebrow">THE AUDIT TRAIL</p>
+    <h1>What is here. What is missing.</h1>
+    <p class="intro">Coverage is counted by performer <em>and</em> designed role. Finding an actor elsewhere on the wall does not make another face covered.</p>
+    <form class="filters" aria-label="Coverage filters">
+      <label>Franchise<select id="franchise"></select></label>
+      <label>Category<select id="category"></select></label>
+      <label>Performance<select id="mode"><option value="physical-any">Any physical face</option><option value="">All modes</option><option value="physical-prosthetic">Physical prosthetic</option><option value="physical-and-voice">Physical and voice</option><option value="voice-animation">Animation / voice</option><option value="unresolved">Unresolved</option></select></label>
+      <label class="search-label">Find a person or role<input id="query" type="search" autocomplete="off" placeholder="Quark, Jeffrey Combs…"></label>
+    </form>
+    <section id="metrics" class="metrics" aria-live="polite"></section>
+    <p id="scope" class="scope"></p>
+    <div class="table-wrap"><table><thead><tr><th>Performer</th><th>Designed role</th><th>Mode</th><th>Archive</th><th>Evidence</th></tr></thead><tbody id="rows"></tbody></table></div>
+    <p id="empty" class="empty" hidden>No credits match these filters.</p>
+  </main>
+  <script>
+  (() => {
+    const $ = id => document.getElementById(id);
+    const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[ch]);
+    const safeUrl = value => { try { const u = new URL(value, location.href); return /^(https?):$/.test(u.protocol) ? u.href : ""; } catch { return ""; } };
+    const labels = {"physical-prosthetic":"physical prosthetic","physical-and-voice":"physical + voice","voice-animation":"animation / voice",unresolved:"unresolved"};
+    let coverage = [], summary = null;
+
+    function options(select, values, preferred) {
+      select.innerHTML = values.map(value => `<option value="${escapeHtml(value)}"${value === preferred ? " selected" : ""}>${escapeHtml(value)}</option>`).join("");
+    }
+    function selectedRows() {
+      const q = $("query").value.trim().toLocaleLowerCase();
+      const mode = $("mode").value;
+      return coverage.filter(row => row.franchise === $("franchise").value && row.category === $("category").value
+        && (!mode || (mode === "physical-any" ? row.performance_mode.startsWith("physical-") : row.performance_mode === mode))
+        && (!q || `${row.performer} ${row.character}`.toLocaleLowerCase().includes(q)));
+    }
+    function render() {
+      const rows = selectedRows();
+      const people = new Set(rows.map(row => row.performer.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase()));
+      const covered = rows.filter(row => row.role_on_wall).length;
+      $("metrics").innerHTML = `<div><b>${rows.length}</b><span>credited roles</span></div><div><b>${people.size}</b><span>performers</span></div><div><b>${covered}</b><span>on the wall</span></div><div><b>${rows.length - covered}</b><span>filed gaps</span></div>`;
+      $("rows").innerHTML = rows.map(row => {
+        const source = safeUrl(row.source);
+        const wall = row.wall_ids?.[0];
+        return `<tr><td><b>${escapeHtml(row.performer)}</b></td><td>${escapeHtml(row.character)}</td><td><span class="mode">${escapeHtml(labels[row.performance_mode] || row.performance_mode)}</span></td><td>${wall ? `<a href="recognition.html#${encodeURIComponent(wall)}">${escapeHtml(wall)} · open record</a>` : `<span class="gap">Not yet a card</span>`}</td><td>${source ? `<a href="${escapeHtml(source)}" rel="noopener">Filed source ↗</a>` : "Source unresolved"}</td></tr>`;
+      }).join("");
+      $("empty").hidden = rows.length > 0;
+      const group = summary?.groups?.find(item => item.franchise === $("franchise").value && item.category === $("category").value);
+      $("scope").textContent = `${summary?.scope_note || ""}${group?.unresolved_characters ? ` ${group.unresolved_characters} additional source pages have no credited performer field and remain explicitly unresolved.` : ""}`;
+      const params = new URLSearchParams({franchise: $("franchise").value, category: $("category").value});
+      if ($("mode").value) params.set("mode", $("mode").value);
+      history.replaceState(null, "", `?${params}`);
+    }
+    function categories() {
+      const values = [...new Set(coverage.filter(row => row.franchise === $("franchise").value).map(row => row.category))].sort((a,b) => a.localeCompare(b));
+      const requested = new URLSearchParams(location.search).get("category");
+      options($("category"), values, values.includes(requested) ? requested : values[0]);
+      render();
+    }
+    Promise.all([fetch("data/CENSUS-COVERAGE.json").then(r => { if (!r.ok) throw Error(r.status); return r.json(); }), fetch("data/CENSUS-SUMMARY.json").then(r => { if (!r.ok) throw Error(r.status); return r.json(); })])
+      .then(([credits, censusSummary]) => {
+        coverage = credits; summary = censusSummary;
+        const params = new URLSearchParams(location.search);
+        const franchises = [...new Set(coverage.map(row => row.franchise))].sort((a,b) => a.localeCompare(b));
+        const requestedFranchise = params.get("franchise") || "Star Trek";
+        options($("franchise"), franchises, franchises.includes(requestedFranchise) ? requestedFranchise : franchises[0]);
+        $("mode").value = params.get("mode") || "physical-any";
+        categories();
+      }).catch(error => { $("scope").textContent = `Coverage data could not be loaded (${error.message}). No zero has been inferred.`; });
+    $("franchise").addEventListener("change", categories);
+    $("category").addEventListener("change", render);
+    $("mode").addEventListener("change", render);
+    $("query").addEventListener("input", render);
+  })();
+  </script>
+</body>
+</html>
