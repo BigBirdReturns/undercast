@@ -249,7 +249,9 @@ async function growFromDrafts(file) {
     const row = {
       id: "UC-" + String(++maxN).padStart(3, "0"),
       ...(c.kind === "voice" ? { kind: "voice" } : {}),
-      character: c.character, actor: c.actor, production: c.production || "",
+      character: c.character, actor: c.actor,
+      ...(Array.isArray(c.aliases) && c.aliases.length ? { aliases: [...new Set(c.aliases.map(String).map((name) => name.trim()).filter(Boolean))] } : {}),
+      production: c.production || "",
       universe: SHELVES.includes(c.universe) ? c.universe : "Film",
       years: c.years || "", designer: c.designer || "—",
       transform: Math.max(1, Math.min(5, parseInt(c.transform) || 4)),

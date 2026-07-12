@@ -10,6 +10,11 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
   maintained truth: live records, image provenance and retired-ID continuity.
 - `data/index.json`, `data/shards/`, `data/entities.json`, `data/search/` and the
   permanent HTML record routes are generated projections. They are disposable.
+- `data/CENSUS-COVERAGE.json` is the performer-plus-role coverage projection;
+  `data/CENSUS-SUMMARY.json` declares its source scope and performance modes.
+  A performer appearing elsewhere in the archive is not evidence that a
+  different designed role is covered. `data/CENSUS-UNRESOLVED.json` retains
+  character pages whose source names no performer instead of silently dropping them.
 - Verify the SHA-256 values in `data/archive.json` before treating a cached
   projection as current.
 - `data/quality.json` publishes current completeness and claim-evidence coverage
@@ -27,6 +32,9 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
   claims to the source that actually supports them. A performer profile alone
   is not evidence for every claim on a card.
 - Missing, disputed and unknown evidence must remain missing, disputed or unknown.
+- Census zeroes are never inferred from an unavailable wiki. Community-wiki
+  snapshots do not silently include uncredited extras or licensed works outside
+  the named source; those boundaries remain explicit in the summary.
 - Image origin and license fields describe provenance; they do not transfer rights.
 
 ## Durable identifiers
