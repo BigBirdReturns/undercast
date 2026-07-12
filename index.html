@@ -405,6 +405,7 @@
    ============================================================ */
 let INDEX = [];               // lean entries: {id,sh,u,y,d,a,c,p,tf,k?,kw?,_hay}
 let MANIFEST = null;          // data/shard-manifest.json — the shard load map
+let MEDIA = {};               // localSrc -> {url,location}: images living on GitHub Releases
 const RECORDS = new Map();    // id -> full record (populated lazily from shards)
 const SHARDS = new Map();     // shard# -> in-flight/settled load promise (dedupe)
 let renderSeq = 0;            // guards against a stale async render clobbering a newer one
@@ -493,6 +494,33 @@ function voiceGlyph(rand){
   return `<svg class="portrait" viewBox="0 0 268 ${jaw+30}" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     ${grad}${head}${band}${bars}${stamp}
   </svg>`;
+}
+
+/* The blank state for a photo that FAILED to load (e.g. a release asset went away).
+   Deliberately distinct from the generated life-cast a card shows when it simply
+   has no photo — a broken remote asset must not masquerade as an intentional
+   "no cast", show a browser broken-image icon, or draw a fake humanoid face. */
+function blankCast(){
+  return `<svg class="portrait" viewBox="0 0 268 176" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg" aria-label="image unavailable" role="img">
+    <rect width="268" height="176" fill="var(--relief)"/>
+    <rect x="1" y="1" width="266" height="174" fill="none" stroke="var(--relief-lo)" stroke-width="2"/>
+    <line x1="134" y1="16" x2="134" y2="150" stroke="var(--seam)" stroke-width="1" stroke-dasharray="1 5" opacity=".6"/>
+    <g fill="none" stroke="var(--relief-lo)" stroke-width="2" opacity=".75">
+      <rect x="97" y="52" width="74" height="52" rx="3"/>
+      <circle cx="150" cy="68" r="5"/>
+      <path d="M103 98l16-18 13 11 11-14 16 21"/>
+    </g>
+    <text x="134" y="132" text-anchor="middle" font-family="Space Mono, monospace" font-size="11" letter-spacing="2" fill="var(--grease)">IMAGE OFFLINE</text>
+  </svg>`;
+}
+// swap a failed <img> for the blank state (onerror can fire more than once — guard it)
+function undercastBlank(img){
+  if(!img||img.dataset.blanked) return;
+  img.dataset.blanked="1";
+  const holder=document.createElement("div");
+  holder.innerHTML=blankCast();
+  const el=holder.firstElementChild;
+  if(el) img.replaceWith(el);
 }
 const grid=document.getElementById("grid");
 const qEl=document.getElementById("q");
@@ -615,13 +643,13 @@ function card(s){
   const still = s.still && s.still.src;
   const portrait = s.portrait && s.portrait.src;
   const front = still
-    ? `<img class="shot" src="${safeSrc(s.still.src)}" alt="${esc(s.character)}" loading="lazy">`
+    ? `<img class="shot" src="${safeSrc(mediaSrc(s.still.src))}" alt="${esc(s.character)}" loading="lazy" onerror="undercastBlank(this)">`
     : castSvg;
   // the reveal image, in the SAME box as the front: the real photo, or — with no
   // photo yet — the BARE-face relief (mask off), so the flip is always face→face.
   const bareSvg = isVoice ? voiceGlyph(seedRand(s.id+"vb")) : reliefBase(seedRand(s.id+"b"), false);
   const back = portrait
-    ? `<img class="shot" src="${safeSrc(s.portrait.src)}" alt="${esc(s.actor)}" loading="lazy">`
+    ? `<img class="shot" src="${safeSrc(mediaSrc(s.portrait.src))}" alt="${esc(s.actor)}" loading="lazy" onerror="undercastBlank(this)">`
     : bareSvg;
   const genMark = ((s.still&&s.still.kind==="generated")||(s.portrait&&s.portrait.kind==="generated"))
     ? `<span class="gen-badge">gen</span>` : "";
@@ -690,6 +718,12 @@ const ALIAS={tng:"the next generation",ds9:"deep space nine",tos:"the original s
   potc:"pirates of the caribbean",cmll:"lucha libre",aew:"wrestling",wwe:"wrestling"};
 const ALIAS_RE=new RegExp("\\b("+Object.keys(ALIAS).join("|")+")\\b","g");
 const expandAliases=t=>t.replace(ALIAS_RE,m=>m+" "+ALIAS[m]);
+
+/* ---------- media resolution ---------- */
+// An image's bytes live either in the repo (Pages) or on a GitHub Release. The
+// manifest is the ONLY source of that fact — the wall knows a resolved url and
+// whether it's live, never the release layout. Absent/pending => serve local.
+function mediaSrc(src){ const e=MEDIA[src]; return (e&&e.location==="release"&&e.url)?e.url:src; }
 
 /* ---------- the two-tier data layer ---------- */
 // Precompute an index entry's search haystack once (per-keystroke search is then
@@ -865,6 +899,11 @@ async function boot(){
     MANIFEST={shards:[]};
     INDEX=specs.map(function(s){ RECORDS.set(s.id,s); return asEntry(s); }); // every record already resident
   }
+  // optional media manifest: which images have moved to GitHub Releases (absent is fine)
+  try{
+    const media=await fetch("./data/media-manifest.json").then(function(r){return r.ok?r.json():null;});
+    if(media&&media.assets) for(const src in media.assets){ const e=media.assets[src]; MEDIA[src]={url:e.url,location:e.location}; }
+  }catch(_){}
   buildFilters();
   buildMakers();
   await render();

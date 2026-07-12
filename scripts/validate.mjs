@@ -106,6 +106,10 @@ function conformProfile(code, rows, schema, keyName) {
 const specimens = load("data/specimens.json");
 const sources = load("data/SOURCES.json");
 if (!Array.isArray(specimens) || !Array.isArray(sources)) { console.error("FATAL: specimens/SOURCES are not arrays"); process.exit(1); }
+// media manifest (optional): images whose bytes live on GitHub Releases
+const media = existsSync("data/media-manifest.json") ? load("data/media-manifest.json") : null;
+const mediaAssets = (media && media.assets) || {};
+const onRelease = (src) => mediaAssets[src] && mediaAssets[src].location === "release"; // resolvable without a local file
 
 // ── profile: schema conformance ───────────────────────────────────────────────
 if (existsSync("schema/specimen.schema.json")) conformProfile("schema.specimen", specimens, load("schema/specimen.schema.json"), "specimen");
@@ -121,7 +125,7 @@ for (const s of specimens) {
   seen.add(s.id);
 }
 
-// ── profile: referential integrity (every image ref resolves to a file) ───────
+// ── profile: referential integrity (every image ref resolves — locally or on a release) ──
 mark("ref.integrity");
 const imgRefs = []; // [{id, side, src}]
 for (const s of specimens) {
@@ -129,8 +133,8 @@ for (const s of specimens) {
     const a = s[side];
     if (a && typeof a === "object" && a.src) {
       imgRefs.push({ id: s.id, side, src: a.src });
-      if (!existsSync(a.src)) fail("ref.integrity", `${s.id}.${side} → missing file ${a.src}`);
-      else if (statSync(a.src).size === 0) fail("ref.integrity", `${s.id}.${side} → zero-byte file ${a.src}`);
+      if (existsSync(a.src)) { if (statSync(a.src).size === 0) fail("ref.integrity", `${s.id}.${side} → zero-byte file ${a.src}`); }
+      else if (!onRelease(a.src)) fail("ref.integrity", `${s.id}.${side} → no local file ${a.src} and not published to a release`);
     }
   }
 }
@@ -229,6 +233,43 @@ if (existsSync("data/index.json") && existsSync("data/shard-manifest.json")) {
   }
 } else {
   skip("projection.consistency", "projections not built (data/index.json / shard-manifest.json absent) — run: node scripts/shard.mjs");
+}
+
+// ── profile: media manifest consistency (the GitHub Releases store) ───────────
+if (media) {
+  mark("media.consistency");
+  const specIdSet = new Set(specimens.map((s) => s.id));
+  const refSrcSet = new Set(imgRefs.map((r) => r.src));
+  const perRelease = {};
+  const byAsset = new Map();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(String(media.repo || ""))) fail("media.consistency", `manifest.repo "${media.repo}" is not owner/repo`);
+  const cap = media.release_capacity || 800;
+  for (const [src, e] of Object.entries(mediaAssets)) {
+    if (!refSrcSet.has(src)) fail("media.consistency", `${src}: manifest entry references no specimen image`);
+    const sha8 = String(e.sha256 || "").slice(0, 8);
+    if (!/^[0-9a-f]{64}$/.test(e.sha256 || "")) fail("media.consistency", `${src}: bad sha256`);
+    if (e.asset !== `${String(e.id).toLowerCase()}-${e.side}-${sha8}.${String(e.asset).split(".").pop()}`)
+      fail("media.consistency", `${src}: asset name "${e.asset}" isn't content-addressed (expected ${e.id.toLowerCase()}-${e.side}-${sha8}.*)`);
+    if (byAsset.has(e.asset) && byAsset.get(e.asset) !== e.sha256) fail("media.consistency", `asset ${e.asset} maps to two different hashes`);
+    byAsset.set(e.asset, e.sha256);
+    if (!/^media-\d{4}$/.test(e.release || "")) fail("media.consistency", `${src}: bad release tag "${e.release}"`);
+    perRelease[e.release] = (perRelease[e.release] || 0) + 1;
+    if (!/^https:\/\/github\.com\/.+\/releases\/download\/.+/.test(e.url || "")) fail("media.consistency", `${src}: url is not a release-download URL`);
+    if (e.url && !e.url.endsWith(`/${e.release}/${e.asset}`)) fail("media.consistency", `${src}: url does not resolve to ${e.release}/${e.asset}`);
+    if (!["pending", "release"].includes(e.location)) fail("media.consistency", `${src}: bad location "${e.location}"`);
+    if (!(Number.isInteger(e.bytes) && e.bytes > 0)) fail("media.consistency", `${src}: bad byte size`);
+    if (!(Number.isInteger(e.w) && Number.isInteger(e.h))) fail("media.consistency", `${src}: bad dimensions`);
+    if (!specIdSet.has(e.prov)) fail("media.consistency", `${src}: provenance id ${e.prov} matches no specimen`);
+    // integrity: if the local file is still present, its bytes must match the recorded hash
+    if (existsSync(src)) {
+      const b = readFileSync(src);
+      if (createHash("sha256").update(b).digest("hex") !== e.sha256) fail("media.consistency", `${src}: local bytes don't match manifest sha256`);
+      if (b.length !== e.bytes) fail("media.consistency", `${src}: local byte size ≠ manifest`);
+    }
+  }
+  for (const [tag, n] of Object.entries(perRelease)) if (n > cap) fail("media.consistency", `release ${tag} holds ${n} assets, over capacity ${cap}`);
+} else {
+  skip("media.consistency", "no media manifest (data/media-manifest.json absent) — all images served from Pages");
 }
 
 // ── emit the result envelope ──────────────────────────────────────────────────
