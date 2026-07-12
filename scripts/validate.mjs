@@ -122,6 +122,7 @@ function conformObjectProfile(code, value, schema, label) {
 // ── load the catalog ──────────────────────────────────────────────────────────
 const specimens = load("data/specimens.json");
 const sources = load("data/SOURCES.json");
+const tombstones = existsSync("data/tombstones.json") ? load("data/tombstones.json") : { version: 1, records: [] };
 if (!Array.isArray(specimens) || !Array.isArray(sources)) { console.error("FATAL: specimens/SOURCES are not arrays"); process.exit(1); }
 // media manifest (optional): images whose bytes live on GitHub Releases
 const media = existsSync("data/media-manifest.json") ? load("data/media-manifest.json") : null;
@@ -143,9 +144,13 @@ else skip("schema.entities", "entity projection or schema missing");
 // ── profile: unique ids ───────────────────────────────────────────────────────
 mark("id.unique");
 const seen = new Set();
+const performanceKeys = new Set();
 for (const s of specimens) {
   if (seen.has(s.id)) fail("id.unique", `duplicate specimen id ${s.id}`);
   seen.add(s.id);
+  const performanceKey = [s.actor, s.character, s.production].map((value) => String(value || "").normalize("NFKC").toLowerCase().trim()).join("|");
+  if (performanceKeys.has(performanceKey)) fail("id.unique", `duplicate performer/character/production identity at ${s.id}`);
+  performanceKeys.add(performanceKey);
 }
 
 // ── profile: referential integrity (every image ref resolves — locally or on a release) ──
@@ -199,6 +204,21 @@ for (const r of sources) if (!specIds.has(r.id)) fail("sources.consistency", `SO
 for (const s of specimens) {
   const hasProvImg = ["still", "portrait"].some((side) => s[side]?.src);
   if (hasProvImg && !srcById.has(s.id)) fail("sources.consistency", `${s.id} carries images but has no SOURCES ledger row`);
+  const row = srcById.get(s.id);
+  if (!row) continue;
+  for (const field of ["actor", "character", "universe"]) if (row[field] !== s[field]) fail("sources.consistency", `${s.id}.${field} differs between specimen and SOURCES ledger`);
+  for (const side of ["still", "portrait"]) if (JSON.stringify(row[side] || null) !== JSON.stringify(s[side] || null)) fail("sources.consistency", `${s.id}.${side} differs between specimen and SOURCES ledger`);
+}
+
+mark("id.lifecycle");
+const liveIds = new Set(specimens.map((record) => record.id));
+const retiredIds = new Set();
+for (const row of tombstones.records || []) {
+  if (!/^UC-G?\d+$/.test(row.id || "")) fail("id.lifecycle", `invalid tombstone id ${row.id}`);
+  if (retiredIds.has(row.id)) fail("id.lifecycle", `duplicate tombstone id ${row.id}`);
+  if (liveIds.has(row.id)) fail("id.lifecycle", `${row.id} is both live and retired`);
+  if (row.status !== "merged" || !liveIds.has(row.successor)) fail("id.lifecycle", `${row.id} has invalid successor ${row.successor}`);
+  retiredIds.add(row.id);
 }
 
 // ── profile: URL / host safety (link + image origins) ─────────────────────────
@@ -210,6 +230,9 @@ const safeUrl = (u) => {
 };
 for (const s of specimens) {
   if (!safeUrl(s.link)) fail("url.safety", `${s.id}.link is not a safe http(s) URL: ${String(s.link).slice(0, 60)}`);
+  for (const [index, reference] of (s.references || []).entries()) {
+    if (!safeUrl(reference.source) || !String(reference.source).startsWith("https://")) fail("url.safety", `${s.id}.references[${index}] is not a safe HTTPS URL`);
+  }
   for (const side of ["still", "portrait"]) {
     const o = s[side]?.origin;
     if (o != null && !safeUrl(o)) fail("url.safety", `${s.id}.${side}.origin is not a safe http(s) URL: ${String(o).slice(0, 60)}`);
@@ -222,6 +245,13 @@ const conditionVocabulary = existsSync("data/vocabularies/conditions.json") ? lo
 if (!conditionVocabulary) fail("claims.evidence", "data/vocabularies/conditions.json is missing");
 const conditionTerms = new Set(Object.keys(conditionVocabulary?.terms || {}));
 for (const s of specimens) {
+  const referenceKeys = new Set();
+  for (const [index, reference] of (s.references || []).entries()) {
+    const key = `${reference.claim}|${reference.source}`;
+    if (referenceKeys.has(key)) fail("claims.evidence", `${s.id} duplicates fact reference ${key}`);
+    referenceKeys.add(key);
+    if (!safeUrl(reference.source)) fail("claims.evidence", `${s.id}.references[${index}] lacks a safe evidence URL`);
+  }
   const conditionKeys = new Set();
   for (const [index, condition] of (s.conditions || []).entries()) {
     if (!conditionTerms.has(condition.type)) fail("claims.evidence", `${s.id}.conditions[${index}] uses unknown type ${condition.type}`);
@@ -237,7 +267,7 @@ for (const s of specimens) {
 // The wall serves the generated projections, not specimens.json. If they drift —
 // someone edited the data but didn't rebuild — the site would publish stale cards.
 // This is the gate that keeps `node scripts/shard.mjs` from being forgotten.
-const hashFile = (p) => sha256Hex(readFileSync(p, "utf8").replace(/\n$/, ""));
+const hashFile = (p) => sha256Hex(readFileSync(p));
 function sha256Hex(s) { return createHash("sha256").update(s).digest("hex"); }
 if (existsSync("data/index.json") && existsSync("data/shard-manifest.json")) {
   mark("projection.consistency");
@@ -253,6 +283,7 @@ if (existsSync("data/index.json") && existsSync("data/shard-manifest.json")) {
     if (index.length !== specimens.length) fail("projection.consistency", `index has ${index.length} entries, expected ${specimens.length}`);
     // 3. index integrity: its own hash + exact id set
     if (manifest.index_sha256 !== hashFile("data/index.json")) fail("projection.consistency", "data/index.json does not match manifest.index_sha256");
+    if (manifest.index_bytes !== statSync("data/index.json").size) fail("projection.consistency", "data/index.json does not match manifest.index_bytes");
     const idxIds = new Set(index.map((e) => e.id));
     if (idxIds.size !== index.length) fail("projection.consistency", "duplicate id in index.json");
     for (const s of specimens) if (!idxIds.has(s.id)) fail("projection.consistency", `${s.id} missing from index.json`);
@@ -262,6 +293,7 @@ if (existsSync("data/index.json") && existsSync("data/shard-manifest.json")) {
       const m = manifest.shards[i];
       if (!existsSync("data/" + m.file)) { fail("projection.consistency", `shard ${m.file} missing`); continue; }
       if (m.sha256 !== hashFile("data/" + m.file)) fail("projection.consistency", `shard ${m.file} bytes ≠ manifest sha256`);
+      if (m.bytes !== statSync("data/" + m.file).size) fail("projection.consistency", `shard ${m.file} bytes ≠ manifest byte count`);
       for (const rec of load("data/" + m.file)) {
         if (shardIds.has(rec.id)) fail("projection.consistency", `${rec.id} appears in more than one shard`);
         shardIds.add(rec.id);
@@ -346,6 +378,16 @@ if (existsSync("data/entities.json")) {
   }
 } else skip("entities.consistency", "data/entities.json missing — run node scripts/shard.mjs");
 
+if (existsSync("data/quality.json")) {
+  mark("quality.non_regression");
+  const quality = load("data/quality.json"), metrics = quality.metrics || {}, baseline = quality.baseline || {};
+  if (quality.generated_from !== load("data/shard-manifest.json").source_sha256 || quality.total !== specimens.length) fail("quality.non_regression", "quality projection is stale");
+  if (metrics.complete_pair_ratio < baseline.minimum_complete_pair_ratio) fail("quality.non_regression", "complete image-pair ratio fell below baseline");
+  if (metrics.missing_both_ratio > baseline.maximum_missing_both_ratio) fail("quality.non_regression", "fully unillustrated ratio exceeded baseline");
+  if (metrics.known_maker_ratio < baseline.minimum_known_maker_ratio) fail("quality.non_regression", "known-maker ratio fell below baseline");
+  if (metrics.claim_evidence_ratio < baseline.minimum_claim_evidence_ratio) fail("quality.non_regression", "claim-evidence ratio fell below baseline");
+} else skip("quality.non_regression", "data/quality.json missing — run node scripts/shard.mjs");
+
 // Versioned archive contract + every advertised checksum.
 if (existsSync("data/archive.json")) {
   mark("contract.consistency");
@@ -356,7 +398,7 @@ if (existsSync("data/archive.json")) {
   if (archive.canonical?.records?.count !== specimens.length) fail("contract.consistency", "canonical record count drift");
   if (archive.canonical?.sources?.count !== sources.length) fail("contract.consistency", "canonical source count drift");
   if (archive.canonical?.records?.content_sha256 !== manifest.source_sha256) fail("contract.consistency", "canonical content hash drift");
-  for (const item of [archive.canonical?.records, archive.canonical?.sources, archive.projections?.lean_index, archive.projections?.shard_manifest, archive.projections?.entities, archive.projections?.search, archive.projections?.media_live, archive.vocabularies?.conditions, ...(archive.web_assets || [])]) {
+  for (const item of [archive.canonical?.records, archive.canonical?.sources, archive.canonical?.tombstones, ...Object.values(archive.schemas || {}), archive.projections?.lean_index, archive.projections?.shard_manifest, archive.projections?.entities, archive.projections?.search, archive.projections?.media_live, archive.projections?.quality, archive.vocabularies?.conditions, ...(archive.web_assets || [])]) {
     if (!item?.path || !existsSync(item.path)) { fail("contract.consistency", `contract path missing: ${item?.path || "undefined"}`); continue; }
     const published = publishedTextBytes(item.path);
     if (item.sha256 !== createHash("sha256").update(published).digest("hex")) fail("contract.consistency", `${item.path} sha256 drift — rebuild contract`);
@@ -366,8 +408,13 @@ if (existsSync("data/archive.json")) {
   if (search.generated_from !== manifest.source_sha256) fail("contract.consistency", "search projection was not built from current truth");
   for (const shard of search.shards || []) {
     if (!existsSync(shard.file)) fail("contract.consistency", `search shard missing: ${shard.file}`);
-    else if (shard.sha256 !== hashFile(shard.file)) fail("contract.consistency", `search shard hash drift: ${shard.file}`);
+    else {
+      if (shard.sha256 !== hashFile(shard.file)) fail("contract.consistency", `search shard hash drift: ${shard.file}`);
+      if (shard.bytes !== statSync(shard.file).size) fail("contract.consistency", `search shard byte count drift: ${shard.file}`);
+    }
   }
+  const expectedRedirects = Object.fromEntries((tombstones.records || []).map((row) => [row.id, row.successor]));
+  if (JSON.stringify(manifest.redirects || {}) !== JSON.stringify(expectedRedirects)) fail("contract.consistency", "manifest redirects drift from canonical tombstones");
 } else skip("contract.consistency", "data/archive.json missing — run node scripts/shard.mjs");
 
 // Standards-based crawler discovery must continue to point at the machine contract.
@@ -381,7 +428,8 @@ if (existsSync("robots.txt")) {
 if (existsSync("sitemap.xml")) {
   const sitemap = readFileSync("sitemap.xml", "utf8");
   const recordUrls = (sitemap.match(/<loc>https:\/\/bigbirdreturns\.github\.io\/undercast\/records\/UC-G?\d+\/<\/loc>/g) || []).length;
-  if (recordUrls !== specimens.length) fail("crawler.discovery", `sitemap exposes ${recordUrls} record routes, expected ${specimens.length}`);
+  const expectedRoutes = specimens.length + (tombstones.records || []).length;
+  if (recordUrls !== expectedRoutes) fail("crawler.discovery", `sitemap exposes ${recordUrls} record routes, expected ${expectedRoutes}`);
 }
 for (const pagePath of ["index.html", "recognition.html"]) {
   const html = readFileSync(pagePath, "utf8");

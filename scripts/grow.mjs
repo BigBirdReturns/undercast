@@ -61,6 +61,8 @@ const WIKIS = [
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const norm  = (s) => String(s || "").trim().toLowerCase();
+const identity = (card) => [card?.actor, card?.character, card?.production].map(norm).join("|");
+const identityLabel = (card) => `${card.actor} — ${card.character} (${card.production})`;
 
 // ── the buffalo journal ──────────────────────────────────────────────────────
 // Growth is a filter: most candidates are rejected (already on the wall, not
@@ -94,12 +96,12 @@ function parseCard(text) {
   return JSON.parse(t);
 }
 
-const CARD_KEYS = `{"character":"","actor":"","production":"","years":"YYYY or YYYY-YY","universe":one of ${JSON.stringify(SHELVES)},"designer":"makeup/creature/costume designer or studio","transform":1-5,"kind":"face"|"voice","knownFor":"one sentence","reveal":"two sentences","wiki":"https://en.wikipedia.org/wiki/Name"}`;
+const CARD_KEYS = `{"character":"","actor":"","production":"","years":"YYYY or YYYY-YY","universe":one of ${JSON.stringify(SHELVES)},"designer":"makeup/creature/costume designer or studio","transform":1-5,"kind":"face"|"voice","knownFor":"one sentence","reveal":"two sentences","references":[{"claim":"performance"|"design-build"|"production"|"biography"|"interview","label":"what the source supports","source":"https://...","publisher":"optional"}],"wiki":"https://en.wikipedia.org/wiki/Name"}`;
 
 function prompt(vein, exclude) {
   return `You curate UNDERCAST, a catalog of performers who vanish under a designed face — heavy prosthetics, a mask, a full creature suit, motion capture, or (kind:"voice") an unseen voice-only role.
 Vein: ${VEINS[vein]}.
-Pick ONE real, verifiable, reasonably well-known performer from that vein who is NOT in this list: ${exclude.join(", ")}.
+Pick ONE real, verifiable, reasonably well-known PERFORMANCE from that vein that is NOT in this list: ${exclude.join(", ")}.
 Return ONLY a JSON object, no prose, no code fences, with exactly these keys:
 ${CARD_KEYS}
 Real people only. Facts must be accurate. JSON only.`;
@@ -120,9 +122,9 @@ function upsertLedger(ledger, row) { const i = ledger.findIndex((r) => r.id === 
 // verify -> attach schema fields (matching index.html) -> push. Mutates ctx in place.
 async function tryEmit(card, ctx) {
   const { specimens, ledger, have } = ctx;
-  if (!card || card.skip || !card.actor || !card.character || have.has(norm(card.actor))) {
+  if (!card || card.skip || !card.actor || !card.character || have.has(identity(card))) {
     console.log("skip:", card && (card.reason || card.actor));
-    await journal("rejections.jsonl", { op: "lead.reject", reason: !card ? "no card parsed" : card.skip ? (card.reason || "model declined") : !card.actor ? "missing actor" : !card.character ? "missing character" : "already on the wall", actor_name: (card && card.actor) || "", character: (card && card.character) || "", wiki: (card && card.wiki) || "" });
+    await journal("rejections.jsonl", { op: "lead.reject", reason: !card ? "no card parsed" : card.skip ? (card.reason || "model declined") : !card.actor ? "missing actor" : !card.character ? "missing character" : "performance already on the wall", actor_name: (card && card.actor) || "", character: (card && card.character) || "", wiki: (card && card.wiki) || "" });
     return false;
   }
   const title = await verify(card);
@@ -144,7 +146,8 @@ async function tryEmit(card, ctx) {
   card.transform = Math.max(1, Math.min(5, parseInt(card.transform) || 4));
   if (img) card.portrait = { src: img.url, kind: "free", origin: img.source, author: img.author, license: img.license };
   specimens.push(card);
-  have.add(norm(card.actor));
+  have.add(identity(card));
+  ctx.exclude?.push(identityLabel(card));
   await journal("candidates.jsonl", { op: "lead.accept", specimen: card.id, actor_name: card.actor, character: card.character, universe: card.universe, production: card.production || "", link: card.link, image_via: img ? img.via : "", image_license: img ? img.license : "" });
   console.log("grown:", card.actor, "—", card.character, img ? `(+free image via ${img.via})` : "(no free image)");
   if (img) upsertLedger(ledger, { id: card.id, actor: card.actor, character: card.character, universe: card.universe, still: null, portrait: card.portrait, fetched_at: new Date().toISOString().slice(0, 10) });
@@ -222,7 +225,7 @@ async function growFromDrafts(file) {
   const drafts = JSON.parse(await readFile(file, "utf8").catch(() => "[]"));
   if (!Array.isArray(drafts) || !drafts.length) { console.log(`no drafts in ${file} — write an array of cards there first (see GROW.md).`); return; }
   const specimens = JSON.parse(await readFile(DATA, "utf8"));
-  const have = new Set(specimens.map((s) => norm(s.actor)));
+  const have = new Set(specimens.map(identity));
   let maxN = Math.max(0, ...specimens.map((s) => parseInt((String(s.id).match(/UC-(\d+)/) || [])[1] || "0", 10)));
   const added = [], dropped = [];
   for (const c of drafts) {
@@ -231,9 +234,9 @@ async function growFromDrafts(file) {
       await journal("rejections.jsonl", { op: "draft.reject", reason: "missing actor/character", actor_name: (c && c.actor) || "", character: (c && c.character) || "", wiki: (c && c.wiki) || "" });
       continue;
     }
-    if (have.has(norm(c.actor))) {
-      dropped.push([c.actor, "already on the wall"]);
-      await journal("rejections.jsonl", { op: "draft.reject", reason: "already on the wall", actor_name: c.actor, character: c.character || "", wiki: c.wiki || "" });
+    if (have.has(identity(c))) {
+      dropped.push([c.actor, "performance already on the wall"]);
+      await journal("rejections.jsonl", { op: "draft.reject", reason: "performance already on the wall", actor_name: c.actor, character: c.character || "", wiki: c.wiki || "" });
       continue;
     }
     const title = await verify({ wiki: c.wiki, actor: c.actor }).catch(() => null);
@@ -251,9 +254,10 @@ async function growFromDrafts(file) {
       years: c.years || "", designer: c.designer || "—",
       transform: Math.max(1, Math.min(5, parseInt(c.transform) || 4)),
       knownFor: c.knownFor || "", reveal: c.reveal || "",
+      ...(Array.isArray(c.references) && c.references.length ? { references: c.references } : {}),
       link: c.wiki || ("https://en.wikipedia.org/wiki/" + encodeURIComponent(String(title).replace(/ /g, "_"))),
     };
-    specimens.push(row); have.add(norm(c.actor)); added.push(row.id + "  " + row.actor + " — " + row.character);
+    specimens.push(row); have.add(identity(row)); added.push(row.id + "  " + row.actor + " — " + row.character);
     await journal("candidates.jsonl", { op: "draft.accept", specimen: row.id, actor_name: row.actor, character: row.character, universe: row.universe, production: row.production || "", link: row.link });
   }
   await writeFile(DATA, JSON.stringify(specimens, null, 2) + "\n");
@@ -278,8 +282,9 @@ async function main() {
   try { ledger = JSON.parse(await readFile(LEDGER, "utf8")); } catch { ledger = []; }
   let queue = [];
   try { queue = JSON.parse(await readFile(QUEUE, "utf8")); } catch { queue = []; }
-  const have = new Set(specimens.map((s) => norm(s.actor)));
-  const ctx = { specimens, ledger, have };
+  const have = new Set(specimens.map(identity));
+  const exclude = specimens.map(identityLabel);
+  const ctx = { specimens, ledger, have, exclude };
   const veins = Object.keys(VEINS);
   let added = 0, tries = 0;
 
@@ -287,7 +292,6 @@ async function main() {
   // Every lead is looked at exactly once: it becomes a card or it's dropped.
   while (added < BUDGET && queue.length) {
     const lead = queue.shift();
-    if (have.has(norm(lead.name))) { await journal("rejections.jsonl", { op: "lead.reject", reason: "already on the wall since harvest", actor_name: lead.name || "", character: "", wiki: lead.wiki || "" }); continue; }
     try {
       const card = parseCard(await claude(candidatePrompt(lead.name, lead.wiki)));
       if (card && !card.skip && !card.universe && lead.universe) card.universe = lead.universe;
@@ -304,7 +308,7 @@ async function main() {
     tries++;
     const vein = veins[tries % veins.length];
     try {
-      const card = parseCard(await claude(prompt(vein, [...have])));
+      const card = parseCard(await claude(prompt(vein, exclude)));
       if (await tryEmit(card, ctx)) added++;
       await sleep(400);
     } catch (e) { console.log("error, skip:", e.message); }

@@ -151,7 +151,18 @@ derivative work: RanZag (talk), CC BY 2.0 — [source](https://commons.wikimedia
 - **Piotr Michael** (UC-1068) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Piotr_Michael_by_Gage_Skidmore.jpg)
 - **Dan Milano** (UC-1069) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Dan_Milano_by_Gage_Skidmore.jpg)
 - **Pedro Pascal** (UC-107) — Gage Skidmore from Peoria, AZ, United States of America, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Pedro_Pascal_(14588037218).jpg)
+- **Jacob Elordi** (UC-1073) — JoshPopov, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:JacobElordi-TIFF2025-01_(cropped_2).png)
+- **Jamie Campbell Bower** (UC-1074) — Miguel Discart &amp; Kiri Karma, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:2025-10-25_11-06-54_Jamie_Campbell_Bower_in_2025_(cropped).jpg)
+- **Jacob Tremblay** (UC-1075) — Gordon Correll, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Jacob_Tremblay_(22859198313)_(cropped).jpg)
+- **James McAvoy** (UC-1076) — gdcgraphics at https://www.flickr.com/photos/gdcgraphics/, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:JamesMcAvoyTIFFSept10.jpg)
+- **Benicio del Toro** (UC-1077) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Benicio_Del_Toro_by_Gage_Skidmore.jpg)
+- **Eric Bana** (UC-1078) — David Shankbone, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Eric_Bana_at_the_2009_Tribeca_Film_Festival.jpg)
+- **Christopher Eccleston** (UC-1079) — Benjamin Ellis, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Christopher_Eccleston_Thor_2_cropped.png)
 - **Margaret Hamilton** (UC-108) — Unknown authorUnknown author, Public domain — [source](https://commons.wikimedia.org/wiki/File:Margaret_Hamilton_1929.jpg)
+- **Michael Rooker** (UC-1080) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Michael_Rooker_by_Gage_Skidmore_3.jpg)
+- **Bill Skarsgård** (UC-1081) — Gage Skidmore from Peoria, AZ, United States of America, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Bill_Skarsg%C3%A5rd_(43573067882)_(cropped).jpg)
+- **Ron Perlman** (UC-1082) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Ron_Perlman_by_Gage_Skidmore_2.jpg)
+- **Doug Jones** (UC-1083) — Judson University, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Doug_Jones_2015.jpg)
 - **Josh Pais** (UC-110) — Bryan Berlin, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Josh_Pais_at_the_2024_New_York_Film_Festival_(cropped).jpg)
 - **Deep Roy** (UC-111) — Miguel Discart, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Deep_Roy_(53725207113).jpg)
 - **Alan Cumming** (UC-112) — gdcgraphics, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:AlanCummingSept2013TIFF.jpg)
@@ -327,7 +338,7 @@ derivative work: Masem (talk), CC BY 2.0 — [source](https://commons.wikimedia.
 - **Dick Warlock** (UC-384) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Dick_Warlock_by_Gage_Skidmore.jpg)
 - **C. J. Graham** (UC-387) — Super Festivals, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:C.J._Graham_Photo_Op_Animate_Nightmare_Weekend_Des_Moines_2024.jpg)
 - **R. A. Mihailoff** (UC-388) — Ryota Nakanishi, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:R._A._Mihailoff.jpg)
-- **Paul Blake (actor, born 1949)** (UC-389) — Raboe001, CC BY-SA 3.0 de — [source](https://commons.wikimedia.org/wiki/File:Stuttgart_2025_-_ComicCon_-_Paul_Blake_-_by-RaBoe_010.jpg)
+- **Paul Blake** (UC-389) — Raboe001, CC BY-SA 3.0 de — [source](https://commons.wikimedia.org/wiki/File:Stuttgart_2025_-_ComicCon_-_Paul_Blake_-_by-RaBoe_010.jpg)
 - **Femi Taylor** (UC-390) — Oolafan, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Feminew.jpg)
 - **Tim Dry** (UC-398) — User:Jo!Hannes, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Sean_Crawford_Celebration_Europe_II.jpg)
 - **Lewis MacLeod** (UC-402) — Raph_PH, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:PrivateEyeCriterion041223_(5_of_8)_(53377500198)_(cropped).jpg)
@@ -651,8 +662,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **629**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **666**
+- Free-licensed portraits (attributed above): **640**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **670**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —

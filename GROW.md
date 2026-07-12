@@ -31,6 +31,7 @@ themselves*, they don't belong here.
      "kind": "face" | "voice",
      "knownFor": "one sentence",
      "reveal": "two sentences — the human under the design",
+     "references": "recommended array of claim-level sources: {claim, label, source, optional publisher}; claim is performance, design-build, production, biography, or interview",
      "conditions": "optional array; each item needs type, scope, note and its own source URL — see data/vocabularies/conditions.json",
      "wiki": "optional https://en.wikipedia.org/wiki/Name"
    }

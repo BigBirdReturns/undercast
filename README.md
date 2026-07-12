@@ -23,6 +23,7 @@ data/
   entities.json       derived exact-credit navigation groups (not identity claims)
   search/             prefix-sharded inverted token index for future-scale clients
   dataset.jsonld      Schema.org Dataset discovery metadata
+  quality.json        generated completeness/evidence metrics with non-regression floors
   specimens.json      the CANONICAL roster (verified cards and counting) — edit this
   index.json + shards/ generated serving projections, rebuilt by scripts/shard.mjs
   media-manifest.json / media-live.json  images on GitHub Releases (see MEDIA.md)
@@ -35,6 +36,8 @@ scripts/
   ingest.mjs          KEYLESS lead harvester: wiki categories -> CANDIDATES.json
   retrieve.mjs        KEYLESS crawler: stills + portraits -> images/ + ledger
   credits.mjs         builds CREDITS.md from the ledger
+  audit-links.mjs     checks filed fact links in polite batches; `--assets` adds media origins
+  sync-sources.mjs    repairs canonical card/image drift in the provenance ledger
   grow.mjs            model triage/drafting of new cards (needs a key, or run it
                       from a Claude coding session)
 .github/workflows/
@@ -59,6 +62,7 @@ npm run build          # retrieve images + rebuild credits
 # or the pieces:
 node scripts/retrieve.mjs
 node scripts/credits.mjs
+npm run audit:links   # live reference audit; not part of deterministic CI
 ```
 
 `retrieve.mjs` illustrates `RETRIEVE_MAX` cards per run (default 20) and skips
