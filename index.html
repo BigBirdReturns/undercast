@@ -383,10 +383,11 @@
         whole point, and it lands harder than a thumbnail.
       </p>
       <p>
-        <b>Fork the wall.</b> Every specimen is one object in a plain <code>SPECIMENS</code> array at the top
-        of the script. Add a row — character, actor, production, the <b>designer credit</b>, a transformation
-        rating, a "known for," and one good reveal — and it appears. No build step. The benchmark is the
-        schema: no entry without a designed face behind it.
+        <b>Fork the wall.</b> Every specimen is one object in the canonical <code>data/specimens.json</code> —
+        character, actor, production, the <b>designer credit</b>, a transformation rating, a "known for," and
+        one good reveal. Add a row and run <code>node scripts/shard.mjs</code> to rebuild the lean index + shards
+        the page loads (so it stays fast past a million cards). The benchmark is the schema: no entry without a
+        designed face behind it.
       </p>
     </div>
     <div class="colophon">Undercast · turn a cast to read who's underneath · catalog grows by pull request<span id="queue"></span></div>
@@ -395,10 +396,18 @@
 
 <script>
 /* ============================================================
-   SPECIMENS — the wall. One object per performer who vanished.
-   Field rule: no entry without a *designed* face behind it.
+   The wall loads as two tiers so it stays fast whether the roster is 1,000 or
+   1,000,000: a lean INDEX (one small entry per card — facets + sort + search)
+   is fetched on boot, and the heavy full records live in numbered SHARDS that
+   load only for the cards actually on screen. Projections are built from the
+   canonical data/specimens.json by scripts/shard.mjs; if they're missing we
+   fall back to reading specimens.json directly, so the site never hard-fails.
    ============================================================ */
-let SPECIMENS = [];
+let INDEX = [];               // lean entries: {id,sh,u,y,d,a,c,p,tf,k?,kw?,_hay}
+let MANIFEST = null;          // data/shard-manifest.json — the shard load map
+const RECORDS = new Map();    // id -> full record (populated lazily from shards)
+const SHARDS = new Map();     // shard# -> in-flight/settled load promise (dedupe)
+let renderSeq = 0;            // guards against a stale async render clobbering a newer one
 
 /* ---------- deterministic pseudo-random from an id ---------- */
 function seedRand(str){
@@ -517,7 +526,7 @@ function parseMakers(str){
 }
 function buildMakerIndex(list){
   const idx={};
-  for(const s of list) for(const m of parseMakers(s.designer)) idx[m]=(idx[m]||0)+1;
+  for(const s of list) for(const m of parseMakers(s.d)) idx[m]=(idx[m]||0)+1;
   return idx;
 }
 /* a card's headline maker = the parsed name that appears on the most cards overall */
@@ -551,7 +560,7 @@ const DECADE_ORDER=["70s","80s","90s","00s","10s","pre-70s"];
 function buildFilters(){
   chipsEl.innerHTML="";
   decadesEl.innerHTML="";
-  const universes=["All",...Array.from(new Set(SPECIMENS.map(s=>s.universe)))];
+  const universes=["All",...Array.from(new Set(INDEX.map(e=>e.u)))];
   universes.forEach(u=>{
     const b=document.createElement("button");
     b.className="chip";b.textContent=u;b.setAttribute("aria-pressed",u===universeFilter);
@@ -559,7 +568,7 @@ function buildFilters(){
     chipsEl.appendChild(b);
   });
 
-  const present=new Set(SPECIMENS.map(s=>decadeOf(s.years)));
+  const present=new Set(INDEX.map(e=>decadeOf(e.y)));
   const decades=["All",...DECADE_ORDER.filter(d=>present.has(d))];
   decades.forEach(d=>{
     const b=document.createElement("button");
@@ -571,7 +580,7 @@ function buildFilters(){
 
 /* the makers strip: every hand that built >=2 faces, ranked, click to filter */
 function buildMakers(){
-  MAKER_INDEX=buildMakerIndex(SPECIMENS.concat(GROWN));
+  MAKER_INDEX=buildMakerIndex(INDEX);
   const ranked=Object.entries(MAKER_INDEX).filter(([,n])=>n>=2).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]));
   makerChipsEl.innerHTML="";
   for(const [name,n] of ranked){
@@ -666,8 +675,6 @@ function card(s){
   return btn;
 }
 
-let GROWN=[];
-
 // Render cap: only ever put PAGE cards in the DOM at once, "load more" for the
 // rest. Keeps the browser fast whether the roster is 175 or 175,000.
 const PAGE=120;
@@ -684,30 +691,73 @@ const ALIAS={tng:"the next generation",ds9:"deep space nine",tos:"the original s
 const ALIAS_RE=new RegExp("\\b("+Object.keys(ALIAS).join("|")+")\\b","g");
 const expandAliases=t=>t.replace(ALIAS_RE,m=>m+" "+ALIAS[m]);
 
-function render(reset=true){
-  if(reset) shownCount=PAGE;
+/* ---------- the two-tier data layer ---------- */
+// Precompute an index entry's search haystack once (per-keystroke search is then
+// just a substring test, not a rebuild-the-string over the whole roster each time).
+function hydrate(e){
+  e._hay = expandAliases((e.a+" "+e.c+" "+e.p+" "+e.u+" "+e.d+" "+(e.kw||"")).toLowerCase());
+  return e;
+}
+// A grown/full record → an index-shaped entry (used only in the specimens.json
+// fallback and for any in-page grown cards). Carries full prose into the haystack.
+function asEntry(s){
+  const e={id:s.id,sh:-1,u:s.universe,y:s.years||"",d:s.designer||"",a:s.actor||"",c:s.character||"",p:s.production||"",tf:s.transform||0};
+  if(s.kind==="voice") e.k=1;
+  e._hay=expandAliases((s.actor+" "+s.character+" "+s.production+" "+s.universe+" "+s.designer+" "+(s.knownFor||"")+" "+(s.reveal||"")).toLowerCase());
+  return e;
+}
+// Load one shard's full records into RECORDS, deduping concurrent requests.
+function loadShard(sh){
+  if(SHARDS.has(sh)) return SHARDS.get(sh);
+  const meta=MANIFEST&&MANIFEST.shards&&MANIFEST.shards[sh];
+  if(!meta){ const p=Promise.resolve([]); SHARDS.set(sh,p); return p; }
+  const p=fetch("./data/"+meta.file).then(r=>{if(!r.ok)throw new Error("shard "+sh);return r.json();})
+    .then(recs=>{ for(const rec of recs) RECORDS.set(rec.id,rec); return recs; })
+    .catch(err=>{ SHARDS.delete(sh); throw err; }); // let a later render retry
+  SHARDS.set(sh,p);
+  return p;
+}
+// Make sure every entry in the list has its full record in memory before we render it.
+async function ensureRecords(entries){
+  const need=new Set();
+  for(const e of entries) if(!RECORDS.has(e.id)) need.add(e.sh);
+  if(need.size) await Promise.all([...need].map(sh=>loadShard(sh).catch(()=>null)));
+}
+// The filtered + sorted index entries — shared by render() and focusSpecimen().
+function computeRows(){
   const q=qEl.value.trim().toLowerCase();
   const terms=[q,ALIAS[q]].filter(Boolean); // a bare acronym query also tries its expansion
-  const ALL=SPECIMENS.concat(GROWN);
   const mf=makerFilter.toLowerCase();
-  let rows=ALL.filter(s=>{
-    const inU = universeFilter==="All"||s.universe===universeFilter;
-    const inD = decadeFilter==="All"||decadeOf(s.years)===decadeFilter;
-    const inM = !mf || (s.designer||"").toLowerCase().includes(mf);
-    const hay=expandAliases((s.character+" "+s.actor+" "+s.production+" "+s.universe+" "+s.designer+" "+(s.knownFor||"")+" "+(s.reveal||"")).toLowerCase());
-    return inU && inD && inM && (q===""||terms.some(t=>hay.includes(t)));
+  const list=INDEX;
+  let rows=list.filter(e=>{
+    const inU = universeFilter==="All"||e.u===universeFilter;
+    const inD = decadeFilter==="All"||decadeOf(e.y)===decadeFilter;
+    const inM = !mf || (e.d||"").toLowerCase().includes(mf);
+    return inU && inD && inM && (q===""||terms.some(t=>e._hay.includes(t)));
   });
   const mode=sortEl.value;
   rows.sort((a,b)=>{
-    if(mode==="transform") return b.transform-a.transform || a.id.localeCompare(b.id);
-    if(mode==="actor") return a.actor.localeCompare(b.actor);
-    return a.id.localeCompare(b.id);
+    if(mode==="transform") return b.tf-a.tf || String(a.id).localeCompare(String(b.id));
+    if(mode==="actor") return String(a.a).localeCompare(String(b.a));
+    return String(a.id).localeCompare(String(b.id));
   });
+  return rows;
+}
+
+async function render(reset=true){
+  if(reset) shownCount=PAGE;
+  const rows=computeRows();
+  const visible=rows.slice(0,shownCount);
+  // fetch only the shards the visible cards live in, then guard against a newer
+  // render (a later keystroke) having superseded us while we awaited the fetch.
+  const seq=++renderSeq;
+  await ensureRecords(visible);
+  if(seq!==renderSeq) return;
   grid.innerHTML="";
   if(rows.length===0){
     grid.innerHTML=`<div class="empty"><b>No cast on this shelf.</b>Nobody in the index matches that yet — the wall only holds performers with a designed face. Clear the search, or grow the shelf below.</div>`;
   } else {
-    rows.slice(0,shownCount).forEach(s=>grid.appendChild(card(s)));
+    for(const e of visible){ const rec=RECORDS.get(e.id); if(rec) grid.appendChild(card(rec)); }
   }
   // load-more control when the filtered set exceeds what's on screen
   if(rows.length>shownCount){
@@ -726,11 +776,10 @@ function render(reset=true){
     makerActiveEl.hidden=true;
     makerActiveEl.innerHTML="";
   }
-  const shown=rows.length, total=ALL.length;
-  const label = GROWN.length ? ` · ${GROWN.length} grown` : "";
-  document.getElementById("count").innerHTML = ((shown===total)
+  const shown=rows.length, total=INDEX.length;
+  document.getElementById("count").innerHTML = (shown===total)
     ? String(total).padStart(2,"0")
-    : shown+"/"+total) + (label?`<span style="font-size:11px;letter-spacing:.1em;color:var(--grease)">${label}</span>`:"");
+    : shown+"/"+total;
   syncURL();
 }
 
@@ -757,14 +806,18 @@ function applyURLState(){
 }
 
 /* ---------- deep link: #UC-042 opens, scrolls to, and rings a specimen ---------- */
-function focusSpecimen(id){
+async function focusSpecimen(id){
   if(!id) return;
   const sel='[data-uid="'+(window.CSS&&CSS.escape?CSS.escape(id):id)+'"]';
   let el=grid.querySelector(sel);
-  if(!el){ // filtered out or past the page cap — clear filters and render enough
+  if(!el){ // filtered out or past the page cap — clear filters and page in far enough
     universeFilter="All";decadeFilter="All";makerFilter="";qEl.value="";
-    shownCount=Math.max(shownCount,SPECIMENS.length+GROWN.length);
-    buildFilters();reflectMakerChips();render(false);
+    const rows=computeRows();
+    const pos=rows.findIndex(e=>e.id===id);
+    if(pos<0) return; // no such specimen in the index
+    shownCount=Math.max(shownCount, Math.ceil((pos+1)/PAGE)*PAGE); // enough pages to include it
+    buildFilters();reflectMakerChips();
+    await render(false); // loads the shards up to that page
     el=grid.querySelector(sel);
   }
   if(!el) return;
@@ -786,27 +839,42 @@ function copyPermalink(ev,id){
 }
 
 document.getElementById("random").addEventListener("click",function(){
-  const ALL=SPECIMENS.concat(GROWN);
-  if(!ALL.length) return;
-  const s=ALL[Math.floor(Math.random()*ALL.length)];
-  location.hash=s.id; // triggers hashchange -> focusSpecimen
+  if(!INDEX.length) return;
+  const e=INDEX[Math.floor(Math.random()*INDEX.length)];
+  location.hash=e.id; // triggers hashchange -> focusSpecimen
 });
 window.addEventListener("hashchange",function(){ focusSpecimen(location.hash.replace(/^#/,"")); });
 
-qEl.addEventListener("input",render);
-sortEl.addEventListener("change",render);
-fetch("./data/specimens.json").then(function(r){return r.json();}).then(function(d){
-  SPECIMENS=d;
+qEl.addEventListener("input",()=>render());
+sortEl.addEventListener("change",()=>render());
+
+// Boot: load the lean index + shard map. If the projections aren't built (a fresh
+// fork, or mid-migration), fall back to reading the canonical specimens.json whole
+// so the wall still works — just without the lazy-loading win.
+async function boot(){
   applyURLState();
+  try{
+    const [idx,man]=await Promise.all([
+      fetch("./data/index.json").then(r=>{if(!r.ok)throw new Error("index");return r.json();}),
+      fetch("./data/shard-manifest.json").then(r=>{if(!r.ok)throw new Error("manifest");return r.json();}),
+    ]);
+    INDEX=idx.map(hydrate);
+    MANIFEST=man;
+  }catch(_){
+    const specs=await fetch("./data/specimens.json").then(function(r){return r.json();});
+    MANIFEST={shards:[]};
+    INDEX=specs.map(function(s){ RECORDS.set(s.id,s); return asEntry(s); }); // every record already resident
+  }
   buildFilters();
   buildMakers();
-  render();
+  await render();
   if(location.hash) focusSpecimen(location.hash.replace(/^#/,""));
   // living pipeline: show how many harvested leads are queued for triage (optional file)
   fetch("./data/CANDIDATES.json").then(function(r){return r.ok?r.json():[];}).then(function(c){
     if(Array.isArray(c)&&c.length) document.getElementById("queue").textContent=" · "+c.length+" leads in the ingest queue";
   }).catch(function(){});
-}).catch(function(){ grid.innerHTML="<div class=\"empty\"><b>Couldn&#39;t load the roster.</b>Serve this over http (not file://) and make sure data/specimens.json is present.</div>"; });
+}
+boot().catch(function(){ grid.innerHTML="<div class=\"empty\"><b>Couldn&#39;t load the roster.</b>Serve this over http (not file://) and make sure data/index.json (or data/specimens.json) is present.</div>"; });
 </script>
 </body>
 </html>

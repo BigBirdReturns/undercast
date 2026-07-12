@@ -189,6 +189,48 @@ for (const s of specimens) {
   }
 }
 
+// ── profile: projection consistency (index/shards must match the truth) ───────
+// The wall serves the generated projections, not specimens.json. If they drift —
+// someone edited the data but didn't rebuild — the site would publish stale cards.
+// This is the gate that keeps `node scripts/shard.mjs` from being forgotten.
+const hashFile = (p) => sha256Hex(readFileSync(p, "utf8").replace(/\n$/, ""));
+function sha256Hex(s) { return createHash("sha256").update(s).digest("hex"); }
+if (existsSync("data/index.json") && existsSync("data/shard-manifest.json")) {
+  mark("projection.consistency");
+  try {
+    const manifest = load("data/shard-manifest.json");
+    const index = load("data/index.json");
+    // 1. truth hash: projections must be built from the CURRENT specimens.json
+    const truthHash = sha256Hex(JSON.stringify(specimens));
+    if (manifest.source_sha256 !== truthHash)
+      fail("projection.consistency", "projections are STALE — data/specimens.json changed since the last `node scripts/shard.mjs`. Rebuild the projections.");
+    // 2. counts line up
+    if (manifest.count !== specimens.length) fail("projection.consistency", `manifest.count ${manifest.count} ≠ ${specimens.length} specimens`);
+    if (index.length !== specimens.length) fail("projection.consistency", `index has ${index.length} entries, expected ${specimens.length}`);
+    // 3. index integrity: its own hash + exact id set
+    if (manifest.index_sha256 !== hashFile("data/index.json")) fail("projection.consistency", "data/index.json does not match manifest.index_sha256");
+    const idxIds = new Set(index.map((e) => e.id));
+    if (idxIds.size !== index.length) fail("projection.consistency", "duplicate id in index.json");
+    for (const s of specimens) if (!idxIds.has(s.id)) fail("projection.consistency", `${s.id} missing from index.json`);
+    // 4. every shard file present, hash-verified; union of records == the roster, once each
+    const shardIds = new Set();
+    for (let i = 0; i < manifest.shards.length; i++) {
+      const m = manifest.shards[i];
+      if (!existsSync("data/" + m.file)) { fail("projection.consistency", `shard ${m.file} missing`); continue; }
+      if (m.sha256 !== hashFile("data/" + m.file)) fail("projection.consistency", `shard ${m.file} bytes ≠ manifest sha256`);
+      for (const rec of load("data/" + m.file)) {
+        if (shardIds.has(rec.id)) fail("projection.consistency", `${rec.id} appears in more than one shard`);
+        shardIds.add(rec.id);
+      }
+    }
+    for (const s of specimens) if (!shardIds.has(s.id)) fail("projection.consistency", `${s.id} is in no shard`);
+  } catch (e) {
+    fail("projection.consistency", "could not verify projections: " + e.message);
+  }
+} else {
+  skip("projection.consistency", "projections not built (data/index.json / shard-manifest.json absent) — run: node scripts/shard.mjs");
+}
+
 // ── emit the result envelope ──────────────────────────────────────────────────
 const status = errors.length ? "FAIL" : "PASS";
 const envelope = {
