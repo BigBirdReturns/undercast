@@ -25,6 +25,7 @@
  */
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { normalizeCensusKey } from "./census-key.mjs";
 
 const JSON_ONLY = process.argv.includes("--json");
 const errors = [];
@@ -139,6 +140,8 @@ if (existsSync("schema/source.schema.json")) conformProfile("schema.source", sou
 else skip("schema.source", "schema/source.schema.json not found");
 if (existsSync("data/archive.json") && existsSync("schema/archive.schema.json")) conformObjectProfile("schema.archive", load("data/archive.json"), load("schema/archive.schema.json"), "archive");
 else skip("schema.archive", "archive contract or schema missing");
+if (existsSync("data/CENSUS-FERENGI-TEST.json") && existsSync("schema/census-test.schema.json")) conformObjectProfile("schema.census_test", load("data/CENSUS-FERENGI-TEST.json"), load("schema/census-test.schema.json"), "Ferengi benchmark");
+else skip("schema.census_test", "Ferengi benchmark report or schema missing");
 if (existsSync("data/entities.json") && existsSync("schema/entities.schema.json")) conformObjectProfile("schema.entities", load("data/entities.json"), load("schema/entities.schema.json"), "entities");
 else skip("schema.entities", "entity projection or schema missing");
 if (constellationGraph && existsSync("schema/constellations.schema.json")) conformObjectProfile("schema.constellations", constellationGraph, load("schema/constellations.schema.json"), "constellations");
@@ -427,7 +430,12 @@ if (constellationGraph) {
       if (!edge.record_id || !specIds.has(edge.record_id)) { fail("constellation.integrity", `${edge.id} specimen edge lacks a live record`); continue; }
       const record = specimens.find((item) => item.id === edge.record_id), person = nodes.get(edge.from), character = nodes.get(edge.to);
       if (person?.kind !== "person" || character?.kind !== "character") fail("constellation.integrity", `${edge.id} specimen endpoints must be person to character`);
-      if (record && (normalized(record.actor) !== normalized(person?.label) || normalized(record.character) !== normalized(character?.label))) fail("constellation.integrity", `${edge.id} record ${edge.record_id} does not match its person/character nodes`);
+      const recordRoles = record ? [record.character, ...(record.performances || []).map((item) => item.character)] : [];
+      const actorMatches = record && [record.actor, ...(record.aliases || [])]
+        .some((name) => normalizeCensusKey(name) === normalizeCensusKey(person?.label));
+      if (record && (!actorMatches
+        || !recordRoles.some((role) => normalizeCensusKey(role) === normalizeCensusKey(character?.label))))
+        fail("constellation.integrity", `${edge.id} record ${edge.record_id} does not match its person/character nodes or filed performances`);
       if (!person?.record_ids?.includes(edge.record_id) || !character?.record_ids?.includes(edge.record_id)) fail("constellation.integrity", `${edge.id} record anchor is not present on both endpoint nodes`);
     } else if (edge.record_id) fail("constellation.integrity", `${edge.id} non-specimen edge must not claim record_id ${edge.record_id}`);
   }
@@ -483,6 +491,24 @@ if (["data/CENSUS.json", "data/CENSUS-COVERAGE.json", "data/CENSUS-GAPS.json", "
   if (ferengiSummary?.unresolved_characters !== unresolvedFerengi.length) fail("census.consistency", "Ferengi unresolved-character count drift");
   for (const row of unresolved) if (!/^https:\/\//.test(row.source || "")) fail("census.consistency", `${row.character} unresolved census row lacks an HTTPS source`);
 } else skip("census.consistency", "census projections missing — run npm run census:ferengi");
+
+// The named benchmark is stricter than aggregate count consistency. Input
+// hashes ensure a stale committed report cannot make CI green.
+if (existsSync("data/CENSUS-FERENGI-TEST.json")) {
+  mark("census.ferengi_benchmark");
+  const report = load("data/CENSUS-FERENGI-TEST.json");
+  if (report.status !== "PASS" || report.accounting_status !== "PASS")
+    fail("census.ferengi_benchmark", `Ferengi benchmark is ${report.status}; accounting is ${report.accounting_status}`);
+  if (report.source_rows !== Object.values(report.counts || {}).reduce((sum, count) => sum + count, 0))
+    fail("census.ferengi_benchmark", "Ferengi disposition totals do not equal source row count");
+  if (!report.constellation_id || report.physical_blockers !== 0)
+    fail("census.ferengi_benchmark", "Ferengi exact-edge discoverability is incomplete");
+  for (const [path, digest] of Object.entries(report.input_sha256 || {})) {
+    if (!existsSync(path) || hashBytes(path) !== digest) fail("census.ferengi_benchmark", `${path} changed since the benchmark report was generated`);
+  }
+  if (Object.keys(report.input_sha256 || {}).length < 6)
+    fail("census.ferengi_benchmark", "Ferengi benchmark report lacks complete input hashes");
+} else skip("census.ferengi_benchmark", "run npm run test:ferengi");
 
 // Versioned archive contract + every advertised checksum.
 if (existsSync("data/archive.json")) {

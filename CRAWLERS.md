@@ -16,6 +16,12 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
   A performer appearing elsewhere in the archive is not evidence that a
   different designed role is covered. `data/CENSUS-UNRESOLVED.json` retains
   character pages whose source names no performer instead of silently dropping them.
+- `data/CENSUS-FERENGI-TEST.json` is the executable Ferengi benchmark report.
+  `status: PASS` proves every named physical credit has an exact sourced
+  constellation edge or evidence-backed exclusion; `accounting_status` proves
+  every discovered row has a disposition. `wall_coverage_complete` separately
+  states whether eligible filed card gaps remain.
+  Never interpret accounting completeness as total licensed-media completeness.
 - Verify the SHA-256 values in `data/archive.json` before treating a cached
   projection as current.
 - `data/quality.json` publishes current completeness and claim-evidence coverage
