@@ -20,13 +20,14 @@ const ORIGIN="https://bigbirdreturns.github.io/undercast";
 const RELEASE=/^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\/[^/]+\/[^/?#]+$/;
 
 const esc=value=>String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[ch]);
+const focusAttrs=image=>image?.focus&&typeof image.focus==="object"?` data-focus-x="${esc(image.focus.x)}" data-focus-y="${esc(image.focus.y)}"`:"";
 const url=value=>{ try{ const parsed=new URL(value); return /^https?:$/.test(parsed.protocol)?parsed.href:"#"; }catch{return "#";} };
 const imageUrl=image=>{
   if(!image?.src) return "../../assets/placeholder-light-clean.png";
   const live=media.urls?.[image.src];
   return RELEASE.test(live||"")?live:"../../"+image.src.replace(/^\.?\//,"");
 };
-const figure=(image,label,title)=>`<figure><div class="record-image${image?.src?"":" absent"}"><img src="${esc(imageUrl(image))}" alt="${esc(image?.src?title:`${label} image is not on file`)}" loading="eager"></div><figcaption>${esc(title)}</figcaption></figure>`;
+const figure=(image,label,title)=>`<figure><div class="record-image${label==="Performer"?" is-portrait":""}${image?.src?"":" absent"}"${focusAttrs(image)}><img src="${esc(imageUrl(image))}" alt="${esc(image?.src?title:`${label} image is not on file`)}" loading="eager"></div><figcaption>${esc(title)}</figcaption></figure>`;
 const creditPresent=value=>Boolean(String(value||"").trim()&&!/^(?:—|-|unknown|not credited)$/i.test(String(value).trim()));
 const imageEvidence=(image,label)=>image?.origin?`<div class="record-row"><span>${esc(label)} image provenance</span><b><a href="${esc(url(image.origin))}" rel="noopener">Open image source</a></b>${image.author||image.license?`<div>${esc([image.author,image.license].filter(Boolean).join(" · "))}</div>`:""}</div>`:"";
 
