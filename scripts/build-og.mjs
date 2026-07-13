@@ -1,35 +1,36 @@
 #!/usr/bin/env node
 /**
  * build-og.mjs — regenerate og.png (the 1200×630 social-share card) from the
- * LIVE specimen count.
+ * LIVE specimen count, demonstrating the one fully art-directed comparison the
+ * archive has: Morn (the character) → Mark Allen Shepherd (the performer).
  *
  * Why this exists: og.png used to be a hand-made PNG with the count baked in as
- * pixels. It froze at "139 SPECIMENS ON FILE" while the roster grew to a
- * thousand-plus, so every shared link undersold the project and — under a
- * tagline that literally reads "THE CATALOG GROWS" — made it look abandoned.
+ * pixels. It froze at "139 SPECIMENS ON FILE" while the roster grew past a
+ * thousand, so every shared link undersold the project under a tagline that
+ * literally reads "THE CATALOG GROWS." A frozen integer in a static asset is
+ * exactly the kind of un-pinned truth the archive contract exists to kill.
  *
- * A frozen integer in a static asset is exactly the kind of un-pinned truth the
- * archive contract exists to kill. So og.png is now a generated artifact: this
- * script renders an on-brand HTML card (real Fraunces + Space Mono via Google
- * Fonts) and screenshots it. It runs inside `build:site`, so the count is
- * always current at deploy; the file is gitignored like the records/ pages.
+ * og.png is now a generated artifact: this script renders an on-brand card
+ * (real Fraunces + Space Mono via Google Fonts) with the live count and the
+ * Morn/Mark seam, then screenshots it. It runs inside `build:site`, so the card
+ * is always current at deploy; the file is gitignored like the records/ pages.
+ *
+ * The seam shows Morn because Morn is the single comparison with reviewed
+ * positioning — the card demonstrates the real interaction, not a placeholder.
  *
  * Requires @playwright/test (installed for the rendered suite) and network
  * access to Google Fonts (already allow-listed in the site CSP).
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { chromium } from "@playwright/test";
 
 const specimens = JSON.parse(await readFile("data/specimens.json", "utf8"));
 const count = specimens.length;
 
-// The blank casting relief — the site's actual "no evidence yet" mark (the
-// halftone head with the registration centerline). Embedded from the real asset
-// so the card art tracks the site's blank-card language instead of drifting.
-const faceUri = "data:image/png;base64," + (await readFile("assets/placeholder-light-clean.png")).toString("base64");
-
-const card = (id, shelf, cls) =>
-  `<div class="card ${cls}"><div class="card-head"><span class="card-id">${id}</span><span class="card-shelf">${shelf}</span></div><div class="card-face"><img src="${faceUri}" alt=""></div></div>`;
+const dataUri = async (path, mime) =>
+  `data:${mime};base64,` + (await readFile(path)).toString("base64");
+const mornStill = await dataUri("images/uc-001-still.jpg", "image/jpeg");   // the character
+const markPortrait = await dataUri("images/uc-001-portrait.jpg", "image/jpeg"); // the person
 
 const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -43,42 +44,46 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
     background:#E4DFD5;
     background-image:radial-gradient(#c9c2b3 1px,transparent 1px);
     background-size:22px 22px;
-    border:14px solid #1C1A16;
-    position:relative;overflow:hidden;
+    border:14px solid #1C1A16;position:relative;overflow:hidden;
   }
-  .field{position:absolute;inset:0;padding:46px 66px}
-  .kicker{display:flex;align-items:center;gap:14px;font-size:15px;letter-spacing:.34em;text-transform:uppercase;color:#5B564C}
-  .kicker .no{border:1px solid #8B8577;padding:3px 9px;letter-spacing:.2em;font-size:13px}
-  h1{font-family:"Fraunces",serif;font-weight:900;font-size:132px;line-height:.86;letter-spacing:-.01em;margin-top:20px}
-  h1 .under{color:#1C1A16;display:block}
-  h1 .cast{color:#7C918D;display:block}
-  .lede{font-size:20px;line-height:1.5;color:#5B564C;max-width:33ch;margin-top:26px}
-  .lede .grease{color:#A83E30;font-weight:700}
-  .count{position:absolute;left:66px;bottom:30px;display:flex;align-items:baseline;gap:16px}
-  .count .n{font-family:"Fraunces",serif;font-weight:900;font-size:58px;line-height:1;color:#1C1A16}
-  .count .l{font-size:15px;letter-spacing:.24em;text-transform:uppercase;color:#8B8577}
-  /* card fan */
-  .fan{position:absolute;right:44px;top:96px;width:430px;height:470px}
-  .card{position:absolute;display:flex;flex-direction:column;background:#DAD4C7;border:2px solid #1C1A16;box-shadow:0 10px 26px rgba(20,16,10,.22)}
-  .card-head{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;font-size:14px;letter-spacing:.08em;flex:none}
-  .card-id{color:#A83E30;font-weight:700}
-  .card-shelf{color:#1C1A16;letter-spacing:.18em}
-  .card-face{flex:1;min-height:0;overflow:hidden;display:flex;align-items:flex-start;justify-content:center}
-  .card-face img{width:100%;height:100%;object-fit:cover;object-position:center 20%}
-  .card-1{width:250px;height:300px;top:0;right:150px;transform:rotate(-9deg)}
-  .card-2{width:250px;height:300px;top:64px;right:96px;transform:rotate(-3deg)}
-  .card-front{width:290px;height:360px;top:130px;right:0;transform:rotate(4deg);background:#E4DFD5}
+  .col{position:absolute;left:66px;top:52px;width:600px}
+  .mark{font-family:"Fraunces",serif;font-weight:900;font-size:38px;letter-spacing:.01em;line-height:1}
+  .mark .u{color:#1C1A16}.mark .c{color:#7C918D}
+  .kicker{margin-top:14px;font-size:13px;letter-spacing:.28em;text-transform:uppercase;color:#8B8577}
+  h1{font-family:"Fraunces",serif;font-weight:900;font-size:52px;line-height:1.02;letter-spacing:-.01em;margin-top:40px;color:#1C1A16}
+  h1 em{font-style:italic;color:#7C918D;font-weight:600}
+  .sub{font-size:18px;line-height:1.5;color:#5B564C;max-width:30ch;margin-top:22px}
+  .sub b{color:#A83E30;font-weight:700}
+  .count{position:absolute;left:66px;bottom:32px;display:flex;align-items:baseline;gap:16px}
+  .count .n{font-family:"Fraunces",serif;font-weight:900;font-size:52px;line-height:1;color:#1C1A16}
+  .count .l{font-size:14px;letter-spacing:.24em;text-transform:uppercase;color:#8B8577}
+  /* the Morn -> Mark seam */
+  .frame{position:absolute;right:66px;top:62px;width:406px;height:506px;border:1px solid #1C1A16;overflow:hidden;background:#141109;box-shadow:0 12px 30px rgba(20,16,10,.24)}
+  .layer{position:absolute;inset:0;overflow:hidden}
+  .layer img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .layer.char img{object-position:58% 30%}
+  .layer.person img{object-position:50% 26%}
+  .layer.char{clip-path:inset(0 50% 0 0)}
+  .layer.person{clip-path:inset(0 0 0 50%);z-index:2}
+  .seam{position:absolute;top:0;bottom:0;left:50%;width:2px;background:#A6402F;transform:translateX(-1px);z-index:3}
+  .handle{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:46px;height:46px;border-radius:50%;background:#1C1A16;color:#E4DFD5;display:grid;place-items:center;z-index:4;border:1px solid #E4DFD5;font-size:17px;box-shadow:0 2px 14px rgba(0,0,0,.3)}
+  .plabel{position:absolute;bottom:12px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;background:#1C1A16;color:#E4DFD5;padding:3px 8px;z-index:5}
+  .plabel.l{left:12px}.plabel.r{right:12px}
 </style></head>
 <body>
-  <div class="field">
-    <div class="kicker"><span>A Field Index</span><span class="no">No.01</span></div>
-    <h1><span class="under">UNDER</span><span class="cast">CAST</span></h1>
-    <p class="lede">The performers you've watched for hours and would walk past on the street. One rule for entry, and it isn't fame: <span class="grease">someone designed a face for them.</span></p>
+  <div class="col">
+    <div class="mark"><span class="u">UNDER</span><span class="c">CAST</span></div>
+    <div class="kicker">A Field Index · No.01</div>
+    <h1>You remember Morn.<br>Now meet <em>Mark Allen Shepherd.</em></h1>
+    <p class="sub">Some performers disappear under a face. <b>Undercast brings the person back into view.</b></p>
   </div>
-  <div class="fan">
-    ${card("UC-001", "STAR TREK", "card-1")}
-    ${card("UC-067", "X-MEN", "card-2")}
-    ${card("UC-008", "LOTR", "card-front")}
+  <div class="frame">
+    <div class="layer char"><img src="${mornStill}" alt=""></div>
+    <div class="layer person"><img src="${markPortrait}" alt=""></div>
+    <div class="seam"></div>
+    <div class="handle">↔</div>
+    <span class="plabel l">The character</span>
+    <span class="plabel r">The person</span>
   </div>
   <div class="count"><span class="n">${count.toLocaleString("en-US")}</span><span class="l">specimens on file · the catalog grows</span></div>
 </body></html>`;
@@ -91,9 +96,9 @@ try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 630 }, deviceScaleFactor: 1 });
   await page.setContent(html, { waitUntil: "networkidle" });
   await page.evaluate(() => document.fonts.ready);
-  await page.waitForTimeout(150); // let the last glyphs paint
+  await page.waitForTimeout(150);
   await page.screenshot({ path: "og.png", clip: { x: 0, y: 0, width: 1200, height: 630 } });
-  console.log(`built og.png — ${count.toLocaleString("en-US")} specimens on file`);
+  console.log(`built og.png — Morn → Mark, ${count.toLocaleString("en-US")} specimens on file`);
 } finally {
   await browser.close();
 }
