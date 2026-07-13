@@ -30,6 +30,13 @@ import { spawnSync } from "node:child_process";
 // before any archive hashes are calculated.
 const censusProjection = spawnSync(process.execPath, ["scripts/census.mjs", "--project-only"], { stdio: "inherit" });
 if (censusProjection.status !== 0) throw new Error(`census projection failed with exit ${censusProjection.status}`);
+const changelingProjection = spawnSync(process.execPath, ["scripts/build-ds9-changeling-constellation.mjs"], { stdio: "inherit" });
+if (changelingProjection.status !== 0) throw new Error(`DS9 Changeling projection failed with exit ${changelingProjection.status}`);
+// The Ferengi benchmark fingerprints the complete composite graph. Any generator-owned
+// slice added after the Ferengi projection must be present before that fingerprint is
+// finalized, or a clean rebuild immediately appears stale.
+const finalCensusGate = spawnSync(process.execPath, ["scripts/census-gate.mjs", "--write"], { stdio: "inherit" });
+if (finalCensusGate.status !== 0) throw new Error(`final census benchmark failed with exit ${finalCensusGate.status}`);
 
 const SHARD_SIZE = parseInt(process.env.SHARD_SIZE || "1000", 10);
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");

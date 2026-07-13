@@ -92,6 +92,7 @@ await writeFile("data/search/manifest.json",JSON.stringify(searchManifest,null,1
 const canonicalRecords=await fileMeta("data/specimens.json");
 const canonicalSources=await fileMeta("data/SOURCES.json");
 const canonicalConstellations=await fileMeta("data/constellations.json");
+const ds9ChangelingCensus=await fileMeta("data/DS9-CHANGELING-CENSUS.json");
 const canonicalCensusManifest=await fileMeta("data/CENSUS-MANIFEST.json");
 const leanIndex=await fileMeta("data/index.json");
 const entityMeta=await fileMeta("data/entities.json");
@@ -109,7 +110,7 @@ const archive={
   version:1,catalog_id:"undercast",schema:"schema/archive.schema.json",title:"UNDERCAST — performers behind designed faces",canonical_url:`${ORIGIN}/`,
   description:"A provenance-first field index of performers who vanish under prosthetics, masks, creature suits, performance capture, or an unseen voice.",
   identifiers:{record_pattern:"^UC-G?\\d+$",record_key:"id",never_reuse_ids:true},
-  canonical:{records:{...canonicalRecords,schema:"schema/specimen.schema.json",count:specimens.length,content_sha256:shardManifest.source_sha256},sources:{...canonicalSources,schema:"schema/source.schema.json",count:sources.length},constellations:{...canonicalConstellations,schema:"schema/constellations.schema.json",count:constellations.constellations.length,nodes:constellations.nodes.length,edges:constellations.edges.length},census_manifest:{...canonicalCensusManifest,schema:"schema/census-manifest.schema.json"},tombstones:{...tombstoneMeta,count:(tombstones.records||[]).length}},
+  canonical:{records:{...canonicalRecords,schema:"schema/specimen.schema.json",count:specimens.length,content_sha256:shardManifest.source_sha256},sources:{...canonicalSources,schema:"schema/source.schema.json",count:sources.length},constellations:{...canonicalConstellations,schema:"schema/constellations.schema.json",count:constellations.constellations.length,nodes:constellations.nodes.length,edges:constellations.edges.length},ds9_changeling_census:{...ds9ChangelingCensus,constellation_id:"constellation:ds9-changeling-performers"},census_manifest:{...canonicalCensusManifest,schema:"schema/census-manifest.schema.json"},tombstones:{...tombstoneMeta,count:(tombstones.records||[]).length}},
   schemas,
   path_bases:{contract_paths:"repository root",shard_manifest_children:"data/"},
   projections:{lean_index:leanIndex,shard_manifest:{...(await fileMeta("data/shard-manifest.json")),count:shardManifest.count,shards:shardManifest.shards},entities:entityMeta,search:searchMeta,media_live:mediaMeta,quality:qualityMeta,census:censusMeta},

@@ -38,7 +38,7 @@ derivative work: nagualdesign, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **Aron Eisenberg** (UC-031) — Leut, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Aron_Eisenberg.jpg)
 - **Salome Jens** (UC-032) — William Morris Agency (management), Public domain — [source](https://commons.wikimedia.org/wiki/File:Salome_Jens_1965.JPG)
 - **Louise Fletcher** (UC-033) — Rob DiCaterino from Clifton, NJ, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Louise_Fletcher_2014_(headshot).jpg)
-- **Alice Krige** (UC-035) — ian.mcrob from Barnsley, u.k., CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Alice_Krige_2006.jpg)
+- **Alice Krige** (UC-035) — beaglebill, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:2008_10_10_Alice_Krige_01.jpg)
 - **Jeri Ryan** (UC-037) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Jeri_Ryan_by_Gage_Skidmore_2.jpg)
 - **Stephen Furst** (UC-038) — Lois Benton, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Stephen_Furst,_July,_2014.jpg)
 - **Julie Caitlin Brown** (UC-039) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Julie_Caitlin_Brown_by_Gage_Skidmore.jpg)
