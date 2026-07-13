@@ -14,6 +14,10 @@ const captureConsoleErrors=page=>{
 test.beforeEach(async({page})=>{
   await page.route("**/*",route=>{
     const request=route.request(),url=new URL(request.url());
+    // keep the suite hermetic: external images -> 1x1, Google Fonts -> empty (fallback
+    // fonts render fine for behaviour tests, and the run no longer depends on network).
+    if(url.hostname==="fonts.googleapis.com") return route.fulfill({status:200,contentType:"text/css",body:""});
+    if(url.hostname==="fonts.gstatic.com") return route.fulfill({status:200,contentType:"font/woff2",body:Buffer.alloc(0)});
     if(request.resourceType()==="image"&&url.hostname!=="127.0.0.1") return route.fulfill({status:200,contentType:"image/png",body:pixel});
     return route.continue();
   });
@@ -91,12 +95,12 @@ test("archive navigation stays complete, consistent, and inside every viewport",
 test("wall search, current decade, flip semantics, and partial failure are honest",async({page})=>{
   await open(page,"index.html");
   await waitForWall(page);
-  await page.getByRole("searchbox",{name:"Search the index",exact:true}).fill("Borg Queen");
+  await page.getByRole("searchbox",{name:"Search a character, an actor, or a production",exact:true}).fill("Borg Queen");
   await expect(page.locator("#result-status")).toHaveText("2 specimens match; 2 shown.");
   await expect(page.locator(".cast-shell")).toHaveCount(2);
   await expect(page.locator(".looplink")).toHaveCount(2);
 
-  await page.getByRole("searchbox",{name:"Search the index",exact:true}).fill("");
+  await page.getByRole("searchbox",{name:"Search a character, an actor, or a production",exact:true}).fill("");
   await page.getByRole("button",{name:"20s",exact:true}).click();
   await expect(page.locator("#result-status")).toHaveText("79 specimens match; 79 shown.");
 
@@ -110,6 +114,39 @@ test("wall search, current decade, flip semantics, and partial failure are hones
   await open(page,"index.html?sort=actor");
   await expect(page.getByText("Couldn't load this page completely.",{exact:false})).toBeVisible();
   await expect(page.locator(".cast-shell")).toHaveCount(0);
+});
+
+test("homepage Morn hero flips on click and keyboard, keeping focus on the one button",async({page})=>{
+  await open(page,"index.html");
+  const card=page.locator("#mornCard");
+  await expect(card).toBeVisible();
+  await expect(card).toHaveAttribute("data-flipped","false");
+  await expect(card).toHaveAttribute("aria-pressed","false");
+  // click flips to the performer, and the state is reflected visibly + accessibly
+  await card.click();
+  await expect(card).toHaveAttribute("data-flipped","true");
+  await expect(card).toHaveAttribute("aria-pressed","true");
+  await expect(card).toHaveAttribute("aria-label",/Mark Allen Shepherd/);
+  await expect(page.locator(".hero-turn")).toHaveText(/back to the character/i);
+  // keyboard: one persistent button — Space and Enter each toggle it, focus never leaves it
+  await card.focus();
+  await page.keyboard.press("Space");
+  await expect(card).toHaveAttribute("data-flipped","false");
+  await expect(card).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(card).toHaveAttribute("data-flipped","true");
+  await expect(card).toBeFocused();
+  // the retired seam is not here either — no slider in the hero
+  await expect(page.locator("#mornCard input[type=range], .reveal .uc-wipe-frame")).toHaveCount(0);
+});
+
+test.describe("homepage without JavaScript",()=>{
+  test.use({javaScriptEnabled:false});
+  test("hides the dead flip control and offers a durable permanent-record link",async({page})=>{
+    await open(page,"index.html");
+    await expect(page.locator("#mornCard")).toBeHidden(); // JS-gated: no dead control
+    await expect(page.locator('a[href="./records/UC-001/"]')).toBeVisible(); // durable fallback, not the JS view
+  });
 });
 
 test("Recognition shows side-by-side plates, not a comparison seam",async({page})=>{
