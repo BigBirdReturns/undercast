@@ -6,11 +6,17 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
 
 ## Truth and projections
 
-- `data/specimens.json`, `data/SOURCES.json` and `data/tombstones.json` are
-  maintained truth: live records, image provenance and retired-ID continuity.
+- `data/specimens.json`, `data/SOURCES.json`, `data/DS9-CHANGELING-CENSUS.json`
+  and `data/tombstones.json` are maintained truth: live records, image
+  provenance, exact DS9 Changeling performer/form accounting, and retired-ID
+  continuity.
 - `data/constellations.json` is the published composite evidence graph. Curated
   constellations are maintained; the `constellation:every-ferengi-performer`
   slice is regenerated exactly from the committed census snapshot and exclusions.
+  The `constellation:ds9-changeling-performers` slice is regenerated from
+  `data/DS9-CHANGELING-CENSUS.json`; it preserves practical designed-face
+  credits, visible Human impersonations, and unknown practical performers as
+  different dispositions instead of collapsing them into a species keyword.
   Consumers may treat the published graph as canonical, but editors must not
   hand-edit a generator-owned slice.
 - `data/index.json`, `data/shards/`, `data/entities.json`, `data/search/` and the
@@ -69,7 +75,8 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
   resolve through `shard-manifest.json.redirects`; `status: removed` rows keep a
   permanent correction page and evidence but deliberately do not redirect.
 - `node scripts/shard.mjs` is the complete offline projection build. It refreshes
-  census coverage, the Ferengi graph/test, shards, search, entities and archive
+  census coverage, the Ferengi and DS9 Changeling graph slices, the Ferengi test,
+  shards, search, entities and archive
   hashes from committed truth before publication.
 - Permanent record: `/undercast/records/{id}/`
 - Interactive record: `/undercast/recognition.html#{id}`

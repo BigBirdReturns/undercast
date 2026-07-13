@@ -93,6 +93,73 @@ test("Recognition comparison moves a clip, never the image geometry",async({page
   expect(right.map(row=>row.photo)).toEqual(balanced.map(row=>row.photo));
 });
 
+test("UC-035 comparison portrait is not a low-resolution sliver",async({page})=>{
+  await open(page,"recognition.html#UC-035");
+  await expect(page.getByRole("heading",{name:"The Borg Queen",exact:true}).first()).toBeVisible();
+  const source=await page.evaluate(()=>RECORDS.get("UC-035").portrait.src);
+  const dimensions=await page.evaluate(src=>new Promise((resolve,reject)=>{
+    const image=new Image();
+    image.onload=()=>resolve({width:image.naturalWidth,height:image.naturalHeight});
+    image.onerror=()=>reject(new Error(`Could not load ${src}`));
+    image.src=new URL(src,location.href).href;
+  }),source);
+  expect(dimensions.width).toBeGreaterThanOrEqual(600);
+  expect(dimensions.height/dimensions.width).toBeLessThanOrEqual(1.6);
+});
+
+test("Recognition and permanent-record missing portraits stay full-bleed",async({page})=>{
+  const measure=async()=>page.locator('[data-plate="portrait"] .uc-image-well.is-absence').evaluate(well=>{
+    const absence=well.querySelector(".uc-absence");
+    const inner=well.querySelector(".uc-absence-inner");
+    const image=[...inner.querySelectorAll("img")].find(node=>getComputedStyle(node).display!=="none");
+    const rect=node=>{
+      const box=node.getBoundingClientRect();
+      return {top:box.top,right:box.right,bottom:box.bottom,left:box.left,width:box.width,height:box.height};
+    };
+    const style=getComputedStyle(inner);
+    return {
+      well:rect(well),
+      absence:rect(absence),
+      inner:rect(inner),
+      image:rect(image),
+      border:[style.borderTopWidth,style.borderRightWidth,style.borderBottomWidth,style.borderLeftWidth],
+      padding:getComputedStyle(absence).padding
+    };
+  });
+  const expectFullBleed=metrics=>{
+    expect(metrics.border).toEqual(["0px","0px","0px","0px"]);
+    expect(metrics.padding).toBe("0px");
+    for(const edge of ["top","right","bottom","left"]){
+      expect(Math.abs(metrics.absence[edge]-metrics.well[edge])).toBeLessThanOrEqual(1);
+      expect(Math.abs(metrics.inner[edge]-metrics.absence[edge])).toBeLessThanOrEqual(1);
+      expect(Math.abs(metrics.image[edge]-metrics.inner[edge])).toBeLessThanOrEqual(1);
+    }
+  };
+
+  for(const viewport of [{width:1280,height:900},{width:390,height:844}]){
+    await page.setViewportSize(viewport);
+    await open(page,"recognition.html#UC-040");
+    await expect(page.getByRole("heading",{name:"Zathras",exact:true}).first()).toBeVisible();
+    await expect(page.locator('[data-plate="portrait"] .uc-absence')).toHaveAttribute("aria-label",/not on file/);
+    expectFullBleed(await measure());
+
+    await open(page,"records/UC-040/");
+    const permanent=await page.locator(".record-image.absent").evaluate(well=>{
+      const image=well.querySelector("img");
+      const rect=node=>{
+        const box=node.getBoundingClientRect();
+        return {top:box.top,right:box.right,bottom:box.bottom,left:box.left};
+      };
+      return {well:rect(well),image:rect(image),padding:getComputedStyle(image).padding};
+    });
+    await expect(page.locator(".record-image.absent img")).toHaveAttribute("alt",/not on file/);
+    expect(permanent.padding).toBe("0px");
+    for(const edge of ["top","right","bottom","left"]){
+      expect(Math.abs(permanent.image[edge]-permanent.well[edge])).toBeLessThanOrEqual(1);
+    }
+  }
+});
+
 test("Recognition renders role evidence, voice truth, narrow pairs, and local connection failure",async({page})=>{
   await open(page,"recognition.html#UC-019");
   await expect(page.getByRole("heading",{name:"Quark",exact:true}).first()).toBeVisible();
@@ -142,6 +209,15 @@ test("coverage and constellation preserve human-searchable, unique evidence",asy
   expect(identity.bok.length).toBeGreaterThan(1);
   expect(new Set(identity.bok).size).toBe(identity.bok.length);
   expect(identity.bok.every(href=>href.includes("edge="))).toBeTruthy();
+
+  await open(page,"constellation.html?id=constellation%3Ads9-changeling-performers");
+  await expect(page.getByRole("heading",{name:"Every filed DS9 Changeling performer",exact:true})).toBeVisible();
+  await expect(page.locator("#metrics")).toContainText("11people");
+  await expect(page.locator("#metrics")).toContainText("14credited roles");
+  await expect(page.locator("#metrics")).toContainText("3wall records");
+  await expect(page.locator("#map")).toContainText("William Frankfather");
+  await expect(page.locator("#map")).toContainText("Tami Peterson");
+  await expect(page.locator("#edges")).toContainText("Changeling trio — second male Founder");
 });
 
 test("all canonical sitemap routes resolve and merged aliases stay out",async({request})=>{
