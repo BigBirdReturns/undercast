@@ -23,6 +23,13 @@
  */
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+
+// Census coverage, its constellation slice and the executable benchmark are
+// projections of committed snapshots. Refresh them without network access
+// before any archive hashes are calculated.
+const censusProjection = spawnSync(process.execPath, ["scripts/census.mjs", "--project-only"], { stdio: "inherit" });
+if (censusProjection.status !== 0) throw new Error(`census projection failed with exit ${censusProjection.status}`);
 
 const SHARD_SIZE = parseInt(process.env.SHARD_SIZE || "1000", 10);
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");

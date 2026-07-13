@@ -39,7 +39,7 @@ const https = (value) => {
 const load = (path, fallback) => existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : fallback;
 const sha256 = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
 const inputPaths = ["data/CENSUS.json", "data/CENSUS-COVERAGE.json", "data/CENSUS-UNRESOLVED.json",
-  "data/CENSUS-EXCLUSIONS.json", "data/constellations.json", "data/specimens.json"];
+  "data/CENSUS-EXCLUSIONS.json", "data/CENSUS-MANIFEST.json", "data/constellations.json", "data/specimens.json"];
 
 const census = load("data/CENSUS.json", []);
 const coverage = load("data/CENSUS-COVERAGE.json", []);

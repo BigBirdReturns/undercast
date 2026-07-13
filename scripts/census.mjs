@@ -10,6 +10,7 @@
  *   node scripts/census.mjs                 # all franchises -> data/CENSUS.json
  *   node scripts/census.mjs star-trek       # one franchise
  *   node scripts/census.mjs star-trek --category Ferengi
+ *   node scripts/census.mjs --project-only  # rebuild projections, no network
  *
  * Output: data/CENSUS.json  [{franchise, category, character, performers[]}]
  *         data/CENSUS-COVERAGE.json  every performer-role credit and its wall IDs
@@ -25,10 +26,37 @@
  * gates (Wikipedia verification in grow.mjs --drafts, then vision image audit).
  */
 import { readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { normalizeCensusKey as normalize } from "./census-key.mjs";
 
 const UA = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT || "census"})`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const digest = (value) => createHash("sha256").update(value).digest("hex");
+const fileDigest = async (path) => digest(await readFile(path));
+const args = process.argv.slice(2);
+const PROJECT_ONLY = args.includes("--project-only");
+const CAPTURED_AT = PROJECT_ONLY ? null : new Date().toISOString();
+const observations = [];
+function observePage({ cfg, cat, page, revision, source, content, disposition }) {
+  if (!Number.isInteger(page?.pageid) || !Number.isInteger(revision?.revid) || !revision?.timestamp)
+    throw new Error(`${cfg.label} ${cat} page ${page?.title || "unknown"} lacks revision identity`);
+  observations.push({ franchise: cfg.label, category: cat, title: page.title, source, observed_at: CAPTURED_AT,
+    pageid: page.pageid, revision: revision.revid, timestamp: revision.timestamp,
+    content_sha256: digest(content), disposition });
+}
+
+async function observeTitles(cfg, cat, titles, disposition = "category-member") {
+  for (let i = 0; i < titles.length; i += 20) {
+    const j = await mw(cfg.api, { action: "query", prop: "revisions", rvprop: "ids|timestamp|content",
+      rvslots: "main", titles: titles.slice(i, i + 20).join("|") });
+    for (const page of Object.values(j?.query?.pages || {})) {
+      const revision = page?.revisions?.[0] || {};
+      const content = revision?.slots?.main?.["*"] || "";
+      const source = cfg.api.replace(/api\.php$/, `wiki/${encodeURIComponent(page.title.replace(/ /g, "_"))}`);
+      observePage({ cfg, cat, page, revision, source, content, disposition });
+    }
+  }
+}
 
 // Actor-ish infobox fields, in rough order of trust. Different wikis use
 // different keys; all of these mean "the human behind the character".
@@ -139,9 +167,10 @@ async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
     let people = 0;
     for (const sub of subs) {
       const character = sub.slice(cfg.portrayalPrefix.length).trim().replace(/\/Legends$/, "");
-      const members = (await categoryMembers(cfg.api, sub))
-        .filter((t) => PERSONISH.test(t.replace(/\/Legends$/, "")) && !/[()\d]/.test(t))
-        .map((t) => t.replace(/\/Legends$/, ""));
+      const sourceMembers = (await categoryMembers(cfg.api, sub))
+        .filter((t) => PERSONISH.test(t.replace(/\/Legends$/, "")) && !/[()\d]/.test(t));
+      await observeTitles(cfg, "portrayed " + character, [...new Set(sourceMembers)]);
+      const members = sourceMembers.map((t) => t.replace(/\/Legends$/, ""));
       for (const p of members) { rows.push({ franchise: cfg.label, category: "portrayed " + character, character, performers: [p], source: cfg.api }); people++; }
     }
     console.log(`  [portrayal] ${subs.length} characters, ${people} performer credits`);
@@ -150,25 +179,32 @@ async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
   for (const cat of (cfg.performerCategories || []).filter((cat) => !onlyCategory || normalize(cat) === normalize(onlyCategory))) {
     const people = (await categoryMembers(cfg.api, cat))
       .filter((t) => PERSONISH.test(t) && !/[()\d]/.test(t));
+    await observeTitles(cfg, cat, [...new Set(people)]);
     for (const p of people) rows.push({ franchise: cfg.label, category: cat, character: "—", performers: [p], source: cfg.api });
     console.log(`  [performers] ${cat}: ${people.length} people`);
   }
   for (const cat of (cfg.categories || []).filter((cat) => !onlyCategory || normalize(cat) === normalize(onlyCategory))) {
-    const pages = await categoryMembers(cfg.api, cat, 0, cfg.label === "Star Trek" ? "unnamed" : "all");
+    const pages = [...new Set(await categoryMembers(cfg.api, cat, 0, cfg.label === "Star Trek" ? "unnamed" : "all"))];
     if (!pages.length) throw new Error(`${cfg.label} category ${cat} returned no pages; refusing to publish a false zero`);
     let found = 0;
     for (let i = 0; i < pages.length; i += 20) {
-      const j = await mw(cfg.api, { action: "query", prop: "revisions", rvprop: "content", rvslots: "main", titles: pages.slice(i, i + 20).join("|") });
+      const j = await mw(cfg.api, { action: "query", prop: "revisions", rvprop: "ids|timestamp|content", rvslots: "main", titles: pages.slice(i, i + 20).join("|") });
       for (const p of Object.values(j?.query?.pages || {})) {
         // scan only the page head (infobox lives there) — actor-ish phrases in
         // body prose link to stories and planets, not people.
         const fullWikitext = p?.revisions?.[0]?.slots?.main?.["*"] || "";
         const wt = fullWikitext.split(/\n==/)[0].slice(0, 4000);
+        const revision = p?.revisions?.[0] || {};
+        const source = cfg.api.replace(/api\.php$/, `wiki/${encodeURIComponent(p.title.replace(/ /g, "_"))}`);
         if (cfg.label === "Star Trek" && normalize(cat) === "ferengi"
-          && !/\|\s*species\s*=.*\[\[Ferengi(?:\||\]\])/i.test(wt)) continue;
+          && !/\|\s*species\s*=.*\[\[Ferengi(?:\||\]\])/i.test(wt)) {
+          observePage({ cfg, cat, page: p, revision, source, content: fullWikitext, disposition: "out-of-scope" });
+          continue;
+        }
         const performers = new Set();
         for (const m of wt.matchAll(ACTOR_FIELDS)) for (const n of namesFrom(m[2])) performers.add(n);
-        const source = cfg.api.replace(/api\.php$/, `wiki/${encodeURIComponent(p.title.replace(/ /g, "_"))}`);
+        observePage({ cfg, cat, page: p, revision, source, content: fullWikitext,
+          disposition: performers.size ? "credited" : "unresolved" });
         if (performers.size) {
           rows.push({ franchise: cfg.label, category: cat, character: p.title, performers: [...performers],
             performance_mode: performanceMode(fullWikitext),
@@ -185,7 +221,6 @@ async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
   }
 }
 
-const args = process.argv.slice(2);
 const categoryAt = args.indexOf("--category");
 const onlyCategory = categoryAt >= 0 ? args[categoryAt + 1] : null;
 if (categoryAt >= 0 && !onlyCategory) throw new Error("--category requires a category name");
@@ -193,10 +228,12 @@ const requested = args.filter((arg, index) => !arg.startsWith("--") && index !==
 const keys = requested.length ? requested : Object.keys(FRANCHISES);
 const freshRows = [];
 const freshUnresolved = [];
+if (!PROJECT_ONLY) {
 for (const k of keys) {
   const cfg = FRANCHISES[k];
   if (!cfg) { console.log("unknown franchise:", k, "— known:", Object.keys(FRANCHISES).join(", ")); continue; }
   await censusFranchise(k, cfg, freshRows, freshUnresolved, onlyCategory);
+}
 }
 
 function performanceMode(wikitext) {
@@ -210,20 +247,47 @@ function performanceMode(wikitext) {
 let previous = [];
 try { previous = JSON.parse(await readFile("data/CENSUS.json", "utf8")); } catch {}
 const targetedLabels = new Set(keys.map((key) => FRANCHISES[key]?.label).filter(Boolean));
-const retained = previous.filter((row) => !targetedLabels.has(row.franchise)
+const retained = PROJECT_ONLY ? previous : previous.filter((row) => !targetedLabels.has(row.franchise)
   || (onlyCategory && normalize(row.category) !== normalize(onlyCategory)));
 const sourceByFranchise = new Map(Object.values(FRANCHISES).map((cfg) => [cfg.label, cfg.api]));
 const rows = [...retained, ...freshRows].map((row) => ({ ...row, source: row.source || sourceByFranchise.get(row.franchise) || null })).sort((a, b) =>
   a.franchise.localeCompare(b.franchise) || a.category.localeCompare(b.category)
   || a.character.localeCompare(b.character) || a.performers.join().localeCompare(b.performers.join()));
-await writeFile("data/CENSUS.json", JSON.stringify(rows, null, 1) + "\n");
+if (!PROJECT_ONLY) await writeFile("data/CENSUS.json", JSON.stringify(rows, null, 1) + "\n");
 let previousUnresolved = [];
 try { previousUnresolved = JSON.parse(await readFile("data/CENSUS-UNRESOLVED.json", "utf8")); } catch {}
-const retainedUnresolved = previousUnresolved.filter((row) => !targetedLabels.has(row.franchise)
+const retainedUnresolved = PROJECT_ONLY ? previousUnresolved : previousUnresolved.filter((row) => !targetedLabels.has(row.franchise)
   || (onlyCategory && normalize(row.category) !== normalize(onlyCategory)));
 const unresolved = [...retainedUnresolved, ...freshUnresolved].sort((a, b) =>
   a.franchise.localeCompare(b.franchise) || a.category.localeCompare(b.category) || a.character.localeCompare(b.character));
-await writeFile("data/CENSUS-UNRESOLVED.json", JSON.stringify(unresolved, null, 1) + "\n");
+if (!PROJECT_ONLY) await writeFile("data/CENSUS-UNRESOLVED.json", JSON.stringify(unresolved, null, 1) + "\n");
+
+// The crawl manifest preserves source observation identity separately from the
+// derived coverage projections. Scoped runs replace only their own observation
+// slice, just as they do for the census snapshot itself.
+if (!PROJECT_ONLY) {
+  let previousManifest = { observations: [] };
+  try { previousManifest = JSON.parse(await readFile("data/CENSUS-MANIFEST.json", "utf8")); } catch {}
+  const retainedObservations = (previousManifest.observations || []).filter((row) =>
+    !targetedLabels.has(row.franchise)
+    || (onlyCategory && normalize(row.category) !== normalize(onlyCategory)));
+  const mergedObservations = [...retainedObservations, ...observations].sort((a, b) =>
+    a.franchise.localeCompare(b.franchise) || a.category.localeCompare(b.category)
+    || a.title.localeCompare(b.title) || a.source.localeCompare(b.source));
+  const manifest = {
+    version: 1,
+    schema: "schema/census-manifest.schema.json",
+    captured_at: CAPTURED_AT,
+    generator: "scripts/census.mjs",
+    scope: { franchises: [...targetedLabels].sort(), category: onlyCategory || null },
+    observations: mergedObservations,
+    snapshots: {
+      census: { path: "data/CENSUS.json", sha256: await fileDigest("data/CENSUS.json"), rows: rows.length },
+      unresolved: { path: "data/CENSUS-UNRESOLVED.json", sha256: await fileDigest("data/CENSUS-UNRESOLVED.json"), rows: unresolved.length },
+    },
+  };
+  await writeFile("data/CENSUS-MANIFEST.json", JSON.stringify(manifest, null, 1) + "\n");
+}
 
 // Diff at performer+role granularity. Having Jeffrey Combs on the wall as
 // Weyoun does not cover his separate Ferengi role as Brunt.

@@ -6,9 +6,13 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
 
 ## Truth and projections
 
-- `data/specimens.json`, `data/SOURCES.json`, `data/constellations.json` and
-  `data/tombstones.json` are maintained truth: live records, image provenance,
-  sourced connective evidence and retired-ID continuity.
+- `data/specimens.json`, `data/SOURCES.json` and `data/tombstones.json` are
+  maintained truth: live records, image provenance and retired-ID continuity.
+- `data/constellations.json` is the published composite evidence graph. Curated
+  constellations are maintained; the `constellation:every-ferengi-performer`
+  slice is regenerated exactly from the committed census snapshot and exclusions.
+  Consumers may treat the published graph as canonical, but editors must not
+  hand-edit a generator-owned slice.
 - `data/index.json`, `data/shards/`, `data/entities.json`, `data/search/` and the
   permanent HTML record routes are generated projections. They are disposable.
 - `data/CENSUS-COVERAGE.json` is the performer-plus-role coverage projection;
@@ -16,6 +20,13 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
   A performer appearing elsewhere in the archive is not evidence that a
   different designed role is covered. `data/CENSUS-UNRESOLVED.json` retains
   character pages whose source names no performer instead of silently dropping them.
+- `data/CENSUS-MANIFEST.json` binds a networked census refresh to the exact
+  MediaWiki page and revision IDs, source timestamps and content hashes that the
+  crawler observed. Its snapshot hashes cover `CENSUS.json` and
+  `CENSUS-UNRESOLVED.json`. A legacy snapshot may have no observations; never
+  invent revision metadata for it. `node scripts/census.mjs --project-only`
+  refreshes coverage, gaps, summary, the Ferengi constellation and benchmark
+  without network access and must preserve the observation manifest.
 - `data/CENSUS-FERENGI-TEST.json` is the executable Ferengi benchmark report.
   `status: PASS` proves every named physical credit has an exact sourced
   constellation edge or evidence-backed exclusion; `accounting_status` proves
@@ -54,8 +65,12 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
 ## Durable identifiers
 
 - Specimen IDs match `^UC-G?\d+$` and are never reused.
-- Merged duplicates remain in `data/tombstones.json`; clients resolve them
-  through `shard-manifest.json.redirects` rather than treating them as missing.
+- Retired identifiers remain in `data/tombstones.json`. `status: merged` rows
+  resolve through `shard-manifest.json.redirects`; `status: removed` rows keep a
+  permanent correction page and evidence but deliberately do not redirect.
+- `node scripts/shard.mjs` is the complete offline projection build. It refreshes
+  census coverage, the Ferengi graph/test, shards, search, entities and archive
+  hashes from committed truth before publication.
 - Permanent record: `/undercast/records/{id}/`
 - Interactive record: `/undercast/recognition.html#{id}`
 - Wall record: `/undercast/index.html#{id}`

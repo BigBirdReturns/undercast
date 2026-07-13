@@ -142,6 +142,10 @@ if (existsSync("data/archive.json") && existsSync("schema/archive.schema.json"))
 else skip("schema.archive", "archive contract or schema missing");
 if (existsSync("data/CENSUS-FERENGI-TEST.json") && existsSync("schema/census-test.schema.json")) conformObjectProfile("schema.census_test", load("data/CENSUS-FERENGI-TEST.json"), load("schema/census-test.schema.json"), "Ferengi benchmark");
 else skip("schema.census_test", "Ferengi benchmark report or schema missing");
+if (existsSync("data/CENSUS-MANIFEST.json") && existsSync("schema/census-manifest.schema.json")) conformObjectProfile("schema.census_manifest", load("data/CENSUS-MANIFEST.json"), load("schema/census-manifest.schema.json"), "census manifest");
+else skip("schema.census_manifest", "census observation manifest or schema missing");
+if (existsSync("data/tombstones.json") && existsSync("schema/tombstones.schema.json")) conformObjectProfile("schema.tombstones", tombstones, load("schema/tombstones.schema.json"), "tombstones");
+else skip("schema.tombstones", "tombstone ledger or schema missing");
 if (existsSync("data/entities.json") && existsSync("schema/entities.schema.json")) conformObjectProfile("schema.entities", load("data/entities.json"), load("schema/entities.schema.json"), "entities");
 else skip("schema.entities", "entity projection or schema missing");
 if (constellationGraph && existsSync("schema/constellations.schema.json")) conformObjectProfile("schema.constellations", constellationGraph, load("schema/constellations.schema.json"), "constellations");
@@ -241,7 +245,13 @@ for (const row of tombstones.records || []) {
   if (!/^UC-G?\d+$/.test(row.id || "")) fail("id.lifecycle", `invalid tombstone id ${row.id}`);
   if (retiredIds.has(row.id)) fail("id.lifecycle", `duplicate tombstone id ${row.id}`);
   if (liveIds.has(row.id)) fail("id.lifecycle", `${row.id} is both live and retired`);
-  if (row.status !== "merged" || !liveIds.has(row.successor)) fail("id.lifecycle", `${row.id} has invalid successor ${row.successor}`);
+  if (row.status === "merged") {
+    if (!row.successor || !liveIds.has(row.successor) || row.successor === row.id) fail("id.lifecycle", `${row.id} has invalid successor ${row.successor}`);
+  } else if (row.status === "removed") {
+    if (row.successor) fail("id.lifecycle", `${row.id} removed record must not redirect`);
+    if (!String(row.actor || "").trim() || !String(row.character || "").trim() || !/^https:\/\//.test(row.source || ""))
+      fail("id.lifecycle", `${row.id} removed record lacks identity or HTTPS correction evidence`);
+  } else fail("id.lifecycle", `${row.id} has unsupported retirement status ${row.status}`);
   retiredIds.add(row.id);
 }
 
@@ -334,7 +344,7 @@ if (existsSync("data/index.json") && existsSync("data/shard-manifest.json")) {
 // ── profile: media manifest consistency (the GitHub Releases store) ───────────
 if (media) {
   mark("media.consistency");
-  const specIdSet = new Set(specimens.map((s) => s.id));
+  const specIdSet = new Set([...specimens.map((s) => s.id), ...(tombstones.records || []).map((row) => row.id)]);
   const refSrcSet = new Set(imgRefs.map((r) => r.src));
   const perRelease = {};
   const byAsset = new Map();
@@ -492,6 +502,33 @@ if (["data/CENSUS.json", "data/CENSUS-COVERAGE.json", "data/CENSUS-GAPS.json", "
   for (const row of unresolved) if (!/^https:\/\//.test(row.source || "")) fail("census.consistency", `${row.character} unresolved census row lacks an HTTPS source`);
 } else skip("census.consistency", "census projections missing — run npm run census:ferengi");
 
+// Census source observations bind the committed snapshot to the exact wiki
+// revisions seen by the networked crawler. Project-only rebuilds preserve this
+// file while refreshing every derived census surface.
+if (existsSync("data/CENSUS-MANIFEST.json")) {
+  mark("census.observation_freshness");
+  const censusManifest = load("data/CENSUS-MANIFEST.json");
+  const expectedSnapshots = {
+    census: ["data/CENSUS.json", load("data/CENSUS.json").length],
+    unresolved: ["data/CENSUS-UNRESOLVED.json", load("data/CENSUS-UNRESOLVED.json").length],
+  };
+  for (const [name, [path, rows]] of Object.entries(expectedSnapshots)) {
+    const snapshot = censusManifest.snapshots?.[name];
+    if (snapshot?.path !== path || snapshot?.sha256 !== hashBytes(path) || snapshot?.rows !== rows)
+      fail("census.observation_freshness", `${name} snapshot identity is stale`);
+  }
+  if ((censusManifest.observations || []).length && !/^\d{4}-\d{2}-\d{2}T/.test(censusManifest.captured_at || ""))
+    fail("census.observation_freshness", "observed census pages require a captured_at timestamp");
+  const observationKeys = new Set();
+  for (const row of censusManifest.observations || []) {
+    const key = `${normalizeCensusKey(row.franchise)}|${normalizeCensusKey(row.category)}|${normalizeCensusKey(row.title)}`;
+    if (observationKeys.has(key)) fail("census.observation_freshness", `duplicate census page observation ${key}`);
+    observationKeys.add(key);
+    if (!Number.isInteger(row.pageid) || !Number.isInteger(row.revision) || !/^[a-f0-9]{64}$/.test(row.content_sha256 || ""))
+      fail("census.observation_freshness", `${key} lacks durable source revision identity`);
+  }
+} else skip("census.observation_freshness", "data/CENSUS-MANIFEST.json missing");
+
 // The named benchmark is stricter than aggregate count consistency. Input
 // hashes ensure a stale committed report cannot make CI green.
 if (existsSync("data/CENSUS-FERENGI-TEST.json")) {
@@ -508,6 +545,8 @@ if (existsSync("data/CENSUS-FERENGI-TEST.json")) {
   }
   if (Object.keys(report.input_sha256 || {}).length < 6)
     fail("census.ferengi_benchmark", "Ferengi benchmark report lacks complete input hashes");
+  if (!report.input_sha256?.["data/CENSUS-MANIFEST.json"])
+    fail("census.ferengi_benchmark", "Ferengi benchmark is not bound to the census observation manifest");
 } else skip("census.ferengi_benchmark", "run npm run test:ferengi");
 
 // Versioned archive contract + every advertised checksum.
@@ -521,7 +560,7 @@ if (existsSync("data/archive.json")) {
   if (archive.canonical?.sources?.count !== sources.length) fail("contract.consistency", "canonical source count drift");
   if (archive.canonical?.records?.content_sha256 !== manifest.source_sha256) fail("contract.consistency", "canonical content hash drift");
   if (archive.canonical?.constellations?.count !== constellationGraph?.constellations?.length || archive.canonical?.constellations?.nodes !== constellationGraph?.nodes?.length || archive.canonical?.constellations?.edges !== constellationGraph?.edges?.length) fail("contract.consistency", "canonical constellation counts drift");
-  for (const item of [archive.canonical?.records, archive.canonical?.sources, archive.canonical?.constellations, archive.canonical?.tombstones, ...Object.values(archive.schemas || {}), archive.projections?.lean_index, archive.projections?.shard_manifest, archive.projections?.entities, archive.projections?.search, archive.projections?.media_live, archive.projections?.quality, ...Object.values(archive.projections?.census || {}), archive.vocabularies?.conditions, ...(archive.web_assets || [])]) {
+  for (const item of [archive.canonical?.records, archive.canonical?.sources, archive.canonical?.constellations, archive.canonical?.census_manifest, archive.canonical?.tombstones, ...Object.values(archive.schemas || {}), archive.projections?.lean_index, archive.projections?.shard_manifest, archive.projections?.entities, archive.projections?.search, archive.projections?.media_live, archive.projections?.quality, ...Object.values(archive.projections?.census || {}), archive.vocabularies?.conditions, ...(archive.web_assets || [])]) {
     if (!item?.path || !existsSync(item.path)) { fail("contract.consistency", `contract path missing: ${item?.path || "undefined"}`); continue; }
     const published = publishedTextBytes(item.path);
     if (item.sha256 !== createHash("sha256").update(published).digest("hex")) fail("contract.consistency", `${item.path} sha256 drift — rebuild contract`);
@@ -536,7 +575,7 @@ if (existsSync("data/archive.json")) {
       if (shard.bytes !== statSync(shard.file).size) fail("contract.consistency", `search shard byte count drift: ${shard.file}`);
     }
   }
-  const expectedRedirects = Object.fromEntries((tombstones.records || []).map((row) => [row.id, row.successor]));
+  const expectedRedirects = Object.fromEntries((tombstones.records || []).filter((row) => row.status === "merged").map((row) => [row.id, row.successor]));
   if (JSON.stringify(manifest.redirects || {}) !== JSON.stringify(expectedRedirects)) fail("contract.consistency", "manifest redirects drift from canonical tombstones");
 } else skip("contract.consistency", "data/archive.json missing — run node scripts/shard.mjs");
 

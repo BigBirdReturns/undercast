@@ -358,6 +358,7 @@
 </style>
 </head>
 <body>
+<a class="skip-link" href="#archive">Skip to the archive</a>
 
 <header class="masthead">
   <div class="wrap">
@@ -367,7 +368,7 @@
         <span class="site-tagline">the people behind the faces culture remembers</span>
       </a>
       <nav class="site-nav" aria-label="Archive navigation">
-        <a href="#archive">Browse</a>
+        <a href="#archive" aria-current="page">Browse</a>
         <a class="site-primary" href="./recognition.html#UC-001">One record</a>
         <a href="./coverage.html?franchise=Star+Trek&amp;category=Ferengi&amp;mode=physical-any">Coverage</a>
         <a href="./constellation.html">Constellations</a>
@@ -410,7 +411,7 @@
   </div>
 </header>
 
-<div class="wrap" id="archive">
+<main class="wrap" id="archive">
   <div class="controls">
     <label class="search">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
@@ -439,18 +440,19 @@
 
   <div class="maker-active" id="makerActive" hidden></div>
 
-  <div class="grid" id="grid" aria-live="polite"></div>
+  <div id="result-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+  <div class="grid" id="grid" aria-busy="true"></div>
   <div class="loadmore-wrap" id="loadmore" hidden></div>
-</div>
+</main>
 
 <footer id="about">
   <div class="wrap">
     <div class="cols">
       <p>
-        <b>Why the faces are blank.</b> Every portrait here is an original plaster relief, not a still —
-        a mask on the front of the cast, a bare face on the back. The actual reveal lives one click away
-        on each specimen's back panel. That's on purpose: turning the cast over to find the human is the
-        whole point, and it lands harder than a thumbnail.
+        <b>Why the cards turn.</b> Each card keeps the remembered character and the person underneath in
+        the same frame. Turn it to restore the performer, then open the full record for the image evidence,
+        credited makers, provenance, and live recognition paths. When an image is missing, the blank cast
+        stays visible rather than pretending the evidence exists.
       </p>
       <p>
         <b>Fork the wall.</b> Every specimen is one object in the canonical <code>data/specimens.json</code> —
@@ -600,6 +602,7 @@ const decadesEl=document.getElementById("decades");
 const makerChipsEl=document.getElementById("makerChips");
 const makerActiveEl=document.getElementById("makerActive");
 const loadmoreEl=document.getElementById("loadmore");
+const resultStatusEl=document.getElementById("result-status");
 let universeFilter="All";
 let decadeFilter="All";
 let makerFilter="";
@@ -788,6 +791,7 @@ function card(s){
   loop.href="./recognition.html#"+safeId(s.id);
   loop.setAttribute("aria-label","Open the full record for "+s.character);
   loop.innerHTML=`<span>open full record</span><span aria-hidden="true">→</span>`;
+  loop.addEventListener("click",()=>rememberWallPosition(s.id,true));
   shell.appendChild(loop);
   return shell;
 }
@@ -874,6 +878,7 @@ function computeRows(){
 
 async function render(reset=true){
   if(reset) shownCount=PAGE;
+  grid.setAttribute("aria-busy","true");
   const rows=computeRows();
   const visible=rows.slice(0,shownCount);
   // fetch only the shards the visible cards live in, then guard against a newer
@@ -893,6 +898,8 @@ async function render(reset=true){
       grid.innerHTML=`<div class="empty"><b>Couldn't load this page.</b>A data shard didn't arrive — likely a network blip. <button class="rep-btn" type="button" id="retryBtn">Retry</button></div>`;
       document.getElementById("retryBtn").addEventListener("click",()=>render(false));
       loadmoreEl.hidden=true; loadmoreEl.innerHTML="";
+      resultStatusEl.textContent="The requested specimen cards could not be loaded. Retry is available.";
+      grid.setAttribute("aria-busy","false");
       return;
     }
   }
@@ -917,6 +924,8 @@ async function render(reset=true){
   document.getElementById("count").innerHTML = (shown===total)
     ? String(total).padStart(2,"0")
     : shown+"/"+total;
+  resultStatusEl.textContent=rows.length===0?"No specimens match the current filters.":`${rows.length} specimen${rows.length===1?"":"s"} match; ${Math.min(rows.length,shownCount)} shown.`;
+  grid.setAttribute("aria-busy","false");
   syncURL();
 }
 
@@ -930,7 +939,19 @@ function syncURL(){
   if(sortEl.value!=="cat") p.set("sort",sortEl.value);
   const qs=p.toString();
   const url=location.pathname+(qs?"?"+qs:"")+location.hash;
-  history.replaceState(null,"",url);
+  const previous=history.state&&history.state.ucWall||{};
+  history.replaceState({...history.state,ucWall:{...previous,shownCount}},"",url);
+}
+function rememberWallPosition(anchor="",pinHash=false){
+  const previous=history.state&&history.state.ucWall||{};
+  const hash=pinHash&&safeId(anchor)?"#"+safeId(anchor):location.hash;
+  const url=location.pathname+location.search+hash;
+  history.replaceState({...history.state,ucWall:{...previous,shownCount,scrollY:Math.max(0,Math.round(scrollY)),anchor:safeId(anchor)||previous.anchor||""}},"",url);
+}
+function restoreWallPosition(){
+  const saved=history.state&&history.state.ucWall;
+  if(!saved||typeof saved!=="object") return;
+  if(Number.isFinite(saved.shownCount)) shownCount=Math.max(PAGE,Math.min(INDEX.length,Math.ceil(saved.shownCount/PAGE)*PAGE));
 }
 function applyURLState(){
   const p=new URLSearchParams(location.search);
@@ -999,7 +1020,7 @@ async function boot(){
     INDEX=idx.map(hydrate);
     MANIFEST=man;
   }catch(_){
-    const specs=await fetch("./data/specimens.json").then(function(r){return r.json();});
+    const specs=await fetch("./data/specimens.json",{cache:"no-store"}).then(function(r){if(!r.ok)throw new Error("canonical specimens");return r.json();});
     MANIFEST={shards:[]};
     INDEX=specs.map(function(s){ RECORDS.set(s.id,s); return asEntry(s); }); // every record already resident
   }
@@ -1009,6 +1030,7 @@ async function boot(){
     const live=await fetch("./data/media-live.json?v="+encodeURIComponent(MANIFEST.media_live_sha256||"")).then(function(r){return r.ok?r.json():null;});
     if(live&&live.urls) for(const src in live.urls){ MEDIA[src]={url:live.urls[src],location:"release"}; }
   }catch(_){}
+  restoreWallPosition();
   buildFilters();
   buildMakers();
   await render();
@@ -1018,8 +1040,9 @@ async function boot(){
     if(Array.isArray(c)&&c.length) document.getElementById("queue").textContent=" · "+c.length+" leads in the ingest queue";
   }).catch(function(){});
 }
+window.addEventListener("pagehide",()=>rememberWallPosition());
 if(location.search||location.hash) document.body.classList.add("is-directed");
-boot().catch(function(){ grid.innerHTML="<div class=\"empty\"><b>Couldn&#39;t load the roster.</b>Serve this over http (not file://) and make sure data/index.json (or data/specimens.json) is present.</div>"; });
+boot().catch(function(){ grid.innerHTML="<div class=\"empty\"><b>Couldn&#39;t load the roster.</b>Serve this over http (not file://) and make sure data/index.json (or data/specimens.json) is present.</div>"; resultStatusEl.textContent="The roster could not be loaded."; grid.setAttribute("aria-busy","false"); });
 </script>
 </body>
 </html>
