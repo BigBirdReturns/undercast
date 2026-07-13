@@ -43,6 +43,8 @@ expect(has("recognition.html", /\.uc-wipe-layer\{position:absolute;inset:0;/), "
 expect(has("recognition.html", /\.uc-wipe-layer\.is-character\{clip-path:inset\(0 calc\(100% - var\(--split\)\) 0 0\)\}/), "recognition: character wipe is not a fixed-image clip");
 expect(has("recognition.html", /\.uc-wipe-layer\.is-person\{clip-path:inset\(0 0 0 var\(--split\)\)/), "recognition: performer wipe is not a fixed-image clip");
 expect(!has("recognition.html", /\.uc-wipe-layer\.is-(?:character|person)[^{]*\{[^}]*width:/), "recognition: moving the comparison seam must not resize either image");
+expect(has("recognition.html", /transform:scale\(var\(--compare-scale\)\)/), "recognition: comparison-specific face scale is not consumed");
+expect(has("recognition.html", /transform-origin:var\(--compare-x\) var\(--compare-y\)/), "recognition: comparison alignment anchor is not consumed");
 
 expect(has("coverage.html", /data\/archive\.json", \{cache:"no-store"\}/), "coverage: archive snapshot is not fresh");
 expect(has("coverage.html", /readArtifact\(census\.coverage/), "coverage: census artifacts are not snapshot-versioned");

@@ -1,7 +1,9 @@
 import { test, expect } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 
 const sitePath=path=>`/undercast/${String(path).replace(/^\//,"")}`;
 const open=(page,path)=>page.goto(sitePath(path),{waitUntil:"domcontentloaded"});
+const pixel=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+Xh9WAAAAAElFTkSuQmCC","base64");
 const waitForWall=async page=>expect(page.locator("#result-status")).toContainText(/specimens? match/);
 const captureConsoleErrors=page=>{
   const errors=[];
@@ -10,7 +12,6 @@ const captureConsoleErrors=page=>{
 };
 
 test.beforeEach(async({page})=>{
-  const pixel=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+Xh9WAAAAAElFTkSuQmCC","base64");
   await page.route("**/*",route=>{
     const request=route.request(),url=new URL(request.url());
     if(request.resourceType()==="image"&&url.hostname!=="127.0.0.1") return route.fulfill({status:200,contentType:"image/png",body:pixel});
@@ -123,7 +124,6 @@ test("Recognition comparison moves a clip, never the image geometry",async({page
   }));
   const balanced=await geometry();
   expect(balanced[0].layer).toEqual(balanced[1].layer);
-  expect(balanced[0].photo).toEqual(balanced[1].photo);
   await slider.press("Home");
   const left=await geometry();
   expect(left.map(row=>row.layer)).toEqual(balanced.map(row=>row.layer));
@@ -166,6 +166,7 @@ test("Recognition comparison is a ratio-stable, aligned 4:5 component",async({pa
 
 test("Recognition comparison renders the curated physical-transformation benchmark",async({page})=>{
   const records=[
+    ["UC-001","Morn"],
     ["UC-035","The Borg Queen"],
     ["UC-006","Odo"],
     ["UC-018","Worf"],
@@ -183,15 +184,49 @@ test("Recognition comparison renders the curated physical-transformation benchma
     await expect(images).toHaveCount(2);
     expect(await images.evaluateAll(nodes=>nodes.every(image=>image.complete&&image.naturalWidth>0&&image.naturalHeight>0))).toBeTruthy();
     const boxes=await images.evaluateAll(nodes=>nodes.map(image=>{
-      const rect=image.getBoundingClientRect();
-      return [rect.x,rect.y,rect.width,rect.height];
+      const rect=image.getBoundingClientRect(),frame=image.closest(".uc-wipe-frame").getBoundingClientRect();
+      return {image:[rect.x,rect.y,rect.width,rect.height],frame:[frame.x,frame.y,frame.width,frame.height]};
     }));
-    expect(boxes[0]).toEqual(boxes[1]);
+    for(const box of boxes){
+      expect(box.image[0]).toBeLessThanOrEqual(box.frame[0]+1);
+      expect(box.image[1]).toBeLessThanOrEqual(box.frame[1]+1);
+      expect(box.image[0]+box.image[2]).toBeGreaterThanOrEqual(box.frame[0]+box.frame[2]-1);
+      expect(box.image[1]+box.image[3]).toBeGreaterThanOrEqual(box.frame[1]+box.frame[3]-1);
+    }
     if(id==="UC-006"||id==="UC-018"||id==="UC-362"){
       expect(await images.first().evaluate(image=>getComputedStyle(image).objectPosition)).toMatch(/^20%\s+28%$/);
     }
     if(id==="UC-362") expect(await images.last().evaluate(image=>getComputedStyle(image).objectPosition)).toMatch(/^50%\s+28%$/);
   }
+});
+
+test("Morn comparison consumes the human-reviewed face alignment",async({page})=>{
+  const still=await readFile(new URL("../../images/uc-001-still.jpg",import.meta.url));
+  const portrait=await readFile(new URL("../../images/uc-001-portrait.jpg",import.meta.url));
+  await page.unrouteAll({behavior:"ignoreErrors"});
+  await page.route("**/*",route=>{
+    const request=route.request(),url=new URL(request.url());
+    if(url.pathname.includes("uc-001-still-")) return route.fulfill({status:200,contentType:"image/jpeg",body:still});
+    if(url.pathname.includes("uc-001-portrait-")) return route.fulfill({status:200,contentType:"image/jpeg",body:portrait});
+    if(request.resourceType()==="image"&&url.hostname!=="127.0.0.1") return route.fulfill({status:200,contentType:"image/png",body:pixel});
+    return route.continue();
+  });
+  await page.setViewportSize({width:1280,height:900});
+  await open(page,"recognition.html#UC-001");
+  await expect(page.getByRole("heading",{name:"Morn",exact:true}).first()).toBeVisible();
+  await page.getByRole("button",{name:"Compare in one frame",exact:true}).click();
+  const profiles=await page.locator("#comparison-stage .uc-wipe-layer img").evaluateAll(nodes=>nodes.map(image=>({
+    position:getComputedStyle(image).objectPosition,
+    origin:getComputedStyle(image).transformOrigin,
+    transform:getComputedStyle(image).transform
+  })));
+  expect(profiles[0].position).toBe("50% 26%");
+  expect(profiles[0].origin).toMatch(/^\d+(?:\.\d+)?px \d+(?:\.\d+)?px$/);
+  expect(profiles[0].transform).toContain("1.45");
+  expect(profiles[1].position).toBe("50% 46%");
+  expect(profiles[1].transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
+  await page.addStyleTag({content:"#comparison-stage{width:400px!important}.uc-wipe-seam{display:none!important}"});
+  await expect(page.locator("#wipe-frame")).toHaveScreenshot("uc-001-morn-face-alignment.png",{animations:"disabled",maxDiffPixelRatio:.01});
 });
 
 test("UC-035 comparison portrait is not a low-resolution sliver",async({page})=>{
