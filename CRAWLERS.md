@@ -19,8 +19,13 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
   different dispositions instead of collapsing them into a species keyword.
   Consumers may treat the published graph as canonical, but editors must not
   hand-edit a generator-owned slice.
-- `data/index.json`, `data/shards/`, `data/entities.json`, `data/search/` and the
+- `data/index.json`, `data/shards/`, `data/entities.json`, `data/species.json`, `data/search/` and the
   permanent HTML record routes are generated projections. They are disposable.
+- `data/vocabularies/species.json` is the maintained mapping from exact census
+  categories to singular navigation labels. `data/species.json` carries the
+  resulting exact performer-role joins, source URLs, performance modes, filed
+  record IDs, named gaps and source pages with no credited performer. Do not
+  infer a taxon from prose, appearance, performer identity, or another role.
 - `data/CENSUS-COVERAGE.json` is the performer-plus-role coverage projection;
   `data/CENSUS-SUMMARY.json` declares its source scope and performance modes.
   A performer appearing elsewhere in the archive is not evidence that a
@@ -46,6 +51,9 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
 - `data/entities.json` groups exact credit labels for navigation. Its keys are
   stable derived keys, not assertions that two similarly named humans are the
   same legal identity.
+- Lean-index `sp` values and every public species link are generated from
+  `data/species.json`. A species-filtered wall is the filed subset; follow the
+  taxon's `coverage_route` for the source-scoped named credits and explicit gaps.
 - `data/constellations.json` is the broader evidence graph. Node IDs are durable
   typed anchors. Every edge is sourced. `scope: specimen` must name a matching
   live record; `scope: context` may connect a person or role without granting
@@ -81,6 +89,7 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
 - Permanent record: `/undercast/records/{id}/`
 - Interactive record: `/undercast/recognition.html#{id}`
 - Wall record: `/undercast/index.html#{id}`
+- Species-filtered wall: `/undercast/index.html?species={singular_label}`
 - Constellation anchor: `/undercast/constellation.html?id={constellation_id}&node={node_id}`
 
 ## Polite use

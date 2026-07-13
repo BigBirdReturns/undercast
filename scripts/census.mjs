@@ -143,7 +143,12 @@ async function categoryMembers(api, cat, depth = 0, subcategoryMode = "all") {
 // strip wiki markup from a captured actor-field value -> clean people names.
 // A performer credit must LOOK like a person: 2+ capitalized words, no digits,
 // no ALL-CAPS citation templates (PROSE/COMIC/TV), no story parentheticals.
-const PERSONISH = /^[A-ZÀ-Þ][a-zà-þ'.\-]+(?: [A-ZÀ-Þ][A-Za-zà-þ'.\-]*)+$/;
+// Initialled professional names (J.G. Hertzler, D.C. Fontana, etc.) are common
+// in source credits. Requiring a lowercase letter in the first name silently
+// turned exact performer fields into "unresolved" rows. Keep the two-word and
+// mixed-case guards below, but accept initials inside an otherwise person-like
+// name.
+const PERSONISH = /^[A-ZÀ-Þ][A-Za-zà-þ'.\-]*(?: [A-ZÀ-Þ][A-Za-zà-þ'.\-]*)+$/;
 function namesFrom(value) {
   const links = [...value.matchAll(/\[\[([^\]|#]+)(?:[^\]]*)?\]\]/g)]
     .map((m) => m[1].trim().replace(/\s*\((actor|actress|performer|puppeteer|Dalek operator)\)$/i, ""));

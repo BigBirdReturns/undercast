@@ -24,6 +24,8 @@ data/
   archive.json        versioned crawler contract: truth, schemas, hashes, routes,
                       projections, evidence/cache/privacy policy
   entities.json       derived exact-credit navigation groups (not identity claims)
+  species.json        sourced species navigation: exact performer-role joins,
+                      separated physical/voice/unknown dispositions and gaps
   constellations.json canonical evidence graph: stable nodes, sourced edges,
                       explicit specimen/context boundary
   search/             prefix-sharded inverted token index for future-scale clients
@@ -207,6 +209,14 @@ The summary separates physical prosthetic performances, animation/voice, mixed
 appearances, and source pages with no named performer. It is a sourced community-wiki snapshot,
 not a claim that uncredited background performers or every licensed tie-in have
 already been identified.
+
+`data/vocabularies/species.json` maps an exact census category to its singular
+display label; `scripts/build-species.mjs` joins those source rows to exact filed
+performer-role records and publishes `data/species.json`. The wall's species
+filter, card links, focused-record rail and permanent pages all consume that
+projection. They never classify a role because “Klingon” or “Ferengi” happened
+to appear in reveal prose. The first durable taxa are Klingon and Ferengi; a new
+taxon is added only when its source category has been captured and retained.
 
 ## Constellations beyond the wall
 

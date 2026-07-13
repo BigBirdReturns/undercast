@@ -45,6 +45,48 @@ test("wall controls execute, announce, and survive browser history",async({page}
   expect(errors).toEqual([]);
 });
 
+test("archive navigation stays complete, consistent, and inside every viewport",async({page})=>{
+  const surfaces=[
+    {path:"index.html",ready:"#result-status",align:".controls",current:1},
+    {path:"recognition.html#UC-001",ready:"#record-title",align:".uc-record",current:1},
+    {path:"coverage.html",ready:"#rows tr",align:".eyebrow",current:1},
+    {path:"constellation.html",ready:".person-row",align:".hero",current:1},
+    {path:"records/UC-001/",ready:"#record-main",align:".record-meta",current:1},
+    {path:"404.html",ready:"#recovery",align:".kicker",current:0}
+  ];
+  const core=["Browse","Coverage","Constellations","Makers","About"];
+  for(const viewport of [{width:1280,height:900},{width:390,height:844}]){
+    await page.setViewportSize(viewport);
+    for(const surface of surfaces){
+      await open(page,surface.path);
+      await expect(page.locator(surface.ready).first()).toBeVisible();
+      const nav=page.getByRole("navigation",{name:"Archive navigation",exact:true});
+      await expect(nav).toBeVisible();
+      for(const label of core) await expect(nav.getByRole("link",{name:label,exact:true})).toBeVisible();
+      const browseTarget=await nav.getByRole("link",{name:"Browse",exact:true}).evaluate(link=>new URL(link.href).hash);
+      expect(browseTarget,`${surface.path} Browse destination`).toBe("#archive");
+      await expect(nav.locator('[aria-current="page"]')).toHaveCount(surface.current);
+      const overflow=await page.locator(".site-shell").evaluate(shell=>{
+        const viewportWidth=document.documentElement.clientWidth;
+        const visible=[shell,...shell.querySelectorAll("a,button")].filter(node=>{
+          const style=getComputedStyle(node),rect=node.getBoundingClientRect();
+          return style.display!=="none"&&style.visibility!=="hidden"&&rect.width>0&&rect.height>0;
+        });
+        return visible.map(node=>{
+          const rect=node.getBoundingClientRect();
+          return {text:node.textContent.trim(),left:rect.left,right:rect.right};
+        }).filter(item=>item.left < -1 || item.right > viewportWidth + 1);
+      });
+      expect(overflow,`${surface.path} at ${viewport.width}px`).toEqual([]);
+      const alignment=await page.locator(".site-brand").evaluate((brand,selector)=>{
+        const content=document.querySelector(selector);
+        return Math.abs(brand.getBoundingClientRect().left-content.getBoundingClientRect().left);
+      },surface.align);
+      expect(alignment,`${surface.path} shell/content alignment at ${viewport.width}px`).toBeLessThanOrEqual(1);
+    }
+  }
+});
+
 test("wall search, current decade, flip semantics, and partial failure are honest",async({page})=>{
   await open(page,"index.html");
   await waitForWall(page);
@@ -91,6 +133,65 @@ test("Recognition comparison moves a clip, never the image geometry",async({page
   const right=await geometry();
   expect(right.map(row=>row.layer)).toEqual(balanced.map(row=>row.layer));
   expect(right.map(row=>row.photo)).toEqual(balanced.map(row=>row.photo));
+});
+
+test("Recognition comparison is a ratio-stable, aligned 4:5 component",async({page})=>{
+  for(const viewport of [{width:1280,height:720},{width:1280,height:900},{width:390,height:844}]){
+    await page.setViewportSize(viewport);
+    await open(page,`recognition.html?layout=${viewport.width}x${viewport.height}#UC-035`);
+    await expect(page.getByRole("heading",{name:"The Borg Queen",exact:true}).first()).toBeVisible();
+    await page.getByRole("button",{name:"Compare in one frame",exact:true}).click();
+    const metrics=await page.locator("#comparison-stage").evaluate(stage=>{
+      const box=node=>{
+        const rect=node.getBoundingClientRect();
+        return {left:rect.left,right:rect.right,width:rect.width,height:rect.height};
+      };
+      return {
+        stage:box(stage),
+        head:box(stage.querySelector(".uc-wipe-head")),
+        frame:box(stage.querySelector(".uc-wipe-frame")),
+        labels:box(stage.querySelector(".uc-wipe-labels"))
+      };
+    });
+    expect(metrics.frame.width/metrics.frame.height).toBeCloseTo(4/5,2);
+    for(const part of [metrics.head,metrics.frame,metrics.labels]){
+      expect(Math.abs(part.left-metrics.stage.left)).toBeLessThanOrEqual(1);
+      expect(Math.abs(part.right-metrics.stage.right)).toBeLessThanOrEqual(1);
+      expect(Math.abs(part.width-metrics.stage.width)).toBeLessThanOrEqual(1);
+    }
+    const heightCap=viewport.width<=700?.70:.74;
+    expect(metrics.frame.height).toBeLessThanOrEqual(viewport.height*heightCap+1);
+  }
+});
+
+test("Recognition comparison renders the curated physical-transformation benchmark",async({page})=>{
+  const records=[
+    ["UC-035","The Borg Queen"],
+    ["UC-006","Odo"],
+    ["UC-018","Worf"],
+    ["UC-019","Quark"],
+    ["UC-026","Hellboy"],
+    ["UC-037","Seven of Nine"],
+    ["UC-057","Chewbacca"],
+    ["UC-362","Chewbacca"]
+  ];
+  for(const [id,title] of records){
+    await open(page,`recognition.html#${id}`);
+    await expect(page.getByRole("heading",{name:title,exact:true}).first()).toBeVisible();
+    await page.getByRole("button",{name:"Compare in one frame",exact:true}).click();
+    const images=page.locator("#comparison-stage .uc-wipe-layer img");
+    await expect(images).toHaveCount(2);
+    expect(await images.evaluateAll(nodes=>nodes.every(image=>image.complete&&image.naturalWidth>0&&image.naturalHeight>0))).toBeTruthy();
+    const boxes=await images.evaluateAll(nodes=>nodes.map(image=>{
+      const rect=image.getBoundingClientRect();
+      return [rect.x,rect.y,rect.width,rect.height];
+    }));
+    expect(boxes[0]).toEqual(boxes[1]);
+    if(id==="UC-006"||id==="UC-018"||id==="UC-362"){
+      expect(await images.first().evaluate(image=>getComputedStyle(image).objectPosition)).toMatch(/^20%\s+28%$/);
+    }
+    if(id==="UC-362") expect(await images.last().evaluate(image=>getComputedStyle(image).objectPosition)).toMatch(/^50%\s+28%$/);
+  }
 });
 
 test("UC-035 comparison portrait is not a low-resolution sliver",async({page})=>{
@@ -194,6 +295,12 @@ test("Recognition renders role evidence, voice truth, narrow pairs, and local co
 });
 
 test("coverage and constellation preserve human-searchable, unique evidence",async({page})=>{
+  await open(page,"coverage.html?franchise=Star+Trek&category=Klingons&mode=physical-any");
+  await expect(page.locator("#rows tr").first()).toBeVisible();
+  await expect(page.locator("#benchmark")).toContainText("KLINGONS SOURCE SNAPSHOT · Star Trek");
+  await expect(page.locator("#benchmark")).toContainText("192 named performer-role credits across 174 performers");
+  await expect(page.locator("#benchmark")).not.toContainText("FERENGI BENCHMARK");
+
   await open(page,"coverage.html?franchise=Star+Trek&category=Ferengi&mode=physical-any");
   await expect(page.locator("#rows tr").first()).toBeVisible();
   await page.locator("#query").fill("Max Grodenchik");

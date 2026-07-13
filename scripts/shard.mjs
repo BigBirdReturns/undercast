@@ -30,6 +30,8 @@ import { spawnSync } from "node:child_process";
 // before any archive hashes are calculated.
 const censusProjection = spawnSync(process.execPath, ["scripts/census.mjs", "--project-only"], { stdio: "inherit" });
 if (censusProjection.status !== 0) throw new Error(`census projection failed with exit ${censusProjection.status}`);
+const speciesProjection = spawnSync(process.execPath, ["scripts/build-species.mjs"], { stdio: "inherit" });
+if (speciesProjection.status !== 0) throw new Error(`species navigation projection failed with exit ${speciesProjection.status}`);
 const changelingProjection = spawnSync(process.execPath, ["scripts/build-ds9-changeling-constellation.mjs"], { stdio: "inherit" });
 if (changelingProjection.status !== 0) throw new Error(`DS9 Changeling projection failed with exit ${changelingProjection.status}`);
 // The Ferengi benchmark fingerprints the complete composite graph. Any generator-owned
@@ -50,6 +52,13 @@ const STOP = new Set(("the a an and or of to in on for with as at by from is was
 const tokens = (t) => [...new Set(String(t || "").toLowerCase().match(/[a-z0-9]{3,}/g) || [])].filter((w) => !STOP.has(w));
 
 const specimens = JSON.parse(await readFile("data/specimens.json", "utf8"));
+const speciesProjectionData = JSON.parse(await readFile("data/species.json", "utf8"));
+const speciesByRecord = new Map();
+for (const taxon of speciesProjectionData.taxa || []) for (const record of taxon.records || []) {
+  const labels = speciesByRecord.get(record.id) || [];
+  labels.push(taxon.label);
+  speciesByRecord.set(record.id, labels);
+}
 const tombstones = JSON.parse(await readFile("data/tombstones.json", "utf8").catch(() => '{"records":[]}'));
 // stable, human-legible shard order: by catalog number
 const ordered = specimens.slice().sort((a, b) => idNum(a.id) - idNum(b.id) || String(a.id).localeCompare(String(b.id)));
@@ -64,6 +73,7 @@ const index = ordered.map((s, gi) => {
     a: s.actor || "", c: s.character || "", p: s.production || "", tf: s.transform || 0,
   };
   if (s.kind === "voice") e.k = 1;
+  if (speciesByRecord.has(s.id)) e.sp = [...new Set(speciesByRecord.get(s.id))].sort();
   if (Array.isArray(s.conditions) && s.conditions.length) e.co = [...new Set(s.conditions.map((condition) => condition.type).filter(Boolean))].join(" ");
   if (kw.length) e.kw = kw.join(" ");
   return e;
