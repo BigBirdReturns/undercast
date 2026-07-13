@@ -110,7 +110,11 @@ The wall is built to be linked, not just visited:
   on socials. If you deploy somewhere other than the default Pages URL, update
   the absolute `og:*`/`canonical` URLs in `index.html`'s `<head>`.
 
-`og.png` is a static asset — regenerate it only if you restyle the masthead.
+`og.png` is generated at `build:site` by `scripts/build-og.mjs`, which renders
+an on-brand card with the **live specimen count** (real Fraunces/Space Mono via
+Google Fonts) and screenshots it at 1200×630. It is gitignored — never
+hand-edited or committed — so the social preview can never fall out of date with
+the roster. Restyle the masthead by editing the template in that script.
 
 ## The makers are undercast too
 
