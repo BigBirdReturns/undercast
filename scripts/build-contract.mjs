@@ -98,11 +98,11 @@ const searchMeta=await fileMeta("data/search/manifest.json");
 const mediaMeta=await fileMeta("data/media-live.json");
 const conditionVocabMeta=await fileMeta("data/vocabularies/conditions.json");
 const qualityMeta=await fileMeta("data/quality.json");
-const censusMeta={snapshot:await fileMeta("data/CENSUS.json"),coverage:await fileMeta("data/CENSUS-COVERAGE.json"),gaps:await fileMeta("data/CENSUS-GAPS.json"),summary:await fileMeta("data/CENSUS-SUMMARY.json"),unresolved:await fileMeta("data/CENSUS-UNRESOLVED.json")};
+const censusMeta={snapshot:await fileMeta("data/CENSUS.json"),coverage:await fileMeta("data/CENSUS-COVERAGE.json"),gaps:await fileMeta("data/CENSUS-GAPS.json"),summary:await fileMeta("data/CENSUS-SUMMARY.json"),unresolved:await fileMeta("data/CENSUS-UNRESOLVED.json"),exclusions:await fileMeta("data/CENSUS-EXCLUSIONS.json"),ferengi_test:await fileMeta("data/CENSUS-FERENGI-TEST.json")};
 const tombstoneMeta=await fileMeta("data/tombstones.json");
 const siteAssets=await Promise.all(["index.html","recognition.html","coverage.html","constellation.html","assets/site-shell.css","assets/record-page.css","assets/coverage.css","assets/constellation.css"].map(fileMeta));
 const schemas=Object.fromEntries(await Promise.all([
-  ["archive","schema/archive.schema.json"],["specimen","schema/specimen.schema.json"],["source","schema/source.schema.json"],["entities","schema/entities.schema.json"],["constellations","schema/constellations.schema.json"]
+  ["archive","schema/archive.schema.json"],["specimen","schema/specimen.schema.json"],["source","schema/source.schema.json"],["entities","schema/entities.schema.json"],["constellations","schema/constellations.schema.json"],["census_test","schema/census-test.schema.json"]
 ].map(async([key,path])=>[key,{...(await fileMeta(path)),media_type:"application/schema+json"}])));
 const archive={
   version:1,catalog_id:"undercast",schema:"schema/archive.schema.json",title:"UNDERCAST — performers behind designed faces",canonical_url:`${ORIGIN}/`,

@@ -191,6 +191,15 @@ card does not make Jeffrey Combs's Brunt performance covered. Scoped census runs
 replace only their franchise/category and preserve every other snapshot. Source
 failure aborts the run instead of manufacturing an empty category.
 
+`npm run test:ferengi` is the executable benchmark. It passes only when every
+named physical performer-role credit has an exact-key, sourced `performed` edge
+in the Ferengi constellation (or an evidence-backed exclusion), while voice
+credits and source pages without named performers have explicit dispositions.
+No fuzzy substring match can satisfy the gate. `accounting_status` proves there
+are no silent rows; `wall_coverage_complete` remains a separate boolean and does
+not turn green while filed card gaps remain. Maintained exclusions live in
+`data/CENSUS-EXCLUSIONS.json` and require both a reason and an HTTPS evidence URL.
+
 The summary separates physical prosthetic performances, animation/voice, mixed
 appearances, and source pages with no named performer. It is a sourced community-wiki snapshot,
 not a claim that uncredited background performers or every licensed tie-in have

@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Coverage census | UNDERCAST</title>
   <meta name="description" content="Auditable performer-plus-role coverage across UNDERCAST franchise and species censuses.">
@@ -12,24 +13,31 @@
   <link rel="stylesheet" href="assets/coverage.css">
 </head>
 <body>
+  <a class="skip-link" href="#coverage-main">Skip to coverage</a>
   <header class="site-shell">
     <a class="site-brand" href="index.html"><span class="site-wordmark">UNDERCAST</span><span class="site-tagline">the people behind the faces culture remembers</span></a>
     <nav class="site-nav" aria-label="Archive navigation"><a href="index.html#archive">Browse</a><a href="recognition.html">Recognition Loop</a><a class="site-primary" href="coverage.html">Coverage</a><a href="constellation.html">Constellations</a><a href="index.html#about">About</a></nav>
   </header>
-  <main class="coverage-wrap">
+  <main class="coverage-wrap" id="coverage-main">
     <p class="eyebrow">THE AUDIT TRAIL</p>
     <h1>What is here. What is missing.</h1>
     <p class="intro">Coverage is counted by performer <em>and</em> designed role. Finding an actor elsewhere on the wall does not make another face covered.</p>
+    <section id="benchmark" class="benchmark" aria-labelledby="benchmark-title" aria-live="polite">
+      <div><p class="benchmark-kicker">FERENGI BENCHMARK</p><h2 id="benchmark-title">Checking the source-scoped discovery test…</h2></div>
+      <p class="benchmark-copy">The benchmark report is loading. No completeness claim is inferred while it is unavailable.</p>
+    </section>
     <form class="filters" aria-label="Coverage filters">
       <label>Franchise<select id="franchise"></select></label>
       <label>Category<select id="category"></select></label>
       <label>Performance<select id="mode"><option value="physical-any">Any physical face</option><option value="">All modes</option><option value="physical-prosthetic">Physical prosthetic</option><option value="physical-and-voice">Physical and voice</option><option value="voice-animation">Animation / voice</option><option value="unresolved">Unresolved</option></select></label>
       <label class="search-label">Find a person or role<input id="query" type="search" autocomplete="off" placeholder="Quark, Jeffrey Combs…"></label>
     </form>
-    <section id="metrics" class="metrics" aria-live="polite"></section>
+    <section id="metrics" class="metrics" aria-live="polite"><div class="loading-metric"><b>…</b><span>Loading filed credits</span></div></section>
     <p id="scope" class="scope"></p>
-    <div class="table-wrap"><table><thead><tr><th>Performer</th><th>Designed role</th><th>Mode</th><th>Archive</th><th>Evidence</th></tr></thead><tbody id="rows"></tbody></table></div>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable performer and role coverage table"><table><thead><tr><th>Performer</th><th>Designed role</th><th>Mode</th><th>Archive</th><th>Evidence</th></tr></thead><tbody id="rows"></tbody></table></div>
     <p id="empty" class="empty" hidden>No credits match these filters.</p>
+    <p id="load-error" class="load-error" role="alert" hidden></p>
+    <noscript><p class="load-error">Coverage needs JavaScript for filtering. The maintained source remains available as <a href="data/CENSUS-COVERAGE.json">coverage JSON</a>, with its <a href="data/CENSUS-SUMMARY.json">scope summary</a> and <a href="data/CENSUS-FERENGI-TEST.json">Ferengi benchmark report</a>.</p></noscript>
   </main>
   <script>
   (() => {
@@ -37,7 +45,7 @@
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[ch]);
     const safeUrl = value => { try { const u = new URL(value, location.href); return /^(https?):$/.test(u.protocol) ? u.href : ""; } catch { return ""; } };
     const labels = {"physical-prosthetic":"physical prosthetic","physical-and-voice":"physical + voice","voice-animation":"animation / voice",unresolved:"unresolved"};
-    let coverage = [], summary = null;
+    let coverage = [], summary = null, benchmark = null;
 
     function options(select, values, preferred) {
       select.innerHTML = values.map(value => `<option value="${escapeHtml(value)}"${value === preferred ? " selected" : ""}>${escapeHtml(value)}</option>`).join("");
@@ -56,15 +64,38 @@
       $("metrics").innerHTML = `<div><b>${rows.length}</b><span>credited roles</span></div><div><b>${people.size}</b><span>performers</span></div><div><b>${covered}</b><span>on the wall</span></div><div><b>${rows.length - covered}</b><span>filed gaps</span></div>`;
       $("rows").innerHTML = rows.map(row => {
         const source = safeUrl(row.source);
-        const wall = row.wall_ids?.[0];
-        return `<tr><td><b>${escapeHtml(row.performer)}</b></td><td>${escapeHtml(row.character)}</td><td><span class="mode">${escapeHtml(labels[row.performance_mode] || row.performance_mode)}</span></td><td>${wall ? `<a href="recognition.html#${encodeURIComponent(wall)}">${escapeHtml(wall)} · open record</a>` : `<span class="gap">Not yet a card</span>`}</td><td>${source ? `<a href="${escapeHtml(source)}" rel="noopener">Filed source ↗</a>` : "Source unresolved"}</td></tr>`;
+        const wallIds = Array.isArray(row.wall_ids) ? row.wall_ids : [];
+        const disposition = benchmark?.dispositions?.find(item => item.source === row.source && item.performer === row.performer);
+        const records = wallIds.map(id => `<span class="record-links"><a href="records/${encodeURIComponent(id)}/">${escapeHtml(id)} · permanent</a><a href="recognition.html#${encodeURIComponent(id)}">compare</a></span>`).join("");
+        const archiveState = benchmark?.constellation_id && disposition?.disposition === "covered"
+          ? `<a href="constellation.html?id=${encodeURIComponent(benchmark.constellation_id)}">Filed in constellation →</a>`
+          : disposition?.disposition === "excluded-with-reason"
+            ? `<span class="gap" title="${escapeHtml(disposition.reason || "Evidence-backed exclusion")}">Outside physical benchmark · reason filed</span>`
+          : `<span class="gap">Filed gap · not yet a card</span>`;
+        return `<tr><td><b>${escapeHtml(row.performer)}</b></td><td>${escapeHtml(row.character)}</td><td><span class="mode">${escapeHtml(labels[row.performance_mode] || row.performance_mode)}</span></td><td>${records || archiveState}</td><td>${source ? `<a href="${escapeHtml(source)}" rel="noopener">Filed source ↗</a>` : "Source unresolved"}</td></tr>`;
       }).join("");
       $("empty").hidden = rows.length > 0;
       const group = summary?.groups?.find(item => item.franchise === $("franchise").value && item.category === $("category").value);
       $("scope").textContent = `${summary?.scope_note || ""}${group?.unresolved_characters ? ` ${group.unresolved_characters} additional source pages have no credited performer field and remain explicitly unresolved.` : ""}`;
       const params = new URLSearchParams({franchise: $("franchise").value, category: $("category").value});
       if ($("mode").value) params.set("mode", $("mode").value);
+      if ($("query").value.trim()) params.set("q", $("query").value.trim());
       history.replaceState(null, "", `?${params}`);
+    }
+    function renderBenchmark() {
+      if (!benchmark) return;
+      const pass = benchmark.status === "PASS";
+      const physical = (benchmark.dispositions || []).filter(row => row.performer && ["physical-prosthetic","physical-and-voice"].includes(row.performance_mode));
+      const polished = physical.filter(row => Array.isArray(row.wall_ids) && row.wall_ids.length).length;
+      const anchored = physical.filter(row => row.disposition === "covered").length;
+      const excluded = physical.filter(row => row.disposition === "excluded-with-reason").length;
+      const title = pass ? "Discovery passes. Card coverage is still growing." : "Discovery does not pass yet.";
+      const detail = pass
+        ? `${anchored} of ${physical.length} named physical performer-role identities have exact sourced anchors${excluded ? `; ${excluded} is excluded with a filed reason` : ""}; ${polished} currently have polished wall records.`
+        : `${benchmark.physical_blockers ?? "Uncounted"} physical performer-role identities still lack the evidence required by this test.`;
+      const scope = benchmark.scope ? `${benchmark.scope.franchise} · ${benchmark.scope.category}` : "Filed Ferengi census";
+      $("benchmark").dataset.status = pass ? "pass" : "fail";
+      $("benchmark").innerHTML = `<div><p class="benchmark-kicker">FERENGI BENCHMARK · ${escapeHtml(scope)}</p><h2 id="benchmark-title"><span class="benchmark-status">${pass ? "PASS" : "FAIL"}</span> ${escapeHtml(title)}</h2></div><div class="benchmark-copy"><p>${escapeHtml(detail)}</p><p>This proves the maintained community-wiki snapshot is accounted for—not every uncredited extra or every licensed work ever made.</p>${benchmark.constellation_id ? `<a href="constellation.html?id=${encodeURIComponent(benchmark.constellation_id)}">Open the filed Ferengi constellation →</a>` : ""}</div>`;
     }
     function categories() {
       const values = [...new Set(coverage.filter(row => row.franchise === $("franchise").value).map(row => row.category))].sort((a,b) => a.localeCompare(b));
@@ -72,17 +103,34 @@
       options($("category"), values, values.includes(requested) ? requested : values[0]);
       render();
     }
-    Promise.all([fetch("data/CENSUS-COVERAGE.json").then(r => { if (!r.ok) throw Error(r.status); return r.json(); }), fetch("data/CENSUS-SUMMARY.json").then(r => { if (!r.ok) throw Error(r.status); return r.json(); })])
-      .then(([credits, censusSummary]) => {
-        coverage = credits; summary = censusSummary;
+    const readJson = path => fetch(path, {cache:"no-cache"}).then(r => { if (!r.ok) throw Error(`${path} ${r.status}`); return r.json(); });
+    Promise.all([readJson("data/CENSUS-COVERAGE.json"), readJson("data/CENSUS-SUMMARY.json"), readJson("data/CENSUS-FERENGI-TEST.json").catch(() => null)])
+      .then(([credits, censusSummary, benchmarkReport]) => {
+        coverage = credits; summary = censusSummary; benchmark = benchmarkReport;
         const params = new URLSearchParams(location.search);
         const franchises = [...new Set(coverage.map(row => row.franchise))].sort((a,b) => a.localeCompare(b));
         const requestedFranchise = params.get("franchise") || "Star Trek";
         options($("franchise"), franchises, franchises.includes(requestedFranchise) ? requestedFranchise : franchises[0]);
         $("mode").value = params.get("mode") || "physical-any";
+        $("query").value = params.get("q") || "";
+        if (benchmark) renderBenchmark();
+        else {
+          $("benchmark").dataset.status = "unknown";
+          $("benchmark").querySelector("h2").textContent = "Benchmark report unavailable.";
+          $("benchmark").querySelector(".benchmark-copy").textContent = "Coverage remains browsable, but no discovery pass has been inferred.";
+        }
         categories();
-      }).catch(error => { $("scope").textContent = `Coverage data could not be loaded (${error.message}). No zero has been inferred.`; });
+      }).catch(error => {
+        $("metrics").innerHTML = "";
+        $("benchmark").dataset.status = "unknown";
+        $("benchmark").querySelector("h2").textContent = "Benchmark unavailable.";
+        $("benchmark").querySelector(".benchmark-copy").textContent = "No pass or zero has been inferred.";
+        $("load-error").hidden = false;
+        $("load-error").innerHTML = `Coverage data could not be loaded (${escapeHtml(error.message)}). <button type="button" id="retry">Retry</button>`;
+        $("retry").addEventListener("click", () => location.reload());
+      });
     $("franchise").addEventListener("change", categories);
+    document.querySelector(".filters").addEventListener("submit", event => event.preventDefault());
     $("category").addEventListener("change", render);
     $("mode").addEventListener("change", render);
     $("query").addEventListener("input", render);

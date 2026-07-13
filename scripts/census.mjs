@@ -25,12 +25,10 @@
  * gates (Wikipedia verification in grow.mjs --drafts, then vision image audit).
  */
 import { readFile, writeFile } from "node:fs/promises";
+import { normalizeCensusKey as normalize } from "./census-key.mjs";
 
 const UA = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT || "census"})`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const normalize = (value) => String(value || "").normalize("NFKD").replace(/\p{M}+/gu, "").toLowerCase()
-  .replace(/\s*\((?:ferengi|mirror|character|actor|actress|performer|puppeteer)\)\s*$/i, "")
-  .replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
 // Actor-ish infobox fields, in rough order of trust. Different wikis use
 // different keys; all of these mean "the human behind the character".
@@ -239,10 +237,9 @@ for (const row of rows) for (const performer of row.performers) {
   const performerRecords = specimens.filter((record) => [record.actor, ...(record.aliases || [])]
     .some((name) => normalize(name) === normalize(performer)));
   const roleRecords = performerRecords.filter((record) => {
-    const cardRole = normalize(record.character);
     const censusRole = normalize(row.character);
-    return !censusRole || censusRole === "—" || cardRole === censusRole
-      || cardRole.includes(censusRole) || censusRole.includes(cardRole);
+    const filedRoles = [record.character, ...(record.performances || []).map((item) => item.character)].map(normalize);
+    return !censusRole || censusRole === "—" || filedRoles.includes(censusRole);
   });
   coverage.push({ franchise: row.franchise, category: row.category, character: row.character,
     performer, performance_mode: row.performance_mode || "unresolved", source: row.source || null,
@@ -307,3 +304,13 @@ console.log(`\ncensus: ${rows.length} character rows, ${censusPerformers} distin
 console.log(`coverage: ${coverage.length - missingRoles}/${coverage.length} performer-role credits on wall`);
 console.log(`gaps: ${missingRoles} roles across ${gaps.length} performers -> data/CENSUS-GAPS.json`);
 console.log("top 20:", gaps.slice(0, 20).map((g) => `${g.performer}(${g.missing_roles})`).join(", "));
+
+// A successful crawl is not enough: prove that every discovered Ferengi row
+// survived into an explicit disposition before publishing the refreshed report.
+if (targetedLabels.has("Star Trek") && (!onlyCategory || normalize(onlyCategory) === "ferengi")) {
+  const { spawnSync } = await import("node:child_process");
+  const projection = spawnSync(process.execPath, ["scripts/build-ferengi-constellation.mjs"], { stdio: "inherit" });
+  if (projection.status !== 0) throw new Error(`Ferengi constellation build failed with exit ${projection.status}`);
+  const gate = spawnSync(process.execPath, ["scripts/census-gate.mjs", "--write", "--accounting-only"], { stdio: "inherit" });
+  if (gate.status !== 0) throw new Error(`Ferengi accounting gate failed with exit ${gate.status}`);
+}
