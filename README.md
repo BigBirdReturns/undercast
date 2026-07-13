@@ -80,6 +80,7 @@ See which wikis the roster will pull from, without touching the network:
 node scripts/retrieve.mjs --audit    # still-wiki coverage, grouped by host
 npm run audit:corpus                 # person labels, free-image provenance, filed roles
 npm run test:site-seams              # navigation, recovery, cache and accessibility seams
+npm run test:rendered                # Chromium interactions, failure injection, responsive geometry, all routes
 ```
 
 Deploy: Settings -> Pages -> Source: **GitHub Actions**. The `pages.yml` workflow

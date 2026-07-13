@@ -203,7 +203,7 @@ button{font:inherit;color:inherit}
   .uc-memory{grid-template-columns:1fr}.uc-memory-visual{border-right:0;border-bottom:1px solid var(--ink);min-height:360px}.uc-memory-copy{padding:30px 4px 28px}
 }
 @media(max-width:420px){
-  .uc-wordmark{font-size:13px}.uc-record-controls{width:100%;justify-content:space-between}.uc-record-meta{font-size:9.5px}
+  .uc-wordmark{font-size:13px}.uc-record-controls{width:100%;justify-content:space-between}.uc-record-meta{font-size:9.5px}.uc-pair{grid-template-columns:1fr;gap:24px}
   .uc-plate-head{font-size:8.5px}.uc-image-well{border-width:1px}.uc-caption-main{font-size:14px}.uc-caption-prov{font-size:7.5px}.uc-absence{padding:3%}
 }
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
@@ -229,7 +229,8 @@ button{font:inherit;color:inherit}
         <button class="uc-theme" type="button" id="theme" aria-pressed="false">☾ Dark</button>
       </nav>
     </header>
-    <main id="record-view" tabindex="-1" aria-live="polite">
+    <div class="uc-sr-only" id="record-status" role="status" aria-live="polite" aria-atomic="true"></div>
+    <main id="record-view" tabindex="-1">
       <section class="uc-loading" aria-label="Loading recognition record">
         <div class="uc-loading-mark" aria-hidden="true"></div>
         <div class="uc-kicker">Recognition loop</div>
@@ -257,6 +258,7 @@ const page=document.getElementById("page");
 const view=document.getElementById("record-view");
 const themeButton=document.getElementById("theme");
 const themeColor=document.getElementById("theme-color");
+const recordStatus=document.getElementById("record-status");
 const RELEASE_URL=/^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\/[^/]+\/[^/?#]+$/;
 const ID_RE=/^UC-G?\d+$/;
 
@@ -431,6 +433,18 @@ function imagePlate(record,side,number){
     </div>${note}
   </article>`;
 }
+function performanceRows(record){
+  if(!Array.isArray(record.performances)||!record.performances.length) return "";
+  return record.performances.map((performance)=>{
+    const context=[performance.production,performance.years].filter(Boolean).map(esc).join(" · ");
+    const mode=performance.performance_mode?esc(performance.performance_mode.replace(/-/g," ")):"Filed performance";
+    const references=Array.isArray(performance.references)?performance.references.map((item)=>{
+      const source=safeUrl(item.source);
+      return source!=="#"?`<a href="${esc(source)}" target="_blank" rel="noopener">${esc(item.label||"Open evidence")}</a>`:esc(item.label||"");
+    }).filter(Boolean).join(" · "):"";
+    return `<div class="uc-spec-row"><div class="uc-spec-k">Filed performance</div><div class="uc-spec-v"><b>${esc(performance.character)}</b>${context?`<br>${context}`:""}<br>${mode}${references?` · ${references}`:""}</div></div>`;
+  }).join("");
+}
 function comparisonStage(record){
   return `<section class="uc-wipe" id="comparison-stage" aria-label="Interactive image comparison" hidden>
     <div class="uc-wipe-head"><span>The character <b>01</b></span><span>The person <b>02</b></span></div>
@@ -482,16 +496,24 @@ function renderRecord(record,entry,position){
   const methodRow=method?`<div class="uc-spec-row"><div class="uc-spec-k">Method signal</div><div class="uc-spec-v">${esc(method.label)} · inferred from the filed record copy</div></div>`:"";
   const conditionRows=Array.isArray(record.conditions)?record.conditions.map((condition)=>`<div class="uc-spec-row"><div class="uc-spec-k">Condition</div><div class="uc-spec-v"><b>${esc(CONDITION_LABELS[condition.type]||condition.type)}</b>${condition.episode?` · ${esc(condition.episode)}`:""}<br>${esc(condition.note)} · <a href="${esc(safeUrl(condition.source))}" target="_blank" rel="noopener">source</a></div></div>`).join(""):"";
   const referenceRows=Array.isArray(record.references)?record.references.map((item)=>`<div class="uc-spec-row"><div class="uc-spec-k">Evidence · ${esc(item.claim.replace(/-/g," "))}</div><div class="uc-spec-v"><a href="${esc(safeUrl(item.source))}" target="_blank" rel="noopener">${esc(item.label)}</a>${item.publisher?`<br>${esc(item.publisher)}`:""}</div></div>`).join(""):"";
+  const filedPerformances=performanceRows(record);
   const memoryVisual=record.still&&record.still.src?imageNode(record.still,record.character,"uc-memory-image"):absenceGraphic(record.character+" still is not on file");
   const compare=record.kind==="voice"
     ? `<span class="uc-compare-note">No visual comparison: this record restores an unseen voice, not a mask or cast.</span>`
     : both
     ? `<button class="uc-compare-action" id="compare" type="button" aria-pressed="false"><span aria-hidden="true">⇆</span> Compare in one frame</button><span class="uc-compare-note" id="compare-note">Layer the evidence, then drag the seam between character and person.</span>`
     : `<span class="uc-compare-note">Comparison waits until both images are honestly on file.</span>`;
+  const memoryLine=record.kind==="voice"
+    ? `The next time ${esc(record.character)} speaks, keep ${esc(record.actor)} attached to the voice. The character is the remembered result; the heard performance and the person who made it are what this record restores.`
+    : `The next time this face moves into view, keep ${esc(record.actor)} and the filed work attached to the image. The character is the remembered result; the person and the work are what this record restores.`;
+  const memoryCreditLabel=record.kind==="voice"?"Filed production credit":"Design & build";
+  const footerLead=record.kind==="voice"
+    ? "Character, voice performer, and credited work remain attached throughout the record."
+    : "Character, performer, and credited work remain attached throughout the record. A missing image is shown as missing evidence, never replaced with a fabricated person.";
 
   view.innerHTML=`
     <div class="uc-record">
-      <div class="uc-record-meta"><span style="color:var(--label)">Record</span><span style="color:var(--acc);font-weight:700">${esc(record.id)} · ${esc(record.universe)}</span><span class="uc-dot" aria-hidden="true"></span><span style="color:var(--serif)">${esc(statusFor(record))}</span></div>
+      <div class="uc-record-meta"><span style="color:var(--label)">Record</span><span style="color:var(--acc);font-weight:700">${esc(record.id)} · ${esc(record.universe)}</span><span class="uc-dot" aria-hidden="true"></span><span id="record-evidence-status" style="color:var(--serif)">${esc(statusFor(record))}</span></div>
       <div class="uc-record-controls" aria-label="Record navigation"><button class="uc-btn" id="prev" type="button" aria-label="Previous record">‹ prev</button><span style="color:var(--label)">${count}</span><button class="uc-btn" id="next" type="button" aria-label="Next record">next ›</button><button class="uc-btn" id="random" type="button" style="color:var(--acc)">random</button></div>
     </div>
     <section class="uc-association" aria-labelledby="association-label"><div class="uc-kicker" id="association-label">The association</div><div class="uc-association-line">${esc(associationFor(record))}</div></section>
@@ -511,7 +533,7 @@ function renderRecord(record,entry,position){
           <div class="uc-spec-row"><div class="uc-spec-k">Years</div><div class="uc-spec-v">${esc(record.years)}</div></div>
           <div class="uc-spec-row"><div class="uc-spec-k">Shelf</div><div class="uc-spec-v">${esc(record.universe)}</div></div>
           <div class="uc-spec-row"><div class="uc-spec-k">Transformation</div><div class="uc-spec-v">${esc(record.transform)} / 5 — ${esc(transformLabel(record.transform))}</div></div>
-          <div class="uc-spec-row"><div class="uc-spec-k">Design & build</div><div class="uc-spec-v">${esc(creditLedger)}</div></div>${methodRow}${conditionRows}${referenceRows}
+          <div class="uc-spec-row"><div class="uc-spec-k">Design & build</div><div class="uc-spec-v">${esc(creditLedger)}</div></div>${methodRow}${filedPerformances}${conditionRows}${referenceRows}
         </div></section>
         <section class="uc-section"><div class="uc-section-head"><span class="uc-section-no">05</span><span class="uc-section-title">The reveal</span></div><p class="uc-body">${esc(record.reveal)}</p>${reference!=="#"?`<a class="uc-source-action" href="${esc(reference)}" target="_blank" rel="noopener">Open performer profile →</a>`:""}<br><a class="uc-source-action" href="./records/${esc(record.id)}/">Permanent no-JavaScript record →</a>${constellationLink}</section>
         <section class="uc-section"><div class="uc-section-head"><span class="uc-section-no">06</span><span class="uc-section-title">You already knew them</span></div><p class="uc-known">${esc(record.knownFor)}</p></section>
@@ -519,10 +541,10 @@ function renderRecord(record,entry,position){
     </div>
     <section class="uc-memory">
       <div class="uc-memory-visual${record.still&&record.still.src?"":" is-absence"}">${memoryVisual}</div>
-      <div class="uc-memory-copy"><div class="uc-section-head"><span class="uc-section-no">07</span><span class="uc-section-title">Look again</span></div><h2 class="uc-memory-title">${esc(record.character)}</h2><p class="uc-memory-line">The next time this face moves into view, keep ${esc(record.actor)} and the filed work attached to the image. The character is the remembered result; the person and the work are what this record restores.</p><div class="uc-memory-ledger"><div><span>Performed by</span><b>${esc(record.actor)}</b></div><div><span>Design & build</span><b>${esc(creditLedger)}</b></div></div></div>
+      <div class="uc-memory-copy"><div class="uc-section-head"><span class="uc-section-no">07</span><span class="uc-section-title">Look again</span></div><h2 class="uc-memory-title">${esc(record.character)}</h2><p class="uc-memory-line">${memoryLine}</p><div class="uc-memory-ledger"><div><span>${record.kind==="voice"?"Voiced by":"Performed by"}</span><b>${esc(record.actor)}</b></div><div><span>${memoryCreditLabel}</span><b>${esc(creditLedger)}</b></div></div></div>
     </section>
     <section class="uc-paths" id="connections"><div class="uc-paths-head"><div class="uc-paths-title">Recognition paths</div><div class="uc-paths-note">the connection is named before the visitor follows it</div></div><div id="rails"><div class="uc-rails-loading">Finding defensible links in the live roster…</div></div></section>
-    <footer class="uc-footer"><div style="max-width:42ch">Character, performer, and credited work remain attached throughout the record. A missing image is shown as missing evidence, never replaced with a fabricated person.</div><div style="max-width:44ch">The complete index remains searchable and exhaustive; this view exists to make one association stay in memory.</div></footer>`;
+    <footer class="uc-footer"><div style="max-width:42ch">${footerLead}</div><div style="max-width:44ch">The complete index remains searchable and exhaustive; this view exists to make one association stay in memory.</div></footer>`;
 
   wireRecordControls(position,record.id,both);
   wireImageFailures();
@@ -574,8 +596,23 @@ function wireImageFailures(){
       const node=image.closest(".uc-image-node");
       if(!node||node.dataset.failed) return;
       const affectsPair=Boolean(image.closest("#pair, #comparison-stage"));
+      const plate=image.closest("[data-plate]");
+      const side=plate?.dataset.plate||(image.closest(".uc-wipe-layer.is-character")?"still":image.closest(".uc-wipe-layer.is-person")?"portrait":"");
       node.dataset.failed="1";
       node.outerHTML=absenceGraphic((image.alt||"Image")+" could not be loaded");
+      if(side){
+        const pairPlate=document.querySelector(`#pair [data-plate="${side}"]`);
+        const pairImage=pairPlate?.querySelector(".uc-image-node.has-photo");
+        if(pairImage) pairImage.outerHTML=absenceGraphic((image.alt||"Image")+" could not be loaded");
+        const caption=pairPlate?.querySelector(".uc-caption-main");
+        if(caption){ caption.textContent="Image could not be loaded."; caption.classList.add("is-missing"); }
+        if(pairPlate&&!pairPlate.querySelector(".uc-note")) pairPlate.insertAdjacentHTML("beforeend",`<div class="uc-note">The filed image could not be retrieved. Its provenance remains visible so the failure is not mistaken for missing evidence.</div>`);
+        const pair=document.getElementById("pair");
+        const hasStill=Boolean(pair?.querySelector('[data-plate="still"] .uc-image-node.has-photo'));
+        const hasPortrait=Boolean(pair?.querySelector('[data-plate="portrait"] .uc-image-node.has-photo'));
+        const evidence=document.getElementById("record-evidence-status");
+        if(evidence) evidence.textContent=hasStill&&hasPortrait?"Character and person images on file":hasStill?"Performer portrait unavailable":hasPortrait?"Character still unavailable":"Filed images unavailable";
+      }
       const compare=document.getElementById("compare");
       if(compare&&affectsPair){
         compare.disabled=true;
@@ -653,6 +690,11 @@ function renderRails(plan){
   }).join("");
   wireImageFailures();
 }
+function renderRailsUnavailable(){
+  const rails=document.getElementById("rails");
+  if(!rails) return;
+  rails.innerHTML=`<div class="uc-empty-path" role="status"><span>Connections could not be loaded. The record above remains available.</span><a href="./index.html">Browse the complete wall</a></div>`;
+}
 
 async function showRecord(id){
   const requested=resolveId(id);
@@ -668,12 +710,18 @@ async function showRecord(id){
     if(!record) throw new Error("Record not found in its catalog shard");
     renderRecord(record,entry,position);
     document.title=`${record.character} — UNDERCAST Recognition Loop`;
-    const plan=buildConnectionPlan(entry,position);
-    const candidates=[...new Map(plan.flatMap((rail)=>rail.entries).map((candidate)=>[candidate.id,candidate])).values()];
-    await ensureRecords(candidates);
-    if(sequence!==renderSequence) return;
-    renderRails(plan);
+    try{
+      const plan=buildConnectionPlan(entry,position);
+      const candidates=[...new Map(plan.flatMap((rail)=>rail.entries).map((candidate)=>[candidate.id,candidate])).values()];
+      await ensureRecords(candidates);
+      if(sequence!==renderSequence) return;
+      renderRails(plan);
+    }catch(_){
+      if(sequence!==renderSequence) return;
+      renderRailsUnavailable();
+    }
     page.setAttribute("aria-busy","false");
+    recordStatus.textContent=record.kind==="voice"?`Opened ${record.character}, voiced by ${record.actor}.`:`Opened ${record.character}, performed by ${record.actor}.`;
     if(!firstRecord){
       window.scrollTo({top:0,behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth"});
       document.getElementById("record-title")?.focus({preventScroll:true});
@@ -687,14 +735,17 @@ function renderError(id){
   page.setAttribute("aria-busy","false");
   view.innerHTML=`<section class="uc-error"><div class="uc-kicker">Record not found</div><h1>${esc(id||"Unknown record")}</h1><p>That catalog number is not present in the live UNDERCAST index. Growth IDs are supported; the record itself still has to exist.</p><a href="./index.html">Browse the wall</a></section>`;
   document.title="Record not found — UNDERCAST";
+  recordStatus.textContent=`Record ${id||"unknown"} was not found.`;
 }
 function renderLoadError(id,error){
   page.setAttribute("aria-busy","false");
   view.innerHTML=`<section class="uc-error"><div class="uc-kicker">Archive unavailable</div><h1>${esc(id||"Record")}</h1><p>The roster could not be read from its projection or canonical fallback. Serve this page over HTTP and keep the data directory beside it.</p><button class="uc-btn" id="retry" type="button" style="margin-top:24px">Retry record</button><span class="uc-sr-only">${esc(error&&error.message)}</span></section>`;
   document.getElementById("retry").addEventListener("click",restart);
+  recordStatus.textContent=`Record ${id||"unknown"} could not be loaded.`;
 }
 function renderLoading(){
   page.setAttribute("aria-busy","true");
+  recordStatus.textContent="Loading recognition record.";
   view.innerHTML=`<section class="uc-loading" aria-label="Loading recognition record"><div class="uc-loading-mark" aria-hidden="true"></div><div class="uc-kicker">Recognition loop</div><p>Opening the catalog record and its live connections…</p></section>`;
 }
 function restart(){

@@ -41,9 +41,14 @@
     const params = new URLSearchParams(location.search);
     let graph;
 
-    function nodeLink(node, inner) {
+    function nodeLink(node, inner, {edgeId = "", legacySelected = false} = {}) {
       const query = new URLSearchParams({id: $("constellation").value, node: node.id});
-      return `<a class="node" id="node-${esc(node.id.replace(/[^a-z0-9]+/gi,"-"))}" data-node="${esc(node.id)}" href="?${query}"${params.get("node") === node.id ? ' data-selected="true"' : ""}>${inner}</a>`;
+      if (edgeId) query.set("edge", edgeId);
+      const selected = edgeId
+        ? params.get("edge") === edgeId || legacySelected
+        : !params.get("edge") && params.get("node") === node.id;
+      const selectionId = edgeId || node.id;
+      return `<a class="node" id="node-${esc(selectionId.replace(/[^a-z0-9]+/gi,"-"))}" data-node="${esc(node.id)}"${edgeId ? ` data-edge="${esc(edgeId)}"` : ""} href="?${query}"${selected ? ' data-selected="true" aria-current="location"' : ""}>${inner}</a>`;
     }
     function followToFranchise(nodeId, edges, seen = new Set()) {
       if (seen.has(nodeId)) return null; seen.add(nodeId);
@@ -64,10 +69,10 @@
       }
       return labels;
     }
-    function roleCard(edge, nodes, edges) {
+    function roleCard(edge, nodes, edges, legacySelectedEdge) {
       const role = nodes.get(edge.to); const path = workPath(role.id, edges); const evidence = safeUrl(edge.evidence?.[0]?.source);
       const foot = `<span class="node-foot"><span class="scope ${esc(edge.scope)}">${edge.scope === "specimen" ? "On the wall" : "Context only"}</span>${evidence ? `<span>source filed</span>` : ""}</span>`;
-      const selection = nodeLink(role, `<span class="node-type">${esc(path.at(-1) || "Connected role")}</span><div><h3>${esc(role.label)}</h3><p>${esc(path.slice(0,-1).join(" · ") || role.description)}</p></div>${foot}`);
+      const selection = nodeLink(role, `<span class="node-type">${esc(path.at(-1) || "Connected role")}</span><div><h3>${esc(role.label)}</h3><p>${esc(path.slice(0,-1).join(" · ") || role.description)}</p></div>${foot}`, {edgeId: edge.id, legacySelected: edge.id === legacySelectedEdge});
       const record = edge.record_id ? `<a class="record-open" href="recognition.html#${encodeURIComponent(edge.record_id)}">${esc(edge.record_id)} · open record <span aria-hidden="true">→</span></a>` : "";
       return `<div class="node-shell">${selection}${record}</div>`;
     }
@@ -78,6 +83,9 @@
       const edges = graph.edges.filter(edge => edgeSet.has(edge.id));
       const people = [...nodes.values()].filter(node => node.kind === "person");
       const performed = edges.filter(edge => edge.predicate === "performed");
+      const legacyNode = !params.get("edge") && params.get("node");
+      const legacyMatches = legacyNode ? performed.filter(edge => edge.to === legacyNode) : [];
+      const legacySelectedEdge = (legacyMatches.find(edge => edge.record_id) || legacyMatches[0])?.id || "";
       $("kicker").textContent = view.kicker; $("title").textContent = view.title; $("summary").textContent = view.summary;
       const specimenCount = performed.filter(edge => edge.scope === "specimen").length;
       const evidenceCount = edges.reduce((total,edge) => total + edge.evidence.length, 0);
@@ -87,14 +95,14 @@
         const trek = roles.filter(edge => followToFranchise(edge.to, edges)?.id === "franchise:star-trek");
         const elsewhere = roles.filter(edge => !trek.includes(edge));
         const personInner = `<span class="person-no">${String(index+1).padStart(2,"0")}</span><div><span class="node-type">Performer anchor</span><h2>${esc(person.label)}</h2><p>${esc(person.description)}</p></div><span class="node-foot">${person.record_ids?.length ? `${person.record_ids.length} wall record${person.record_ids.length === 1 ? "" : "s"}` : "context anchor"}</span>`;
-        return `<article class="person-row"><div class="role-stack">${trek.map(edge => roleCard(edge,nodes,edges)).join("")}</div>${nodeLink(person,personInner).replace('class="node"','class="node person-node"')}<div class="role-stack">${elsewhere.map(edge => roleCard(edge,nodes,edges)).join("")}</div></article>`;
+        return `<article class="person-row"><div class="role-stack">${trek.map(edge => roleCard(edge,nodes,edges,legacySelectedEdge)).join("")}</div>${nodeLink(person,personInner).replace('class="node"','class="node person-node"')}<div class="role-stack">${elsewhere.map(edge => roleCard(edge,nodes,edges,legacySelectedEdge)).join("")}</div></article>`;
       }).join("");
       $("scope-note").textContent = graph.semantics;
       $("edges").innerHTML = edges.map(edge => {
         const from = nodes.get(edge.from), to = nodes.get(edge.to), evidence = edge.evidence[0], href = safeUrl(evidence.source);
         return `<article class="edge"><b>${esc(from?.label || edge.from)}</b><span class="predicate">${esc(edge.predicate.replaceAll("_"," "))}</span><b>${esc(to?.label || edge.to)}</b><span class="note">${esc(edge.note)} ${href ? `<a href="${esc(href)}" rel="noopener">${esc(evidence.publisher)} ↗</a>` : ""}</span></article>`;
       }).join("");
-      const next = new URLSearchParams({id:view.id}); const selected = params.get("node"); if (selected) next.set("node",selected); history.replaceState(null,"",`?${next}`);
+      const next = new URLSearchParams({id:view.id}); const selected = params.get("node"); if (selected) next.set("node",selected); const selectedEdge = params.get("edge"); if (selectedEdge) next.set("edge",selectedEdge); history.replaceState(null,"",`?${next}`);
       requestAnimationFrame(() => document.querySelector('[data-selected="true"]')?.scrollIntoView({block:"center",behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth"}));
     }
     fetch("data/archive.json", {cache:"no-store"}).then(response => { if (!response.ok) throw Error(`archive ${response.status}`); return response.json(); }).then(snapshot => {
@@ -104,7 +112,7 @@
     }).then(response => { if (!response.ok) throw Error(response.status); return response.json(); }).then(data => {
       graph = data; const requested = params.get("id");
       $("constellation").innerHTML = graph.constellations.map(item => `<option value="${esc(item.id)}"${item.id === requested ? " selected" : ""}>${esc(item.title)}</option>`).join("");
-      $("constellation").addEventListener("change", () => { params.delete("node"); render(); }); render();
+      $("constellation").addEventListener("change", () => { params.delete("node"); params.delete("edge"); render(); }); render();
     }).catch(error => {
       $("summary").textContent = "Constellation data could not be loaded. No connection has been inferred.";
       $("empty").hidden = false;
