@@ -1,154 +1,167 @@
 # UNDERCAST — Decision Log
 
 Append-only. Every architectural or design decision about the **experience** lives
-here as a numbered entry. Never edit a decision to change its meaning; to change a
-decision, add a new entry that **Supersedes** it and mark the old one **Superseded**.
+here as a numbered entry. Never edit a decision to change its meaning; to change
+one, add a new entry that **Supersedes** it and mark the old one **Superseded**.
 
 UI/UX pull requests must cite the decision number(s) they serve or change
-(see `docs/UI-REVIEW-CHECKLIST.md`). If a change contradicts an **Active** decision
-and does not supersede it, it is out of bounds.
+(`docs/UI-REVIEW-CHECKLIST.md`). A change that contradicts an **Active** decision
+without superseding it is out of bounds.
 
-**Status values and their meaning — read this:**
+**Status values:**
 
-- **Active** — ratified by the owner and true of the repository now. Binding.
-- **Accepted; implementation pending (#NN)** — the owner has accepted the
-  *direction*, but the repo does not yet match it; the named PR implements it. Do
-  not cite these as describing current repo state.
-- **Proposed** — drafted, awaiting the owner's ruling. Not binding.
+- **Active** — ratified and **true of the repository now.** Binding.
+- **Accepted; implementation pending (#NN)** — ratified *direction*; the repo does
+  **not yet match it**; the named PR/work implements it. Do not cite as current state.
+- **Proposed** — drafted, awaiting a ruling. Not binding.
 
-A decision must never describe repository state falsely. "Accepted" is a
-destination; "Active" is a fact.
+A decision must never describe repository state falsely.
 
----
-
-## DEC-0001 — The card flip is the signature character→performer reveal
-**Status:** Active · 2026-07-13
-
-The signature interaction for showing **the character and then the person** is the
-**trading-card flip**: the remembered character on the front, the performer
-underneath on the back. It is a *temporal* reveal — **one unsplit frame at a time**
-(the cards use `object-fit: cover` and do crop; "unsplit" means the two faces are
-never composited into a single frame) — so it works for every pair with no
-per-image alignment.
-
-**Because:** it is the founding metaphor ("Every card flips…" — README) and scales
-to the whole roster without curation, which spatial comparisons cannot.
-
-> **STOP.** Do not introduce a *second* mechanic for the **character→performer
-> reveal** (seam, before/after slider, dissolve, wipe, morph, hover-swap) without a
-> decision that explicitly **supersedes DEC-0001**. This governs the
-> character↔performer reveal only — it does **not** restrict unrelated interactions
-> elsewhere (carousels, the constellation graph, maps, filters).
+**Provenance:** entries below were **ratified through delegated product/design
+review, 2026-07-13**, per the owner's decision slate on PR #44. Synthesized wording
+is *not* an owner quotation; nothing here is presented as a verbatim owner statement.
 
 ---
 
-## DEC-0002 — Retire the comparison seam
+## DEC-0001 — The flip is the signature character→performer reveal
+**Status:** Active · Ratified through delegated product/design review, 2026-07-13
+
+The flip is UNDERCAST's signature **character-to-performer** reveal. It presents
+**one unsplit frame at a time** (the cards crop with `object-fit: cover`; "unsplit"
+means the two faces are never composited into a single frame). This rule governs
+that reveal; it does **not** prohibit maps, graphs, carousels, or other interaction
+patterns elsewhere.
+
+> **STOP.** No *second* mechanic for the **character→performer** reveal (seam,
+> before/after slider, dissolve, wipe, morph) without a decision that supersedes
+> DEC-0001.
+
+---
+
+## DEC-0002 — Retire the seam comparison mechanic
 **Status:** Accepted; implementation pending (#42) · 2026-07-13
 
-The draggable "Compare in one frame" overlay — which composited two half-faces into
-one frame — is to be retired. It produced a chimera that only reads as a morph for a
-registered pair (scale, angle, eye-line); one pair (Morn) was ever curated for it.
-The record's reveal is its **side-by-side plates**; the character↔performer reveal
-is the flip (DEC-0001).
+Retire the "Compare in one frame" seam (it composited two half-faces into one
+frame). Change to **Active only when the shipped site and validation contract no
+longer contain it.**
 
-**Repo state:** `main` still ships the seam and still *requires* it in
-`validate.mjs` and the rendered tests. PR #42 removes it. Until #42 merges, this is
-the intended destination, not the current state.
+**Repo state:** `main` still ships the seam and requires it in `validate.mjs` and
+the rendered tests. PR #42 removes it.
 
 ---
 
-## DEC-0003 — Retain `focus`; remove `comparison`
+## DEC-0003 — Recognition keeps the focused record; loses the seam
 **Status:** Accepted; implementation pending (#42) · 2026-07-13
 
-The image `focus` field (`{x,y}` upper-center crop framing) is **retained** — it is
-the crop system the wall cards, record plates, and permanent record pages all use.
-The image `comparison` field (`{x,y,scale}` seam alignment) is to be **removed** in
-full: schema, data, validator invariant, docs, tests. Owner-confirmed contract
-boundary.
+Recognition keeps the focused record and loses the comparison seam; `focus` is
+retained, `comparison` removed (schema/data/validator/docs/tests). Change to
+**Active only after implementation lands.**
 
 **Repo state:** `main` still defines and validates `comparison`. PR #42 removes it.
 
 ---
 
-## DEC-0004 — Search is fan intent, not administration
-**Status:** Proposed · 2026-07-13
+## DEC-0004 — Search is primary discovery
+**Status:** Active (principle level) · Ratified through delegated product/design review, 2026-07-13
 
-Direction: the wall's search is a **fan-facing question** ("who are you trying to
-place?"), a visible field, not an advanced-query/administration console. Advanced
-facets (shelf/decade/species/maker) exist but are subordinate.
-
-**Not yet ratified:** neither the search's prominence nor the exact copy
-"Who are you trying to place?" has an owner ruling. Awaiting decision.
+Search is a **primary discovery tool, not footer utility.** The homepage must
+expose it in the **initial discovery area** and use **fan vocabulary** (character,
+performer, production). Exact wording, dimensions, and placement remain
+**implementation choices subject to visual QA** — the copy "Who are you trying to
+place?" is one such choice, not part of this decision.
 
 ---
 
-## DEC-0005 — The default opening must not be dominated by performer imagery
-**Status:** Active · 2026-07-13 · Owner decision
+## DEC-0005 — The default opening is character-first; hero-scale performer is allowed after the flip
+**Status:** Active and resolved · Ratified through delegated product/design review, 2026-07-13
 
-> The homepage's default opening state must not be dominated by performer imagery.
-> Character imagery or archive artwork comes first. A performer photograph appears
-> only after deliberate visitor action.
+The homepage opens **character/artwork first** and must **not be visually dominated
+by performer photography.** A performer image appears **only after deliberate
+visitor action.** After that action, the performer **may** occupy the same card
+footprint — **including hero scale** — because continuity of the flipped object is
+part of the reveal.
 
-**Because:** the reveal is the payoff; the front door should present the remembered
-character (or archive artwork), and the performer is something the visitor chooses
-to surface.
-
-**Not decided here:** whether the current flip-hero homepage (PR #43) — where the
-performer starts hidden behind an explicit flip — still feels wrong at hero scale.
-The performer there *does* appear only after deliberate action, so it is not
-self-evidently a violation. Whether that hero-scale reveal is nonetheless too much
-is the **owner's** open call, not an agent's to declare.
-
-_(Correction, recorded for honesty: an earlier draft of this entry stated the
-decision as "No performer until the record" and attributed it as a verbatim owner
-ruling. That wording was an agent's option label, not the owner's words, and was
-materially stronger — it would have eliminated the original wall-card reveal. The
-text above is the owner's actual decision.)_
+Therefore **#43 is acceptable on this principle** *if* its default face is
+character-first; its composition and crop are judged **separately, in visual
+review**, not here.
 
 ---
 
 ## DEC-0006 — Page ownership
-**Status:** Active · 2026-07-13 · Owner decision
+**Status:** Active · Ratified through delegated product/design review, 2026-07-13
 
-- **The wall (`index.html`)** owns **discovery and the first optional reveal.** The
-  wall-card **front** shows the character; its **back** may reveal the performer and
-  brief human context.
-- **Recognition (`recognition.html`)** owns **depth**: makers, work, evidence, and
-  connections.
-- **Permanent records (`records/UC-…/`)** own **durable, no-JavaScript evidence.**
+- **The wall (`index.html`)** owns **discovery and the first optional reveal.**
+- **Recognition (`recognition.html`)** owns **depth and evidence.**
+- **Permanent routes (`records/UC-…/`)** own **durable, linkable, no-JavaScript records.**
 - **Coverage** owns **completeness and gaps.**
 - **Constellations** owns **curated relationships.**
 
-The record does **not** hold an exclusive monopoly on "the person" — the wall-card
-back is the original, intentional first reveal (DEC-0007). Removing it would destroy
-the founding design.
+The record does not monopolize "the person" — see DEC-0007.
 
 ---
 
 ## DEC-0007 — The wall card may reveal the performer
-**Status:** Active · 2026-07-13 · Owner decision
+**Status:** Active · Ratified through delegated product/design review, 2026-07-13
 
-Yes — the wall card may reveal the performer on its back. That is the original
-product. The reveal is **earned** because the visitor **intentionally turns the
-card**; the card's initial state remains **character-first**.
+A wall card may reveal the performer **after an intentional flip.** The card's
+initial state is character-first; the record does not monopolize performer identity.
 
 ---
 
-## DEC-0008 — When a visual experiment has earned permanence
-**Status:** Active · 2026-07-13 · Owner decision
+## DEC-0008 — Permanence bar for visual experiments
+**Status:** Active · Ratified through delegated product/design review, 2026-07-13
 
-A visual experiment remains **isolated and non-canonical** until **all** of the
-following are true:
+A visual experiment stays **isolated and non-canonical** until it is **all seven** of:
 
-1. It solves a **documented, recurring** user need.
-2. It is **tested across representative records** — including missing-image states,
-   mobile, keyboard, and no-JavaScript — not one perfect specimen.
-3. It **adds no schema or archive-contract fields** during experimentation.
-4. It **reuses the existing reveal primitive** (DEC-0001) or **explicitly proposes
-   superseding it** here.
-5. The **owner reviews actual desktop and mobile renders.**
-6. The **complete gate passes** (`docs/UI-REVIEW-CHECKLIST.md`).
-7. The **owner explicitly promotes it** with an entry in this log.
+1. **Corpus-scalable** — works across representative records, not one specimen.
+2. **Data-driven** — solves a documented, recurring need.
+3. **Accessible** — keyboard, focus, alt text, contrast, targets.
+4. **Responsive** — desktop and mobile.
+5. **No-JS coherent** — degrades honestly with scripting off.
+6. **Provenance-safe** — adds **no** schema or archive-contract fields while experimental.
+7. **Maintainable** — reuses the existing reveal primitive (DEC-0001) or explicitly
+   proposes superseding it.
 
-Until then it does not get schema, does not get a validator invariant, and does not
-get called a primitive.
+Promotion also requires the owner to review actual desktop/mobile renders, the
+complete gate to pass, and an explicit promoting entry in this log. Until then it
+gets no schema, no validator invariant, and is not called a primitive.
+
+---
+
+## DEC-0009 — Constellations has not earned permanent top-navigation
+**Status:** Accepted; implementation pending · 2026-07-13
+
+Constellations stays **contextual** (under Explore or within records) and does
+**not** occupy permanent top-navigation until it demonstrates **repeatable visitor
+value** and **enough curated coverage** to justify a global destination. **No
+arbitrary numeric threshold is constitutional** — the bar is demonstrated value, not
+a count.
+
+**Repo state (conflict):** the Archive navigation on `main` (and in #43) currently
+lists **Constellations** as a top-nav item. This decision cannot be marked **Active**
+until a change removes it from top-nav and relocates it contextually. Pending that
+implementation.
+
+---
+
+## DEC-0010 — Shared CSS is canonical for tokens; typography changes only by decision
+**Status:** Active (authority) · Ratified through delegated product/design review, 2026-07-13
+
+**Shared CSS is canonical for actual token values.** Documentation describes intent
+and may show current values but must not become a second source of truth.
+Page-specific layouts are legitimate. **Typography may change only through an
+explicit design decision, not incidental substitution.**
+
+**Repo state (gap):** tokens currently live **inline in each page**, not yet in a
+shared stylesheet. The authority is ratified; consolidating tokens into shared CSS
+is tracked implementation work so the canonical source actually exists.
+
+---
+
+## DEC-0011 — `validate.yml` is the canonical gate until `npm run gate` exists
+**Status:** Active (authority) · Ratified through delegated product/design review, 2026-07-13
+
+Until a cross-platform **`npm run gate`** exists, **`.github/workflows/validate.yml`
+is the canonical gate.** The UI checklist **points to it and summarizes categories**;
+it must not maintain a fragile second copy of shell commands. Creating `npm run
+gate` is tracked implementation improvement.

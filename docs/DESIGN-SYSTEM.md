@@ -11,11 +11,11 @@ UNDERCAST looks like a **forensic field guide / letterpress catalog**: warm bone
 paper, registration marks, catalog numbers, a single sparingly-used red annotation.
 This is the identity and must not be "modernized" into a generic streaming grid.
 
-**Palette — DESCRIPTIVE of the current inline values, not yet canonical.** These
-values live inline in each page today; they are *not* a single source of truth until
-they live in a shared stylesheet. Treat this table as a description to keep
-consistent, and prefer extracting these into shared CSS custom properties over
-citing this table as law.
+**Palette — DESCRIPTIVE, not canonical (DEC-0010).** Shared CSS is the canonical
+source for actual token values; this table describes intent and shows the current
+values but is **not** a second source of truth. The values live inline in each page
+today (an implementation gap DEC-0010 tracks) — prefer extracting them into shared
+CSS custom properties over citing this table as law.
 
 | token | value (current) | role |
 |---|---|---|
@@ -31,8 +31,9 @@ Recognition uses its own light/dark token set. Sitewide dark mode and global no-
 architecture are out of scope for a presentation PR unless a decision opens them.
 
 **Type:** `Fraunces` (display serif) for titles/names/numbers; `Space Mono` for
-kickers/labels/catalog voice. These are the brand — do not substitute. Self-host
-them when a build must be hermetic.
+kickers/labels/catalog voice. These are the brand. **Typography may change only
+through an explicit design decision, not incidental substitution** (DEC-0010).
+Self-host the fonts when a build must be hermetic.
 
 ## 2. Card anatomy — the primitive (DEC-0001)
 
