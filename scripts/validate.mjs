@@ -180,6 +180,24 @@ for (const s of specimens) {
 // ── profile: no cross-card duplicate image bytes ──────────────────────────────
 // The distinct-still pass drove this to zero; the gate keeps it there. Skipped
 // (not passed) if the image files are absent — e.g. a data-only checkout.
+// Fixed comparison frames must share one crop policy across every public surface.
+// Curated per-image focus is semantic data; the upper-center default protects the
+// common tall-portrait case without mutating source images.
+mark("image.crop_policy");
+const focusedImages = specimens.flatMap((record) => [record.still, record.portrait]).filter((image) => image?.focus);
+if (!focusedImages.length) fail("image.crop_policy", "no curated image focus exercises the crop contract");
+const cropConsumers = [
+  ["index.html", /var\(--focus-y,28%\)/, /data-focus-y/],
+  ["recognition.html", /--focus-y:28%/, /data-focus-y/],
+  ["assets/record-page.css", /--focus-y:28%/, /data-focus-y/],
+  ["scripts/build-record-pages.mjs", /focusAttrs/, /data-focus-y/]
+];
+for (const [path, defaultPattern, focusPattern] of cropConsumers) {
+  const source = readFileSync(path, "utf8");
+  if (!defaultPattern.test(source)) fail("image.crop_policy", `${path} lost the shared upper-center crop default`);
+  if (!focusPattern.test(source)) fail("image.crop_policy", `${path} does not consume curated image focus`);
+}
+
 const presentRefs = imgRefs.filter((r) => existsSync(r.src) && statSync(r.src).size > 0);
 if (presentRefs.length === 0) {
   skip("image.no_cross_card_dup", "no image files present to hash");

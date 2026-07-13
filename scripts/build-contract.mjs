@@ -115,7 +115,7 @@ const archive={
   vocabularies:{conditions:conditionVocabMeta},
   routes:{record:"records/{id}/",interactive_record:"recognition.html#{id}",wall_record:"index.html#{id}",filtered_wall:"index.html?{query}",constellation:"constellation.html?id={constellation_id}&node={node_id}",merged_ids:"canonical.tombstones"},
   discovery:{robots:"robots.txt",sitemap:"sitemap.xml",dataset:"data/dataset.jsonld",crawler_guide:"CRAWLERS.md"},
-  policies:{truth:"Canonical records, image-source ledger and tombstones are maintained evidence. Every projection is disposable.",evidence:"Do not promote inferred conditions or identities to fact. Evidence-scoped claims require a source URL.",cache:"Every cached artifact is disposable. sha256 and bytes describe the exact published UTF-8/LF payload.",privacy:"No visitor profile, search history, or server-side session is collected."},
+  policies:{truth:"Canonical records, image-source ledger and tombstones are maintained evidence. Every projection is disposable.",evidence:"Do not promote inferred conditions or identities to fact. Evidence-scoped claims require a source URL.",image_crop:"Fixed comparison frames default to upper-center. Optional still.focus and portrait.focus are canonical semantic overrides consumed by every public surface.",cache:"Every cached artifact is disposable. sha256 and bytes describe the exact published UTF-8/LF payload.",privacy:"No visitor profile, search history, or server-side session is collected."},
   web_assets:siteAssets,
 };
 await writeFile("data/archive.json",JSON.stringify(archive,null,1)+"\n");

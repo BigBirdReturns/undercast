@@ -34,6 +34,7 @@ themselves*, they don't belong here.
      "reveal": "two sentences — the human under the design",
      "references": "recommended array of claim-level sources: {claim, label, source, optional publisher}; claim is performance, design-build, production, biography, or interview",
      "conditions": "optional array; each item needs type, scope, note and its own source URL — see data/vocabularies/conditions.json",
+     "focus": "optional on still/portrait after retrieval: {x:left|center|right, y:top|upper|center|lower|bottom}",
      "wiki": "optional https://en.wikipedia.org/wiki/Name"
    }
    ```
@@ -98,3 +99,8 @@ reveal (same framing, mask → face).
 
 Pinned assets carry `"pin": true` in `data/specimens.json`. Do a curate pass over
 the marquee cards first; the crawler's heuristics are fine for the long tail.
+
+Portraits default to an upper-center focal crop on the wall, Recognition Loop and
+permanent records. When that still misses the intended face, add `focus` to the
+specific image object. `npm run audit:focus` lists unusually tall source images
+in descending crop-risk order so a vision pass can review the smallest useful set.

@@ -41,6 +41,9 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
   snapshots do not silently include uncredited extras or licensed works outside
   the named source; those boundaries remain explicit in the summary.
 - Image origin and license fields describe provenance; they do not transfer rights.
+- `still.focus` and `portrait.focus` are curated display coordinates, not claims
+  about image content. They use semantic horizontal/vertical positions so every
+  surface can preserve the same intended subject through responsive crops.
 
 ## Durable identifiers
 
