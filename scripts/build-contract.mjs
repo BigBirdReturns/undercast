@@ -92,6 +92,7 @@ await writeFile("data/search/manifest.json",JSON.stringify(searchManifest,null,1
 const canonicalRecords=await fileMeta("data/specimens.json");
 const canonicalSources=await fileMeta("data/SOURCES.json");
 const canonicalConstellations=await fileMeta("data/constellations.json");
+const canonicalCensusManifest=await fileMeta("data/CENSUS-MANIFEST.json");
 const leanIndex=await fileMeta("data/index.json");
 const entityMeta=await fileMeta("data/entities.json");
 const searchMeta=await fileMeta("data/search/manifest.json");
@@ -100,20 +101,20 @@ const conditionVocabMeta=await fileMeta("data/vocabularies/conditions.json");
 const qualityMeta=await fileMeta("data/quality.json");
 const censusMeta={snapshot:await fileMeta("data/CENSUS.json"),coverage:await fileMeta("data/CENSUS-COVERAGE.json"),gaps:await fileMeta("data/CENSUS-GAPS.json"),summary:await fileMeta("data/CENSUS-SUMMARY.json"),unresolved:await fileMeta("data/CENSUS-UNRESOLVED.json"),exclusions:await fileMeta("data/CENSUS-EXCLUSIONS.json"),ferengi_test:await fileMeta("data/CENSUS-FERENGI-TEST.json")};
 const tombstoneMeta=await fileMeta("data/tombstones.json");
-const siteAssets=await Promise.all(["index.html","recognition.html","coverage.html","constellation.html","assets/site-shell.css","assets/record-page.css","assets/coverage.css","assets/constellation.css"].map(fileMeta));
+const siteAssets=await Promise.all(["index.html","recognition.html","coverage.html","constellation.html","404.html","assets/site-shell.css","assets/record-page.css","assets/coverage.css","assets/constellation.css"].map(fileMeta));
 const schemas=Object.fromEntries(await Promise.all([
-  ["archive","schema/archive.schema.json"],["specimen","schema/specimen.schema.json"],["source","schema/source.schema.json"],["entities","schema/entities.schema.json"],["constellations","schema/constellations.schema.json"],["census_test","schema/census-test.schema.json"]
+  ["archive","schema/archive.schema.json"],["specimen","schema/specimen.schema.json"],["source","schema/source.schema.json"],["entities","schema/entities.schema.json"],["constellations","schema/constellations.schema.json"],["census_manifest","schema/census-manifest.schema.json"],["census_test","schema/census-test.schema.json"],["tombstones","schema/tombstones.schema.json"]
 ].map(async([key,path])=>[key,{...(await fileMeta(path)),media_type:"application/schema+json"}])));
 const archive={
   version:1,catalog_id:"undercast",schema:"schema/archive.schema.json",title:"UNDERCAST — performers behind designed faces",canonical_url:`${ORIGIN}/`,
   description:"A provenance-first field index of performers who vanish under prosthetics, masks, creature suits, performance capture, or an unseen voice.",
   identifiers:{record_pattern:"^UC-G?\\d+$",record_key:"id",never_reuse_ids:true},
-  canonical:{records:{...canonicalRecords,schema:"schema/specimen.schema.json",count:specimens.length,content_sha256:shardManifest.source_sha256},sources:{...canonicalSources,schema:"schema/source.schema.json",count:sources.length},constellations:{...canonicalConstellations,schema:"schema/constellations.schema.json",count:constellations.constellations.length,nodes:constellations.nodes.length,edges:constellations.edges.length},tombstones:{...tombstoneMeta,count:(tombstones.records||[]).length}},
+  canonical:{records:{...canonicalRecords,schema:"schema/specimen.schema.json",count:specimens.length,content_sha256:shardManifest.source_sha256},sources:{...canonicalSources,schema:"schema/source.schema.json",count:sources.length},constellations:{...canonicalConstellations,schema:"schema/constellations.schema.json",count:constellations.constellations.length,nodes:constellations.nodes.length,edges:constellations.edges.length},census_manifest:{...canonicalCensusManifest,schema:"schema/census-manifest.schema.json"},tombstones:{...tombstoneMeta,count:(tombstones.records||[]).length}},
   schemas,
   path_bases:{contract_paths:"repository root",shard_manifest_children:"data/"},
   projections:{lean_index:leanIndex,shard_manifest:{...(await fileMeta("data/shard-manifest.json")),count:shardManifest.count,shards:shardManifest.shards},entities:entityMeta,search:searchMeta,media_live:mediaMeta,quality:qualityMeta,census:censusMeta},
   vocabularies:{conditions:conditionVocabMeta},
-  routes:{record:"records/{id}/",interactive_record:"recognition.html#{id}",wall_record:"index.html#{id}",filtered_wall:"index.html?{query}",constellation:"constellation.html?id={constellation_id}&node={node_id}",merged_ids:"canonical.tombstones"},
+  routes:{record:"records/{id}/",interactive_record:"recognition.html#{id}",wall_record:"index.html#{id}",filtered_wall:"index.html?{query}",constellation:"constellation.html?id={constellation_id}&node={node_id}",recovery:"404.html",retired_ids:"canonical.tombstones"},
   discovery:{robots:"robots.txt",sitemap:"sitemap.xml",dataset:"data/dataset.jsonld",crawler_guide:"CRAWLERS.md"},
   policies:{truth:"Canonical records, image-source ledger and tombstones are maintained evidence. Every projection is disposable.",evidence:"Do not promote inferred conditions or identities to fact. Evidence-scoped claims require a source URL.",image_crop:"Fixed comparison frames default to upper-center. Optional still.focus and portrait.focus are canonical semantic overrides consumed by every public surface.",cache:"Every cached artifact is disposable. sha256 and bytes describe the exact published UTF-8/LF payload.",privacy:"No visitor profile, search history, or server-side session is collected."},
   web_assets:siteAssets,
