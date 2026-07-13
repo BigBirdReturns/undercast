@@ -590,8 +590,11 @@ if (existsSync("robots.txt")) {
 if (existsSync("sitemap.xml")) {
   const sitemap = readFileSync("sitemap.xml", "utf8");
   const recordUrls = (sitemap.match(/<loc>https:\/\/bigbirdreturns\.github\.io\/undercast\/records\/UC-G?\d+\/<\/loc>/g) || []).length;
-  const expectedRoutes = specimens.length + (tombstones.records || []).length;
+  const expectedRoutes = specimens.length + (tombstones.records || []).filter((row) => row.status !== "merged").length;
   if (recordUrls !== expectedRoutes) fail("crawler.discovery", `sitemap exposes ${recordUrls} record routes, expected ${expectedRoutes}`);
+  for (const row of (tombstones.records || []).filter((item) => item.status === "merged")) {
+    if (sitemap.includes(`<loc>https://bigbirdreturns.github.io/undercast/records/${row.id}/</loc>`)) fail("crawler.discovery", `sitemap advertises non-canonical merged alias ${row.id}`);
+  }
 }
 for (const pagePath of ["index.html", "recognition.html", "coverage.html", "constellation.html"]) {
   const html = readFileSync(pagePath, "utf8");

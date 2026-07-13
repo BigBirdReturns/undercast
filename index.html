@@ -658,7 +658,7 @@ function decadeOf(years){
   const d=Math.floor(parseInt(m[0],10)/10)*10;
   return d<1970 ? "pre-70s" : (String(d).slice(2)+"s");
 }
-const DECADE_ORDER=["70s","80s","90s","00s","10s","pre-70s"];
+const DECADE_ORDER=["70s","80s","90s","00s","10s","20s","pre-70s"];
 
 /* Build the shelf + decade chips from whatever's actually loaded.
    Must run AFTER specimens.json arrives — the roster is empty at parse time. */
@@ -737,7 +737,9 @@ function card(s){
     ? `<span class="gen-badge">gen</span>` : "";
   const btn=document.createElement("article");
   btn.className="cast";btn.dataset.flipped="false";
-  btn.dataset.uid=s.id;
+  btn.dataset.uid=s.id;btn.dataset.character=s.character;
+  btn.tabIndex=-1;
+  btn.setAttribute("aria-label",`${s.character}, specimen ${s.id}`);
   const pm = isVoice ? "" : primaryMakerOf(s.designer);
   const creditBlock = isVoice
     ? `<div class="designed"><span class="lab">On file</span><span class="who">Voice only · no cast taken</span></div>`
@@ -761,7 +763,7 @@ function card(s){
           <div class="prod">${esc(s.production)} · ${esc(s.years)}</div>
           ${creditBlock}
           ${pips(s.transform, isVoice?"unseen":"vanished")}
-          <button class="turnhint" type="button" data-flip>▸ turn the ${isVoice?"card":"cast"}</button>
+          <button class="turnhint" type="button" data-flip aria-label="Reveal the performer for ${esc(s.character)}, specimen ${esc(s.id)}">▸ turn the ${isVoice?"card":"cast"}</button>
         </div>
       </div>
       <div class="face back">
@@ -774,7 +776,7 @@ function card(s){
           <div class="reveal">${esc(s.reveal)}</div>
           ${portrait && (s.portrait.author||s.portrait.license) ? `<div class="credit">${esc(s.portrait.author||"")}${s.portrait.license?" · "+esc(s.portrait.license):""}${s.portrait.origin?` · <a href="${safeUrl(s.portrait.origin)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">source</a>`:""}</div>` : ""}
           <a class="backlink" href="${safeUrl(s.link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Performer profile →</a>
-          <button class="turnhint" type="button" data-flip>↶ return to character</button>
+          <button class="turnhint" type="button" data-flip aria-label="Return to ${esc(s.character)}, specimen ${esc(s.id)}">↶ return to character</button>
         </div>
       </div>
     </div>`;
@@ -887,21 +889,20 @@ async function render(reset=true){
   await ensureRecords(visible);
   if(seq!==renderSeq) return;
   grid.innerHTML="";
+  const missing=visible.filter(e=>!RECORDS.has(e.id));
+  if(missing.length){
+    grid.innerHTML=`<div class="empty"><b>Couldn't load this page completely.</b>${missing.length} of ${visible.length} requested specimen${visible.length===1?" was":"s were"} unavailable, so the wall is withholding the partial result rather than presenting an incomplete count. <button class="rep-btn" type="button" id="retryBtn">Retry</button></div>`;
+    document.getElementById("retryBtn").addEventListener("click",()=>render(false));
+    loadmoreEl.hidden=true; loadmoreEl.innerHTML="";
+    document.getElementById("count").textContent="—";
+    resultStatusEl.textContent=`The requested page is incomplete: ${missing.length} of ${visible.length} specimen cards could not be loaded. Retry is available.`;
+    grid.setAttribute("aria-busy","false");
+    return;
+  }
   if(rows.length===0){
     grid.innerHTML=`<div class="empty"><b>No cast on this shelf.</b>Nobody in the index matches that yet — the wall only holds performers with a designed face. Clear the search, or grow the shelf below.</div>`;
   } else {
-    let got=0;
-    for(const e of visible){ const rec=RECORDS.get(e.id); if(rec){ grid.appendChild(card(rec)); got++; } }
-    // a transient shard fetch failure would leave records empty — don't show a blank wall
-    // under a confident count; surface a retry (loadShard cleared its cache so this refetches).
-    if(got===0){
-      grid.innerHTML=`<div class="empty"><b>Couldn't load this page.</b>A data shard didn't arrive — likely a network blip. <button class="rep-btn" type="button" id="retryBtn">Retry</button></div>`;
-      document.getElementById("retryBtn").addEventListener("click",()=>render(false));
-      loadmoreEl.hidden=true; loadmoreEl.innerHTML="";
-      resultStatusEl.textContent="The requested specimen cards could not be loaded. Retry is available.";
-      grid.setAttribute("aria-busy","false");
-      return;
-    }
+    for(const e of visible){ const rec=RECORDS.get(e.id); if(rec) grid.appendChild(card(rec)); }
   }
   // load-more control when the filtered set exceeds what's on screen
   if(rows.length>shownCount){
@@ -942,25 +943,46 @@ function syncURL(){
   const previous=history.state&&history.state.ucWall||{};
   history.replaceState({...history.state,ucWall:{...previous,shownCount}},"",url);
 }
+function visibleWallAnchor(){
+  const cards=[...grid.querySelectorAll("[data-uid]")];
+  if(!cards.length) return "";
+  const middle=innerHeight/2;
+  const nearest=cards.reduce((best,card)=>Math.abs(card.getBoundingClientRect().top+card.getBoundingClientRect().height/2-middle)<best.distance
+    ?{card,distance:Math.abs(card.getBoundingClientRect().top+card.getBoundingClientRect().height/2-middle)}:best,{card:null,distance:Infinity});
+  return safeId(nearest.card&&nearest.card.dataset.uid);
+}
 function rememberWallPosition(anchor="",pinHash=false){
   const previous=history.state&&history.state.ucWall||{};
   const hash=pinHash&&safeId(anchor)?"#"+safeId(anchor):location.hash;
   const url=location.pathname+location.search+hash;
-  history.replaceState({...history.state,ucWall:{...previous,shownCount,scrollY:Math.max(0,Math.round(scrollY)),anchor:safeId(anchor)||previous.anchor||""}},"",url);
+  history.replaceState({...history.state,ucWall:{...previous,shownCount,scrollY:Math.max(0,Math.round(scrollY)),anchor:safeId(anchor)||visibleWallAnchor()}},"",url);
 }
+let pendingWallRestore=null;
 function restoreWallPosition(){
   const saved=history.state&&history.state.ucWall;
   if(!saved||typeof saved!=="object") return;
   if(Number.isFinite(saved.shownCount)) shownCount=Math.max(PAGE,Math.min(INDEX.length,Math.ceil(saved.shownCount/PAGE)*PAGE));
+  pendingWallRestore=saved;
+}
+function applyRestoredWallPosition(){
+  const saved=pendingWallRestore;
+  pendingWallRestore=null;
+  if(!saved||location.hash) return;
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    const anchor=safeId(saved.anchor);
+    const el=anchor&&grid.querySelector('[data-uid="'+(window.CSS&&CSS.escape?CSS.escape(anchor):anchor)+'"]');
+    if(el){ el.scrollIntoView({behavior:"auto",block:"center"}); return; }
+    if(Number.isFinite(saved.scrollY)) scrollTo({top:Math.max(0,saved.scrollY),behavior:"auto"});
+  }));
 }
 function applyURLState(){
   const p=new URLSearchParams(location.search);
-  if(p.get("q")) qEl.value=p.get("q");
-  if(p.get("shelf")) universeFilter=p.get("shelf");
-  if(p.get("decade")) decadeFilter=p.get("decade");
-  if(p.get("maker")) makerFilter=p.get("maker");
+  qEl.value=p.get("q")||"";
+  universeFilter=p.get("shelf")||"All";
+  decadeFilter=p.get("decade")||"All";
+  makerFilter=p.get("maker")||"";
   const srt=p.get("sort");
-  if(srt&&[...sortEl.options].some(o=>o.value===srt)) sortEl.value=srt;
+  sortEl.value=srt&&[...sortEl.options].some(o=>o.value===srt)?srt:"cat";
 }
 
 /* ---------- deep link: #UC-042 opens, scrolls to, and rings a specimen ---------- */
@@ -983,7 +1005,9 @@ async function focusSpecimen(id){
   if(!el) return;
   if(el._setFlipped) el._setFlipped(true); else el.dataset.flipped="true"; // show the human side of a shared card
   el.scrollIntoView({behavior:reducedMotion()?"auto":"smooth",block:"center"});
+  el.focus({preventScroll:true});
   el.classList.add("pinged");
+  resultStatusEl.textContent=`Opened ${el.dataset.character||id}, specimen ${id}, with the performer revealed.`;
   setTimeout(()=>el.classList.remove("pinged"),1600);
 }
 
@@ -993,8 +1017,9 @@ function copyPermalink(ev,id){
   const link=location.origin+location.pathname+"#"+id;
   const a=ev.currentTarget;
   const done=()=>{const t=a.textContent;a.textContent="✓ copied";a.classList.add("copied");setTimeout(()=>{a.textContent=t;a.classList.remove("copied");},1200);};
-  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(link).then(done).catch(done); }
-  else { done(); }
+  const failed=()=>{const t=a.textContent;a.textContent="copy failed";a.classList.remove("copied");setTimeout(()=>{a.textContent=t;},1600);};
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(link).then(done).catch(failed); }
+  else { failed(); }
   return true; // let the href set #id too, so the card is deep-linkable
 }
 
@@ -1004,7 +1029,19 @@ document.getElementById("random").addEventListener("click",function(){
   if(location.hash==="#"+e.id) focusSpecimen(e.id); // re-drew the current id: hashchange won't fire, focus directly
   else location.hash=e.id;                          // new id: hashchange -> focusSpecimen
 });
-window.addEventListener("hashchange",function(){ focusSpecimen(location.hash.replace(/^#/,"")); });
+let handlingPopstate=false;
+window.addEventListener("hashchange",function(){ if(!handlingPopstate) focusSpecimen(location.hash.replace(/^#/,"")); });
+window.addEventListener("popstate",async function(){
+  handlingPopstate=true;
+  try{
+    applyURLState();
+    restoreWallPosition();
+    buildFilters();reflectMakerChips();
+    await render(false);
+    if(location.hash) await focusSpecimen(location.hash.replace(/^#/,""));
+    else applyRestoredWallPosition();
+  } finally { handlingPopstate=false; }
+});
 
 qEl.addEventListener("input",()=>render());
 sortEl.addEventListener("change",()=>render());
@@ -1034,7 +1071,8 @@ async function boot(){
   buildFilters();
   buildMakers();
   await render();
-  if(location.hash) focusSpecimen(location.hash.replace(/^#/,""));
+  if(location.hash) await focusSpecimen(location.hash.replace(/^#/,""));
+  else applyRestoredWallPosition();
   // living pipeline: show how many harvested leads are queued for triage (optional file)
   fetch("./data/CANDIDATES.json").then(function(r){return r.ok?r.json():[];}).then(function(c){
     if(Array.isArray(c)&&c.length) document.getElementById("queue").textContent=" · "+c.length+" leads in the ingest queue";
