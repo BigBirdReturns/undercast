@@ -27,7 +27,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate the deploy on the same data/contract invariants as validate.yml. This is
+  # load-bearing: bot commits push with GITHUB_TOKEN, which does NOT trigger
+  # validate.yml (recursion guard, see note above) — but the workflow_run trigger
+  # here DOES redeploy after each bot commit. Without this job, nightly bot data
+  # would reach production having never passed the gate. These scripts are pure
+  # node builtins (no npm ci, no browser), so the guard stays fast and flake-free.
+  # The rendered/browser suite remains PR-time in validate.yml.
+  guard:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Rebuild every deterministic projection
+        run: node scripts/shard.mjs
+      - name: Refuse generated drift
+        run: git diff --exit-code
+      - name: Validate archive invariants
+        run: node scripts/validate.mjs
+      - name: Validate semantic corpus invariants
+        run: npm run audit:corpus
+      - name: Validate public site seams
+        run: npm run test:site-seams
+
   deploy:
+    needs: guard
     # on a workflow_run trigger, only deploy if the upstream bot run actually succeeded
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     environment:
