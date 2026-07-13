@@ -23,16 +23,13 @@ import { chromium } from "@playwright/test";
 const specimens = JSON.parse(await readFile("data/specimens.json", "utf8"));
 const count = specimens.length;
 
-// A blank casting relief — the mask with nobody behind it yet. Echoes the site favicon.
-const faceRelief = (w) => `<svg viewBox="0 0 120 150" width="${w}" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <path d="M22 52c0-26 12-40 38-40s38 14 38 40c0 32-16 54-38 70-22-16-38-38-38-70z" fill="#EDE8DD" stroke="#1C1A16" stroke-width="2"/>
-  <path d="M60 16c4 30 4 66 0 104" fill="none" stroke="#7C918D" stroke-width="1.5" stroke-dasharray="2 4"/>
-  <ellipse cx="44" cy="60" rx="8" ry="5" fill="none" stroke="#1C1A16" stroke-width="2"/>
-  <ellipse cx="76" cy="60" rx="8" ry="5" fill="none" stroke="#1C1A16" stroke-width="2"/>
-</svg>`;
+// The blank casting relief — the site's actual "no evidence yet" mark (the
+// halftone head with the registration centerline). Embedded from the real asset
+// so the card art tracks the site's blank-card language instead of drifting.
+const faceUri = "data:image/png;base64," + (await readFile("assets/placeholder-light-clean.png")).toString("base64");
 
 const card = (id, shelf, cls) =>
-  `<div class="card ${cls}"><div class="card-head"><span class="card-id">${id}</span><span class="card-shelf">${shelf}</span></div><div class="card-face">${faceRelief(cls === "card-front" ? 150 : 118)}</div></div>`;
+  `<div class="card ${cls}"><div class="card-head"><span class="card-id">${id}</span><span class="card-shelf">${shelf}</span></div><div class="card-face"><img src="${faceUri}" alt=""></div></div>`;
 
 const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -62,11 +59,12 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
   .count .l{font-size:15px;letter-spacing:.24em;text-transform:uppercase;color:#8B8577}
   /* card fan */
   .fan{position:absolute;right:44px;top:96px;width:430px;height:470px}
-  .card{position:absolute;background:#DAD4C7;border:2px solid #1C1A16;box-shadow:0 10px 26px rgba(20,16,10,.22)}
-  .card-head{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;font-size:14px;letter-spacing:.08em}
+  .card{position:absolute;display:flex;flex-direction:column;background:#DAD4C7;border:2px solid #1C1A16;box-shadow:0 10px 26px rgba(20,16,10,.22)}
+  .card-head{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;font-size:14px;letter-spacing:.08em;flex:none}
   .card-id{color:#A83E30;font-weight:700}
   .card-shelf{color:#1C1A16;letter-spacing:.18em}
-  .card-face{display:flex;align-items:flex-start;justify-content:center;padding:8px 0}
+  .card-face{flex:1;min-height:0;overflow:hidden;display:flex;align-items:flex-start;justify-content:center}
+  .card-face img{width:100%;height:100%;object-fit:cover;object-position:center 20%}
   .card-1{width:250px;height:300px;top:0;right:150px;transform:rotate(-9deg)}
   .card-2{width:250px;height:300px;top:64px;right:96px;transform:rotate(-3deg)}
   .card-front{width:290px;height:360px;top:130px;right:0;transform:rotate(4deg);background:#E4DFD5}
@@ -75,7 +73,7 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
   <div class="field">
     <div class="kicker"><span>A Field Index</span><span class="no">No.01</span></div>
     <h1><span class="under">UNDER</span><span class="cast">CAST</span></h1>
-    <p class="lede">The performers you've watched for hours and would walk past on the street. <span class="grease">Someone designed a face for them.</span> Turn the cast over to find the human.</p>
+    <p class="lede">The performers you've watched for hours and would walk past on the street. One rule for entry, and it isn't fame: <span class="grease">someone designed a face for them.</span></p>
   </div>
   <div class="fan">
     ${card("UC-001", "STAR TREK", "card-1")}
