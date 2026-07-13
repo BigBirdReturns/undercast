@@ -29,12 +29,14 @@ existing code are *not* authority — these documents are:
    it in every UI PR.
 
 **The rules that would have prevented the last excursion:** the trading-card flip is
-the *only* signature reveal (DEC-0001) — do not add a second (no seams, sliders,
-dissolves, wipes) without superseding it in words first. The opening view is
-character-only (DEC-0005) — no performer portrait on the front door. Every UI PR
-**cites the decision number(s)** it serves. And no one claims the gate is "green"
-without running all of `docs/UI-REVIEW-CHECKLIST.md` — the whole gate, not most of
-it.
+the signature *character→performer* reveal (DEC-0001) — do not add a second one (no
+seams, sliders, dissolves, wipes) without superseding it in words first; unrelated
+interactions elsewhere are fine. The homepage's default opening must not be
+dominated by performer imagery (DEC-0005) — character or archive artwork first, the
+performer only after deliberate action. Every UI PR **cites the decision number(s)**
+it serves. And no one claims the gate is "green" without running all of
+`docs/UI-REVIEW-CHECKLIST.md` — the whole gate, not most of it. Never attribute a
+decision or a "ruling" to the owner they did not actually make.
 
 Key files: `GROW.md` (how to add cards), `CRAWLERS.md` (crawler/evidence
 contract), `README.md` (the whole system),
