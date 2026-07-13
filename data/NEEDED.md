@@ -1,6 +1,6 @@
 # NEEDED — the photo worklist
 
-487 of 1077 cards still want a face: **407 stills**, **198 portraits**.
+487 of 1079 cards still want a face: **407 stills**, **198 portraits**.
 
 **How to fill one by hand:**
 1. Find the photo (the card's reference link is a good start).

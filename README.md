@@ -12,6 +12,9 @@ index.html            the wall — a static page; boots from the generated proje
                       falling back to data/specimens.json if they're absent
 recognition.html      one live catalog record at a time — character, performer,
                       credited work, and evidence-backed connection rails
+constellation.html    sourced paths beyond the wall — people, roles, episodes,
+                      productions and franchises without relaxing card eligibility
+coverage.html         source-scoped franchise/species census and filed gaps
 records/UC-…/         generated permanent, no-JavaScript record routes; built for
                       deployment by scripts/build-record-pages.mjs
 assets/               light/dark topology marks for explicitly missing evidence
@@ -21,6 +24,8 @@ data/
   archive.json        versioned crawler contract: truth, schemas, hashes, routes,
                       projections, evidence/cache/privacy policy
   entities.json       derived exact-credit navigation groups (not identity claims)
+  constellations.json canonical evidence graph: stable nodes, sourced edges,
+                      explicit specimen/context boundary
   search/             prefix-sharded inverted token index for future-scale clients
   dataset.jsonld      Schema.org Dataset discovery metadata
   quality.json        generated completeness/evidence metrics with non-regression floors
@@ -92,6 +97,8 @@ The wall is built to be linked, not just visited:
   and conservative method signals. Missing evidence stays visibly missing.
 - **Filtered views are shareable.** Shelf, decade, search and sort live in the
   URL — `…/?shelf=Star%20Trek&decade=90s&sort=transform` reopens exactly that.
+- **Constellation nodes are shareable.** `…/constellation.html?id=constellation%3Aalbuquerque-in-space&node=person%3Ajonathan-banks`
+  opens a maintained evidence graph at a specific person, role, work or franchise.
 - **⚄ Random** pulls a specimen at random (great for "show me someone I don't
   know").
 - **Links unfurl.** OpenGraph/Twitter tags + `og.png` give a real preview card
@@ -188,6 +195,21 @@ The summary separates physical prosthetic performances, animation/voice, mixed
 appearances, and source pages with no named performer. It is a sourced community-wiki snapshot,
 not a claim that uncredited background performers or every licensed tie-in have
 already been identified.
+
+## Constellations beyond the wall
+
+`data/constellations.json` is maintained evidence, not a recommendation feed.
+It lets an in-scope specimen connect to wider roles, episodes, productions and
+franchises without turning those contextual credits into cards. Every node has
+a stable typed ID and source; every edge carries its own evidence.
+
+The boundary is machine-readable: `scope: "specimen"` requires a matching live
+`UC-###` record, while `scope: "context"` is connective evidence only. Structural
+edges organize works and franchises. `scripts/validate.mjs` rejects missing
+endpoints, unsupported edges, broken record anchors, duplicate relationships and
+constellations whose edges escape their declared node set.
+Run `node scripts/audit-links.mjs --constellations` for a focused live audit of
+every node source and edge-evidence URL without probing the full specimen roster.
 
 ## Growing the wall — the pipeline
 

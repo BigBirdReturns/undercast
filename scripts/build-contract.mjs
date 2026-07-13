@@ -40,6 +40,7 @@ function entitiesFor(kind,records,labelOf){
 
 const specimens=JSON.parse(await readFile("data/specimens.json","utf8"));
 const sources=JSON.parse(await readFile("data/SOURCES.json","utf8"));
+const constellations=JSON.parse(await readFile("data/constellations.json","utf8"));
 const tombstones=JSON.parse(await readFile("data/tombstones.json","utf8").catch(()=>'{"records":[]}'));
 const shardManifest=JSON.parse(await readFile("data/shard-manifest.json","utf8"));
 const index=JSON.parse(await readFile("data/index.json","utf8"));
@@ -90,6 +91,7 @@ await writeFile("data/search/manifest.json",JSON.stringify(searchManifest,null,1
 
 const canonicalRecords=await fileMeta("data/specimens.json");
 const canonicalSources=await fileMeta("data/SOURCES.json");
+const canonicalConstellations=await fileMeta("data/constellations.json");
 const leanIndex=await fileMeta("data/index.json");
 const entityMeta=await fileMeta("data/entities.json");
 const searchMeta=await fileMeta("data/search/manifest.json");
@@ -98,30 +100,30 @@ const conditionVocabMeta=await fileMeta("data/vocabularies/conditions.json");
 const qualityMeta=await fileMeta("data/quality.json");
 const censusMeta={snapshot:await fileMeta("data/CENSUS.json"),coverage:await fileMeta("data/CENSUS-COVERAGE.json"),gaps:await fileMeta("data/CENSUS-GAPS.json"),summary:await fileMeta("data/CENSUS-SUMMARY.json"),unresolved:await fileMeta("data/CENSUS-UNRESOLVED.json")};
 const tombstoneMeta=await fileMeta("data/tombstones.json");
-const siteAssets=await Promise.all(["index.html","recognition.html","coverage.html","assets/site-shell.css","assets/record-page.css","assets/coverage.css"].map(fileMeta));
+const siteAssets=await Promise.all(["index.html","recognition.html","coverage.html","constellation.html","assets/site-shell.css","assets/record-page.css","assets/coverage.css","assets/constellation.css"].map(fileMeta));
 const schemas=Object.fromEntries(await Promise.all([
-  ["archive","schema/archive.schema.json"],["specimen","schema/specimen.schema.json"],["source","schema/source.schema.json"],["entities","schema/entities.schema.json"]
+  ["archive","schema/archive.schema.json"],["specimen","schema/specimen.schema.json"],["source","schema/source.schema.json"],["entities","schema/entities.schema.json"],["constellations","schema/constellations.schema.json"]
 ].map(async([key,path])=>[key,{...(await fileMeta(path)),media_type:"application/schema+json"}])));
 const archive={
   version:1,catalog_id:"undercast",schema:"schema/archive.schema.json",title:"UNDERCAST — performers behind designed faces",canonical_url:`${ORIGIN}/`,
   description:"A provenance-first field index of performers who vanish under prosthetics, masks, creature suits, performance capture, or an unseen voice.",
   identifiers:{record_pattern:"^UC-G?\\d+$",record_key:"id",never_reuse_ids:true},
-  canonical:{records:{...canonicalRecords,schema:"schema/specimen.schema.json",count:specimens.length,content_sha256:shardManifest.source_sha256},sources:{...canonicalSources,schema:"schema/source.schema.json",count:sources.length},tombstones:{...tombstoneMeta,count:(tombstones.records||[]).length}},
+  canonical:{records:{...canonicalRecords,schema:"schema/specimen.schema.json",count:specimens.length,content_sha256:shardManifest.source_sha256},sources:{...canonicalSources,schema:"schema/source.schema.json",count:sources.length},constellations:{...canonicalConstellations,schema:"schema/constellations.schema.json",count:constellations.constellations.length,nodes:constellations.nodes.length,edges:constellations.edges.length},tombstones:{...tombstoneMeta,count:(tombstones.records||[]).length}},
   schemas,
   path_bases:{contract_paths:"repository root",shard_manifest_children:"data/"},
   projections:{lean_index:leanIndex,shard_manifest:{...(await fileMeta("data/shard-manifest.json")),count:shardManifest.count,shards:shardManifest.shards},entities:entityMeta,search:searchMeta,media_live:mediaMeta,quality:qualityMeta,census:censusMeta},
   vocabularies:{conditions:conditionVocabMeta},
-  routes:{record:"records/{id}/",interactive_record:"recognition.html#{id}",wall_record:"index.html#{id}",filtered_wall:"index.html?{query}",merged_ids:"canonical.tombstones"},
+  routes:{record:"records/{id}/",interactive_record:"recognition.html#{id}",wall_record:"index.html#{id}",filtered_wall:"index.html?{query}",constellation:"constellation.html?id={constellation_id}&node={node_id}",merged_ids:"canonical.tombstones"},
   discovery:{robots:"robots.txt",sitemap:"sitemap.xml",dataset:"data/dataset.jsonld",crawler_guide:"CRAWLERS.md"},
   policies:{truth:"Canonical records, image-source ledger and tombstones are maintained evidence. Every projection is disposable.",evidence:"Do not promote inferred conditions or identities to fact. Evidence-scoped claims require a source URL.",cache:"Every cached artifact is disposable. sha256 and bytes describe the exact published UTF-8/LF payload.",privacy:"No visitor profile, search history, or server-side session is collected."},
   web_assets:siteAssets,
 };
 await writeFile("data/archive.json",JSON.stringify(archive,null,1)+"\n");
 
-const dataset={"@context":"https://schema.org","@type":"Dataset","@id":`${ORIGIN}/#dataset`,identifier:"undercast",name:"UNDERCAST",description:archive.description,url:`${ORIGIN}/`,version:String(archive.version),creator:{"@type":"Organization",name:"UNDERCAST contributors"},isAccessibleForFree:true,keywords:["performers","prosthetics","creature suits","masks","performance capture","voice performance"],distribution:[{"@type":"DataDownload",name:"Canonical specimen catalog",encodingFormat:"application/json",contentUrl:`${ORIGIN}/data/specimens.json`},{"@type":"DataDownload",name:"Archive contract",encodingFormat:"application/json",contentUrl:`${ORIGIN}/data/archive.json`},{"@type":"DataDownload",name:"Derived entity index",encodingFormat:"application/json",contentUrl:`${ORIGIN}/data/entities.json`},{"@type":"DataDownload",name:"Franchise census coverage",encodingFormat:"application/json",contentUrl:`${ORIGIN}/data/CENSUS-COVERAGE.json`}]};
+const dataset={"@context":"https://schema.org","@type":"Dataset","@id":`${ORIGIN}/#dataset`,identifier:"undercast",name:"UNDERCAST",description:archive.description,url:`${ORIGIN}/`,version:String(archive.version),creator:{"@type":"Organization",name:"UNDERCAST contributors"},isAccessibleForFree:true,keywords:["performers","prosthetics","creature suits","masks","performance capture","voice performance","evidence graph"],distribution:[{"@type":"DataDownload",name:"Canonical specimen catalog",encodingFormat:"application/json",contentUrl:`${ORIGIN}/data/specimens.json`},{"@type":"DataDownload",name:"Canonical constellation evidence graph",encodingFormat:"application/json",contentUrl:`${ORIGIN}/data/constellations.json`},{"@type":"DataDownload",name:"Archive contract",encodingFormat:"application/json",contentUrl:`${ORIGIN}/data/archive.json`},{"@type":"DataDownload",name:"Derived entity index",encodingFormat:"application/json",contentUrl:`${ORIGIN}/data/entities.json`},{"@type":"DataDownload",name:"Franchise census coverage",encodingFormat:"application/json",contentUrl:`${ORIGIN}/data/CENSUS-COVERAGE.json`}]};
 await writeFile("data/dataset.jsonld",JSON.stringify(dataset,null,1)+"\n");
 
-const urls=[`${ORIGIN}/`,`${ORIGIN}/recognition.html`,`${ORIGIN}/coverage.html`,...specimens.map(record=>`${ORIGIN}/records/${record.id}/`),...(tombstones.records||[]).map(record=>`${ORIGIN}/records/${record.id}/`)];
+const urls=[`${ORIGIN}/`,`${ORIGIN}/recognition.html`,`${ORIGIN}/coverage.html`,`${ORIGIN}/constellation.html`,...specimens.map(record=>`${ORIGIN}/records/${record.id}/`),...(tombstones.records||[]).map(record=>`${ORIGIN}/records/${record.id}/`)];
 const sitemap=`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map(loc=>`  <url><loc>${escXml(loc)}</loc></url>`).join("\n")}\n</urlset>\n`;
 await writeFile("sitemap.xml",sitemap);
 console.log(`built archive contract, ${entities.performers.length} performer credits, ${entities.makers.length} makers, ${searchShards.length} search shards`);

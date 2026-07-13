@@ -6,8 +6,9 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
 
 ## Truth and projections
 
-- `data/specimens.json`, `data/SOURCES.json` and `data/tombstones.json` are
-  maintained truth: live records, image provenance and retired-ID continuity.
+- `data/specimens.json`, `data/SOURCES.json`, `data/constellations.json` and
+  `data/tombstones.json` are maintained truth: live records, image provenance,
+  sourced connective evidence and retired-ID continuity.
 - `data/index.json`, `data/shards/`, `data/entities.json`, `data/search/` and the
   permanent HTML record routes are generated projections. They are disposable.
 - `data/CENSUS-COVERAGE.json` is the performer-plus-role coverage projection;
@@ -22,6 +23,10 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
 - `data/entities.json` groups exact credit labels for navigation. Its keys are
   stable derived keys, not assertions that two similarly named humans are the
   same legal identity.
+- `data/constellations.json` is the broader evidence graph. Node IDs are durable
+  typed anchors. Every edge is sourced. `scope: specimen` must name a matching
+  live record; `scope: context` may connect a person or role without granting
+  wall eligibility; `scope: structure` organizes works and franchises.
 
 ## Evidence rules
 
@@ -45,6 +50,7 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
 - Permanent record: `/undercast/records/{id}/`
 - Interactive record: `/undercast/recognition.html#{id}`
 - Wall record: `/undercast/index.html#{id}`
+- Constellation anchor: `/undercast/constellation.html?id={constellation_id}&node={node_id}`
 
 ## Polite use
 
