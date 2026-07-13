@@ -163,6 +163,8 @@ derivative work: RanZag (talk), CC BY 2.0 — [source](https://commons.wikimedia
 - **Bill Skarsgård** (UC-1081) — Gage Skidmore from Peoria, AZ, United States of America, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Bill_Skarsg%C3%A5rd_(43573067882)_(cropped).jpg)
 - **Ron Perlman** (UC-1082) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Ron_Perlman_by_Gage_Skidmore_2.jpg)
 - **Doug Jones** (UC-1083) — Judson University, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Doug_Jones_2015.jpg)
+- **Jonathan Banks** (UC-1084) — Netta_Bank_and_Jonathan_Banks.jpg: Netta Bank
+derivative work: RanZag (talk), CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Jonathan_Banks_1995.jpg)
 - **Josh Pais** (UC-110) — Bryan Berlin, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Josh_Pais_at_the_2024_New_York_Film_Festival_(cropped).jpg)
 - **Deep Roy** (UC-111) — Miguel Discart, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Deep_Roy_(53725207113).jpg)
 - **Alan Cumming** (UC-112) — gdcgraphics, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:AlanCummingSept2013TIFF.jpg)
@@ -662,8 +664,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **640**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **670**
+- Free-licensed portraits (attributed above): **641**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **672**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —

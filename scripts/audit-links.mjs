@@ -4,9 +4,11 @@ import { readFile } from "node:fs/promises";
 
 const USER_AGENT = "undercast-link-audit/1.0 (+https://github.com/BigBirdReturns/undercast)";
 const specimens = JSON.parse(await readFile("data/specimens.json", "utf8"));
+const constellations = JSON.parse(await readFile("data/constellations.json", "utf8"));
 const includeAssets = process.argv.includes("--assets");
+const constellationOnly = process.argv.includes("--constellations");
 const refs = [];
-for (const record of specimens) {
+for (const record of constellationOnly ? [] : specimens) {
   refs.push({ id: record.id, field: "link", url: record.link });
   for (const [index, claim] of (record.references || []).entries()) refs.push({ id: record.id, field: `references[${index}]`, url: claim.source });
   for (const [index, condition] of (record.conditions || []).entries()) refs.push({ id: record.id, field: `conditions[${index}]`, url: condition.source });
@@ -14,6 +16,10 @@ for (const record of specimens) {
     if (record.still?.origin) refs.push({ id: record.id, field: "still.origin", url: record.still.origin });
     if (record.portrait?.origin) refs.push({ id: record.id, field: "portrait.origin", url: record.portrait.origin });
   }
+}
+for (const node of constellations.nodes || []) refs.push({ id: node.id, field: "source", url: node.source });
+for (const edge of constellations.edges || []) {
+  for (const [index, evidence] of (edge.evidence || []).entries()) refs.push({ id: edge.id, field: `evidence[${index}]`, url: evidence.source });
 }
 
 const malformed = [];

@@ -122,6 +122,7 @@ function conformObjectProfile(code, value, schema, label) {
 // ── load the catalog ──────────────────────────────────────────────────────────
 const specimens = load("data/specimens.json");
 const sources = load("data/SOURCES.json");
+const constellationGraph = existsSync("data/constellations.json") ? load("data/constellations.json") : null;
 const tombstones = existsSync("data/tombstones.json") ? load("data/tombstones.json") : { version: 1, records: [] };
 if (!Array.isArray(specimens) || !Array.isArray(sources)) { console.error("FATAL: specimens/SOURCES are not arrays"); process.exit(1); }
 // media manifest (optional): images whose bytes live on GitHub Releases
@@ -140,6 +141,8 @@ if (existsSync("data/archive.json") && existsSync("schema/archive.schema.json"))
 else skip("schema.archive", "archive contract or schema missing");
 if (existsSync("data/entities.json") && existsSync("schema/entities.schema.json")) conformObjectProfile("schema.entities", load("data/entities.json"), load("schema/entities.schema.json"), "entities");
 else skip("schema.entities", "entity projection or schema missing");
+if (constellationGraph && existsSync("schema/constellations.schema.json")) conformObjectProfile("schema.constellations", constellationGraph, load("schema/constellations.schema.json"), "constellations");
+else skip("schema.constellations", "constellation evidence graph or schema missing");
 
 // ── profile: unique ids ───────────────────────────────────────────────────────
 mark("id.unique");
@@ -378,6 +381,53 @@ if (existsSync("data/entities.json")) {
   }
 } else skip("entities.consistency", "data/entities.json missing — run node scripts/shard.mjs");
 
+// Maintained constellation graph: broader context may anchor to the archive,
+// but only an explicit specimen edge may claim wall eligibility.
+if (constellationGraph) {
+  mark("constellation.integrity");
+  const nodes = new Map(), edges = new Map(), triples = new Set();
+  const normalized = (value) => String(value || "").normalize("NFKC").toLowerCase().trim();
+  for (const node of constellationGraph.nodes || []) {
+    if (nodes.has(node.id)) fail("constellation.integrity", `duplicate node ${node.id}`);
+    nodes.set(node.id, node);
+    if (!String(node.id || "").startsWith(`${node.kind}:`)) fail("constellation.integrity", `${node.id} kind/id prefix disagreement`);
+    if (!/^https:\/\//.test(node.source || "")) fail("constellation.integrity", `${node.id} lacks an HTTPS source`);
+    for (const id of node.record_ids || []) if (!specIds.has(id)) fail("constellation.integrity", `${node.id} references missing ${id}`);
+  }
+  for (const edge of constellationGraph.edges || []) {
+    if (edges.has(edge.id)) fail("constellation.integrity", `duplicate edge ${edge.id}`);
+    edges.set(edge.id, edge);
+    if (!nodes.has(edge.from) || !nodes.has(edge.to)) fail("constellation.integrity", `${edge.id} has a missing endpoint`);
+    const triple = `${edge.from}|${edge.predicate}|${edge.to}`;
+    if (triples.has(triple)) fail("constellation.integrity", `duplicate relationship ${triple}`);
+    triples.add(triple);
+    if (!Array.isArray(edge.evidence) || !edge.evidence.length) fail("constellation.integrity", `${edge.id} has no evidence`);
+    for (const evidence of edge.evidence || []) if (!/^https:\/\//.test(evidence.source || "")) fail("constellation.integrity", `${edge.id} has non-HTTPS evidence`);
+    if (edge.predicate === "performed" && !["specimen", "context"].includes(edge.scope)) fail("constellation.integrity", `${edge.id} performed edge has invalid ${edge.scope} scope`);
+    if (edge.predicate !== "performed" && edge.scope !== "structure") fail("constellation.integrity", `${edge.id} structural relationship must use structure scope`);
+    if (edge.scope === "specimen") {
+      if (!edge.record_id || !specIds.has(edge.record_id)) { fail("constellation.integrity", `${edge.id} specimen edge lacks a live record`); continue; }
+      const record = specimens.find((item) => item.id === edge.record_id), person = nodes.get(edge.from), character = nodes.get(edge.to);
+      if (person?.kind !== "person" || character?.kind !== "character") fail("constellation.integrity", `${edge.id} specimen endpoints must be person to character`);
+      if (record && (normalized(record.actor) !== normalized(person?.label) || normalized(record.character) !== normalized(character?.label))) fail("constellation.integrity", `${edge.id} record ${edge.record_id} does not match its person/character nodes`);
+      if (!person?.record_ids?.includes(edge.record_id) || !character?.record_ids?.includes(edge.record_id)) fail("constellation.integrity", `${edge.id} record anchor is not present on both endpoint nodes`);
+    } else if (edge.record_id) fail("constellation.integrity", `${edge.id} non-specimen edge must not claim record_id ${edge.record_id}`);
+  }
+  const constellationIds = new Set();
+  for (const view of constellationGraph.constellations || []) {
+    if (constellationIds.has(view.id)) fail("constellation.integrity", `duplicate constellation ${view.id}`);
+    constellationIds.add(view.id);
+    const memberNodes = new Set(view.node_ids || []);
+    for (const id of memberNodes) if (!nodes.has(id)) fail("constellation.integrity", `${view.id} references missing node ${id}`);
+    for (const id of view.edge_ids || []) {
+      const edge = edges.get(id);
+      if (!edge) fail("constellation.integrity", `${view.id} references missing edge ${id}`);
+      else if (!memberNodes.has(edge.from) || !memberNodes.has(edge.to)) fail("constellation.integrity", `${view.id} edge ${id} escapes its node set`);
+    }
+  }
+  if (!(constellationGraph.edges || []).some((edge) => edge.scope === "specimen") || !(constellationGraph.edges || []).some((edge) => edge.scope === "context")) fail("constellation.integrity", "graph must preserve the specimen/context boundary explicitly");
+} else skip("constellation.integrity", "data/constellations.json missing");
+
 if (existsSync("data/quality.json")) {
   mark("quality.non_regression");
   const quality = load("data/quality.json"), metrics = quality.metrics || {}, baseline = quality.baseline || {};
@@ -426,7 +476,8 @@ if (existsSync("data/archive.json")) {
   if (archive.canonical?.records?.count !== specimens.length) fail("contract.consistency", "canonical record count drift");
   if (archive.canonical?.sources?.count !== sources.length) fail("contract.consistency", "canonical source count drift");
   if (archive.canonical?.records?.content_sha256 !== manifest.source_sha256) fail("contract.consistency", "canonical content hash drift");
-  for (const item of [archive.canonical?.records, archive.canonical?.sources, archive.canonical?.tombstones, ...Object.values(archive.schemas || {}), archive.projections?.lean_index, archive.projections?.shard_manifest, archive.projections?.entities, archive.projections?.search, archive.projections?.media_live, archive.projections?.quality, ...Object.values(archive.projections?.census || {}), archive.vocabularies?.conditions, ...(archive.web_assets || [])]) {
+  if (archive.canonical?.constellations?.count !== constellationGraph?.constellations?.length || archive.canonical?.constellations?.nodes !== constellationGraph?.nodes?.length || archive.canonical?.constellations?.edges !== constellationGraph?.edges?.length) fail("contract.consistency", "canonical constellation counts drift");
+  for (const item of [archive.canonical?.records, archive.canonical?.sources, archive.canonical?.constellations, archive.canonical?.tombstones, ...Object.values(archive.schemas || {}), archive.projections?.lean_index, archive.projections?.shard_manifest, archive.projections?.entities, archive.projections?.search, archive.projections?.media_live, archive.projections?.quality, ...Object.values(archive.projections?.census || {}), archive.vocabularies?.conditions, ...(archive.web_assets || [])]) {
     if (!item?.path || !existsSync(item.path)) { fail("contract.consistency", `contract path missing: ${item?.path || "undefined"}`); continue; }
     const published = publishedTextBytes(item.path);
     if (item.sha256 !== createHash("sha256").update(published).digest("hex")) fail("contract.consistency", `${item.path} sha256 drift — rebuild contract`);
@@ -459,7 +510,7 @@ if (existsSync("sitemap.xml")) {
   const expectedRoutes = specimens.length + (tombstones.records || []).length;
   if (recordUrls !== expectedRoutes) fail("crawler.discovery", `sitemap exposes ${recordUrls} record routes, expected ${expectedRoutes}`);
 }
-for (const pagePath of ["index.html", "recognition.html", "coverage.html"]) {
+for (const pagePath of ["index.html", "recognition.html", "coverage.html", "constellation.html"]) {
   const html = readFileSync(pagePath, "utf8");
   if (!/rel="describedby"[^>]+data\/archive\.json/.test(html)) fail("crawler.discovery", `${pagePath} does not link the archive contract`);
   if (!/application\/ld\+json[^>]+data\/dataset\.jsonld/.test(html)) fail("crawler.discovery", `${pagePath} does not advertise Dataset JSON-LD`);
