@@ -104,9 +104,3 @@ Portraits default to an upper-center focal crop on the wall, Recognition Loop an
 permanent records. When that still misses the intended face, add `focus` to the
 specific image object. `npm run audit:focus` lists unusually tall source images
 in descending crop-risk order so a vision pass can review the smallest useful set.
-
-The Recognition Loop overlay has a stricter standard: choose a loose, frontal,
-eye-level pair before tuning it. Forehead, eye line, chin and face width should
-land in roughly the same place at the 50% seam. A reviewed image may carry
-`comparison: {x: 50, y: 46, scale: 1.2}` for overlay-only alignment. Scale is
-zoom-in only (`1`-`2`); if one side needs to zoom out, replace that source instead.

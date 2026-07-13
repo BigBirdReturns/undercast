@@ -209,20 +209,6 @@ for (const [path, defaultPattern, focusPattern] of cropConsumers) {
   if (!focusPattern.test(source)) fail("image.crop_policy", `${path} does not consume curated image focus`);
 }
 
-// Overlay alignment is a separate, human-reviewed crop contract. It may zoom
-// into a compatible source pair, but it cannot zoom out to hide a tight photo.
-mark("image.comparison_alignment");
-const comparisonImages = specimens.flatMap((record) => [record.still, record.portrait]).filter((image) => image?.comparison);
-if (comparisonImages.length < 2) fail("image.comparison_alignment", "no reviewed image pair exercises comparison alignment");
-for (const image of comparisonImages) {
-  const profile = image.comparison;
-  if (!Number.isInteger(profile.x) || profile.x < 0 || profile.x > 100) fail("image.comparison_alignment", "comparison.x must be an integer from 0 to 100");
-  if (!Number.isInteger(profile.y) || profile.y < 0 || profile.y > 100) fail("image.comparison_alignment", "comparison.y must be an integer from 0 to 100");
-  if (typeof profile.scale !== "number" || profile.scale < 1 || profile.scale > 2) fail("image.comparison_alignment", "comparison.scale must stay between 1 and 2");
-}
-const recognitionSource = readFileSync("recognition.html", "utf8");
-if (!/image\.comparison/.test(recognitionSource) || !/--compare-scale/.test(recognitionSource)) fail("image.comparison_alignment", "Recognition Loop does not consume the canonical comparison profile");
-
 const presentRefs = imgRefs.filter((r) => existsSync(r.src) && statSync(r.src).size > 0);
 if (presentRefs.length === 0) {
   skip("image.no_cross_card_dup", "no image files present to hash");
