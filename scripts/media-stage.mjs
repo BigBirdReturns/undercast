@@ -22,6 +22,7 @@
  *   node scripts/media-stage.mjs --canary          # a representative dozen
  *   node scripts/media-stage.mjs --ids UC-004 UC-071
  *   node scripts/media-stage.mjs --all             # everything not yet staged
+ *   node scripts/media-stage.mjs --all --prune-orphans # explicit destructive cleanup
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { readFileSync, existsSync } from "node:fs";
@@ -91,6 +92,7 @@ for (const s of specimens) for (const side of ["still", "portrait"]) {
 // ── choose the batch ──
 const argv = process.argv.slice(2);
 const flag = argv[0];
+const pruneOrphans = argv.includes("--prune-orphans");
 let want;
 if (flag === "--all") {
   want = refs;
@@ -106,7 +108,7 @@ if (flag === "--all") {
   if (sized.length) { pick.push(sized[0].r, sized[sized.length - 1].r); }
   const seen = new Set(); want = pick.filter((r) => !seen.has(r.src) && seen.add(r.src));
 } else {
-  console.log("usage: node scripts/media-stage.mjs --canary | --ids <UC-id…> | --all");
+  console.log("usage: node scripts/media-stage.mjs --canary | --ids <UC-id…> | --all [--prune-orphans]");
   process.exit(1);
 }
 
@@ -145,11 +147,12 @@ for (const r of want) {
   prev ? updated++ : added++;
 }
 
-// prune orphaned entries — a card (or a side) that no longer exists on the wall. Keeps
-// the manifest honest and stops the cap accounting from counting dead entries.
+// A scoped staging run must never erase release-only history merely because its
+// local byte is absent or its current card changed. Pruning is an explicit,
+// separately reviewable operation; the default preserves the append-only ledger.
 const liveSrc = new Set(refs.map((r) => r.src));
 let pruned = 0;
-for (const src of Object.keys(manifest.assets)) if (!liveSrc.has(src)) { delete manifest.assets[src]; pruned++; }
+if (pruneOrphans) for (const src of Object.keys(manifest.assets)) if (!liveSrc.has(src)) { delete manifest.assets[src]; pruned++; }
 
 // stable key order for a clean, reviewable diff
 const sorted = {};

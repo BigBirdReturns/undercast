@@ -148,6 +148,10 @@ if (existsSync("data/tombstones.json") && existsSync("schema/tombstones.schema.j
 else skip("schema.tombstones", "tombstone ledger or schema missing");
 if (existsSync("data/entities.json") && existsSync("schema/entities.schema.json")) conformObjectProfile("schema.entities", load("data/entities.json"), load("schema/entities.schema.json"), "entities");
 else skip("schema.entities", "entity projection or schema missing");
+if (existsSync("data/vocabularies/species.json") && existsSync("schema/species-vocabulary.schema.json")) conformObjectProfile("schema.species_vocabulary", load("data/vocabularies/species.json"), load("schema/species-vocabulary.schema.json"), "species vocabulary");
+else skip("schema.species_vocabulary", "species vocabulary or schema missing");
+if (existsSync("data/species.json") && existsSync("schema/species.schema.json")) conformObjectProfile("schema.species", load("data/species.json"), load("schema/species.schema.json"), "species navigation");
+else skip("schema.species", "species projection or schema missing");
 if (constellationGraph && existsSync("schema/constellations.schema.json")) conformObjectProfile("schema.constellations", constellationGraph, load("schema/constellations.schema.json"), "constellations");
 else skip("schema.constellations", "constellation evidence graph or schema missing");
 
@@ -352,9 +356,10 @@ if (media) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(String(media.repo || ""))) fail("media.consistency", `manifest.repo "${media.repo}" is not owner/repo`);
   const cap = media.release_capacity || 800;
   for (const [src, e] of Object.entries(mediaAssets)) {
-    // An orphaned entry (its card was deleted) is harmless dead weight — the wall keys
-    // by live card src, so it's never served — and `media-stage.mjs` prunes it on its next
-    // run. Do NOT hard-fail here: that would wedge unrelated nightly commits after a dedup.
+    // An orphaned entry is retained release history, not a serving route: the wall keys
+    // by live card src, so it is never fetched. `media-stage.mjs` preserves these by
+    // default and removes them only under the explicit `--prune-orphans` operation.
+    // Do not hard-fail here: deduped and retired cards still need auditable media history.
     if (!refSrcSet.has(src)) orphans++;
     const sha8 = String(e.sha256 || "").slice(0, 8);
     if (!/^[0-9a-f]{64}$/.test(e.sha256 || "")) fail("media.consistency", `${src}: bad sha256`);
@@ -500,7 +505,67 @@ if (["data/CENSUS.json", "data/CENSUS-COVERAGE.json", "data/CENSUS-GAPS.json", "
   const unresolvedFerengi = unresolved.filter((row) => row.franchise === "Star Trek" && row.category === "Ferengi");
   if (ferengiSummary?.unresolved_characters !== unresolvedFerengi.length) fail("census.consistency", "Ferengi unresolved-character count drift");
   for (const row of unresolved) if (!/^https:\/\//.test(row.source || "")) fail("census.consistency", `${row.character} unresolved census row lacks an HTTPS source`);
+
+  // These identities are the minimum recognizable Klingon spine. A parser that
+  // rejects initials (J.G.) or drifts from exact roles must fail loudly instead
+  // of publishing a plausible aggregate count with the central cast missing.
+  const klingonAnchors = [
+    ["Worf", "Michael Dorn", "UC-018"],
+    ["Gowron", "Robert O'Reilly", "UC-028"],
+    ["Martok", "J.G. Hertzler", "UC-029"],
+    ["Kor", "John Colicos", "UC-036"],
+  ];
+  for (const [character, performer, id] of klingonAnchors) {
+    const row = coverage.find((credit) => credit.franchise === "Star Trek" && credit.category === "Klingons" && credit.character === character && credit.performer === performer);
+    if (!row || !row.role_on_wall || !row.wall_ids.includes(id)) fail("census.consistency", `Klingon anchor missing or not exactly filed: ${character} / ${performer} / ${id}`);
+  }
 } else skip("census.consistency", "census projections missing — run npm run census:ferengi");
+
+// Sourced species navigation may only contain exact filed performer-role
+// credits from its declared census category. Unknown performer pages remain in
+// their own list and never become a wall classification.
+if (existsSync("data/species.json") && existsSync("data/CENSUS-COVERAGE.json") && existsSync("data/CENSUS-UNRESOLVED.json")) {
+  mark("species.navigation_integrity");
+  const projection = load("data/species.json");
+  const coverage = load("data/CENSUS-COVERAGE.json");
+  const unresolved = load("data/CENSUS-UNRESOLVED.json");
+  const index = existsSync("data/index.json") ? load("data/index.json") : [];
+  const indexById = new Map(index.map((entry) => [entry.id, entry]));
+  for (const taxon of projection.taxa || []) {
+    const credits = coverage.filter((row) => row.franchise === taxon.franchise && row.category === taxon.source_category);
+    const unknowns = unresolved.filter((row) => row.franchise === taxon.franchise && row.category === taxon.source_category);
+    if (!credits.length) fail("species.navigation_integrity", `${taxon.label} has no source census credits`);
+    if (taxon.counts?.named_credits !== credits.length || taxon.counts?.unresolved_characters !== unknowns.length)
+      fail("species.navigation_integrity", `${taxon.label} source counts drifted`);
+    const expectedIds = new Set(credits.flatMap((row) => row.wall_ids || []));
+    const filedIds = new Set((taxon.records || []).map((row) => row.id));
+    if (expectedIds.size !== filedIds.size || [...expectedIds].some((id) => !filedIds.has(id)))
+      fail("species.navigation_integrity", `${taxon.label} filed record set is not the exact census join`);
+    for (const record of taxon.records || []) {
+      if (!specIds.has(record.id)) fail("species.navigation_integrity", `${taxon.label} points at missing ${record.id}`);
+      if (!Array.isArray(indexById.get(record.id)?.sp) || !indexById.get(record.id).sp.includes(taxon.label))
+        fail("species.navigation_integrity", `${record.id} is missing ${taxon.label} from the lean index`);
+      for (const credit of record.credits || []) {
+        const exact = credits.find((row) => row.character === credit.character && row.performer === credit.performer && row.performance_mode === credit.performance_mode && row.source === credit.source && row.wall_ids?.includes(record.id));
+        if (!exact) fail("species.navigation_integrity", `${taxon.label} ${record.id} carries a non-exact credit ${credit.character} / ${credit.performer}`);
+        const specimen = specimens.find((row) => row.id === record.id);
+        const exactPerformer = [specimen?.actor, ...(specimen?.aliases || [])].some((name) => normalizeCensusKey(name) === normalizeCensusKey(credit.performer));
+        const exactRole = [specimen?.character, ...(specimen?.performances || []).map((performance) => performance.character)].some((role) => normalizeCensusKey(role) === normalizeCensusKey(credit.character));
+        if (!exactPerformer || !exactRole) fail("species.navigation_integrity", `${taxon.label} ${record.id} is not an exact canonical performer-role join for ${credit.character} / ${credit.performer}`);
+      }
+    }
+  }
+  const exactSpeciesAnchor = (label, id, expected) => {
+    const taxon = projection.taxa?.find((row) => row.label === label);
+    const actual = (taxon?.records?.find((row) => row.id === id)?.credits || []).map((row) => `${row.character}|${row.performer}`).sort();
+    if (JSON.stringify(actual) !== JSON.stringify(expected.slice().sort())) fail("species.navigation_integrity", `${label} ${id} exact-role anchor drift: ${actual.join(", ") || "missing"}`);
+  };
+  exactSpeciesAnchor("Ferengi", "UC-019", ["Bractor|Armin Shimerman", "Letek|Armin Shimerman", "Lumba|Armin Shimerman", "Quark|Armin Shimerman"]);
+  exactSpeciesAnchor("Klingon", "UC-018", ["Worf|Michael Dorn"]);
+  exactSpeciesAnchor("Klingon", "UC-028", ["Gowron|Robert O'Reilly"]);
+  exactSpeciesAnchor("Klingon", "UC-029", ["Martok|J.G. Hertzler"]);
+  exactSpeciesAnchor("Klingon", "UC-036", ["Kor|John Colicos"]);
+} else skip("species.navigation_integrity", "species or census projections missing — run node scripts/shard.mjs");
 
 // Census source observations bind the committed snapshot to the exact wiki
 // revisions seen by the networked crawler. Project-only rebuilds preserve this
@@ -560,7 +625,7 @@ if (existsSync("data/archive.json")) {
   if (archive.canonical?.sources?.count !== sources.length) fail("contract.consistency", "canonical source count drift");
   if (archive.canonical?.records?.content_sha256 !== manifest.source_sha256) fail("contract.consistency", "canonical content hash drift");
   if (archive.canonical?.constellations?.count !== constellationGraph?.constellations?.length || archive.canonical?.constellations?.nodes !== constellationGraph?.nodes?.length || archive.canonical?.constellations?.edges !== constellationGraph?.edges?.length) fail("contract.consistency", "canonical constellation counts drift");
-  for (const item of [archive.canonical?.records, archive.canonical?.sources, archive.canonical?.constellations, archive.canonical?.ds9_changeling_census, archive.canonical?.census_manifest, archive.canonical?.tombstones, ...Object.values(archive.schemas || {}), archive.projections?.lean_index, archive.projections?.shard_manifest, archive.projections?.entities, archive.projections?.search, archive.projections?.media_live, archive.projections?.quality, ...Object.values(archive.projections?.census || {}), archive.vocabularies?.conditions, ...(archive.web_assets || [])]) {
+  for (const item of [archive.canonical?.records, archive.canonical?.sources, archive.canonical?.constellations, archive.canonical?.ds9_changeling_census, archive.canonical?.census_manifest, archive.canonical?.tombstones, ...Object.values(archive.schemas || {}), archive.projections?.lean_index, archive.projections?.shard_manifest, archive.projections?.entities, archive.projections?.species, archive.projections?.search, archive.projections?.media_live, archive.projections?.quality, ...Object.values(archive.projections?.census || {}), archive.vocabularies?.conditions, archive.vocabularies?.species, ...(archive.web_assets || [])]) {
     if (!item?.path || !existsSync(item.path)) { fail("contract.consistency", `contract path missing: ${item?.path || "undefined"}`); continue; }
     const published = publishedTextBytes(item.path);
     if (item.sha256 !== createHash("sha256").update(published).digest("hex")) fail("contract.consistency", `${item.path} sha256 drift — rebuild contract`);

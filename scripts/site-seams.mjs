@@ -16,6 +16,17 @@ for (const path of ["index.html","recognition.html","coverage.html","constellati
   expect(has(path, /aria-current="page"/), `${path}: current surface is not exposed`);
 }
 
+for (const path of ["index.html","recognition.html","coverage.html","constellation.html","404.html"]) {
+  for (const label of ["Browse","Recognition Loop","Coverage","Constellations","Makers","About"]) {
+    expect(has(path, new RegExp(`>${label}<`)), `${path}: archive navigation is missing ${label}`);
+  }
+}
+expect(!has("index.html", />One record</), "index: obsolete Recognition Loop label returned");
+expect(!has("recognition.html", />One record</), "recognition: obsolete Recognition Loop label returned");
+expect(has("index.html", /href="\.\/coverage\.html">Coverage</), "index: global Coverage link must open the coverage surface, not one benchmark");
+expect(has("recognition.html", /href="\.\/coverage\.html">Coverage</), "recognition: global Coverage link must open the coverage surface, not one benchmark");
+expect(has("recognition.html", /href="\.\/index\.html#archive">Browse</), "recognition: Browse must land at the wall, not the home-page preface");
+
 expect(has("index.html", /<main class="wrap" id="archive">/), "index: archive is not a main landmark");
 expect(!has("index.html", /id="grid"[^>]*aria-live/), "index: full card grid must not be an aria-live region");
 expect(has("index.html", /id="result-status"[^>]*role="status"/), "index: compact result status missing");

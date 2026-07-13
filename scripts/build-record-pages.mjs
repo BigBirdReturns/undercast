@@ -5,6 +5,7 @@ const ROOT=path.resolve(new URL("..",import.meta.url).pathname.replace(/^\/(?:[A
 const records=JSON.parse(await readFile(path.join(ROOT,"data/specimens.json"),"utf8"));
 const tombstones=JSON.parse(await readFile(path.join(ROOT,"data/tombstones.json"),"utf8").catch(()=>'{"records":[]}'));
 const constellationGraph=JSON.parse(await readFile(path.join(ROOT,"data/constellations.json"),"utf8"));
+const speciesProjection=JSON.parse(await readFile(path.join(ROOT,"data/species.json"),"utf8"));
 const constellationAnchorByRecord=new Map();
 for(const view of constellationGraph.constellations||[]) for(const nodeId of view.node_ids||[]){
   const node=(constellationGraph.nodes||[]).find(item=>item.id===nodeId);
@@ -35,6 +36,10 @@ const performanceRows=record=>Array.isArray(record.performances)?record.performa
   const references=Array.isArray(performance.references)?performance.references.map(reference=>`<a href="${esc(url(reference.source))}" rel="noopener">${esc(reference.label||"Open evidence")}</a>`).join(" · "):"";
   return `<div class="record-row"><span>Filed performance</span><b>${esc(performance.character)}</b>${context?`<div>${esc(context)}</div>`:""}${performance.performance_mode?`<div>${esc(performance.performance_mode.replace(/-/g," "))}${references?` · ${references}`:""}</div>`:references?`<div>${references}</div>`:""}</div>`;
 }).join(""):"";
+const speciesRows=record=>(speciesProjection.taxa||[]).map(taxon=>({taxon,filed:(taxon.records||[]).find(item=>item.id===record.id)})).filter(item=>item.filed).map(({taxon,filed})=>{
+  const roles=[...new Set(filed.credits.map(credit=>credit.character))].join(" · ");
+  return `<div class="record-row"><span>Species · exact sourced role</span><b><a href="../../${esc(taxon.wall_route)}">${esc(taxon.label)} · see ${esc(taxon.counts.filed_records)} filed records</a></b><div>${esc(roles)} · <a href="../../${esc(taxon.coverage_route)}">audit source census</a></div></div>`;
+}).join("");
 
 function page(record){
   const id=record.id;
@@ -58,7 +63,7 @@ function page(record){
 <h1>${esc(record.character)}</h1><div class="record-sub">${record.kind==="voice"?"Voice performance":"Character performance"}</div>
 <div class="record-pair">${figure(record.still,"Character",record.character)}${figure(record.portrait,"Performer",record.actor)}</div>
 <section class="record-columns"><div><p class="record-reveal">${esc(record.reveal)}</p><p class="record-source">This permanent record is readable without JavaScript. The interactive view adds comparison and live connection paths.</p><div class="record-actions"><a class="record-action primary" href="../../recognition.html#${esc(id)}">Open interactive record <span>→</span></a><a class="record-action" href="../../index.html#${esc(id)}">Find on the wall <span>→</span></a>${constellationAction}</div></div>
-<aside class="record-ledger" aria-label="Record details"><div class="record-row"><span>${record.kind==="voice"?"Voiced by":"Performed by"}</span><b>${esc(record.actor)}</b></div><div class="record-row"><span>${record.kind==="voice"?"Filed production credit":"Design and build credit"}</span><b>${esc(creditPresent(record.designer)?record.designer:"Not yet on file")}</b></div>${performanceRows(record)}${conditionRows}${referenceRows}<div class="record-row"><span>You already knew them</span><b>${esc(record.knownFor)}</b></div>${source!=="#"?`<div class="record-row"><span>Performer profile</span><b><a href="${esc(source)}" rel="noopener">Open profile</a></b></div>`:""}${imageEvidence(record.still,"Character")}${imageEvidence(record.portrait,"Performer")}</aside></section>
+<aside class="record-ledger" aria-label="Record details"><div class="record-row"><span>${record.kind==="voice"?"Voiced by":"Performed by"}</span><b>${esc(record.actor)}</b></div>${speciesRows(record)}<div class="record-row"><span>${record.kind==="voice"?"Filed production credit":"Design and build credit"}</span><b>${esc(creditPresent(record.designer)?record.designer:"Not yet on file")}</b></div>${performanceRows(record)}${conditionRows}${referenceRows}<div class="record-row"><span>You already knew them</span><b>${esc(record.knownFor)}</b></div>${source!=="#"?`<div class="record-row"><span>Performer profile</span><b><a href="${esc(source)}" rel="noopener">Open profile</a></b></div>`:""}${imageEvidence(record.still,"Character")}${imageEvidence(record.portrait,"Performer")}</aside></section>
 </main></div></body></html>`;
 }
 
