@@ -7,130 +7,110 @@
  * or an unseen voice-only role. … If the audience mostly sees the performer as
  * themselves, it doesn't qualify."
  *
- * This engine judges each CANONICAL PERFORMANCE in data/ds9/roster.json against
- * that law, using only the SOURCED species already in the census graph. It never
- * decides the wall and never touches specimens.json — it emits verdicts with a
- * cited reason for every one:
- *
- *   eligible    — the character's species is realized in DS9 production design as a
- *                 full designed face (the performer is never seen as themselves).
- *   ineligible  — the character is Human / genetically-enhanced Human: the performer
- *                 appears as themselves, no designed face.
- *   review      — a light-makeup species (Bajoran ridge, Trill spots, Vulcan/Romulan
- *                 ears) or an unestablished species: the "designed face" question is
- *                 genuinely per-performance and cannot be settled from species alone.
- *
- * A light-makeup species is NEVER auto-excluded — a heavily-transformed Bajoran can
- * still qualify, so those land in review, not ineligible.
+ * Species does NOT decide eligibility — it only sets a review priority. A verdict
+ * of eligible/ineligible is DERIVED from performance-specific, SOURCED evidence
+ * held in data/ds9/eligibility-evidence.json (what transformation, how extensive,
+ * was the performer visible as themselves, and the Memory Alpha sources). Without
+ * that evidence a performance is `review`. Wall membership never overrides
+ * evidence; a conflict is surfaced as a diagnostic, not resolved by fiat.
  *
  *   node scripts/ds9-eligibility.mjs         # rebuild data/ds9/eligibility*.json
  */
 import { readFile, writeFile } from "node:fs/promises";
-import { normalizeCensusKey as normalize } from "./census-key.mjs";
 
 const roster = JSON.parse(await readFile("data/ds9/roster.json", "utf8"));
 const graphEdges = JSON.parse(await readFile("data/ds9/graph/edges.json", "utf8")).edges;
+const evidenceDoc = JSON.parse(await readFile("data/ds9/eligibility-evidence.json", "utf8"));
+const EVIDENCE = evidenceDoc.characters || {};
 
-// species -> the citation that established it (character page or species category),
-// straight from the sourced is_species edges. This is the receipt behind a verdict.
-const speciesSourceOf = new Map();   // "characterId|species" -> source url
-const speciesByChar = new Map();     // characterId -> [species]
+// species per character, from the sourced is_species edges — CONTEXT ONLY.
+const speciesByChar = new Map();
 for (const e of graphEdges) if (e.type === "is_species") {
   const c = e.from.replace("character:", ""), s = e.to.replace("species:", "");
   (speciesByChar.get(c) || speciesByChar.set(c, []).get(c)).push(s);
-  speciesSourceOf.set(c + "|" + s, e.source);
 }
-
-// --- GROW.md rule, grounded in DS9 production design and documented per tier ---
-// DESIGNED_FACE: species whose EVERY DS9 realization is a full prosthetic / creature
-// makeup — there is no "light" version, so per-performance and per-species coincide.
-const DESIGNED_FACE = new Set(["Cardassian", "Klingon", "Ferengi", "Jem'Hadar", "Vorta",
-  "Changeling", "Breen", "Lurian", "Hupyrian", "Nausicaan", "Karemma", "Tosk", "Gorn",
-  "Benzite", "Bolian", "Tzenkethi", "Wadi", "Markalian", "Lethean", "Boslic"]);
-// HUMANLIKE: the audience sees the performer essentially as themselves.
+// species only PRIORITISES review; it is never a verdict.
+const DESIGNED_FACE = new Set(["Cardassian", "Klingon", "Ferengi", "Jem'Hadar", "Vorta", "Changeling",
+  "Breen", "Lurian", "Hupyrian", "Nausicaan", "Karemma", "Tosk", "Gorn", "Benzite", "Bolian", "Tzenkethi", "Markalian", "Lethean", "Boslic"]);
 const HUMANLIKE = new Set(["Human", "Augment"]);
-// LIGHT_MAKEUP: a small prosthetic addition — the "designed face" call is genuinely
-// per-performance, so these go to review, never auto-eligible or auto-ineligible.
 const LIGHT_MAKEUP = new Set(["Bajoran", "Trill", "Vulcan", "Romulan", "Betazoid", "El-Aurian", "Grazerite"]);
+const priorityOf = (species) => species.some((s) => DESIGNED_FACE.has(s)) ? "likely-designed-face"
+  : species.length && species.every((s) => HUMANLIKE.has(s)) ? "likely-humanlike"
+  : species.some((s) => LIGHT_MAKEUP.has(s)) ? "borderline-light-makeup" : "unknown";
 
 const GROW = "https://github.com/BigBirdReturns/undercast/blob/main/GROW.md";
-const cites = (charId, species) => [
-  { claim: "GROW.md eligibility law", source: GROW },
-  ...species.map((s) => ({ claim: `character species: ${s}`, source: speciesSourceOf.get(charId + "|" + s) })).filter((c) => c.source),
-];
 
-function judge(row) {
-  const charId = row.character_page || row.character;
-  const species = [...new Set(speciesByChar.get(charId) || [])];
-  const designed = species.filter((s) => DESIGNED_FACE.has(s));
-  const light = species.filter((s) => LIGHT_MAKEUP.has(s));
-  const human = species.length > 0 && species.every((s) => HUMANLIKE.has(s));
+// The verdict is DERIVED from the sourced evidence facts, not asserted by anyone.
+// A designed face the performer disappears into -> eligible; the performer seen as
+// themselves -> ineligible; anything without sourced facts -> review.
+function judge(charId, species) {
+  const ev = EVIDENCE[charId];
+  const prior = priorityOf(species);
+  if (!ev || !Array.isArray(ev.sources) || ev.sources.length === 0)
+    return { verdict: "review", evidence: null, review_priority: prior,
+      reason: `No performance-specific transformation evidence yet. Species ${species.join("/") || "unestablished"} sets review priority "${prior}" but does not decide — GROW.md eligibility is about the designed face, not the race.` };
+  const { transformation = null, extent = null, visible_as_self = null } = ev;
+  const designed = extent && ["full", "partial"].includes(extent) && transformation && !/^none$/i.test(transformation);
   let verdict, reason;
-  if (designed.length) {
+  if (visible_as_self === false && designed) {
     verdict = "eligible";
-    reason = `Character species ${designed.join("/")} is realized in DS9 as a full designed face (prosthetic/creature makeup); the performer is not seen as themselves — GROW.md "vanishes under a designed face."`;
-  } else if (human) {
+    reason = `${row2label(charId)}: ${transformation} (${extent}); the performer is not seen as themselves — GROW.md "vanishes under a designed face."`;
+  } else if (visible_as_self === true || extent === "none" || (extent === "light" && visible_as_self !== false)) {
     verdict = "ineligible";
-    reason = `Character species ${species.join("/")} appears without a designed face; the audience sees ${row.performer} as themselves — GROW.md "if the audience mostly sees the performer as themselves, it doesn't qualify."`;
-  } else if (light.length) {
-    verdict = "review";
-    reason = `Character species ${light.join("/")} carries only a light makeup addition (e.g. nasal ridge / spots / ears); whether this "vanishes under a designed face" is a per-performance call, not decidable from species — GROW.md.`;
-  } else if (species.length) {
-    verdict = "review";
-    reason = `Character species ${species.join("/")} has no established DS9 makeup tier in this ruleset; needs per-performance adjudication before a verdict.`;
+    reason = `${row2label(charId)}: ${transformation || "no designed transformation"} (${extent || "none"}); the audience sees the performer as themselves — GROW.md disqualifier.`;
   } else {
     verdict = "review";
-    reason = `No species is established for this character in the census graph; the designed-face question cannot be judged from the sourced evidence alone.`;
+    reason = `${row2label(charId)}: evidence present but not decisive (transformation "${transformation}", extent "${extent}", visible_as_self ${visible_as_self}); needs a firmer sourced call.`;
   }
-  return { verdict, reason, species, citations: cites(charId, species) };
+  return { verdict, evidence: { transformation, extent, visible_as_self, sources: ev.sources }, review_priority: prior, reason };
 }
+const labels = new Map();
+const row2label = (charId) => labels.get(charId) || charId;
 
 const rulings = roster.map((row) => {
-  const j = judge(row);
+  const charId = row.character_page || row.character;
+  labels.set(charId, row.character);
+  const species = [...new Set(speciesByChar.get(charId) || [])];
+  const j = judge(charId, species);
   return {
     performer: row.performer, performer_pageid: row.performer_pageid,
     character: row.character, character_pageid: row.character_pageid,
     character_named: row.character_named, background_role: row.background_role,
-    species: j.species, verdict: j.verdict, reason: j.reason,
-    basis: "GROW.md designed-face law applied to sourced census species",
-    on_wall: row.role_on_wall, wall_ids: row.wall_ids,
-    duplicate_key: row.duplicate_key, citations: j.citations,
+    species,                       // context only
+    review_priority: j.review_priority,
+    verdict: j.verdict, reason: j.reason,
+    evidence: j.evidence,          // the sourced facts a decided verdict rests on
+    citations: [{ claim: "GROW.md eligibility law", source: GROW }, ...(j.evidence ? j.evidence.sources : [])],
+    on_wall: row.role_on_wall, wall_ids: row.wall_ids, duplicate_key: row.duplicate_key,
   };
 }).sort((a, b) => a.performer.localeCompare(b.performer) || a.character.localeCompare(b.character));
 
 const by = (v) => rulings.filter((r) => r.verdict === v);
 const eligible = by("eligible"), ineligible = by("ineligible"), review = by("review");
-// INVARIANT: nothing already on the wall may be ruled ineligible (it passed GROW.md
-// when it was added). review is allowed — a wall member may be a per-performance
-// borderline (Leeta, transform 1) or expose a census species gap (Gaila, Ferengi
-// with no is_species edge), and review neither excludes it nor pretends certainty.
-const onWallIneligible = rulings.filter((r) => r.on_wall && r.verdict === "ineligible");
-const onWallInReview = rulings.filter((r) => r.on_wall && r.verdict === "review");
+// evidence can contradict the wall — surfaced, never silently overridden either way.
+const evidenceContradictsWall = rulings.filter((r) => r.on_wall && r.verdict === "ineligible");
+const decided = rulings.filter((r) => r.verdict !== "review");
 
 const summary = {
-  version: 1, production: "Star Trek: Deep Space Nine",
+  version: 2, production: "Star Trek: Deep Space Nine",
   law: "GROW.md — a real, verifiable performer who vanishes under a designed face",
-  generated_from: ["data/ds9/roster.json", "data/ds9/graph/edges.json"],
-  method: "Deterministic, offline projection. Each canonical performance is judged from its SOURCED census species; every verdict cites GROW.md and the species source. Full-designed-face species -> eligible; Human/Augment -> ineligible; light-makeup or unestablished species -> review (never auto-excluded).",
-  rule_tiers: {
-    designed_face_eligible: [...DESIGNED_FACE].sort(),
-    humanlike_ineligible: [...HUMANLIKE].sort(),
-    light_makeup_review: [...LIGHT_MAKEUP].sort(),
-  },
+  generated_from: ["data/ds9/roster.json", "data/ds9/graph/edges.json", "data/ds9/eligibility-evidence.json"],
+  method: "Species sets a review PRIORITY only. eligible/ineligible are DERIVED from performance-specific sourced evidence (transformation, extent, visible-as-self) in eligibility-evidence.json; without that evidence a performance is review. Wall membership never overrides evidence.",
   canonical_performances: rulings.length,
   eligible: eligible.length, ineligible: ineligible.length, review: review.length,
-  every_verdict_cited: rulings.every((r) => r.citations.length >= 1),
-  invariant_on_wall_ruled_ineligible: onWallIneligible.length,   // MUST be 0
-  diagnostic_on_wall_in_review: onWallInReview.map((r) => ({ performer: r.performer, character: r.character, species: r.species, wall_ids: r.wall_ids, why: r.species.length ? "per-performance borderline (light makeup)" : "census species gap — no is_species edge for this character" })),
-  note: "This is a first-pass projection. review verdicts are candidates for a later, separately-authorized per-performance adjudication. Nothing here enters specimens.json.",
+  performances_with_sourced_evidence: decided.length + rulings.filter((r) => r.verdict === "review" && r.evidence).length,
+  every_decided_verdict_has_sources: decided.every((r) => r.evidence && r.evidence.sources.length > 0),
+  review_priority_breakdown: rulings.reduce((a, r) => (a[r.review_priority] = (a[r.review_priority] || 0) + 1, a), {}),
+  diagnostic_evidence_contradicts_wall: evidenceContradictsWall.map((r) => ({ performer: r.performer, character: r.character, wall_ids: r.wall_ids, evidence: r.evidence })),
+  note: "First-pass. Until the sourced adjudication is run, verdicts are honestly mostly review. Nothing here enters specimens.json.",
 };
 
-await writeFile("data/ds9/eligibility.json", JSON.stringify({ version: 1, count: rulings.length, rulings }, null, 1) + "\n");
+await writeFile("data/ds9/eligibility.json", JSON.stringify({ version: 2, count: rulings.length, rulings }, null, 1) + "\n");
 await writeFile("data/ds9/eligibility-summary.json", JSON.stringify(summary, null, 1) + "\n");
 
 console.log(`canonical performances: ${rulings.length}`);
-console.log(`  eligible:   ${eligible.length}`);
-console.log(`  ineligible: ${ineligible.length}`);
+console.log(`  eligible:   ${eligible.length}  (evidence-backed)`);
+console.log(`  ineligible: ${ineligible.length}  (evidence-backed)`);
 console.log(`  review:     ${review.length}`);
-console.log(`INVARIANT on-wall ruled ineligible (must be 0): ${onWallIneligible.length}`);
-console.log(`diagnostic on-wall in review: ${onWallInReview.length}`);
+console.log(`sourced evidence present for ${decided.length} decided verdict(s)`);
+console.log(`evidence-contradicts-wall diagnostics: ${evidenceContradictsWall.length}`);

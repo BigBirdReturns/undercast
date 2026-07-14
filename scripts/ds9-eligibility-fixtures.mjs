@@ -2,6 +2,10 @@
 /**
  * ds9-eligibility-fixtures.mjs — regression fixtures for the eligibility projection.
  * Offline; exits non-zero on any miss.  npm run ds9:eligibility:fixtures
+ *
+ * These lock the CONTRACT, not a headcount, so they hold whether the evidence file
+ * is empty (all review) or fully adjudicated: species never decides, every decided
+ * verdict is sourced, and the wall never overrides evidence.
  */
 import { readFile } from "node:fs/promises";
 
@@ -10,48 +14,44 @@ const summary = JSON.parse(await readFile("data/ds9/eligibility-summary.json", "
 
 let failed = 0;
 const check = (name, cond, detail = "") => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond ? "" : "  <- " + detail}`); if (!cond) failed++; };
-const find = (p, c) => rulings.find((r) => r.performer === p && r.character === c);
+const decided = rulings.filter((r) => r.verdict !== "review");
 
-console.log("== DS9 eligibility fixtures ==");
+console.log("== DS9 eligibility fixtures (evidence-driven contract) ==");
 
 // --- shape ---
 check("every ruling has a verdict in {eligible, ineligible, review}",
   rulings.every((r) => ["eligible", "ineligible", "review"].includes(r.verdict)));
-check("every verdict carries a cited reason (>=1 citation incl. GROW.md)",
-  rulings.every((r) => r.reason && r.citations.length >= 1 && r.citations.some((c) => /GROW\.md/.test(c.source))));
-check("every non-review verdict cites its species source",
-  rulings.filter((r) => r.verdict !== "review").every((r) => r.citations.some((c) => /memory-alpha/.test(c.source || ""))));
+check("every ruling cites GROW.md", rulings.every((r) => r.citations.some((c) => /GROW\.md/.test(c.source))));
+check("every ruling carries a review_priority",
+  rulings.every((r) => ["likely-designed-face", "likely-humanlike", "borderline-light-makeup", "unknown"].includes(r.review_priority)));
 
-// --- INVARIANT: nothing on the wall is ruled ineligible ---
-check("INVARIANT: no on-wall performance is ruled ineligible",
-  rulings.filter((r) => r.on_wall && r.verdict === "ineligible").length === 0,
-  rulings.filter((r) => r.on_wall && r.verdict === "ineligible").map((r) => r.performer + "/" + r.character).join(","));
-check("summary invariant field agrees (== 0)", summary.invariant_on_wall_ruled_ineligible === 0);
+// --- THE CORRECTION: species must not decide; only sourced evidence decides ---
+check("no verdict is decided (eligible/ineligible) without sourced evidence",
+  decided.every((r) => r.evidence && Array.isArray(r.evidence.sources) && r.evidence.sources.length > 0),
+  decided.filter((r) => !(r.evidence?.sources?.length)).map((r) => r.performer + "/" + r.character).slice(0, 5).join(","));
+check("every decided verdict cites a Memory Alpha source",
+  decided.every((r) => r.citations.some((c) => /memory-alpha/.test(c.source || ""))));
+check("eligible only when evidence says the performer is NOT visible as themselves",
+  rulings.filter((r) => r.verdict === "eligible").every((r) => r.evidence?.visible_as_self === false));
+check("ineligible always rests on evidence (never on species/humanlike alone)",
+  rulings.filter((r) => r.verdict === "ineligible").every((r) => r.evidence && r.evidence.sources.length > 0));
+// a designed-face species with NO evidence must still be review (species != verdict)
+const unadjudicatedDesigned = rulings.filter((r) => r.review_priority === "likely-designed-face" && !r.evidence);
+check("a likely-designed-face species with no evidence stays review (species is only a priority)",
+  unadjudicatedDesigned.every((r) => r.verdict === "review"));
 
-// --- rule integrity ---
-check("eligible verdicts only for designed-face species",
-  rulings.filter((r) => r.verdict === "eligible").every((r) => r.species.some((s) => summary.rule_tiers.designed_face_eligible.includes(s))));
-check("ineligible verdicts only for humanlike species (Human/Augment)",
-  rulings.filter((r) => r.verdict === "ineligible").every((r) => r.species.length && r.species.every((s) => summary.rule_tiers.humanlike_ineligible.includes(s))));
-check("no light-makeup species is ever ruled ineligible (a transformed Bajoran can qualify)",
-  rulings.filter((r) => r.species.some((s) => summary.rule_tiers.light_makeup_review.includes(s))).every((r) => r.verdict !== "ineligible"));
+// --- wall does not override evidence ---
+check("summary agrees eligibility is evidence-derived, not wall-driven",
+  summary.every_decided_verdict_has_sources === true);
+check("evidence-contradicts-wall is surfaced as a diagnostic, not forced away",
+  Array.isArray(summary.diagnostic_evidence_contradicts_wall));
 
-// --- specific verdicts ---
-const V = (p, c, v) => check(`${p} as ${c} -> ${v}`, find(p, c)?.verdict === v, find(p, c)?.verdict);
-V("Andrew J. Robinson", "Elim Garak", "eligible");   // Cardassian
-V("Jeffrey Combs", "Weyoun 5", "eligible");           // Vorta
-V("Aron Eisenberg", "Nog", "eligible");               // Ferengi
-V("Alexander Siddig", "Julian Bashir", "ineligible"); // Augment/Human
-V("Avery Brooks", "Benjamin Sisko", "ineligible");    // Human
-V("Nana Visitor", "Kira Nerys", "review");            // Bajoran (light)
-V("Terry Farrell", "Jadzia Dax", "review");           // Trill (light)
-
-// --- determinism: summary counts match the rulings ---
+// --- determinism ---
 check("summary counts match rulings",
   summary.eligible === rulings.filter((r) => r.verdict === "eligible").length &&
   summary.ineligible === rulings.filter((r) => r.verdict === "ineligible").length &&
   summary.review === rulings.filter((r) => r.verdict === "review").length &&
   summary.canonical_performances === rulings.length);
 
-console.log(`\n${failed ? failed + " FIXTURE(S) FAILED" : "all eligibility fixtures passed"}`);
+console.log(`\n${failed ? failed + " FIXTURE(S) FAILED" : "all eligibility fixtures passed"}  (eligible ${summary.eligible} / ineligible ${summary.ineligible} / review ${summary.review})`);
 process.exit(failed ? 1 : 0);

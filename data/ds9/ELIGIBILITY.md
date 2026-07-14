@@ -1,47 +1,63 @@
 # DS9 eligibility — a per-performance GROW.md projection
 
-A first-pass ruling on every canonical performance in `roster.json` against the
-GROW.md wall law:
+A ruling on every canonical performance in `roster.json` against the GROW.md wall
+law:
 
 > a real, verifiable performer who **vanishes under a designed face** — heavy
 > prosthetics, a mask, a full creature suit, motion capture, or an unseen
 > voice-only role. … If the audience mostly sees the performer *as themselves*,
 > it doesn't qualify.
 
-**This decides nothing.** It is a sourced projection, not an ingestion. Nothing
-here enters `specimens.json`; `review` verdicts are candidates for a later,
-separately-authorized per-performance adjudication.
+**This decides nothing about the wall.** It is a sourced projection, not an
+ingestion. Nothing here enters `specimens.json`.
 
 ```
 npm run ds9:eligibility            # rebuild eligibility.json + summary (offline, deterministic)
-npm run ds9:eligibility:fixtures    # regression checks
+npm run ds9:eligibility:fixtures    # contract checks
 ```
 
-## Method
+## Species does not decide — evidence does
 
-Deterministic and offline. Each performance is judged from the **sourced species**
-already in the census graph (`graph/edges.json` `is_species` edges). Every verdict
-cites GROW.md and, for a decided verdict, the Memory Alpha source of the species.
+A verdict of `eligible` / `ineligible` is **derived from performance-specific,
+sourced evidence** held in `eligibility-evidence.json` — never from species:
 
-| verdict | when | why it's safe |
-| --- | --- | --- |
-| `eligible` | character species is a **full designed face** in DS9 production design (Cardassian, Klingon, Ferengi, Jem'Hadar, Vorta, Changeling, Breen, …) | for these species there is no "light" version — the performer is never seen as themselves, so per-performance and per-species coincide. |
-| `ineligible` | character is **Human / Augment** | the audience sees the performer as themselves; GROW.md's explicit disqualifier. |
-| `review` | **light-makeup** species (Bajoran ridge, Trill spots, Vulcan/Romulan ears) **or** no species established | whether a light addition "vanishes under a designed face" is a per-performance call; a heavily-transformed Bajoran can still qualify, so it is **never auto-excluded**. |
+- **transformation** — what was used (full facial prosthetic, creature suit, mask,
+  motion capture, voice-only, light nasal appliance, none).
+- **extent** — full / partial / light / none.
+- **visible_as_self** — was the audience seeing the performer as themselves?
+- **sources** — the Memory Alpha pages that support those facts.
 
-The exact species tiers are recorded in `eligibility-summary.json` (`rule_tiers`).
+The engine derives the verdict:
 
-## Invariant
+| verdict | derived when |
+| --- | --- |
+| `eligible` | `visible_as_self: false` and a full/partial designed transformation, with sources |
+| `ineligible` | `visible_as_self: true`, or transformation none/light, with sources |
+| `review` | no sourced evidence yet, or the evidence is not decisive |
 
-`invariant_on_wall_ruled_ineligible` **must be 0**: nothing already on the wall may
-be ruled ineligible (it passed GROW.md when it was added). A wall member may land
-in `review` — this surfaces either a per-performance borderline the owner
-deliberately included (Leeta, `transform: 1`) or a **census species gap** (Gaila:
-a Ferengi with no `is_species` edge). Those appear in
-`diagnostic_on_wall_in_review` — informational, not a contradiction.
+Species is recorded only as a `review_priority`
+(`likely-designed-face` / `likely-humanlike` / `borderline-light-makeup` /
+`unknown`) — a hint for ordering the adjudication queue. A Cardassian with no
+adjudicated evidence is still `review`; a heavily-transformed Bajoran can become
+`eligible` once the evidence says so.
+
+## The wall does not override evidence
+
+There is no rule forcing a wall member to be eligible. If sourced evidence rules
+an on-wall performance `ineligible`, that is recorded in
+`diagnostic_evidence_contradicts_wall` for a human to reconcile — evidence is
+never overridden by membership, in either direction.
+
+## Trajectory
+
+Until the sourced adjudication pass populates `eligibility-evidence.json`, the
+honest result is **every performance `review`**. The adjudication (a
+Memory-Alpha-grounded, per-character reading of the actual transformation) then
+turns sourced facts into verdicts. `review` verdicts that remain are candidates
+for further, separately-authorized adjudication.
 
 ## Row fields
 
-`performer`, `character` (+ pageids), `species`, `verdict`, `reason`
-(performance-specific), `basis`, `on_wall` / `wall_ids`, and `citations[]`
-(GROW.md + species source).
+`performer`, `character` (+ pageids), `species` (context only), `review_priority`,
+`verdict`, `reason`, `evidence` (`transformation` / `extent` / `visible_as_self` /
+`sources`, or `null`), `on_wall` / `wall_ids`, `citations[]`.
