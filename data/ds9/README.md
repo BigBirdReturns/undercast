@@ -99,7 +99,12 @@ Actual relationships, each edge separately cited to the infobox field, category
 or named page that states it:
 
 - `parent_of` (parent→child), `sibling_of`, `spouse_of` — from character infobox
-  family fields. Generic relationship-word links (`[[son]]`) are dropped.
+  family fields, **relation-aware and reciprocally corroborated**. Explanatory
+  links after a connective (`[[Ziyal]] (daughter by [[Naprem]])`, `…through
+  [[Dukat's wife]]`) are cut, generic relationship-word links (`[[son]]`) are
+  dropped, and an edge is asserted **only when both endpoints' infoboxes state
+  it** (each edge carries `corroborated_by: [both pages]`). One-sided claims are
+  held in `graph/family-review.json` — preserved for audit, never asserted.
 - `member_of` — House / family / organization membership (infobox + category).
 - `host_of` — the Trill symbiont Dax to each host, from a **curated evidence
   table** typed `primary` (the nine), `temporary` (Verad), or `alternate`

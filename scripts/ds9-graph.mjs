@@ -86,13 +86,21 @@ const orgCategory = (cat) => {
 // infobox family fields -> the parent/child direction of a parent_of edge.
 const FAMILY_PARENT_FIELDS = ["father", "mother", "parents"];   // link is the PARENT of this character
 const FAMILY_CHILD_FIELDS = ["children", "son", "daughter"];    // link is a CHILD of this character
-const FAMILY_PEER_FIELDS = { sibling_of: ["sibling", "siblings", "brother", "sister"], spouse_of: ["spouse", "partner"] };
+const FAMILY_SIBLING_FIELDS = ["sibling", "siblings", "brother", "sister"];
+const FAMILY_SPOUSE_FIELDS = ["spouse", "partner", "husband", "wife"];
 
+// requested title -> canonical title, from every fetch's redirect/normalization
+// data, so family links that are redirects ([[Garak]] -> Elim Garak) connect to
+// the right character node.
+const canonTitle = new Map();
+const resolveTitle = (t) => { let cur = t; for (let i = 0; i < 6 && canonTitle.has(cur); i++) cur = canonTitle.get(cur); return cur; };
 async function fetchPages(titles) {
   const out = new Map();
   for (let i = 0; i < titles.length; i += 20) {
     const j = await mw({ action: "query", prop: "revisions|categories", rvprop: "ids|timestamp|content",
       rvslots: "main", cllimit: "500", clshow: "!hidden", redirects: "1", titles: titles.slice(i, i + 20).join("|") });
+    for (const n of j?.query?.normalized || []) canonTitle.set(n.from, n.to);
+    for (const r of j?.query?.redirects || []) canonTitle.set(r.from, r.to);
     for (const page of Object.values(j?.query?.pages || {})) {
       if (page.missing !== undefined) { out.set(page.title, { title: page.title, missing: true }); continue; }
       const rev = page?.revisions?.[0] || {};
@@ -107,15 +115,23 @@ async function fetchPages(titles) {
 
 // relationship-word links ([[son]], [[daughter]]) are the field's own label, not
 // a named relative — never a family node.
-const GENERIC_KIN = /^(son|daughter|child|children|brother|sister|sibling|mother|father|parent|wife|husband|spouse|twin)s?$/i;
-const kin = (value) => [...new Set(fieldLinks(value).filter((t) => !GENERIC_KIN.test(t)))];
+const GENERIC_KIN = /^(son|daughter|child|children|brother|sister|sibling|mother|father|parent|wife|husband|spouse|twin|half-\w+|step\w*|niece|nephew|aunt|uncle|cousin|grand\w+)s?$/i;
+// Family fields mix the relative with EXPLANATORY links: "[[Ziyal]] (daughter by
+// [[Naprem]])", "[[six half-siblings]], through [[Dukat's wife]]". Everything from
+// the first explanatory connective onward describes the relationship rather than
+// naming another relative, so it is cut before links are read.
+const EXPLANATORY = /\s*(?:\(|;|:|\bby\b|\bthrough\b|\bvia\b|\bwith\b|\bfrom\b|\bof\b|&ndash;|&mdash;|–|—| - )/i;
+const relatives = (value) => [...new Set(value.split(/<br\s*\/?>/i).flatMap((entry) =>
+  fieldLinks(entry.split(EXPLANATORY)[0]).filter((t) => !GENERIC_KIN.test(t))))];
 function parseCharacter(page) {
   const head = page.wikitext.split(/\n==[^=]/)[0];
-  const family = { parents: [], children: [], sibling_of: [], spouse_of: [] };
-  for (const f of FAMILY_PARENT_FIELDS) family.parents.push(...kin(infoboxField(head, f)));
-  for (const f of FAMILY_CHILD_FIELDS) family.children.push(...kin(infoboxField(head, f)));
-  for (const [pred, fields] of Object.entries(FAMILY_PEER_FIELDS))
-    for (const f of fields) family[pred].push(...kin(infoboxField(head, f)));
+  const family = { parents: [], children: [], siblings: [], spouses: [] };
+  for (const f of FAMILY_PARENT_FIELDS) family.parents.push(...relatives(infoboxField(head, f)));
+  for (const f of FAMILY_CHILD_FIELDS) family.children.push(...relatives(infoboxField(head, f)));
+  for (const f of FAMILY_SIBLING_FIELDS) family.siblings.push(...relatives(infoboxField(head, f)));
+  for (const f of FAMILY_SPOUSE_FIELDS) family.spouses.push(...relatives(infoboxField(head, f)));
+  family.parents = [...new Set(family.parents)]; family.children = [...new Set(family.children)];
+  family.siblings = [...new Set(family.siblings)]; family.spouses = [...new Set(family.spouses)];
   return {
     title: page.title, source: wikiUrl(page.title), pageid: page.pageid, revision: page.revision,
     timestamp: page.timestamp, content_sha256: digest(page.wikitext),
@@ -133,6 +149,7 @@ const roster = JSON.parse(await readFile("data/ds9/roster.json", "utf8"));
 const characterPages = [...new Set(roster.map((r) => r.character_page).filter(Boolean))].sort();
 
 const nodes = new Map();
+let familyReview = [];   // one-sided family claims, held for audit (not asserted)
 const addNode = (type, id, extra = {}) => {
   const key = type + ":" + id;
   if (!nodes.has(key)) nodes.set(key, { type, id, label: id, ...extra });
@@ -161,9 +178,19 @@ if (PROJECT_ONLY) {
 // ---- performer -> character (episode-cited) + base character nodes ----
 if (!PROJECT_ONLY) {
   console.log(`== reading ${characterPages.length} DS9 character pages ==`);
-  const pages = await fetchPages(characterPages);
   const charData = new Map();
-  for (const [title, page] of pages) charData.set(title, page.missing ? { title, missing: true } : parseCharacter(page));
+  for (const [title, page] of await fetchPages(characterPages)) charData.set(title, page.missing ? { title, missing: true } : parseCharacter(page));
+  // fetch every family-referenced page not already loaded, so a relationship can
+  // be corroborated from BOTH endpoints rather than asserted from one side.
+  const famTitles = new Set();
+  for (const c of charData.values()) if (!c.missing)
+    for (const t of [...c.family.parents, ...c.family.children, ...c.family.siblings, ...c.family.spouses])
+      if (!charData.has(t)) famTitles.add(t);
+  if (famTitles.size) {
+    console.log(`== reading ${famTitles.size} family-referenced pages ==`);
+    for (const [title, page] of await fetchPages([...famTitles].sort()))
+      if (!charData.has(title)) charData.set(title, page.missing ? { title, missing: true, family_target: true } : { ...parseCharacter(page), family_target: true });
+  }
 
 for (const row of roster) {
   const cid = row.character_page || row.character;
@@ -198,16 +225,54 @@ for (const [page, c] of charData) {
   for (const [s, cite] of species) { bySpecies(s); addEdge("is_species", "character:" + page, "species:" + s, { ...cite, predicate: "is_species" }); }
   for (const [a, cite] of orgs) { addNode("organization", a); addEdge("affiliated_with", "character:" + page, "organization:" + a, { ...cite, predicate: "affiliated_with" }); }
   for (const [l, cite] of lineages) { addNode("lineage", l); addEdge("member_of", "character:" + page, "lineage:" + l, { ...cite, predicate: "member_of" }); }
-
-  // family edges (parent_of parent->child; sibling_of / spouse_of undirected, sorted)
-  const famNode = (title) => { addNode("character", title, nodes.has("character:" + title) ? {} : { label: title, in_cast: false }); return "character:" + title; };
-  for (const p of c.family.parents) addEdge("parent_of", famNode(p), "character:" + page, { ...infoboxCite, predicate: "parent_of", read_from: c.title });
-  for (const ch of c.family.children) addEdge("parent_of", "character:" + page, famNode(ch), { ...infoboxCite, predicate: "parent_of", read_from: c.title });
-  for (const pred of ["sibling_of", "spouse_of"]) for (const other of c.family[pred]) {
-    const [a, b] = ["character:" + page, famNode(other)].sort();
-    addEdge(pred, a, b, { ...infoboxCite, predicate: pred, read_from: c.title });
-  }
 }
+
+// ---- family edges by RECIPROCAL CORROBORATION ----
+// A relationship is asserted only when BOTH endpoints' infoboxes state it (A lists
+// B as child AND B lists A as parent; both list each other as sibling/spouse).
+// One-sided claims are held in family-review.json, not asserted — this is what
+// kills the false "Dukat parent_of Naprem" / "wife sibling_of Ziyal" edges that
+// come from explanatory links surviving on a single page.
+const famCite = (t, c) => ({ citation_type: "infobox-reciprocal", source: c.source, revision: c.revision, content_sha256: c.content_sha256 });
+const famNode = (title, c) => { addNode("character", title, nodes.has("character:" + title) ? {} : { label: title, in_cast: !!(c && !c.family_target) }); return "character:" + title; };
+// directed parent→child claims and undirected peer claims, keyed by canonical title
+const childrenClaim = new Map();  // parentTitle -> Set(childTitle) declared on the parent's page
+const parentClaim = new Map();    // childTitle -> Set(parentTitle) declared on the child's page
+const siblingClaim = new Map();   // title -> Set(siblingTitle)
+const spouseClaim = new Map();    // title -> Set(spouseTitle)
+const add = (map, k, v) => { (map.get(k) || map.set(k, new Set()).get(k)).add(v); };
+for (const [page, c] of charData) {
+  if (c.missing) continue;
+  const self = resolveTitle(page);
+  for (const p of c.family.parents) add(parentClaim, self, resolveTitle(p));
+  for (const ch of c.family.children) add(childrenClaim, self, resolveTitle(ch));
+  for (const s of c.family.siblings) add(siblingClaim, self, resolveTitle(s));
+  for (const s of c.family.spouses) add(spouseClaim, self, resolveTitle(s));
+}
+const dataFor = (title) => charData.get(title) || charData.get([...charData.keys()].find((k) => resolveTitle(k) === title));
+const seenPair = new Set();
+// parent_of: corroborated when the parent's page lists the child AND the child's page lists the parent
+for (const [parent, kids] of childrenClaim) for (const child of kids) {
+  const key = "parent_of|" + parent + "|" + child; if (seenPair.has(key)) continue; seenPair.add(key);
+  const reciprocal = parentClaim.get(child)?.has(parent);
+  if (reciprocal) addEdge("parent_of", famNode(parent, dataFor(parent)), famNode(child, dataFor(child)),
+    { ...famCite(parent, dataFor(parent) || {}), predicate: "parent_of", corroborated_by: [wikiUrl(parent), wikiUrl(child)] });
+  else familyReview.push({ predicate: "parent_of", parent, child, declared_on: wikiUrl(parent), missing_reciprocal_on: wikiUrl(child), reason: "child's page does not list this parent" });
+}
+// also surface child-side parent claims with no parent-side child claim
+for (const [child, parents] of parentClaim) for (const parent of parents) {
+  const key = "parent_of|" + parent + "|" + child; if (seenPair.has(key)) continue; seenPair.add(key);
+  familyReview.push({ predicate: "parent_of", parent, child, declared_on: wikiUrl(child), missing_reciprocal_on: wikiUrl(parent), reason: "parent's page does not list this child" });
+}
+// sibling_of / spouse_of: corroborated when both list each other
+for (const [pred, map] of [["sibling_of", siblingClaim], ["spouse_of", spouseClaim]])
+  for (const [a, others] of map) for (const b of others) {
+    const [x, y] = [a, b].sort(); const key = pred + "|" + x + "|" + y; if (seenPair.has(key)) continue; seenPair.add(key);
+    const reciprocal = map.get(b)?.has(a);
+    if (reciprocal) addEdge(pred, famNode(x, dataFor(x)), famNode(y, dataFor(y)),
+      { citation_type: "infobox-reciprocal", predicate: pred, corroborated_by: [wikiUrl(a), wikiUrl(b)] });
+    else familyReview.push({ predicate: pred, a, b, declared_on: wikiUrl(a), missing_reciprocal_on: wikiUrl(b), reason: "other party's page does not list this " + pred.replace("_of", "") });
+  }
 
 // ---- sourced doctrine + succession edges (from named pages, not prose inference) ----
 // The nine primary Dax hosts, plus the temporary and alternate-timeline hosts, as
@@ -410,11 +475,18 @@ const projectionsDoc = { version: 2,
   bloc_rules: BLOCS.map((b) => ({ key: b.key, label: b.label, species: String(b.species), affiliation: String(b.affil) })),
   projections: Object.fromEntries(Object.entries(projections).map(([k, g]) => [k, { label: g.label, node_count: g.node_count, edge_count: g.edge_count }])),
   detail: projections };
+const familyReviewDoc = { version: 1, production: "Star Trek: Deep Space Nine",
+  note: "One-sided family claims: an infobox on one page names the relative, but the relative's own page does not corroborate it. Held for audit — NOT asserted as edges. Reciprocally-corroborated relationships are in edges.json.",
+  count: familyReview.length, review: familyReview.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))) };
 const summaryDoc = { version: 2,
   generated_from: ["data/ds9/graph/nodes.json", "data/ds9/graph/edges.json"],
   node_counts: nodeCounts, edge_counts: edgeCounts,
   characters_with_species: characterNodes.filter((n) => (n.species || []).length).length,
   characters_without_species: characterNodes.filter((n) => !(n.species || []).length).length,
+  family_edges_corroborated: edges.filter((e) => ["parent_of", "sibling_of", "spouse_of"].includes(e.type)).length,
+  family_claims_one_sided_in_review: PROJECT_ONLY
+    ? JSON.parse(await readFile("data/ds9/graph/family-review.json", "utf8")).count
+    : familyReview.length,
   projections: Object.fromEntries(Object.entries(projections).map(([k, g]) => [k, { node_count: g.node_count, edge_count: g.edge_count }])),
   relationships: Object.fromEntries(Object.entries(relationships).map(([k, g]) => [k, { node_count: g.node_count, edge_count: g.edge_count }])) };
 
@@ -426,12 +498,15 @@ const write = async (name, doc) => {
 // In project-only mode nodes/edges are inputs, not outputs — leave them untouched
 // so the manifest can prove the derived files match the committed nodes/edges.
 const snapshots = {};
+const hashOnly = async (name) => ({ path: "data/ds9/graph/" + name, sha256: digest(await readFile("data/ds9/graph/" + name, "utf8")) });
 if (!PROJECT_ONLY) {
   snapshots.nodes = await write("nodes.json", nodesDoc);
   snapshots.edges = await write("edges.json", edgesDoc);
+  snapshots.family_review = await write("family-review.json", familyReviewDoc);
 } else {
-  snapshots.nodes = { path: "data/ds9/graph/nodes.json", sha256: digest(await readFile("data/ds9/graph/nodes.json", "utf8")) };
-  snapshots.edges = { path: "data/ds9/graph/edges.json", sha256: digest(await readFile("data/ds9/graph/edges.json", "utf8")) };
+  snapshots.nodes = await hashOnly("nodes.json");
+  snapshots.edges = await hashOnly("edges.json");
+  snapshots.family_review = await hashOnly("family-review.json");
 }
 snapshots.relationships = await write("relationships.json", relationshipsDoc);
 snapshots.projections = await write("projections.json", projectionsDoc);

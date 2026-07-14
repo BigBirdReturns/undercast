@@ -89,6 +89,27 @@ const cardEdges = new Set(rel.cardassian_web.edges.map((e) => e.type + "|" + e.f
 check("cardassian_web includes Enabran Tain → Elim Garak", cardEdges.has("parent_of|character:Enabran Tain|character:Elim Garak"));
 check("cardassian_web includes Dukat → Tora Ziyal", cardEdges.has("parent_of|character:Dukat|character:Tora Ziyal"));
 
+// --- family: reciprocal corroboration + NEGATIVE fixtures for explanatory-link bugs ---
+const famKey = new Set(edges.filter((e) => ["parent_of", "sibling_of", "spouse_of"].includes(e.type)).map((e) => e.type + "|" + e.from.replace("character:", "") + "|" + e.to.replace("character:", "")));
+const famEdges = edges.filter((e) => ["parent_of", "sibling_of", "spouse_of"].includes(e.type));
+// NEGATIVE: explanatory links must never become relationships
+check("NEGATIVE: Dukat is NOT parent_of Mika (mother of his child, not his child)", !famKey.has("parent_of|Dukat|Mika"));
+check("NEGATIVE: Dukat is NOT parent_of Tora Naprem (Ziyal's mother, explanatory link)", !famKey.has("parent_of|Dukat|Tora Naprem"));
+check("NEGATIVE: Dukat's wife is NOT sibling_of Tora Ziyal (related-through link)", !famKey.has("sibling_of|Dukat's wife 001|Tora Ziyal") && !famKey.has("sibling_of|Tora Ziyal|Dukat's wife 001"));
+check("NEGATIVE: Mika is NOT sibling_of/parent of the hybrid via Dukat", !famKey.has("parent_of|Dukat|Hybrids Mika baby"));
+// POSITIVE: real, reciprocally-corroborated relationships survive
+for (const [a, t, b] of [["Enabran Tain", "parent_of", "Elim Garak"], ["Dukat", "parent_of", "Tora Ziyal"],
+  ["Rom", "parent_of", "Nog"], ["Keldar", "parent_of", "Quark"]])
+  check(`family: ${a} ${t} ${b} corroborated`, famKey.has(`${t}|${a}|${b}`));
+check("family: every asserted edge is reciprocally corroborated (2 sources)",
+  famEdges.every((e) => Array.isArray(e.corroborated_by) && e.corroborated_by.length === 2),
+  `${famEdges.filter((e) => !(e.corroborated_by || []).length === 2).length} uncorroborated`);
+const famReview = JSON.parse(await readFile("data/ds9/graph/family-review.json", "utf8"));
+check("family-review.json preserves one-sided claims (not asserted, not dropped)", famReview.count > 0 && Array.isArray(famReview.review));
+const reviewKeys = new Set(famReview.review.map((r) => r.predicate + "|" + (r.parent || r.a) + "|" + (r.child || r.b)));
+check("no asserted family edge is also in the one-sided review set",
+  [...famKey].every((k) => !reviewKeys.has(k)));
+
 // --- provenance: every relationship edge is cited ---
 const RELATIONAL = new Set(["is_species", "affiliated_with", "member_of", "parent_of", "sibling_of", "spouse_of", "host_of", "succeeded_by", "clone_instance_of", "commands", "allied_with", "belligerent_in"]);
 const uncited = edges.filter((e) => RELATIONAL.has(e.type) && !e.source && !e.citation_type);
