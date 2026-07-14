@@ -4,7 +4,33 @@ import { readFile } from "node:fs/promises";
 const sitePath=path=>`/undercast/${String(path).replace(/^\//,"")}`;
 const open=(page,path)=>page.goto(sitePath(path),{waitUntil:"domcontentloaded"});
 const pixel=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+Xh9WAAAAAElFTkSuQmCC","base64");
+const jpeg=await readFile(new URL("../../images/uc-035-portrait.jpg",import.meta.url));
 const waitForWall=async page=>expect(page.locator("#result-status")).toContainText(/specimens? match/);
+const channels=color=>(color.match(/[\d.]+/g)||[]).slice(0,3).map(Number);
+const luminance=color=>{
+  const values=channels(color).map(value=>value/255).map(value=>value<=.04045?value/12.92:((value+.055)/1.055)**2.4);
+  return .2126*values[0]+.7152*values[1]+.0722*values[2];
+};
+const contrast=(a,b)=>{
+  const [lighter,darker]=[luminance(a),luminance(b)].sort((x,y)=>y-x);
+  return (lighter+.05)/(darker+.05);
+};
+const expectContrast=async(page,selector,background)=>{
+  const samples=await page.locator(selector).evaluateAll((nodes,forced)=>nodes.filter(node=>{
+    const style=getComputedStyle(node),rect=node.getBoundingClientRect();
+    return style.display!=="none"&&style.visibility!=="hidden"&&rect.width>0&&rect.height>0;
+  }).map(node=>{
+    let current=node,bg=forced;
+    while(!bg&&current){
+      const candidate=getComputedStyle(current).backgroundColor;
+      if(candidate&&!/rgba?\([^)]*,\s*0\s*\)$/.test(candidate)&&candidate!=="transparent") bg=candidate;
+      current=current.parentElement;
+    }
+    return {text:node.textContent.trim().slice(0,50),fg:getComputedStyle(node).color,bg:bg||"rgb(255, 255, 255)"};
+  }),background);
+  expect(samples.length,`${selector} rendered samples`).toBeGreaterThan(0);
+  for(const sample of samples) expect(contrast(sample.fg,sample.bg),`${selector} “${sample.text}” ${sample.fg} on ${sample.bg}`).toBeGreaterThanOrEqual(4.5);
+};
 const captureConsoleErrors=page=>{
   const errors=[];
   page.on("console",message=>{ if(message.type()==="error") errors.push(message.text()); });
@@ -18,6 +44,8 @@ test.beforeEach(async({page})=>{
     // fonts render fine for behaviour tests, and the run no longer depends on network).
     if(url.hostname==="fonts.googleapis.com") return route.fulfill({status:200,contentType:"text/css",body:""});
     if(url.hostname==="fonts.gstatic.com") return route.fulfill({status:200,contentType:"font/woff2",body:Buffer.alloc(0)});
+    if(url.hostname==="github.com"&&url.pathname.includes("/releases/download/")) return route.fulfill({status:200,contentType:"image/jpeg",body:jpeg});
+    if(url.hostname==="release-assets.githubusercontent.com") return route.fulfill({status:200,contentType:"image/jpeg",body:jpeg});
     if(request.resourceType()==="image"&&url.hostname!=="127.0.0.1") return route.fulfill({status:200,contentType:"image/png",body:pixel});
     return route.continue();
   });
@@ -72,6 +100,17 @@ test("archive navigation stays complete, consistent, and inside every viewport",
       const browseTarget=await nav.getByRole("link",{name:"Browse",exact:true}).evaluate(link=>new URL(link.href).hash);
       expect(browseTarget,`${surface.path} Browse destination`).toBe("#archive");
       await expect(nav.locator('[aria-current="page"]')).toHaveCount(surface.current);
+      const targets=await nav.locator("a,button").evaluateAll(nodes=>nodes.filter(node=>{
+        const style=getComputedStyle(node),rect=node.getBoundingClientRect();
+        return style.display!=="none"&&style.visibility!=="hidden"&&rect.width>0&&rect.height>0;
+      }).map(node=>{
+        const rect=node.getBoundingClientRect();
+        return {label:node.textContent.trim(),width:rect.width,height:rect.height};
+      }));
+      for(const target of targets){
+        expect(target.width,`${surface.path} ${target.label} target width at ${viewport.width}px`).toBeGreaterThanOrEqual(24);
+        expect(target.height,`${surface.path} ${target.label} target height at ${viewport.width}px`).toBeGreaterThanOrEqual(24);
+      }
       const overflow=await page.locator(".site-shell").evaluate(shell=>{
         const viewportWidth=document.documentElement.clientWidth;
         const visible=[shell,...shell.querySelectorAll("a,button")].filter(node=>{
@@ -157,6 +196,78 @@ test.describe("homepage without JavaScript",()=>{
   });
 });
 
+test.describe("permanent records without JavaScript",()=>{
+  test.use({javaScriptEnabled:false});
+
+  test("renders filed Release images from a narrowly pinned GitHub host",async({page})=>{
+    await open(page,"records/UC-001/");
+    const policy=await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute("content");
+    expect(policy).toContain("object-src 'self' https://github.com https://release-assets.githubusercontent.com");
+    expect(policy).not.toContain("object-src https:");
+    await expect(page.locator(".record-media")).toHaveCount(2);
+    await expect(page.locator(".record-media").first()).toBeVisible();
+    for(const fallback of await page.locator(".record-absence.load-failed").all()) await expect(fallback).toBeHidden();
+  });
+
+  test("distinguishes a filed image load failure from evidence not on file",async({page})=>{
+    await page.route("**/releases/download/**",route=>route.abort());
+    await open(page,"records/UC-040/");
+    const failed=page.locator(".record-absence.load-failed");
+    const notFiled=page.locator(".record-absence.not-filed");
+    await expect(failed).toBeVisible();
+    await expect(failed).toHaveAttribute("aria-label",/could not be loaded/);
+    await expect(notFiled).toBeVisible();
+    await expect(notFiled).toHaveAttribute("aria-label",/not on file/);
+    const geometry=await failed.evaluate(node=>{
+      const well=node.closest(".record-image").getBoundingClientRect(),fallback=node.getBoundingClientRect();
+      return {well:[well.top,well.right,well.bottom,well.left],fallback:[fallback.top,fallback.right,fallback.bottom,fallback.left]};
+    });
+    for(let edge=0;edge<4;edge++) expect(Math.abs(geometry.well[edge]-geometry.fallback[edge])).toBeLessThanOrEqual(1);
+  });
+
+  test("preserves curated focus and fails honestly for a committed local image",async({page})=>{
+    await open(page,"records/UC-035/");
+    const portrait=page.locator('.record-image[data-focus-y="upper"] .record-media');
+    await expect(portrait).toBeVisible();
+    await expect(portrait).toHaveCSS("object-position","50% 28%");
+
+    await page.unrouteAll({behavior:"wait"});
+    await page.route("**/images/uc-035-portrait.jpg",route=>route.abort());
+    await open(page,"records/UC-035/?failed-local=1");
+    const fallback=page.locator('.record-image[data-focus-y="upper"] .record-absence.load-failed');
+    await expect(fallback).toBeVisible();
+    await expect(fallback).toHaveAttribute("aria-label",/filed evidence is temporarily unavailable/);
+  });
+});
+
+test("small archival labels retain WCAG AA contrast on every display surface",async({page})=>{
+  await open(page,"recognition.html#UC-001");
+  await expect(page.getByRole("heading",{name:"Morn",exact:true}).first()).toBeVisible();
+  for(const selector of [".uc-tagline",".uc-kicker",".uc-caption-prov",".uc-footer",".uc-theme"]) await expectContrast(page,selector);
+  await page.locator("#theme").click();
+  for(const selector of [".uc-tagline",".uc-kicker",".uc-caption-prov",".uc-footer",".uc-theme"]) await expectContrast(page,selector);
+
+  await open(page,"coverage.html");
+  await expect(page.locator("#rows tr").first()).toBeVisible();
+  for(const selector of [".eyebrow",".benchmark-kicker",".benchmark-status",".filters label",".metrics span","th",".mode,.gap"]) await expectContrast(page,selector);
+
+  await open(page,"constellation.html");
+  await expect(page.locator(".person-row").first()).toBeVisible();
+  const texture=await page.locator("body").evaluate(node=>({
+    paper:getComputedStyle(document.documentElement).backgroundColor,
+    image:getComputedStyle(node).backgroundImage,
+    size:getComputedStyle(node).backgroundSize
+  }));
+  expect(texture.paper).toBe("rgb(233, 228, 216)");
+  expect(texture.image).toContain("rgba(32, 31, 27, 0.08)");
+  expect(texture.size).toBe("17px 17px");
+  for(const selector of [".eyebrow",".hero-side label",".scope-note",".node:not(.person-node) .node-type"]) await expectContrast(page,selector,"rgb(217, 212, 201)");
+  await expectContrast(page,".person-no","rgb(41, 42, 39)");
+
+  await open(page,"records/UC-001/");
+  for(const selector of [".record-meta",".record-kicker",".record-sub",".record-row span",".record-source"]) await expectContrast(page,selector);
+});
+
 test("Recognition shows side-by-side plates, not a comparison seam",async({page})=>{
   await open(page,"recognition.html#UC-001");
   await expect(page.getByRole("heading",{name:"Morn",exact:true}).first()).toBeVisible();
@@ -230,15 +341,14 @@ test("Recognition and permanent-record missing portraits stay full-bleed",async(
 
     await open(page,"records/UC-040/");
     const permanent=await page.locator(".record-image.absent").evaluate(well=>{
-      const image=well.querySelector("img");
+      const image=well.querySelector(".record-absence");
       const rect=node=>{
         const box=node.getBoundingClientRect();
         return {top:box.top,right:box.right,bottom:box.bottom,left:box.left};
       };
-      return {well:rect(well),image:rect(image),padding:getComputedStyle(image).padding};
+      return {well:rect(well),image:rect(image)};
     });
-    await expect(page.locator(".record-image.absent img")).toHaveAttribute("alt",/not on file/);
-    expect(permanent.padding).toBe("0px");
+    await expect(page.locator(".record-image.absent .record-absence")).toHaveAttribute("aria-label",/not on file/);
     for(const edge of ["top","right","bottom","left"]){
       expect(Math.abs(permanent.image[edge]-permanent.well[edge])).toBeLessThanOrEqual(1);
     }

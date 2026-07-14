@@ -28,7 +28,14 @@ const imageUrl=image=>{
   const live=media.urls?.[image.src];
   return RELEASE.test(live||"")?live:"../../"+image.src.replace(/^\.?\//,"");
 };
-const figure=(image,label,title)=>`<figure><div class="record-image${label==="Performer"?" is-portrait":""}${image?.src?"":" absent"}"${focusAttrs(image)}><img src="${esc(imageUrl(image))}" alt="${esc(image?.src?title:`${label} image is not on file`)}" loading="eager"></div><figcaption>${esc(title)}</figcaption></figure>`;
+const imageMime=image=>/\.png(?:$|[?#])/i.test(image?.src||"")?"image/png":"image/jpeg";
+const absence=(label,status)=>`<div class="record-absence ${status}" role="img" aria-label="${esc(`${label} image ${status==="load-failed"?"could not be loaded; filed evidence is temporarily unavailable":"is not on file"}`)}"><span>${status==="load-failed"?"Filed image unavailable":"Evidence not on file"}</span></div>`;
+const figure=(image,label,title)=>{
+  const visual=image?.src
+    ? `<object class="record-media" data="${esc(imageUrl(image))}" type="${imageMime(image)}" aria-label="${esc(title)}">${absence(label,"load-failed")}</object>`
+    : absence(label,"not-filed");
+  return `<figure><div class="record-image${label==="Performer"?" is-portrait":""}${image?.src?"":" absent"}"${focusAttrs(image)}>${visual}</div><figcaption>${esc(title)}</figcaption></figure>`;
+};
 const creditPresent=value=>Boolean(String(value||"").trim()&&!/^(?:—|-|unknown|not credited)$/i.test(String(value).trim()));
 const imageEvidence=(image,label)=>image?.origin?`<div class="record-row"><span>${esc(label)} image provenance</span><b><a href="${esc(url(image.origin))}" rel="noopener">Open image source</a></b>${image.author||image.license?`<div>${esc([image.author,image.license].filter(Boolean).join(" · "))}</div>`:""}</div>`:"";
 const performanceRows=record=>Array.isArray(record.performances)?record.performances.map(performance=>{
@@ -53,7 +60,7 @@ function page(record){
   const conditionRows=Array.isArray(record.conditions)?record.conditions.map(condition=>`<div class="record-row"><span>Performance condition · ${esc(condition.scope)}</span><b>${esc(condition.type.replace(/-/g," "))}${condition.episode?` · ${esc(condition.episode)}`:""}</b><div>${esc(condition.note)} · <a href="${esc(url(condition.source))}" rel="noopener">source</a></div></div>`).join(""):"";
   const referenceRows=Array.isArray(record.references)?record.references.map(reference=>`<div class="record-row"><span>Evidence · ${esc(reference.claim.replace(/-/g," "))}</span><b><a href="${esc(url(reference.source))}" rel="noopener">${esc(reference.label)}</a></b>${reference.publisher?`<div>${esc(reference.publisher)}</div>`:""}</div>`).join(""):"";
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; img-src 'self' https:; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; img-src 'self' https:; object-src 'self' https://github.com https://release-assets.githubusercontent.com; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(record.character)} — ${esc(record.actor)} | UNDERCAST</title><meta name="description" content="${esc(description)}"><link rel="canonical" href="${canonical}"><link rel="describedby" type="application/json" href="../../data/archive.json"><link rel="alternate" type="application/ld+json" href="../../data/dataset.jsonld" title="UNDERCAST dataset description">
 <meta property="og:type" content="article"><meta property="og:site_name" content="UNDERCAST"><meta property="og:title" content="${esc(record.character)} — ${esc(record.actor)}"><meta property="og:description" content="${esc(description)}"><meta property="og:url" content="${canonical}"><meta property="og:image" content="${esc(mainImage)}">
 <link rel="stylesheet" href="../../assets/site-shell.css"><link rel="stylesheet" href="../../assets/record-page.css"></head>
