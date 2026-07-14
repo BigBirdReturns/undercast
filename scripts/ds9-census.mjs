@@ -119,7 +119,8 @@ function linksOf(text) {
     if (/^(dis|d|disambig)$/i.test(name)) {
       const first = (m[2] || "").split("|").filter(Boolean)[0];
       if (first) out.push({ target: first.trim(), display: first.trim() });
-    } else out.push({ target: name, display: name });
+    } else if (!/^(small|big|e|s|m|ep|sup|sub|nowrap|refn|nbsp|dash|[nm]dash|'|")$/i.test(name))
+      out.push({ target: name, display: name }); // skip MA formatting/utility templates
   }
   return out.filter((l) => l.target && !/^(File|Image|Category|w:c:|Template|wikipedia):/i.test(l.target));
 }
@@ -137,6 +138,10 @@ function charactersFrom(tail) {
     if (named.length) return { ...named[named.length - 1], linked: true };
     if (links.length) return { ...links[links.length - 1], linked: true };
     const text = seg.replace(/^(a|an|the)\s+/i, "").replace(/["']/g, "").replace(/<[^>]+>/g, "").trim();
+    // page-less doubling / utility credits ("stunt double for X", "additional
+    // voice actor") are not designed roles — drop so the caller marks them unresolved.
+    if (/\b(stunt|photo)?\s*double\b|\bstand-?in\b|\bdouble for\b|additional voice|voice double|\butility\b|stunt (performer|coordinator|player)/i.test(text))
+      return null;
     if (text && /^[A-Za-zÀ-Þ]/.test(text) && text.length < 60 && !/^and\b/i.test(text))
       return { target: null, display: text, linked: false };
     return null;
@@ -207,12 +212,20 @@ async function crawl() {
             reason: "performer link is not a person-like name" });
           continue;
         }
-        const chars = charactersFrom(line[2].trim());
+        let chars = charactersFrom(line[2].trim());
         // "* [[Performer]] as" with the roles listed on following ** sub-bullets
         if (!chars.length && !line[2].trim()) {
           while (li + 1 < lines.length && /^\*\*+\s*\S/.test(lines[li + 1]))
             chars.push(...charactersFrom(lines[++li].replace(/^\*\*+\s*/, "")));
         }
+        // a linked or bare "stunt double"/"stand-in"/"utility" role is a doubling
+        // credit, not a designed face — reclassify to unresolved.
+        chars = chars.filter((c) => {
+          if (!/\b(stunt|photo)?\s*double\b|\bstand-?in\b|additional voice|voice double|\butility\b|stunt (performer|coordinator|player)/i.test(c.display)) return true;
+          unresolved.push({ episode: page.title, source: obs.source, tier, performer, line: raw.trim(),
+            reason: "doubling/utility credit — not a designed character role" });
+          return false;
+        });
         if (!chars.length) {
           unresolved.push({ episode: page.title, source: obs.source, tier, performer, line: raw.trim(),
             reason: "no character resolved in the credit line" });
