@@ -30,7 +30,6 @@ import { normalizeCensusKey as normalize } from "./census-key.mjs";
 const UA = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT || "ds9-census"})`;
 const API = "https://memory-alpha.fandom.com/api.php";
 const PRODUCTION = "Star Trek: Deep Space Nine";
-const ERA = "24th-century TV era (1993–1999 first run)";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const fileDigest = async (path) => digest(await readFile(path));
@@ -148,12 +147,37 @@ function charactersFrom(tail) {
   }).filter(Boolean);
 }
 
+// Resolve a set of credited link titles to Memory Alpha page identity, following
+// normalization and redirects. Returns Map(creditedTitle -> {pageid, title, missing}).
+// This is the canonicalizer: "Andrew Robinson" and "Andrew J. Robinson" both
+// resolve to pageid 6598; "Siddig El Fadil" and "Alexander Siddig" to 8798.
+async function resolveTitles(titles) {
+  const resolved = new Map();
+  const list = [...new Set(titles)];
+  for (let i = 0; i < list.length; i += 50) {
+    const j = await mw({ action: "query", redirects: "1", titles: list.slice(i, i + 50).join("|") });
+    const q = j?.query || {};
+    const step = new Map();                       // from -> to (one hop)
+    for (const n of q.normalized || []) step.set(n.from, n.to);
+    for (const r of q.redirects || []) step.set(r.from, r.to);
+    const byTitle = new Map();                     // final title -> {pageid, missing}
+    for (const p of Object.values(q.pages || {}))
+      byTitle.set(p.title, { pageid: p.pageid, missing: p.missing !== undefined });
+    for (const t of list.slice(i, i + 50)) {
+      let cur = t; for (let hop = 0; hop < 6 && step.has(cur); hop++) cur = step.get(cur);
+      const info = byTitle.get(cur) || { missing: true };
+      resolved.set(t, { title: cur, pageid: info.pageid ?? null, missing: !!info.missing });
+    }
+  }
+  return resolved;
+}
+
 async function crawl() {
   const episodes = [...new Set(await categoryMembers("DS9 episodes"))].sort();
   if (episodes.length < 100) throw new Error(`DS9 episodes returned ${episodes.length} pages; refusing a false roster`);
   console.log(`== Star Trek: Deep Space Nine — ${episodes.length} episode pages ==`);
   const observations = [];
-  const assertions = new Map();   // key -> aggregated (performer, character) row
+  const raw = [];        // ungrouped credits: { performer, target|null, display, tier, tierNamed, cite }
   const unresolved = [];
   let lineNo = 0;
 
@@ -179,96 +203,117 @@ async function crawl() {
       const castEnd = after.search(/\n==[^=]/);
       const cast = castEnd < 0 ? after : after.slice(0, castEnd);
 
-      const record = (performer, c, tier, named) => {
-        const key = normalize(performer) + "|" + normalize(c.target || c.display);
-        let row = assertions.get(key);
-        if (!row) {
-          row = { performer, character: c.display, character_page: c.target || null,
-            character_source: c.target ? wikiUrl(c.target) : null,
-            unnamed: c.target ? isUnnamed(c.target) : true,
-            production: PRODUCTION, era: ERA, credit_tiers: new Set(), named: false,
-            duplicate_key: key, episodes: [] };
-          assertions.set(key, row);
-        }
-        row.credit_tiers.add(tier);
-        row.named = row.named || named;
-        if (!row.episodes.some((e) => e.episode === cite.episode)) row.episodes.push(cite);
-      };
-
-      let tier = null, named = false;
+      let tier = null, tierNamed = false;
       const lines = cast.split("\n");
       for (let li = 0; li < lines.length; li++) {
-        const raw = lines[li];
-        const head = raw.match(/^===+\s*(.+?)\s*=+\s*$/);
-        if (head) { const t = tierOf(head[1]); tier = t?.tier || null; named = !!t?.named; continue; }
-        const line = raw.match(/^\*\s*\[\[([^\]|#]+)(?:\|[^\]]+)?\]\]\s+as\b(.*)$/);
+        const rawline = lines[li];
+        const head = rawline.match(/^===+\s*(.+?)\s*=+\s*$/);
+        if (head) { const t = tierOf(head[1]); tier = t?.tier || null; tierNamed = !!t?.named; continue; }
+        const line = rawline.match(/^\*\s*\[\[([^\]|#]+)(?:\|[^\]]+)?\]\]\s+as\b(.*)$/);
         if (!line || !tier) continue;
         lineNo++;
         const performer = line[1].trim()
           .replace(/\s*\((actor|actress|performer|puppeteer)\)$/i, "")
           .replace(/,\s*(Jr\.?|Sr\.?|I{2,}|IV|V)$/i, (m, s) => " " + s);
         if (!isPerson(performer)) {
-          unresolved.push({ episode: page.title, source: obs.source, tier, line: raw.trim(),
+          unresolved.push({ episode: page.title, source: obs.source, tier, line: rawline.trim(),
             reason: "performer link is not a person-like name" });
           continue;
         }
         let chars = charactersFrom(line[2].trim());
-        // "* [[Performer]] as" with the roles listed on following ** sub-bullets
-        if (!chars.length && !line[2].trim()) {
+        if (!chars.length && !line[2].trim()) {   // roles on following ** sub-bullets
           while (li + 1 < lines.length && /^\*\*+\s*\S/.test(lines[li + 1]))
             chars.push(...charactersFrom(lines[++li].replace(/^\*\*+\s*/, "")));
         }
-        // a linked or bare "stunt double"/"stand-in"/"utility" role is a doubling
-        // credit, not a designed face — reclassify to unresolved.
-        chars = chars.filter((c) => {
+        chars = chars.filter((c) => {             // a "stunt double"/"stand-in" role is a doubling, not a face
           if (!/\b(stunt|photo)?\s*double\b|\bstand-?in\b|additional voice|voice double|\butility\b|stunt (performer|coordinator|player)/i.test(c.display)) return true;
-          unresolved.push({ episode: page.title, source: obs.source, tier, performer, line: raw.trim(),
+          unresolved.push({ episode: page.title, source: obs.source, tier, performer, line: rawline.trim(),
             reason: "doubling/utility credit — not a designed character role" });
           return false;
         });
         if (!chars.length) {
-          unresolved.push({ episode: page.title, source: obs.source, tier, performer, line: raw.trim(),
+          unresolved.push({ episode: page.title, source: obs.source, tier, performer, line: rawline.trim(),
             reason: "no character resolved in the credit line" });
           continue;
         }
-        for (const c of chars) record(performer, c, tier, named);
+        for (const c of chars) raw.push({ performer, target: c.target || null, display: c.display, tier, tierNamed, cite });
       }
     }
-    console.log(`  episodes ${i + 1}-${Math.min(i + 20, episodes.length)} scanned; ${assertions.size} assertions so far`);
+    console.log(`  episodes ${i + 1}-${Math.min(i + 20, episodes.length)} scanned; ${raw.length} raw credits`);
   }
-  // Stand-in / stunt-double / photo-double credits are written "X as <principal
-  // actor>"; the resolved "character" is really another performer, not a designed
-  // role. Reclassify those out of the roster (they are doublings, not faces) but
-  // preserve them as unresolved so nothing is silently dropped.
-  const performerKeys = new Set([...assertions.values()].map((r) => normalize(r.performer)));
+
+  // ---- canonicalize by Memory Alpha page identity ----
+  console.log(`\nresolving ${new Set(raw.map((r) => r.performer)).size} performer + ${new Set(raw.filter((r) => r.target).map((r) => r.target)).size} character titles to page identity...`);
+  const performerId = await resolveTitles(raw.map((r) => r.performer));
+  const characterId = await resolveTitles(raw.filter((r) => r.target).map((r) => r.target));
+
+  const idOfPerformer = (t) => { const r = performerId.get(t); return r?.pageid ? "p" + r.pageid : "p:" + normalize(t); };
+  const idOfCharacter = (c) => {
+    if (!c.target) return "t:" + normalize(c.display);       // page-less prose role
+    const r = characterId.get(c.target); return r?.pageid ? "c" + r.pageid : "c:" + normalize(c.target);
+  };
+
+  const assertions = new Map();
+  for (const r of raw) {
+    const pid = idOfPerformer(r.performer), cid = idOfCharacter(r);
+    const key = pid + "|" + cid;
+    let row = assertions.get(key);
+    if (!row) {
+      const pInfo = performerId.get(r.performer) || {};
+      const cInfo = r.target ? (characterId.get(r.target) || {}) : {};
+      const canonChar = r.target ? (cInfo.title || r.target) : r.display;
+      row = {
+        performer_id: pid, performer: pInfo.title || r.performer, performer_pageid: pInfo.pageid ?? null,
+        performer_aliases: new Set(),
+        character_id: cid, character: canonChar, character_page: r.target ? (cInfo.title || r.target) : null,
+        character_pageid: cInfo.pageid ?? null,
+        character_source: r.target ? wikiUrl(cInfo.title || r.target) : null, character_aliases: new Set(),
+        character_named: r.target ? !isUnnamed(cInfo.title || r.target) : false,
+        background: true, credit_tiers: new Set(), duplicate_key: key, episodes: [],
+      };
+      assertions.set(key, row);
+    }
+    row.performer_aliases.add(r.performer);
+    if (r.target) row.character_aliases.add(r.display); else row.character_aliases.add(r.display);
+    row.credit_tiers.add(r.tier);
+    if (!BACKGROUND_TIERS.has(r.tier)) row.background = false;
+    if (!row.episodes.some((e) => e.episode === r.cite.episode)) row.episodes.push(r.cite);
+  }
+
+  // doubling post-pass on canonical identity: if a "character" resolves to the
+  // same page as a known performer, it is a stand-in/double credit, not a face.
+  const performerPages = new Set([...assertions.values()].map((r) => r.performer_id));
   let doublings = 0;
   for (const [key, row] of assertions) {
-    if (performerKeys.has(normalize(row.character_page || row.character))) {
-      assertions.delete(key);
-      doublings++;
+    if (performerPages.has(row.character_id.replace(/^c/, "p"))) {
+      assertions.delete(key); doublings++;
       unresolved.push({ episode: row.episodes[0]?.episode || null, source: row.episodes[0]?.source || null,
         tier: [...row.credit_tiers][0] || null, performer: row.performer,
         line: `${row.performer} as ${row.character}`,
         reason: `doubling credit across ${row.episodes.length} episode(s) — the named role is performer "${row.character}", not a designed character` });
     }
   }
-  console.log(`\ncast lines parsed: ${lineNo}; doublings reclassified: ${doublings}; unresolved: ${unresolved.length}`);
+  console.log(`cast lines parsed: ${lineNo}; doublings reclassified: ${doublings}; unresolved: ${unresolved.length}`);
   return { observations, assertions, unresolved, episodeCount: episodes.length };
 }
 
-// -------- wall match --------
+// credit tiers that are, by themselves, background/extra performances
+const BACKGROUND_TIERS = new Set(["uncredited", "stunt", "stand-in", "photo-double"]);
+
+// -------- wall match (on canonical identity + every credited alias) --------
 function matchWall(rows, specimens) {
   for (const row of rows) {
+    const performerNames = [row.performer, ...row.performer_aliases].map(normalize);
+    const characterNames = [row.character, row.character_page, ...row.character_aliases].filter(Boolean).map(normalize);
     const performerRecords = specimens.filter((rec) => [rec.actor, ...(rec.aliases || [])]
-      .some((name) => normalize(name) === normalize(row.performer)));
-    const roleRecords = performerRecords.filter((rec) => {
-      const filedRoles = [rec.character, ...(rec.performances || []).map((p) => p.character)].map(normalize);
-      return filedRoles.includes(normalize(row.character)) || filedRoles.includes(normalize(row.character_page));
-    });
+      .some((name) => performerNames.includes(normalize(name))));
+    const roleRecords = performerRecords.filter((rec) =>
+      [rec.character, ...(rec.performances || []).map((p) => p.character)]
+        .some((r) => characterNames.includes(normalize(r))));
     row.performer_on_wall = performerRecords.length > 0;
     row.role_on_wall = roleRecords.length > 0;
-    row.wall_ids = roleRecords.map((rec) => rec.id);
-    row.wall_match_method = "normalize(performer) matches actor|aliases AND normalize(character) matches character|performances[].character";
+    row.wall_ids = [...new Set(roleRecords.map((rec) => rec.id))];
+    row.wall_match_method = "canonical performer page (+ every credited alias) matches specimen actor|aliases AND canonical character (+ aliases) matches specimen character|performances[].character";
   }
 }
 
@@ -284,12 +329,18 @@ if (PROJECT_ONLY) {
 } else {
   const crawled = await crawl();
   observations = crawled.observations.sort((a, b) => a.title.localeCompare(b.title));
-  unresolved = crawled.unresolved.sort((a, b) => a.episode.localeCompare(b.episode) || a.line.localeCompare(b.line));
+  unresolved = crawled.unresolved.sort((a, b) => (a.episode || "").localeCompare(b.episode || "") || (a.line || "").localeCompare(b.line || ""));
   roster = [...crawled.assertions.values()].map((row) => ({
-    performer: row.performer, character: row.character, character_page: row.character_page,
-    character_source: row.character_source, unnamed: row.unnamed, named: row.named,
-    production: row.production, era: row.era,
-    credit_tiers: [...row.credit_tiers].sort(),
+    performer: row.performer, performer_pageid: row.performer_pageid,
+    performer_aliases: [...row.performer_aliases].sort(),
+    character: row.character, character_page: row.character_page, character_pageid: row.character_pageid,
+    character_source: row.character_source, character_aliases: [...row.character_aliases].sort(),
+    // three distinct facts, no longer conflated:
+    credit_tiers: [...row.credit_tiers].sort(),          // billing level(s) the credit appeared under
+    character_named: row.character_named,                // the character has an in-universe proper name
+    background_role: row.background,                      // every credit was an extra/uncredited/stunt tier
+    production: PRODUCTION,
+    era: null,                                            // story era (Occupation / Dominion War / post-war) unresolved; not faked from airdates
     eligibility: "review",
     eligibility_reason: "unjudged — per-performance makeup assessment pending (species + design pass)",
     duplicate_key: row.duplicate_key,
@@ -297,7 +348,9 @@ if (PROJECT_ONLY) {
     episodes: row.episodes.sort((a, b) => a.episode.localeCompare(b.episode)),
   })).sort((a, b) => a.performer.localeCompare(b.performer) || a.character.localeCompare(b.character));
   manifest = {
-    version: 1, generator: "scripts/ds9-census.mjs", production: PRODUCTION, era: ERA,
+    version: 2, generator: "scripts/ds9-census.mjs", production: PRODUCTION,
+    identity: "performers and characters canonicalized to Memory Alpha pageid (redirects followed); credited spellings kept as aliases",
+    era_note: "era is intentionally null — story era is a separate sourced facet, not derivable from production airdates",
     source_wiki: "https://memory-alpha.fandom.com", captured_at: CAPTURED_AT,
     scope: { unit: "DS9 episode cast credit", episodes: crawled.episodeCount },
   };
@@ -308,29 +361,31 @@ matchWall(roster, specimens);
 
 // -------- derived coverage + summary --------
 const coverage = roster.map((row) => ({
-  performer: row.performer, character: row.character, production: row.production, era: row.era,
-  named: row.named, unnamed: row.unnamed, credit_tiers: row.credit_tiers,
+  performer: row.performer, performer_pageid: row.performer_pageid,
+  character: row.character, character_pageid: row.character_pageid, production: row.production,
+  character_named: row.character_named, background_role: row.background_role, credit_tiers: row.credit_tiers,
   duplicate_key: row.duplicate_key, wall_match_method: row.wall_match_method,
   performer_on_wall: row.performer_on_wall, role_on_wall: row.role_on_wall, wall_ids: row.wall_ids,
   source: row.episodes[0]?.source || row.character_source }));
 
-const distinctPerformers = new Set(roster.map((r) => normalize(r.performer))).size;
-const distinctCharacters = new Set(roster.map((r) => normalize(r.character_page))).size;
-const named = roster.filter((r) => r.named && !r.unnamed);
-const extras = roster.filter((r) => !r.named || r.unnamed);
+const distinctPerformers = new Set(roster.map((r) => r.performer_pageid ?? r.performer)).size;
+const distinctCharacters = new Set(roster.map((r) => r.character_pageid ?? r.character)).size;
+const namedRoles = roster.filter((r) => r.character_named && !r.background_role);
+const extras = roster.filter((r) => !r.character_named || r.background_role);
 const onWall = roster.filter((r) => r.role_on_wall);
 
 const summary = {
-  version: 1, production: PRODUCTION, era: ERA,
+  version: 2, production: PRODUCTION,
   generated_from: ["data/ds9/roster.json", "data/ds9/observations.json", "data/ds9/unresolved.json"],
   coverage_unit: "one credited performer in one designed/character role on DS9",
+  identity_note: "counts are over canonical Memory Alpha page identity; spelling variants (Andrew Robinson / Andrew J. Robinson, Siddig El Fadil / Alexander Siddig) collapse to one performer.",
   scope_note: "Cast credits from all DS9 episode pages on Memory Alpha. Uncredited background performers are included when the wiki names them; anything the wiki leaves unattributed stays in unresolved.json — zero is never inferred.",
   episodes: manifest.scope.episodes,
   assertions: roster.length,
   distinct_performers: distinctPerformers,
   distinct_characters: distinctCharacters,
-  named_role_assertions: named.length,
-  extra_role_assertions: extras.length,
+  named_character_roles: namedRoles.length,
+  background_or_unnamed_roles: extras.length,
   role_assertions_on_wall: onWall.length,
   role_assertions_off_wall: roster.length - onWall.length,
   unresolved_cast_lines: unresolved.length,
@@ -353,5 +408,5 @@ await writeFile("data/ds9/coverage.json", JSON.stringify({ version: 1, wall_matc
 await writeFile("data/ds9/summary.json", JSON.stringify(summary, null, 1) + "\n");
 
 console.log(`\nroster: ${roster.length} assertions, ${distinctPerformers} performers, ${distinctCharacters} characters`);
-console.log(`named roles: ${named.length}  extras: ${extras.length}  on wall: ${onWall.length}`);
+console.log(`named-character roles: ${namedRoles.length}  extras/unnamed: ${extras.length}  on wall: ${onWall.length}`);
 console.log(`unresolved cast lines: ${unresolved.length}  ->  data/ds9/`);
