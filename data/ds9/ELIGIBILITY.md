@@ -20,33 +20,44 @@ npm run ds9:eligibility            # -> eligibility.json + summary
 npm run ds9:eligibility:fixtures
 ```
 
-## A verdict rests on a verified, affirmative quote — nothing else
+## A verdict rests on a verified, threshold-meeting, applicable quote
 
-Species does not decide. Wall membership does not decide. The **absence** of a
-makeup mention is not evidence. `eligible`/`ineligible` are derived only from a
-claim that is:
+Provenance is not enough. A quote proves it was said; it does not prove it clears
+UNDERCAST's entry bar. So `eligible`/`ineligible` are derived only from a claim
+that is **all three** of:
 
 - **verified** — the reader-agent's verbatim quote is present in the page's pinned
-  revision (`verifyBasis`), and
-- **affirmative** — the quote positively states the fact for its claim type. A
-  quote that merely names a performer ("Bashir was played by Alexander Siddig")
-  is verified but **not** affirmative, so it decides nothing → `review`.
+  revision (`verifyBasis`);
+- **threshold-meeting** — the quote documents a **FULL designed face**: a full
+  facial/head prosthetic, a mask, a full creature suit, motion capture, or an
+  unseen voice. "Teeth", "contact lenses", "a wig", "airbrushing", bare "makeup",
+  and in-universe anatomy ("Cardassians had neck ridges") do **not** clear it;
+- **applicable** — the quote belongs to *this* performance. A species page applies
+  to any member; a character-page quote that names a *different* performer of the
+  same character does not (Melanie Smith does not inherit Batten/Middendorf's Ziyal
+  quote).
 
 Each claim carries `{page, revision, content_sha256, basis}` — a receipt anyone
-can re-check by fetching that immutable revision and finding the quote.
+can re-check.
 
 | verdict | derived when |
 | --- | --- |
-| `eligible` | a verified + affirmative quote documents a GROW qualifying transformation (heavy prosthetics / mask / creature suit / motion capture / voice-only) and the performer is not visible as themselves |
-| `ineligible` | a verified + affirmative quote says the performer is seen as themselves (bare-faced, played himself, only a light appliance) |
-| `review` | no verified, affirmative quote either way — most rows, and honest |
+| `eligible` | a verified + threshold-meeting + applicable quote documents a full designed face |
+| `ineligible` | a verified + affirmative + applicable quote says the performer is seen as themselves (bare-faced, played himself, only a light appliance) |
+| `review` | no such quote either way — most rows, and honest |
 
-Examples: **Garak** eligible on the Cardassian page's *"forehead piece … chin piece
-and a nose appliance"*; **Quark**/**Martok** eligible on quoted Ferengi/Klingon
-prosthetic notes; **Herbert Rossoff** ineligible on *"bizarre to be bare-faced on
-a Star Trek show"*; **Bashir** and **Kira** → `review` (no affirmative quote — not
-inferred from silence). Per-performance, not per-performer: Armin Shimerman is
-eligible as Quark but ineligible as the bare-faced Rossoff.
+Examples: **Garak** eligible on *"the forehead piece but also a chin piece and a
+nose appliance"*; **Nog** on the Ferengi *"helmet-like headpiece … over the head"*;
+**Herbert Rossoff** ineligible on *"bizarre to be bare-faced on a Star Trek show"*.
+**Martok** → `review`: the only quote gathered was Westmore's *"I made teeth for
+him"*, which does not establish a full face — even though Martok is obviously a
+full Klingon prosthetic, the *evidence provided* is insufficient, so the honest
+verdict is review, not an assumption. **Bashir**/**Kira** → `review` (no
+affirmative quote — never inferred from silence).
+
+The eligible set is therefore small and conservative: only performances whose
+gathered quote actually documents a full designed face. Broadening it means
+gathering better quotes (a targeted re-adjudication), not loosening the bar.
 
 ## The wall does not override evidence
 
