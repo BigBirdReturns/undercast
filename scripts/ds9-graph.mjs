@@ -251,13 +251,25 @@ for (const [page, c] of charData) {
 }
 const dataFor = (title) => charData.get(title) || charData.get([...charData.keys()].find((k) => resolveTitle(k) === title));
 const seenPair = new Set();
+// curated relationship qualifiers from the family-edge audit: refuted removes an
+// edge; step/adoptive/surrogate keep it but tag its nature. Each carries a source.
+const curatedRel = new Map();
+for (const r of JSON.parse(await readFile("data/ds9/graph/family-relations.curated.json", "utf8")).relations)
+  curatedRel.set(r.type === "parent_of" ? `parent_of|${r.a}|${r.b}` : `${r.type}|${[r.a, r.b].sort().join("|")}`, r);
+const DEFAULT_REL = { parent_of: "biological", sibling_of: "biological", spouse_of: "married" };
+// returns the edge citation with relation applied, or null if the audit refuted it
+const withRelation = (predType, key, base) => {
+  const cur = curatedRel.get(key);
+  if (cur?.relation === "refuted") { familyReview.push({ predicate: predType, ...cur, reason: "audit-refuted: " + cur.reason }); return null; }
+  return { ...base, relation: cur?.relation || DEFAULT_REL[predType], ...(cur ? { relation_source: cur.source, relation_note: cur.reason } : {}) };
+};
 // parent_of: corroborated when the parent's page lists the child AND the child's page lists the parent
 for (const [parent, kids] of childrenClaim) for (const child of kids) {
   const key = "parent_of|" + parent + "|" + child; if (seenPair.has(key)) continue; seenPair.add(key);
   const reciprocal = parentClaim.get(child)?.has(parent);
-  if (reciprocal) addEdge("parent_of", famNode(parent, dataFor(parent)), famNode(child, dataFor(child)),
-    { ...famCite(parent, dataFor(parent) || {}), predicate: "parent_of", corroborated_by: [wikiUrl(parent), wikiUrl(child)] });
-  else familyReview.push({ predicate: "parent_of", parent, child, declared_on: wikiUrl(parent), missing_reciprocal_on: wikiUrl(child), reason: "child's page does not list this parent" });
+  if (!reciprocal) { familyReview.push({ predicate: "parent_of", parent, child, declared_on: wikiUrl(parent), missing_reciprocal_on: wikiUrl(child), reason: "child's page does not list this parent" }); continue; }
+  const cite = withRelation("parent_of", key, { ...famCite(parent, dataFor(parent) || {}), predicate: "parent_of", corroborated_by: [wikiUrl(parent), wikiUrl(child)] });
+  if (cite) addEdge("parent_of", famNode(parent, dataFor(parent)), famNode(child, dataFor(child)), cite);
 }
 // also surface child-side parent claims with no parent-side child claim
 for (const [child, parents] of parentClaim) for (const parent of parents) {
@@ -269,9 +281,9 @@ for (const [pred, map] of [["sibling_of", siblingClaim], ["spouse_of", spouseCla
   for (const [a, others] of map) for (const b of others) {
     const [x, y] = [a, b].sort(); const key = pred + "|" + x + "|" + y; if (seenPair.has(key)) continue; seenPair.add(key);
     const reciprocal = map.get(b)?.has(a);
-    if (reciprocal) addEdge(pred, famNode(x, dataFor(x)), famNode(y, dataFor(y)),
-      { citation_type: "infobox-reciprocal", predicate: pred, corroborated_by: [wikiUrl(a), wikiUrl(b)] });
-    else familyReview.push({ predicate: pred, a, b, declared_on: wikiUrl(a), missing_reciprocal_on: wikiUrl(b), reason: "other party's page does not list this " + pred.replace("_of", "") });
+    if (!reciprocal) { familyReview.push({ predicate: pred, a, b, declared_on: wikiUrl(a), missing_reciprocal_on: wikiUrl(b), reason: "other party's page does not list this " + pred.replace("_of", "") }); continue; }
+    const cite = withRelation(pred, key, { citation_type: "infobox-reciprocal", predicate: pred, corroborated_by: [wikiUrl(a), wikiUrl(b)] });
+    if (cite) addEdge(pred, famNode(x, dataFor(x)), famNode(y, dataFor(y)), cite);
   }
 
 // ---- sourced doctrine + succession edges (from named pages, not prose inference) ----
@@ -508,6 +520,7 @@ if (!PROJECT_ONLY) {
   snapshots.edges = await hashOnly("edges.json");
   snapshots.family_review = await hashOnly("family-review.json");
 }
+snapshots.family_relations_curated = await hashOnly("family-relations.curated.json");
 snapshots.relationships = await write("relationships.json", relationshipsDoc);
 snapshots.projections = await write("projections.json", projectionsDoc);
 snapshots.summary = await write("graph-summary.json", summaryDoc);

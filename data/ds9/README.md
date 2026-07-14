@@ -105,6 +105,12 @@ or named page that states it:
   dropped, and an edge is asserted **only when both endpoints' infoboxes state
   it** (each edge carries `corroborated_by: [both pages]`). One-sided claims are
   held in `graph/family-review.json` — preserved for audit, never asserted.
+  Every asserted edge then carries a `relation` qualifier (`biological` /
+  `married` by default, or `step` / `adoptive` / `surrogate` where a full
+  adversarial audit against Memory Alpha found a nuance — see
+  `graph/family-relations.curated.json`, each with a source). Audit-`refuted`
+  claims (e.g. Ishka/Zek were partners, never married) are removed from the graph
+  and recorded in `family-review.json`.
 - `member_of` — House / family / organization membership (infobox + category).
 - `host_of` — the Trill symbiont Dax to each host, from a **curated evidence
   table** typed `primary` (the nine), `temporary` (Verad), or `alternate`

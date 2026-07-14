@@ -110,6 +110,23 @@ const reviewKeys = new Set(famReview.review.map((r) => r.predicate + "|" + (r.pa
 check("no asserted family edge is also in the one-sided review set",
   [...famKey].every((k) => !reviewKeys.has(k)));
 
+// --- audit findings: refuted removed, nuances tagged with a sourced relation ---
+const relOf = (t, a, b) => famEdges.find((e) => e.type === t && e.from === "character:" + a && e.to === "character:" + b)?.relation;
+check("audit: every asserted family edge carries a relation qualifier",
+  famEdges.every((e) => typeof e.relation === "string"), `${famEdges.filter((e) => !e.relation).length} without relation`);
+check("audit REFUTED: Ishka spouse_of Zek removed (partners, never married)",
+  !famKey.has("spouse_of|Ishka|Zek") && !famKey.has("spouse_of|Zek|Ishka") &&
+  famReview.review.some((r) => /audit-refuted/.test(r.reason || "") && (r.a === "Ishka" || r.parent === "Ishka")));
+check("audit STEP: Leeta parent_of Nog tagged step", relOf("parent_of", "Leeta", "Nog") === "step");
+check("audit STEP: Kasidy parent_of Jake tagged step", relOf("parent_of", "Kasidy Yates-Sisko", "Jake Sisko") === "step");
+check("audit STEP: Jadzia parent_of Alexander tagged step", relOf("parent_of", "Jadzia Dax", "Alexander Rozhenko") === "step");
+check("audit SURROGATE: Kira parent_of Kirayoshi tagged surrogate", relOf("parent_of", "Kira Nerys", "Kirayoshi O'Brien") === "surrogate");
+check("audit ADOPTIVE: Sergey/Helena parent_of Worf tagged adoptive",
+  relOf("parent_of", "Sergey Rozhenko", "Worf") === "adoptive" && relOf("parent_of", "Helena Rozhenko", "Worf") === "adoptive");
+check("audit BIOLOGICAL: Rom parent_of Nog stays biological (default, confirmed)", relOf("parent_of", "Rom", "Nog") === "biological");
+check("audit: every relation != biological/married carries a relation_source",
+  famEdges.filter((e) => !["biological", "married"].includes(e.relation)).every((e) => e.relation_source));
+
 // --- provenance: every relationship edge is cited ---
 const RELATIONAL = new Set(["is_species", "affiliated_with", "member_of", "parent_of", "sibling_of", "spouse_of", "host_of", "succeeded_by", "clone_instance_of", "commands", "allied_with", "belligerent_in"]);
 const uncited = edges.filter((e) => RELATIONAL.has(e.type) && !e.source && !e.citation_type);
