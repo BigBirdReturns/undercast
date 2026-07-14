@@ -15,7 +15,7 @@ derivative work: Gyrobo (talk), CC BY 2.0 — [source](https://commons.wikimedia
 derivative work: nagualdesign, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Rene_Auberjonois,_by_Kyle_Cassidy_(Cropped).jpg)
 - **Doug Jones** (UC-007) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Doug_Jones_by_Gage_Skidmore_4.jpg)
 - **Andy Serkis** (UC-008) — Stefan Servos, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Andy_Serkis_2003.jpg)
-- **David Prowse & James Earl Jones** (UC-010) — Xanathon, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:David_Prowse_2013_(cropped).jpg)
+- **David Prowse** (UC-010) — Xanathon, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:David_Prowse_2013_(cropped).jpg)
 - **Andreas Katsulas** (UC-011) — Dianne Krauss, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Andreas_Katsulas_crop.jpg)
 - **Mira Furlan** (UC-012) — User:Izolita, Public domain — [source](https://commons.wikimedia.org/wiki/File:Mira_Furlan_(headshot).jpg)
 - **Peter Jurasik** (UC-013) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Peter_Jurasik_by_Gage_Skidmore.jpg)
@@ -130,7 +130,6 @@ derivative work: RanZag (talk), CC BY 2.0 — [source](https://commons.wikimedia
 - **Matthew Yang King** (UC-1040) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Matthew_Yang_King_by_Gage_Skidmore.jpg)
 - **Clare Grant** (UC-1043) — Photo by Eric Blackmon posted to Clare Grant's personal Flickr page., CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Clare_Grant_May_2018_(3x4_cropped).jpg)
 - **Peter Serafinowicz** (UC-1044) — vagueonthehow, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Peter_Serafinowicz_(cropped).jpeg)
-- **Marton Csokas** (UC-1045) — Andrewmaccoll at English Wikipedia, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Marton_Csokas_by_andrew_maccoll.jpg)
 - **Ernie Fosselius** (UC-1046) — DixieDellamorto, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Ernie_Fosselius_Star_Wars.JPG)
 - **Gwendoline Christie** (UC-105) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Gwendoline_Christie_by_Gage_Skidmore.jpg)
 - **Natalia Nogulich** (UC-1050) — Natalia Nogulich, CC0 — [source](https://commons.wikimedia.org/wiki/File:Natalia_Nogulich_2018.jpg)
@@ -193,10 +192,11 @@ derivative work: RanZag (talk), CC BY 2.0 — [source](https://commons.wikimedia
 - **Mark Lenard** (UC-143) — NBC Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Spock_and_parents_1968.jpg)
 - **Michael Ansara** (UC-144) — There is a very faint NBC Photo stamp on back but am not able to make out who the NBC photographer was., Public domain — [source](https://commons.wikimedia.org/wiki/File:Michael_Ansara_Law_of_the_Plainsman_1959.JPG)
 - **Tony Todd** (UC-145) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Tony_Todd_(36141902441).jpg)
+- **Tim Rose** (UC-146) — Edward Hands, CC BY 2.5 — [source](https://commons.wikimedia.org/wiki/File:TimRoseBrompton.jpg)
 - **Alan Tudyk** (UC-148) — PhilipRomanoPhoto, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:AlanTudyk-byPhilipRomano.jpg)
 - **Manu Bennett** (UC-150) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Manu_Bennett_by_Gage_Skidmore.jpg)
 - **David Howard Thornton** (UC-151) — Tim Blackmon for Galaxy Con, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:David_Howard_Thornton_(54215255373).jpg)
-- **Derek Mears** (UC-152) — Unknown, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Derek_Mears_Photo_Op_Animate_Nightmare_Weekend_Des_Moines_2024_(cropped).jpg)
+- **Derek Mears** (UC-152) — Super Festivals, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Derek_Mears_Photo_Op_Animate_Nightmare_Weekend_Des_Moines_2024_(cropped).jpg)
 - **Ari Lehman** (UC-153) — John Manard, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:ARI_LEHMAN_(54886569994).jpg)
 - **Tyler Mane** (UC-154) — Sam Howzit, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Tyler_Mane_2014_(cropped).jpg)
 - **Andrew Bryniarski** (UC-155) — Michael Koschinski, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Andrew_Bryniarski_2013.jpg)
@@ -220,6 +220,7 @@ derivative work: RanZag (talk), CC BY 2.0 — [source](https://commons.wikimedia
 - **Charles Laughton** (UC-177) — Clarence Bull, Public domain — [source](https://commons.wikimedia.org/wiki/File:Charles_Laughton-publicity2.JPG)
 - **Eric Stoltz** (UC-178) — Sooz from NYC, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Eric_Stoltz.jpg)
 - **Elsa Lanchester** (UC-179) — Studio Publicity, Public domain — [source](https://commons.wikimedia.org/wiki/File:ELSA-L.jpg)
+- **Glenn Strange** (UC-180) — Monogram Pictures, Public domain — [source](https://commons.wikimedia.org/wiki/File:Western_Mail_(1942)_-_Glenn_Strange.jpg)
 - **Ricou Browning** (UC-181) — Collin Barnes, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Ricou_Browning,_March_2019.jpg)
 - **Christopher Lee** (UC-182) — Manfred Werner - Tsui, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Christopher_Lee_2009.jpg)
 - **Mark Ruffalo** (UC-183) — gdcgraphics at https://www.flickr.com/photos/gdcgraphics/, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:MarkRuffalo07TIFF.jpg)
@@ -251,10 +252,8 @@ derivative work: Masem (talk), CC BY 2.0 — [source](https://commons.wikimedia.
 - **Jess Harnell** (UC-210) — Informationsource123., CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Jess_Harnell_Picture.jpg)
 - **Tress MacNeille** (UC-211) — jamesandsamaya, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Tress_MacNeille.png)
 - **Kevin Michael Richardson** (UC-212) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Kevin_Michael_Richardson_by_Gage_Skidmore_3.jpg)
-- **Cree Summer** (UC-213) — Unknown, undefined — [source](https://en.wikipedia.org/wiki/Cree_Summer)
 - **Seth MacFarlane** (UC-214) — Rebecca Paiva, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Sethmacfarlane-crop-to-head.jpg)
 - **Matt Stone** (UC-215) — Kevin Payravi, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Matt_Stone_at_the_2024_Telluride_Film_Festival_(cropped).jpg)
-- **Roger Craig Smith** (UC-216) — Unknown, undefined — [source](https://en.wikipedia.org/wiki/Roger_Craig_Smith)
 - **Bob Bergen** (UC-217) — Voice Chasers, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:41st_Annie_Awards,_Bob_Bergen.jpg)
 - **Fran Brill** (UC-221) — NBC Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Fran_Brill_First_Ladies_Diaries_1975.jpg)
 - **Camden Toy** (UC-224) — Nightscream, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:10.17.09CamdenToyByLuigiNovi.jpg)
@@ -330,7 +329,6 @@ derivative work: Masem (talk), CC BY 2.0 — [source](https://commons.wikimedia.
 - **Dan Starkey** (UC-337) — steve cranston, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Dan_Starkey_(16135605890).jpg)
 - **Chikara Hashimoto** (UC-360) — ベースボール・マガジン社（Baseball Magazine Co. Ltd), Public domain — [source](https://commons.wikimedia.org/wiki/File:Chikara_Hashimoto_Daimajin_1955_Scan10014.jpg)
 - **Ian Whyte** (UC-361) — Raboe001, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Stuttgart_2024_-_ComicCon_-_Ian_Whyte_-_by-RaBoe_007.jpg)
-- **Joonas Suotamo** (UC-362) — Tuomas Vitikainen, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Joonas_Suotamo_(cropped).jpg)
 - **Kiran Shah** (UC-363) — .Martin., CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Kiran_Shah,_2006.jpg)
 - **Ben Chapman** (UC-365) — Unknown authorUnknown author, Public domain — [source](https://commons.wikimedia.org/wiki/File:Ben_Chapman_1946_(cropped).jpg)
 - **Dane DiLiegro** (UC-372) — Kevin Paul, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:Dane_DiLiegro_at_53rd_Saturn_Awards_2026.jpg)
@@ -559,9 +557,9 @@ Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.
 - **Cheryl Wagner** (UC-736) — Mare6868, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Cheryl_Wagner_.jpg)
 - **Marilyn Sokol** (UC-737) — The Shukat Company, Ltd., CC0 — [source](https://commons.wikimedia.org/wiki/File:Marilyn_Sokol_headshot.jpg)
 - **Wendy Froud** (UC-740) — Nightscream, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:10.14.12WendyFroudByLuigiNovi.jpg)
-- **David Warner (actor)** (UC-747) — Rory Lewis Photographer, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:David_Warner_(Actor)_Rory_Lewis_Photographer.jpg)
+- **David Warner** (UC-747) — Rory Lewis Photographer, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:David_Warner_(Actor)_Rory_Lewis_Photographer.jpg)
 - **Colm Meaney** (UC-748) — Gordon  Correll, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Colm_Meaney_(29865699455).jpg)
-- **Phil Morris (actor)** (UC-749) — pinguino k from North Hollywood, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Morris,_Phil_(2009)_crop.jpg)
+- **Phil Morris** (UC-749) — pinguino k from North Hollywood, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Morris,_Phil_(2009)_crop.jpg)
 - **Paul Dooley** (UC-750) — Paul J. Alessi aka pjalessi, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Paul_Dooley.png)
 - **Reg E. Cathey** (UC-751) — Rach, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Reg_E._Cathey.jpg)
 - **Tricia O'Neil** (UC-752) — Mcreiff, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Tricia_O%27Neil_Portrait_2_(1967).jpg)
@@ -664,8 +662,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **641**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **672**
+- Free-licensed portraits (attributed above): **639**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **684**
 - Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
