@@ -112,121 +112,25 @@ test("wall search, current decade, flip semantics, and partial failure are hones
   await expect(page.locator(".cast-shell")).toHaveCount(0);
 });
 
-test("Recognition comparison moves a clip, never the image geometry",async({page})=>{
-  await open(page,"recognition.html#UC-035");
-  await expect(page.getByRole("heading",{name:"The Borg Queen",exact:true}).first()).toBeVisible();
-  await page.getByRole("button",{name:"Compare in one frame",exact:true}).click();
-  const slider=page.getByRole("slider",{name:"Move the comparison seam between character and performer",exact:true});
-  const geometry=async()=>page.locator(".uc-wipe-layer").evaluateAll(nodes=>nodes.map(node=>{
-    const image=node.querySelector("img");
-    const layer=node.getBoundingClientRect(),photo=image.getBoundingClientRect();
-    return {layer:[layer.x,layer.y,layer.width,layer.height],photo:[photo.x,photo.y,photo.width,photo.height],clip:getComputedStyle(node).clipPath};
-  }));
-  const balanced=await geometry();
-  expect(balanced[0].layer).toEqual(balanced[1].layer);
-  await slider.press("Home");
-  const left=await geometry();
-  expect(left.map(row=>row.layer)).toEqual(balanced.map(row=>row.layer));
-  expect(left.map(row=>row.photo)).toEqual(balanced.map(row=>row.photo));
-  expect(left[0].clip).not.toBe(balanced[0].clip);
-  await slider.press("End");
-  const right=await geometry();
-  expect(right.map(row=>row.layer)).toEqual(balanced.map(row=>row.layer));
-  expect(right.map(row=>row.photo)).toEqual(balanced.map(row=>row.photo));
+test("Recognition shows side-by-side plates, not a comparison seam",async({page})=>{
+  await open(page,"recognition.html#UC-001");
+  await expect(page.getByRole("heading",{name:"Morn",exact:true}).first()).toBeVisible();
+  await expect(page.locator('#pair [data-plate="still"]')).toBeVisible();
+  await expect(page.locator('#pair [data-plate="portrait"]')).toBeVisible();
+  // the retired comparison seam must be gone entirely
+  await expect(page.getByRole("button",{name:"Compare in one frame",exact:true})).toHaveCount(0);
+  await expect(page.locator("#comparison-stage, .uc-wipe-frame")).toHaveCount(0);
+  await expect(page.getByRole("slider")).toHaveCount(0);
 });
 
-test("Recognition comparison is a ratio-stable, aligned 4:5 component",async({page})=>{
-  for(const viewport of [{width:1280,height:720},{width:1280,height:900},{width:390,height:844}]){
+test("Recognition plates keep the character/person pair across breakpoints",async({page})=>{
+  for(const viewport of [{width:1280,height:900},{width:390,height:844}]){
     await page.setViewportSize(viewport);
     await open(page,`recognition.html?layout=${viewport.width}x${viewport.height}#UC-035`);
     await expect(page.getByRole("heading",{name:"The Borg Queen",exact:true}).first()).toBeVisible();
-    await page.getByRole("button",{name:"Compare in one frame",exact:true}).click();
-    const metrics=await page.locator("#comparison-stage").evaluate(stage=>{
-      const box=node=>{
-        const rect=node.getBoundingClientRect();
-        return {left:rect.left,right:rect.right,width:rect.width,height:rect.height};
-      };
-      return {
-        stage:box(stage),
-        head:box(stage.querySelector(".uc-wipe-head")),
-        frame:box(stage.querySelector(".uc-wipe-frame")),
-        labels:box(stage.querySelector(".uc-wipe-labels"))
-      };
-    });
-    expect(metrics.frame.width/metrics.frame.height).toBeCloseTo(4/5,2);
-    for(const part of [metrics.head,metrics.frame,metrics.labels]){
-      expect(Math.abs(part.left-metrics.stage.left)).toBeLessThanOrEqual(1);
-      expect(Math.abs(part.right-metrics.stage.right)).toBeLessThanOrEqual(1);
-      expect(Math.abs(part.width-metrics.stage.width)).toBeLessThanOrEqual(1);
-    }
-    const heightCap=viewport.width<=700?.70:.74;
-    expect(metrics.frame.height).toBeLessThanOrEqual(viewport.height*heightCap+1);
+    await expect(page.locator('#pair [data-plate]')).toHaveCount(2);
+    await expect(page.locator("#comparison-stage, .uc-wipe-frame")).toHaveCount(0);
   }
-});
-
-test("Recognition comparison renders the curated physical-transformation benchmark",async({page})=>{
-  const records=[
-    ["UC-001","Morn"],
-    ["UC-035","The Borg Queen"],
-    ["UC-006","Odo"],
-    ["UC-018","Worf"],
-    ["UC-019","Quark"],
-    ["UC-026","Hellboy"],
-    ["UC-037","Seven of Nine"],
-    ["UC-057","Chewbacca"],
-    ["UC-362","Chewbacca"]
-  ];
-  for(const [id,title] of records){
-    await open(page,`recognition.html#${id}`);
-    await expect(page.getByRole("heading",{name:title,exact:true}).first()).toBeVisible();
-    await page.getByRole("button",{name:"Compare in one frame",exact:true}).click();
-    const images=page.locator("#comparison-stage .uc-wipe-layer img");
-    await expect(images).toHaveCount(2);
-    expect(await images.evaluateAll(nodes=>nodes.every(image=>image.complete&&image.naturalWidth>0&&image.naturalHeight>0))).toBeTruthy();
-    const boxes=await images.evaluateAll(nodes=>nodes.map(image=>{
-      const rect=image.getBoundingClientRect(),frame=image.closest(".uc-wipe-frame").getBoundingClientRect();
-      return {image:[rect.x,rect.y,rect.width,rect.height],frame:[frame.x,frame.y,frame.width,frame.height]};
-    }));
-    for(const box of boxes){
-      expect(box.image[0]).toBeLessThanOrEqual(box.frame[0]+1);
-      expect(box.image[1]).toBeLessThanOrEqual(box.frame[1]+1);
-      expect(box.image[0]+box.image[2]).toBeGreaterThanOrEqual(box.frame[0]+box.frame[2]-1);
-      expect(box.image[1]+box.image[3]).toBeGreaterThanOrEqual(box.frame[1]+box.frame[3]-1);
-    }
-    if(id==="UC-006"||id==="UC-018"||id==="UC-362"){
-      expect(await images.first().evaluate(image=>getComputedStyle(image).objectPosition)).toMatch(/^20%\s+28%$/);
-    }
-    if(id==="UC-362") expect(await images.last().evaluate(image=>getComputedStyle(image).objectPosition)).toMatch(/^50%\s+28%$/);
-  }
-});
-
-test("Morn comparison consumes the human-reviewed face alignment",async({page})=>{
-  const still=await readFile(new URL("../../images/uc-001-still.jpg",import.meta.url));
-  const portrait=await readFile(new URL("../../images/uc-001-portrait.jpg",import.meta.url));
-  await page.unrouteAll({behavior:"ignoreErrors"});
-  await page.route("**/*",route=>{
-    const request=route.request(),url=new URL(request.url());
-    if(url.pathname.includes("uc-001-still-")) return route.fulfill({status:200,contentType:"image/jpeg",body:still});
-    if(url.pathname.includes("uc-001-portrait-")) return route.fulfill({status:200,contentType:"image/jpeg",body:portrait});
-    if(request.resourceType()==="image"&&url.hostname!=="127.0.0.1") return route.fulfill({status:200,contentType:"image/png",body:pixel});
-    return route.continue();
-  });
-  await page.setViewportSize({width:1280,height:900});
-  await open(page,"recognition.html#UC-001");
-  await expect(page.getByRole("heading",{name:"Morn",exact:true}).first()).toBeVisible();
-  await page.getByRole("button",{name:"Compare in one frame",exact:true}).click();
-  const profiles=await page.locator("#comparison-stage .uc-wipe-layer img").evaluateAll(nodes=>nodes.map(image=>({
-    position:getComputedStyle(image).objectPosition,
-    origin:getComputedStyle(image).transformOrigin,
-    transform:getComputedStyle(image).transform
-  })));
-  expect(profiles[0].position).toBe("50% 26%");
-  expect(profiles[0].origin).toMatch(/^\d+(?:\.\d+)?px \d+(?:\.\d+)?px$/);
-  expect(profiles[0].transform).toContain("1.45");
-  expect(profiles[1].position).toBe("50% 46%");
-  expect(profiles[1].transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
-  await page.addStyleTag({content:"#comparison-stage{width:400px!important}.uc-wipe-seam{display:none!important}"});
-  await expect(page.locator("#wipe-frame")).toHaveScreenshot("uc-001-morn-face-alignment.png",{animations:"disabled",maxDiffPixelRatio:.01});
 });
 
 test("UC-035 comparison portrait is not a low-resolution sliver",async({page})=>{

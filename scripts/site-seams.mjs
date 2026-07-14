@@ -39,12 +39,12 @@ expect(has("recognition.html", /<main id="record-view"/), "recognition: persiste
 expect(has("recognition.html", /connections-nav[\s\S]{0,220}prefers-reduced-motion/), "recognition: Connections ignores reduced motion");
 expect(has("recognition.html", /data\/archive\.json",\{cache:"no-store"\}/), "recognition: archive snapshot is not fresh");
 expect(has("recognition.html", /graphMeta\?\.sha256/), "recognition: constellation graph is not snapshot-versioned");
-expect(has("recognition.html", /\.uc-wipe-layer\{position:absolute;inset:0;/), "recognition: comparison images do not retain full-frame geometry");
-expect(has("recognition.html", /\.uc-wipe-layer\.is-character\{clip-path:inset\(0 calc\(100% - var\(--split\)\) 0 0\)\}/), "recognition: character wipe is not a fixed-image clip");
-expect(has("recognition.html", /\.uc-wipe-layer\.is-person\{clip-path:inset\(0 0 0 var\(--split\)\)/), "recognition: performer wipe is not a fixed-image clip");
-expect(!has("recognition.html", /\.uc-wipe-layer\.is-(?:character|person)[^{]*\{[^}]*width:/), "recognition: moving the comparison seam must not resize either image");
-expect(has("recognition.html", /transform:scale\(var\(--compare-scale\)\)/), "recognition: comparison-specific face scale is not consumed");
-expect(has("recognition.html", /transform-origin:var\(--compare-x\) var\(--compare-y\)/), "recognition: comparison alignment anchor is not consumed");
+// The draggable comparison seam was retired: it composited two half-faces into
+// one frame, which only reads as a morph for a matched pair. The reveal is now
+// the side-by-side plates (whole image at a time, works for every pair). Guard
+// the seam stays gone and the record keeps its character/person pair.
+expect(!has("recognition.html", /uc-wipe|comparison-stage|Compare in one frame|--compare-scale/), "recognition: retired comparison seam returned");
+expect(has("recognition.html", /id="pair"/), "recognition: record must retain the character/person reveal pair");
 
 expect(has("coverage.html", /data\/archive\.json", \{cache:"no-store"\}/), "coverage: archive snapshot is not fresh");
 expect(has("coverage.html", /readArtifact\(census\.coverage/), "coverage: census artifacts are not snapshot-versioned");
