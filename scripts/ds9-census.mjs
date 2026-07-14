@@ -223,7 +223,23 @@ async function crawl() {
     }
     console.log(`  episodes ${i + 1}-${Math.min(i + 20, episodes.length)} scanned; ${assertions.size} assertions so far`);
   }
-  console.log(`\ncast lines parsed: ${lineNo}; unresolved: ${unresolved.length}`);
+  // Stand-in / stunt-double / photo-double credits are written "X as <principal
+  // actor>"; the resolved "character" is really another performer, not a designed
+  // role. Reclassify those out of the roster (they are doublings, not faces) but
+  // preserve them as unresolved so nothing is silently dropped.
+  const performerKeys = new Set([...assertions.values()].map((r) => normalize(r.performer)));
+  let doublings = 0;
+  for (const [key, row] of assertions) {
+    if (performerKeys.has(normalize(row.character_page || row.character))) {
+      assertions.delete(key);
+      doublings++;
+      unresolved.push({ episode: row.episodes[0]?.episode || null, source: row.episodes[0]?.source || null,
+        tier: [...row.credit_tiers][0] || null, performer: row.performer,
+        line: `${row.performer} as ${row.character}`,
+        reason: `doubling credit across ${row.episodes.length} episode(s) — the named role is performer "${row.character}", not a designed character` });
+    }
+  }
+  console.log(`\ncast lines parsed: ${lineNo}; doublings reclassified: ${doublings}; unresolved: ${unresolved.length}`);
   return { observations, assertions, unresolved, episodeCount: episodes.length };
 }
 

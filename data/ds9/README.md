@@ -53,4 +53,37 @@ Set `CONTACT=you@example.com` so the crawl identifies itself to the wiki.
 
 The scope is **DS9 episode cast credits**. A performer the wiki does not name
 stays in `unresolved.json`; a role credited only in prose is kept with
-`character_page: null`. Zero is never inferred from a missing credit.
+`character_page: null`. Zero is never inferred from a missing credit. Stand-in,
+stunt-double and photo-double credits (written "X as \<principal actor\>") are
+reclassified out of the roster into `unresolved.json` — they double a performer,
+not a designed face.
+
+## graph/ — the relationship layer
+
+Built on the roster by `ds9-graph.mjs`, which fetches each distinct character's
+Memory Alpha page and reads its infobox and categories into an explicit
+node/edge graph. Every edge carries its own citation; nothing is inferred from
+prose.
+
+```
+npm run ds9:graph            # crawl character pages, rewrite graph/*
+npm run ds9:graph:project    # rebuild the seven projections from nodes/edges
+```
+
+| file | what it is |
+| --- | --- |
+| `graph/nodes.json` | every performer / character / species / organization / lineage node. Character nodes carry species, affiliations, lineages, rank, status and the full raw category list for audit. |
+| `graph/edges.json` | typed, individually-cited edges: `portrayed` (episode-credited), `is_species` / `affiliated_with` (infobox or species-category), `member_of` (House/family). |
+| `graph/graphs.json` | seven projections over nodes/edges — `portrayal`, `species`, and the five DS9 power blocs (Dominion, Cardassian, Bajoran, Klingon, Ferengi). Each lists its node ids and cited edges; the bloc rules are recorded in the file. |
+| `graph/graph-summary.json` | reproducible node/edge/graph counts. |
+
+Edge citations: `is_species` / `affiliated_with` cite the character page
+(`source`, `revision`, `content_sha256`) when taken from the infobox, or the
+category URL when taken from a species/personnel category. `member_of` cites the
+House/family — the infobox affiliation link or the family category. `portrayed`
+cites every episode that credits the pairing.
+
+A character appears in more than one power bloc when the wiki sources say so
+(Kira is Bajoran, briefly Dominion, and Starfleet-attached). Power-bloc
+membership is a deterministic projection of sourced species/affiliation/lineage,
+not a hand-drawn hierarchy — internal command chains are not invented here.
