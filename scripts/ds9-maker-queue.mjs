@@ -1,58 +1,61 @@
 #!/usr/bin/env node
-/**
- * ds9-maker-queue.mjs — assemble the maker-attribution REVIEW QUEUE. NO NETWORK.
- *
- * The machine prepares decisions; it does not make them. Every performance is
- * `review` unless the OWNER's decisions file records a list of typed credits for
- * it. Substantive-evidence hints never move a performance out of review.
- *
- *   node scripts/ds9-maker-queue.mjs
- */
+/** Assemble the offline maker-credit review queue. No network. */
 import { readFile, writeFile } from "node:fs/promises";
-import { validateDecisions } from "./lib/maker.mjs";
+import { normalizeBasis, validateDecisions } from "./lib/maker.mjs";
 
-const dossiers = JSON.parse(await readFile("data/ds9/maker-evidence.json", "utf8")).performances;
-const decisionsDoc = JSON.parse(await readFile("data/ds9/maker-decisions.json", "utf8"));
+const roster = JSON.parse(await readFile("data/ds9/roster.json", "utf8"));
+const evidence = JSON.parse(await readFile("data/ds9/maker-evidence.json", "utf8"));
+const decisions = JSON.parse(await readFile("data/ds9/maker-decisions.json", "utf8"));
+const observations = JSON.parse(await readFile("data/ds9/observations.json", "utf8")).observations || [];
+const episodeTitles = [...new Set(observations
+  .map((item) => item.title)
+  .filter((title) => /\(episode\)$/.test(title || ""))
+  .map((title) => normalizeBasis(title.replace(/\s*\(episode\)$/, ""))))];
 
-const { applied, errors } = validateDecisions(decisionsDoc.decisions, dossiers);
-
-const queue = Object.values(dossiers).map((d) => {
-  const decision = applied.get(d.duplicate_key) || null;
+const { applied, errors } = validateDecisions(decisions, evidence, roster, episodeTitles);
+const queue = roster.map((row) => {
+  const decision = applied.get(row.duplicate_key) || null;
+  const signals = evidence.performances?.[row.duplicate_key]?.signal_receipt_ids || [];
   return {
-    duplicate_key: d.duplicate_key, performer: d.performer, character: d.character,
-    status: decision ? "decided" : "review",
-    credits: decision ? decision.credits.map((c) => ({ maker: c.maker, role: c.role })) : null,
-    decided_by: decision ? decision.decided_by : null, date: decision ? decision.date : null,
-    substantive_credits: d.substantive_credits, context_makers: d.context_makers,
-    evidence_count: d.evidence.length, substantive_count: d.evidence.filter((e) => e.substantive).length,
-    on_wall: d.on_wall, wall_ids: d.wall_ids,
+    duplicate_key: row.duplicate_key,
+    performer: row.performer,
+    character: row.character,
+    status: decision ? decision.coverage : "review",
+    credits: decision ? decision.credits : null,
+    owner_rationale: decision?.rationale || null,
+    decided_by: decision?.decided_by || null,
+    date: decision?.date || null,
+    grow_md_version: decision?.grow_md_version || null,
+    signal_receipt_ids: signals,
+    signal_count: signals.length,
+    on_wall: row.role_on_wall,
+    wall_ids: row.wall_ids,
   };
 }).sort((a, b) => a.performer.localeCompare(b.performer) || a.character.localeCompare(b.character));
 
-const decided = queue.filter((q) => q.status === "decided");
 const summary = {
-  version: 2, production: "Star Trek: Deep Space Nine",
-  title: "DS9 maker-attribution review queue",
-  question: "Who built each designed face — the plural, typed credits (designer, sculptor, applicator, supervisor, shop)?",
-  generated_from: ["data/ds9/maker-evidence.json (machine: pinned+verified, applicability-judged)", "data/ds9/maker-decisions.json (owner: plural typed credits)"],
-  contract: "Machines pin+verify maker quotes and judge applicability; only substantive (DS9-applicable, performance-matched) items can support a decision. The owner records a list of typed credits per performance; a credit's role must match its cited item's maker_type. Everything undecided is review.",
+  version: 3,
+  production: "Star Trek: Deep Space Nine",
+  title: "DS9 maker-credit owner review queue",
+  contract: "Machines collect, pin, hash, verify, and surface non-authoritative signals. Only owner decisions attach plural typed credits. Queue status is review, partial, or complete; evidence count never implies completion.",
   total: queue.length,
-  decided: decided.length,
-  review: queue.length - decided.length,
-  performances_with_substantive_evidence: queue.filter((q) => q.substantive_credits.length > 0).length,
-  performances_with_context_only: queue.filter((q) => q.substantive_credits.length === 0 && q.context_makers.length > 0).length,
+  review: queue.filter((item) => item.status === "review").length,
+  partial: queue.filter((item) => item.status === "partial").length,
+  complete: queue.filter((item) => item.status === "complete").length,
+  receipt_count: evidence.receipt_count,
+  verified_receipts: evidence.verified_receipts,
+  performances_with_signals: queue.filter((item) => item.signal_count > 0).length,
   decision_errors: errors,
 };
 
-await writeFile("data/ds9/maker-queue.json", JSON.stringify({ version: 2, summary, queue }, null, 1) + "\n");
+await writeFile("data/ds9/maker-queue.json", JSON.stringify({ version: 3, summary, queue }, null, 1) + "\n");
 await writeFile("data/ds9/maker-summary.json", JSON.stringify(summary, null, 1) + "\n");
 
 console.log(`maker review queue: ${queue.length} performances`);
-console.log(`  decided by owner: ${decided.length}`);
-console.log(`  review (undecided): ${summary.review}`);
-console.log(`  with substantive evidence: ${summary.performances_with_substantive_evidence}; context-only: ${summary.performances_with_context_only}`);
+console.log(`  review ${summary.review}; partial ${summary.partial}; complete ${summary.complete}`);
+console.log(`  receipts ${summary.receipt_count}; verified ${summary.verified_receipts}; signal-only matches ${summary.performances_with_signals}`);
 if (errors.length) {
-  console.error(`\n${errors.length} INVALID owner decision(s) — failing:`);
-  for (const e of errors) console.error("  - " + e);
+  console.error(`\n${errors.length} INVALID owner decision error(s):`);
+  for (const error of errors) console.error(`  - ${error}`);
   process.exit(1);
 }

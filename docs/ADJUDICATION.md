@@ -57,19 +57,15 @@ fails the build (and CI) via the shared validator in `scripts/lib/eligibility.mj
   an offline review queue where every performance is `review` until the owner
   records a verdict in `eligibility-decisions.json`. The machine prepares
   decisions; it does not make them.
-- **Maker / designer attribution** (`data/ds9/maker*.json`): reader-agents fan out
-  over character *and* species pages and return verbatim quotes naming who built
-  each face; `ds9-maker-adjudicate.mjs` pins and verifies, then judges
-  **applicability** — a pinned quote is provenance, not proof it applies to a
-  performance. An item is `substantive` for a performance only when it is
-  DS9-applicable (no other-production marker), names no other performer, and is
-  unambiguously about that performance (single-performer named character, or
-  performer-named). Species-design, cross-production, multi-performer-unnamed, and
-  aggregate-page quotes stay context. Owner decisions in `maker-decisions.json` are
-  **plural typed credits** (designer/sculptor/applicator/supervisor/shop), each
-  citing a substantive item whose `maker` and `maker_type` it must match. The
-  lesson: pin/verify establish provenance; applicability and credit are separate,
-  and the owner's.
+- **Maker / designer attribution** (`data/ds9/maker*.json`): reader-agents returned
+  47 character/species-page excerpts. `ds9-maker-adjudicate.mjs` pins each excerpt
+  once as a content-addressed receipt and surfaces possible roster joins only as
+  non-authoritative signals. It does not infer applicability or attach credits.
+  The owner alone attaches plural typed credits in `maker-decisions.json`, citing
+  exact maker/work/target/production spans, an applicability rationale, review
+  coverage (`partial`/`complete`), and an immutable GROW.md pin. Design-lineage
+  credits require a separate pinned bridge to the DS9 performance. See
+  `data/ds9/MAKER.md`.
 
 ## Good candidates to fan out next
 

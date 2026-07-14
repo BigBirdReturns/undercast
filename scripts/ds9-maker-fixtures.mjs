@@ -1,111 +1,139 @@
 #!/usr/bin/env node
-/**
- * ds9-maker-fixtures.mjs — prove the maker-attribution contract, using the SAME
- * validator production uses. Offline; exits non-zero on any miss.
- *
- * The core invariant after the PR #49 review: SUBSTANTIVE means applicability-matched
- * (DS9, no other-production marker, no other performer named, single-performer named
- * character or performer-named, not an aggregate page), not merely pinned. Owner
- * decisions are plural TYPED credits, each role matching its cited item's maker_type.
- *
- *   npm run ds9:maker:fixtures
- */
+/** Offline contract fixtures for the owner-controlled maker-credit queue. */
 import { readFile } from "node:fs/promises";
-import { validateDecisions, validateDecision, evidenceId, isSubstantive, ROLES } from "./lib/maker.mjs";
+import {
+  ENTITY_TYPES, ROLE_CATEGORIES, normalizeBasis, receiptId,
+  validateDecision, validateDecisions,
+} from "./lib/maker.mjs";
 
 const roster = JSON.parse(await readFile("data/ds9/roster.json", "utf8"));
-const dossiers = JSON.parse(await readFile("data/ds9/maker-evidence.json", "utf8")).performances;
-const queue = JSON.parse(await readFile("data/ds9/maker-queue.json", "utf8")).queue;
-const decisionsDoc = JSON.parse(await readFile("data/ds9/maker-decisions.json", "utf8"));
+const evidence = JSON.parse(await readFile("data/ds9/maker-evidence.json", "utf8"));
+const decisions = JSON.parse(await readFile("data/ds9/maker-decisions.json", "utf8"));
+const queueDoc = JSON.parse(await readFile("data/ds9/maker-queue.json", "utf8"));
+const observations = JSON.parse(await readFile("data/ds9/observations.json", "utf8")).observations || [];
+const episodeTitles = [...new Set(observations
+  .map((item) => item.title)
+  .filter((title) => /\(episode\)$/.test(title || ""))
+  .map((title) => normalizeBasis(title.replace(/\s*\(episode\)$/, ""))))];
+const receipts = Object.values(evidence.receipts || {});
+const queue = queueDoc.queue;
 
-let failed = 0;
-const check = (name, cond, detail = "") => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond ? "" : "  <- " + detail}`); if (!cond) failed++; };
-const perf = (p, c) => Object.values(dossiers).find((d) => d.performer === p && d.character === c);
-const substOf = (p, c) => (perf(p, c)?.evidence || []).filter((e) => e.substantive);
-const perfCount = new Map();
-for (const r of roster) { const k = r.character_page || r.character; perfCount.set(k, (perfCount.get(k) || 0) + 1); }
+let failures = 0;
+const check = (name, condition, detail = "") => {
+  console.log(`  ${condition ? "PASS" : "FAIL"}  ${name}${condition ? "" : ` <- ${detail}`}`);
+  if (!condition) failures++;
+};
+const receipt = (ordinal) => receipts.find((item) => item.reader_assertion.ordinal === ordinal);
+const performance = (performer, character) => roster.find((row) => row.performer === performer && row.character === character);
 
-console.log("== DS9 maker-attribution review-queue contract ==");
+console.log("== DS9 maker-credit owner-review contract ==");
 
-// --- status mirrors a VALID owner decision (shared validator) ---
-const { applied, errors } = validateDecisions(decisionsDoc.decisions, dossiers);
-check("committed owner decisions are all valid", errors.length === 0, errors.slice(0, 3).join("; "));
-check("a performance is `decided` IFF the owner has a valid decision (else review)",
-  queue.every((q) => q.status === (applied.has(q.duplicate_key) ? "decided" : "review")));
-check("no queue entry carries credits without a valid owner decision",
-  queue.every((q) => (q.credits === null) === !applied.has(q.duplicate_key)));
+check("evidence and decision documents are v3", evidence.version === 3 && decisions.version === 3 && queueDoc.version === 3);
+check("all 47 raw fan-out claims survive as one receipt each", receipts.length === 47, `got ${receipts.length}`);
+check("receipt ids are full content addresses and recompute exactly",
+  receipts.every((item) => /^mkr:sha256:[0-9a-f]{64}$/.test(item.id) && item.id === receiptId(item)));
+check("receipt ids are globally unique", new Set(receipts.map((item) => item.id)).size === receipts.length);
+check("verified receipts are pinned to revision, content hash, page, URL, and basis",
+  receipts.filter((item) => item.verified).every((item) => item.source.revision && item.source.content_sha256 && item.source.page && item.source.url && item.source.basis));
+check("machine evidence contains no substantive/verdict/credit field",
+  receipts.every((item) => !("substantive" in item) && !("credits" in item) && !("verdict" in item)));
+check("signals are explicitly non-authoritative and only reference roster keys",
+  receipts.every((item) => item.signals.note.includes("Non-authoritative") && item.signals.possible_duplicate_keys.every((key) => roster.some((row) => row.duplicate_key === key))));
 
-// --- PROVENANCE != APPLICABILITY: the three PR #49 leaks stay CONTEXT ---
-check("Marc Worden's DS9 Alexander carries NO substantive TNG (Tania McComas) item",
-  !substOf("Marc Worden", "Alexander Rozhenko").some((e) => e.maker === "Tania McComas"));
-check("Melanie Smith's Ziyal carries NO substantive Season-4 (Dean Jones) item",
-  !substOf("Melanie Smith", "Tora Ziyal").some((e) => e.maker === "Dean Jones"));
-check("Adrienne Barbeau's DS9 Cretak carries NO substantive PIC-Romulan (Neville Page) item",
-  !substOf("Adrienne Barbeau", "Kimara Cretak").some((e) => e.maker === "Neville Page"));
+const aggregate = /^Unnamed |(?:personnel|residents|visitors)$|Dabo girls/i;
+check("aggregate/pronoun claims attach to zero performance signals",
+  receipts.filter((item) => item.reader_assertion.scope === "character" && aggregate.test(item.reader_assertion.key || ""))
+    .every((item) => item.signals.possible_duplicate_keys.length === 0));
+check("Tracee Lee Cocco receipt is not substituted onto Daniel Reardon",
+  !receipt(7).signals.possible_duplicate_keys.includes("p139210|c269567"));
 
-// --- the substantive rule holds for EVERY substantive item across the corpus ---
-const AGG = /^Unnamed |(?:personnel|residents|visitors)$|Dabo girls/i;
-check("every substantive item is DS9-applicable, performer-matched, non-aggregate, character-scoped",
-  Object.values(dossiers).every((d) => d.evidence.filter((e) => e.substantive).every((e) =>
-    e.scope === "character" && e.verified && e.maker && ROLES.includes(e.maker_type) &&
-    !e.applicability.other_production && !e.applicability.other_performer_named &&
-    !AGG.test(d.character || "") && !AGG.test(d.character_page || "") &&
-    (perfCount.get(d.character_page || d.character) === 1 || e.applicability.named_performers.includes(d.performer)))));
-check("no species-scoped item is ever substantive (species design != a performance's maker)",
-  Object.values(dossiers).every((d) => d.evidence.filter((e) => e.scope === "species").every((e) => !e.substantive)));
-check("no cross-production quote is ever substantive",
-  Object.values(dossiers).flatMap((d) => d.evidence).every((e) => !(e.substantive && e.applicability.other_production)));
+const rosterKeys = new Set(roster.map((row) => row.duplicate_key));
+const evidenceKeys = new Set(Object.keys(evidence.performances || {}));
+const queueKeys = new Set(queue.map((item) => item.duplicate_key));
+const setEqual = (a, b) => a.size === b.size && [...a].every((key) => b.has(key));
+check("roster, performance-signal projection, and queue keys are exact sets",
+  setEqual(rosterKeys, evidenceKeys) && setEqual(evidenceKeys, queueKeys));
 
-// --- content-addressed, unique ids; verified quotes pinned ---
-check("every evidence id is the content-address of its own item",
-  Object.values(dossiers).every((d) => d.evidence.every((e) => e.id === evidenceId(d.duplicate_key, e))));
-check("every evidence id is unique within its dossier",
-  Object.values(dossiers).every((d) => new Set(d.evidence.map((e) => e.id)).size === d.evidence.length));
-check("every substantive item is pinned to page + revision + content_sha256 + basis + typed maker",
-  Object.values(dossiers).flatMap((d) => d.evidence).filter((e) => e.substantive)
-    .every((e) => e.page && e.revision && e.content_sha256 && e.basis && e.maker && ROLES.includes(e.maker_type)));
+const validation = validateDecisions(decisions, evidence, roster, episodeTitles);
+check("committed owner decisions are valid", validation.errors.length === 0, validation.errors.slice(0, 3).join("; "));
+check("empty owner file leaves all 557 performances in review",
+  validation.applied.size === 0 && queue.length === 557 && queue.every((item) => item.status === "review" && item.credits === null));
+check("signals never change review status", queue.every((item) => item.status === "review"));
+check("v2 decision documents fail closed", validateDecisions({ version: 2, decisions: [] }, evidence, roster, episodeTitles).errors.length > 0);
 
-// --- exact canonical-key coverage ---
-const setEq = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
-check("roster == dossier == queue keys (exact sets)",
-  setEq(new Set(roster.map((r) => r.duplicate_key)), new Set(Object.keys(dossiers))) &&
-  setEq(new Set(Object.keys(dossiers)), new Set(queue.map((q) => q.duplicate_key))));
+const runepp = performance("John Paul Lona", "Runepp");
+const runeppReceipt = receipt(1);
+const goodCredit = {
+  maker: { entity_type: "person", name: "John Paul Lona", authority_id: "memory-alpha:John_Paul_Lona" },
+  role: { category: "makeup_design", source_label: "designing the make-up" },
+  credit_scope: "performance",
+  supports: [{
+    receipt_id: runeppReceipt.id,
+    mode: "direct",
+    maker_basis: "John Paul Lona",
+    target_basis: "Runepp",
+    production_basis: "DS9",
+    applicability_rationale: "The receipt names Lona, Runepp, DS9, and the makeup-design work directly.",
+  }],
+};
+const goodDecision = {
+  duplicate_key: runepp.duplicate_key,
+  coverage: "partial",
+  credits: [goodCredit],
+  rationale: "One directly evidenced design credit is established; completeness is not asserted.",
+  decided_by: "owner",
+  date: "2026-07-14",
+  grow_md_version: "GROW.md@e50f7acd68baa116dca86a6525b11e09f6d7df8b",
+};
+check("a direct, quote-spanned, policy-pinned partial credit is accepted",
+  validateDecision(goodDecision, evidence, roster, episodeTitles).ok,
+  validateDecision(goodDecision, evidence, roster, episodeTitles).errors.join("; "));
+check("coverage complete is an explicit owner state, not inferred",
+  validateDecision({ ...goodDecision, coverage: "complete" }, evidence, roster, episodeTitles).ok);
+check("one valid partial decision projects exactly one partial performance",
+  (() => { const result = validateDecisions({ version: 3, decisions: [goodDecision] }, evidence, roster, episodeTitles); return result.applied.size === 1 && result.applied.get(runepp.duplicate_key)?.coverage === "partial"; })());
 
-// --- PLURAL TYPED CREDITS: owner-decision validation (accept + reject paths) ---
-const martok = perf("J.G. Hertzler", "Martok");
-const mSub = (martok?.evidence || []).filter(isSubstantive);
-check("a single-performer designed face retains MULTIPLE typed substantive credits (Martok)", mSub.length >= 2,
-  `Martok substantive: ${mSub.length}`);
-if (mSub.length >= 2) {
-  const key = martok.duplicate_key;
-  const credit = (e) => ({ maker: e.maker, role: e.maker_type, evidence_id: e.id });
-  const good = { duplicate_key: key, credits: mSub.map(credit),
-    rationale: "Westmore designed and Quashnick applied Martok's makeup — both sourced.",
-    decided_by: "owner", date: "2026-07-14" };
-  check("a plural-credit decision (designer + applicator) is accepted", validateDecision(good, dossiers).ok,
-    JSON.stringify(validateDecision(good, dossiers).errors));
-  check("a credit whose role != the cited item's maker_type is rejected",
-    !validateDecision({ ...good, credits: [{ ...credit(mSub[0]), role: mSub[0].maker_type === "designer" ? "sculptor" : "designer" }] }, dossiers).ok);
-  check("a credit whose maker the cited item does not name is rejected",
-    !validateDecision({ ...good, credits: [{ ...credit(mSub[0]), maker: "Somebody Else" }] }, dossiers).ok);
-  check("a credit missing role is rejected",
-    !validateDecision({ ...good, credits: [{ maker: mSub[0].maker, evidence_id: mSub[0].id }] }, dossiers).ok);
-  check("a credit citing non-substantive/context evidence is rejected",
-    (() => { const ctx = (Object.values(dossiers).flatMap((d) => d.evidence)).find((e) => e.verified && !e.substantive);
-      return ctx ? !validateDecision({ ...good, credits: [{ maker: ctx.maker, role: ctx.maker_type, evidence_id: ctx.id }] }, dossiers).ok : true; })());
-  check("a credit citing a stale/nonexistent evidence id is rejected",
-    !validateDecision({ ...good, credits: [{ maker: mSub[0].maker, role: mSub[0].maker_type, evidence_id: "nope#000" }] }, dossiers).ok);
-  check("duplicate (maker, role) credits are rejected",
-    !validateDecision({ ...good, credits: [credit(mSub[0]), credit(mSub[0])] }, dossiers).ok);
-  check("an empty credits list is rejected",
-    !validateDecision({ ...good, credits: [] }, dossiers).ok);
-  check("an impossible calendar date is rejected",
-    !validateDecision({ ...good, date: "2026-13-40" }, dossiers).ok);
-  check("a decision for an unknown performance is rejected (dangling)",
-    !validateDecision({ ...good, duplicate_key: "p0|c0" }, dossiers).ok);
-  check("a valid decision flips exactly that one performance",
-    (() => { const { applied: a } = validateDecisions([good], dossiers); return a.size === 1 && a.has(key); })());
+const bad = (mutate) => !validateDecision(mutate(structuredClone(goodDecision)), evidence, roster, episodeTitles).ok;
+check("missing immutable GROW pin is rejected", bad((decision) => { delete decision.grow_md_version; return decision; }));
+check("unknown/unsupported role is rejected", bad((decision) => { decision.credits[0].role.category = "unknown"; return decision; }));
+check("maker entity type is validated", bad((decision) => { decision.credits[0].maker.entity_type = "mystery"; return decision; }));
+check("maker basis must be an exact receipt span naming the credited maker", bad((decision) => { decision.credits[0].supports[0].maker_basis = "Somebody Else"; return decision; }));
+check("work label must be an exact receipt span", bad((decision) => { decision.credits[0].role.source_label = "supervised all makeup"; return decision; }));
+check("target basis must be an exact receipt span", bad((decision) => { decision.credits[0].supports[0].target_basis = "Martok"; return decision; }));
+check("production basis must be an exact receipt span", bad((decision) => { decision.credits[0].supports[0].production_basis = "Voyager"; return decision; }));
+check("stale receipt ids are rejected", bad((decision) => { decision.credits[0].supports[0].receipt_id = "mkr:sha256:" + "0".repeat(64); return decision; }));
+check("duplicate supports are rejected", bad((decision) => { decision.credits[0].supports.push(structuredClone(decision.credits[0].supports[0])); return decision; }));
+check("design-lineage credits require a verified bridge", bad((decision) => { decision.credits[0].credit_scope = "design_lineage"; decision.credits[0].supports[0].mode = "design_lineage"; return decision; }));
+check("an invalid calendar date is rejected", bad((decision) => { decision.date = "2026-13-40"; return decision; }));
+check("a non-roster performance is rejected", bad((decision) => { decision.duplicate_key = "p0|c0"; return decision; }));
+
+for (const [name, ordinal, performer, character] of [
+  ["TNG Alexander", 12, "Marc Worden", "Alexander Rozhenko"],
+  ["Season-4 Ziyal", 4, "Melanie Smith", "Tora Ziyal"],
+  ["PIC Romulan", 44, "Adrienne Barbeau", "Kimara Cretak"],
+  ["franchise-wide Worf", 14, "Michael Dorn", "Worf"],
+  ["Laas alternate form", 9, "J.G. Hertzler", "Laas"],
+]) {
+  const row = performance(performer, character);
+  const item = receipt(ordinal);
+  const decision = structuredClone(goodDecision);
+  decision.duplicate_key = row.duplicate_key;
+  decision.credits[0].maker.name = item.reader_assertion.maker;
+  decision.credits[0].maker.authority_id = `reader:${ordinal}`;
+  decision.credits[0].role.source_label = item.reader_assertion.maker;
+  decision.credits[0].supports[0] = {
+    receipt_id: item.id, mode: "direct",
+    maker_basis: item.reader_assertion.maker,
+    target_basis: character,
+    production_basis: "DS9",
+    applicability_rationale: "Adversarial attempt to attach context as a direct performance credit.",
+  };
+  check(`${name} receipt cannot auto-attach as direct DS9 performance evidence`,
+    !validateDecision(decision, evidence, roster, episodeTitles).ok);
 }
 
-console.log(`\n${failed ? failed + " FIXTURE(S) FAILED" : "all contract fixtures passed"}`);
-process.exit(failed ? 1 : 0);
+check("vocabulary separates maker entity and credited work",
+  ENTITY_TYPES.includes("organization") && ROLE_CATEGORIES.includes("makeup_application") && !ROLE_CATEGORIES.includes("unknown"));
+
+console.log(`\n${failures ? `${failures} FIXTURE(S) FAILED` : "all contract fixtures passed"}`);
+process.exit(failures ? 1 : 0);
