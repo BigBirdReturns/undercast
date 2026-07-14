@@ -1,71 +1,63 @@
-# DS9 eligibility — GROW.md, from verified evidence
+# DS9 eligibility — a review queue, not a verdict machine
 
-A ruling on every canonical performance in `roster.json` against GROW.md:
-
-> a real, verifiable performer who **vanishes under a designed face** — heavy
-> prosthetics, a mask, a full creature suit, motion capture, or an unseen
-> voice-only role. … If the audience mostly sees the performer *as themselves*,
-> it doesn't qualify.
-
-**Decides nothing about the wall.** Sourced projection, not an ingestion. `review`
-verdicts are candidates for a later, separately-authorized pass. Built with the
-reusable adjudication harness — see [`docs/ADJUDICATION.md`](../../docs/ADJUDICATION.md).
+Wall eligibility ("does this performer vanish under a designed face?") is an
+**editorial judgment** against GROW.md. Machines cannot make it — they proved,
+over several rounds, that any automated threshold (species lookup, regex,
+per-character broadcast) is wrong. So this is not an eligibility *projection*. It
+is a **review queue**: machines assemble sourced, pinned, verified evidence and
+prepare decisions; the **owner** makes them.
 
 ```
-# 1. reader fan-out returns verbatim basis quotes  -> data/ds9/eligibility-judgments.json
-# 2. pin + verify (network):
-CONTACT=you@example.com npm run ds9:eligibility:adjudicate   # -> eligibility-evidence.json
-# 3. derive verdicts (offline, deterministic):
-npm run ds9:eligibility            # -> eligibility.json + summary
-npm run ds9:eligibility:fixtures
+CONTACT=you@example.com npm run ds9:eligibility:adjudicate   # collect+pin+verify evidence (network)
+npm run ds9:eligibility:queue        # build the review queue from evidence + owner decisions (offline)
+npm run ds9:eligibility:fixtures      # prove the contract on 10 hard performances
 ```
 
-## A verdict rests on a verified, threshold-meeting, applicable quote
+## The durable boundary
 
-Provenance is not enough. A quote proves it was said; it does not prove it clears
-UNDERCAST's entry bar. So `eligible`/`ineligible` are derived only from a claim
-that is **all three** of:
+- **Machines collect, pin, hash, and verify evidence.** Every evidence item is a
+  verbatim Memory Alpha quote pinned to a `revision` + `content_sha256` and
+  checked to be present in it. No heaviness classifier exists.
+- **Every dossier is keyed by the canonical `duplicate_key`** (557 performances,
+  no collisions).
+- **Shared species information is context only** (`kind: "species-context"`) —
+  never a verdict, never broadcast as one.
+- **Evidence never crosses performances.** A character-page quote attaches to a
+  performance only if it names that performer, or the character had a single
+  performer. Melanie Smith does not inherit Batten/Middendorf's Ziyal quote;
+  Megan Cole does not inherit Barbeau's Cretak makeup.
+- **Explicit voice-only and bare-faced quotes raise a `signal`** — an unambiguous
+  hint for the owner — but a signal is **not** a verdict and never moves a
+  performance out of review.
+- **Editorial decisions live in `eligibility-decisions.json`**, owner-controlled.
+  Each decision carries `verdict`, `rationale`, the `evidence_ids` it rests on,
+  `decided_by`, `date`, and `grow_md_version`. No machine writes to it.
+- **Everything undecided stays `review`.** No regex, species rule, signal, or
+  agent recommendation can change that — only an owner decision.
 
-- **verified** — the reader-agent's verbatim quote is present in the page's pinned
-  revision (`verifyBasis`);
-- **threshold-meeting** — the quote documents a **FULL designed face**: a full
-  facial/head prosthetic, a mask, a full creature suit, motion capture, or an
-  unseen voice. "Teeth", "contact lenses", "a wig", "airbrushing", bare "makeup",
-  and in-universe anatomy ("Cardassians had neck ridges") do **not** clear it;
-- **applicable** — the quote belongs to *this* performance. A species page applies
-  to any member; a character-page quote that names a *different* performer of the
-  same character does not (Melanie Smith does not inherit Batten/Middendorf's Ziyal
-  quote).
+## Files
 
-Each claim carries `{page, revision, content_sha256, basis}` — a receipt anyone
-can re-check.
+| file | who writes it | what it is |
+| --- | --- | --- |
+| `eligibility-judgments.json` | reader fan-out | raw reader notes + verbatim quotes (input) |
+| `eligibility-evidence.json` | machine | per-performance dossiers: pinned, verified evidence + signals |
+| `eligibility-decisions.json` | **owner** | the only place verdicts live |
+| `eligibility-queue.json` | machine | the review queue: `review` unless the owner decided |
+| `eligibility-summary.json` | machine | counts |
 
-| verdict | derived when |
-| --- | --- |
-| `eligible` | a verified + threshold-meeting + applicable quote documents a full designed face |
-| `ineligible` | a verified + affirmative + applicable quote says the performer is seen as themselves (bare-faced, played himself, only a light appliance) |
-| `review` | no such quote either way — most rows, and honest |
+## How the owner decides
 
-Examples: **Garak** eligible on *"the forehead piece but also a chin piece and a
-nose appliance"*; **Nog** on the Ferengi *"helmet-like headpiece … over the head"*;
-**Herbert Rossoff** ineligible on *"bizarre to be bare-faced on a Star Trek show"*.
-**Martok** → `review`: the only quote gathered was Westmore's *"I made teeth for
-him"*, which does not establish a full face — even though Martok is obviously a
-full Klingon prosthetic, the *evidence provided* is insufficient, so the honest
-verdict is review, not an assumption. **Bashir**/**Kira** → `review` (no
-affirmative quote — never inferred from silence).
+Add an entry to `eligibility-decisions.json`, citing the evidence IDs from that
+performance's dossier:
 
-The eligible set is therefore small and conservative: only performances whose
-gathered quote actually documents a full designed face. Broadening it means
-gathering better quotes (a targeted re-adjudication), not loosening the bar.
+```json
+{ "duplicate_key": "p6598|c64886", "verdict": "eligible",
+  "rationale": "Full Cardassian facial + cranial prosthetic; performer not visible.",
+  "evidence_ids": ["p6598|c64886#2"], "decided_by": "owner", "date": "2026-07-14",
+  "grow_md_version": "GROW.md@<sha>" }
+```
 
-## The wall does not override evidence
-
-If a verified quote ruled an on-wall performance `ineligible`, it is surfaced in
-`diagnostic_evidence_contradicts_wall`, never forced eligible. (Currently 0.)
-
-## Scope
-
-Evidence covers the 273 named characters read in the adjudication; unnamed
-background extras and page-less prose roles stay `review` pending a later scoped
-pass. The current honest totals are **mostly review** by design.
+Re-run `ds9:eligibility:queue`; that one performance becomes `decided`, the rest
+stay `review`. A decision that cites evidence which doesn't exist is rejected as
+dangling, never silently applied. Approved candidates still go through the normal
+GROW.md drafting and evidence gate before anything enters `specimens.json`.
