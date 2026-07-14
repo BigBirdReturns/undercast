@@ -46,6 +46,21 @@ check("summary agrees eligibility is evidence-derived, not wall-driven",
 check("evidence-contradicts-wall is surfaced as a diagnostic, not forced away",
   Array.isArray(summary.diagnostic_evidence_contradicts_wall));
 
+// --- evidence-driven behavior (locks the corrected engine on the committed evidence) ---
+const find = (p, c) => rulings.find((r) => r.performer === p && r.character === c);
+const V = (p, c, v) => check(`${p} as ${c} -> ${v} (from evidence)`, find(p, c)?.verdict === v, find(p, c)?.verdict);
+V("Andrew J. Robinson", "Elim Garak", "eligible");        // full Cardassian, visible_as_self false
+V("Armin Shimerman", "Quark", "eligible");                // full Ferengi
+V("Salome Jens", "Female Changeling", "eligible");        // smooth designed face
+V("Alexander Siddig", "Julian Bashir", "ineligible");     // human, seen as self
+V("Nana Visitor", "Kira Nerys", "ineligible");            // light Bajoran, seen as self
+// per-performance, not per-performer: same actor, different role, different verdict
+check("same performer differs by role: Shimerman is eligible as Quark but ineligible as bare-faced Herbert Rossoff",
+  find("Armin Shimerman", "Quark")?.verdict === "eligible" && find("Armin Shimerman", "Herbert Rossoff")?.verdict === "ineligible");
+// wall is NOT overridden: an on-wall performance ruled ineligible on evidence is surfaced
+check("Leeta (on wall UC-735) is surfaced in evidence-contradicts-wall, not forced eligible",
+  summary.diagnostic_evidence_contradicts_wall.some((d) => d.character === "Leeta") && find("Chase Masterson", "Leeta")?.verdict === "ineligible");
+
 // --- determinism ---
 check("summary counts match rulings",
   summary.eligible === rulings.filter((r) => r.verdict === "eligible").length &&
