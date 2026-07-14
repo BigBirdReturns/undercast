@@ -128,7 +128,7 @@ gets no schema, no validator invariant, and is not called a primitive.
 ---
 
 ## DEC-0009 — Constellations has not earned permanent top-navigation
-**Status:** Accepted; implementation pending · 2026-07-13
+**Status:** Active · Implemented 2026-07-14
 
 Constellations stays **contextual** (under Explore or within records) and does
 **not** occupy permanent top-navigation until it demonstrates **repeatable visitor
@@ -136,10 +136,9 @@ value** and **enough curated coverage** to justify a global destination. **No
 arbitrary numeric threshold is constitutional** — the bar is demonstrated value, not
 a count.
 
-**Repo state (conflict):** the Archive navigation on `main` (and in #43) currently
-lists **Constellations** as a top-nav item. This decision cannot be marked **Active**
-until a change removes it from top-nav and relocates it contextually. Pending that
-implementation.
+**Repo state:** Constellations is absent from the permanent Archive navigation and
+remains available through contextual links on Recognition, Coverage, and permanent
+records. The constellation route remains a valid curated destination.
 
 ---
 
