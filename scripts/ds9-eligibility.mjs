@@ -1,116 +1,91 @@
 #!/usr/bin/env node
 /**
- * ds9-eligibility.mjs — a per-performance GROW.md eligibility projection. NO NETWORK.
+ * ds9-eligibility.mjs — derive GROW.md eligibility from VERIFIED evidence. NO NETWORK.
  *
- * GROW.md law: a specimen is "a real, verifiable performer who vanishes under a
- * designed face — heavy prosthetics, a mask, a full creature suit, motion capture,
- * or an unseen voice-only role. … If the audience mostly sees the performer as
- * themselves, it doesn't qualify."
+ * Consumes data/ds9/eligibility-evidence.json (built by ds9-eligibility-adjudicate.mjs:
+ * per performer-character performance, with claim-level revision/hash/basis provenance).
+ * A verdict is DERIVED only from verified, affirmative claims — never from species,
+ * never from wall membership, never from the ABSENCE of a makeup mention:
  *
- * Species does NOT decide eligibility — it only sets a review priority. A verdict
- * of eligible/ineligible is DERIVED from performance-specific, SOURCED evidence
- * held in data/ds9/eligibility-evidence.json (what transformation, how extensive,
- * was the performer visible as themselves, and the Memory Alpha sources). Without
- * that evidence a performance is `review`. Wall membership never overrides
- * evidence; a conflict is surfaced as a diagnostic, not resolved by fiat.
+ *   eligible    — a verified claim documents a GROW qualifying transformation (heavy
+ *                 prosthetics / mask / creature suit / motion capture / voice-only)
+ *                 and the performer is not visible as themselves.
+ *   ineligible  — a verified claim affirmatively says the performer is seen as
+ *                 themselves (bare-faced, played himself, only a light appliance).
+ *   review      — no verified affirmative claim either way. This is most rows, and
+ *                 it is the honest state until sourced adjudication says otherwise.
  *
- *   node scripts/ds9-eligibility.mjs         # rebuild data/ds9/eligibility*.json
+ *   node scripts/ds9-eligibility.mjs
  */
 import { readFile, writeFile } from "node:fs/promises";
 
 const roster = JSON.parse(await readFile("data/ds9/roster.json", "utf8"));
-const graphEdges = JSON.parse(await readFile("data/ds9/graph/edges.json", "utf8")).edges;
 const evidenceDoc = JSON.parse(await readFile("data/ds9/eligibility-evidence.json", "utf8"));
-const EVIDENCE = evidenceDoc.characters || {};
-
-// species per character, from the sourced is_species edges — CONTEXT ONLY.
-const speciesByChar = new Map();
-for (const e of graphEdges) if (e.type === "is_species") {
-  const c = e.from.replace("character:", ""), s = e.to.replace("species:", "");
-  (speciesByChar.get(c) || speciesByChar.set(c, []).get(c)).push(s);
-}
-// species only PRIORITISES review; it is never a verdict.
-const DESIGNED_FACE = new Set(["Cardassian", "Klingon", "Ferengi", "Jem'Hadar", "Vorta", "Changeling",
-  "Breen", "Lurian", "Hupyrian", "Nausicaan", "Karemma", "Tosk", "Gorn", "Benzite", "Bolian", "Tzenkethi", "Markalian", "Lethean", "Boslic"]);
-const HUMANLIKE = new Set(["Human", "Augment"]);
-const LIGHT_MAKEUP = new Set(["Bajoran", "Trill", "Vulcan", "Romulan", "Betazoid", "El-Aurian", "Grazerite"]);
-const priorityOf = (species) => species.some((s) => DESIGNED_FACE.has(s)) ? "likely-designed-face"
-  : species.length && species.every((s) => HUMANLIKE.has(s)) ? "likely-humanlike"
-  : species.some((s) => LIGHT_MAKEUP.has(s)) ? "borderline-light-makeup" : "unknown";
-
+const EV = evidenceDoc.performances || {};
 const GROW = "https://github.com/BigBirdReturns/undercast/blob/main/GROW.md";
+const GROW_TYPES = evidenceDoc.grow_types || ["heavy-prosthetics", "mask", "creature-suit", "motion-capture", "voice-only"];
 
-// The verdict is DERIVED from the sourced evidence facts, not asserted by anyone.
-// A designed face the performer disappears into -> eligible; the performer seen as
-// themselves -> ineligible; anything without sourced facts -> review.
-function judge(charId, species) {
-  const ev = EVIDENCE[charId];
-  const prior = priorityOf(species);
-  if (!ev || !Array.isArray(ev.sources) || ev.sources.length === 0)
-    return { verdict: "review", evidence: null, review_priority: prior,
-      reason: `No performance-specific transformation evidence yet. Species ${species.join("/") || "unestablished"} sets review priority "${prior}" but does not decide — GROW.md eligibility is about the designed face, not the race.` };
-  const { transformation = null, extent = null, visible_as_self = null } = ev;
-  const designed = extent && ["full", "partial"].includes(extent) && transformation && !/^none$/i.test(transformation);
-  let verdict, reason;
-  if (visible_as_self === false && designed) {
-    verdict = "eligible";
-    reason = `${row2label(charId)}: ${transformation} (${extent}); the performer is not seen as themselves — GROW.md "vanishes under a designed face."`;
-  } else if (visible_as_self === true || extent === "none" || (extent === "light" && visible_as_self !== false)) {
-    verdict = "ineligible";
-    reason = `${row2label(charId)}: ${transformation || "no designed transformation"} (${extent || "none"}); the audience sees the performer as themselves — GROW.md disqualifier.`;
-  } else {
-    verdict = "review";
-    reason = `${row2label(charId)}: evidence present but not decisive (transformation "${transformation}", extent "${extent}", visible_as_self ${visible_as_self}); needs a firmer sourced call.`;
+function derive(ev) {
+  if (!ev) return { verdict: "review", reason: "No adjudicated evidence for this performance yet.", claims: [] };
+  const verified = (ev.claims || []).filter((c) => c.verified);
+  const transformation = verified.find((c) => c.type === "transformation");
+  const appearsAsSelf = verified.find((c) => c.type === "appears-as-self");
+  if (transformation && ev.visible_as_self !== true) {
+    return { verdict: "eligible",
+      reason: `${ev.transformation_type} affirmed on the pinned page ("${transformation.basis.slice(0, 90)}…"); the performer is not seen as themselves — GROW.md "vanishes under a designed face."`,
+      claims: verified };
   }
-  return { verdict, evidence: { transformation, extent, visible_as_self, sources: ev.sources }, review_priority: prior, reason };
+  if (appearsAsSelf && !transformation) {
+    return { verdict: "ineligible",
+      reason: `The pinned page affirmatively shows the performer as themselves ("${appearsAsSelf.basis.slice(0, 90)}…") — GROW.md disqualifier.`,
+      claims: verified };
+  }
+  return { verdict: "review",
+    reason: `No verified affirmative evidence decides this yet (transformation_type "${ev.transformation_type}", visible_as_self ${ev.visible_as_self}). Absence of a makeup note is not evidence — held for adjudication.`,
+    claims: verified };
 }
-const labels = new Map();
-const row2label = (charId) => labels.get(charId) || charId;
 
 const rulings = roster.map((row) => {
-  const charId = row.character_page || row.character;
-  labels.set(charId, row.character);
-  const species = [...new Set(speciesByChar.get(charId) || [])];
-  const j = judge(charId, species);
+  const ev = EV[row.performer + "::" + row.character];
+  const d = derive(ev);
   return {
     performer: row.performer, performer_pageid: row.performer_pageid,
     character: row.character, character_pageid: row.character_pageid,
     character_named: row.character_named, background_role: row.background_role,
-    species,                       // context only
-    review_priority: j.review_priority,
-    verdict: j.verdict, reason: j.reason,
-    evidence: j.evidence,          // the sourced facts a decided verdict rests on
-    citations: [{ claim: "GROW.md eligibility law", source: GROW }, ...(j.evidence ? j.evidence.sources : [])],
+    species: ev?.species || [],
+    transformation_type: ev?.transformation_type || "unknown",
+    visible_as_self: ev?.visible_as_self ?? null,
+    verdict: d.verdict, reason: d.reason,
+    citations: [{ claim: "GROW.md eligibility law", source: GROW }, ...d.claims.map((c) => ({
+      claim: c.establishes, source: c.source, revision: c.revision, content_sha256: c.content_sha256, basis: c.basis }))],
     on_wall: row.role_on_wall, wall_ids: row.wall_ids, duplicate_key: row.duplicate_key,
   };
 }).sort((a, b) => a.performer.localeCompare(b.performer) || a.character.localeCompare(b.character));
 
 const by = (v) => rulings.filter((r) => r.verdict === v);
 const eligible = by("eligible"), ineligible = by("ineligible"), review = by("review");
-// evidence can contradict the wall — surfaced, never silently overridden either way.
-const evidenceContradictsWall = rulings.filter((r) => r.on_wall && r.verdict === "ineligible");
 const decided = rulings.filter((r) => r.verdict !== "review");
+const evidenceContradictsWall = rulings.filter((r) => r.on_wall && r.verdict === "ineligible");
 
 const summary = {
-  version: 2, production: "Star Trek: Deep Space Nine",
+  version: 3, production: "Star Trek: Deep Space Nine",
   law: "GROW.md — a real, verifiable performer who vanishes under a designed face",
-  generated_from: ["data/ds9/roster.json", "data/ds9/graph/edges.json", "data/ds9/eligibility-evidence.json"],
-  method: "Species sets a review PRIORITY only. eligible/ineligible are DERIVED from performance-specific sourced evidence (transformation, extent, visible-as-self) in eligibility-evidence.json; without that evidence a performance is review. Wall membership never overrides evidence.",
+  generated_from: ["data/ds9/roster.json", "data/ds9/eligibility-evidence.json"],
+  method: "Verdicts are DERIVED from verified, affirmative, claim-level evidence (each pinned to a Memory Alpha revision + content hash). No affirmative evidence -> review. Species and wall membership never decide. Absence of a makeup mention is never treated as evidence of no makeup.",
+  grow_types_implemented: GROW_TYPES,
   canonical_performances: rulings.length,
   eligible: eligible.length, ineligible: ineligible.length, review: review.length,
-  performances_with_sourced_evidence: decided.length + rulings.filter((r) => r.verdict === "review" && r.evidence).length,
-  every_decided_verdict_has_sources: decided.every((r) => r.evidence && r.evidence.sources.length > 0),
-  review_priority_breakdown: rulings.reduce((a, r) => (a[r.review_priority] = (a[r.review_priority] || 0) + 1, a), {}),
-  diagnostic_evidence_contradicts_wall: evidenceContradictsWall.map((r) => ({ performer: r.performer, character: r.character, wall_ids: r.wall_ids, evidence: r.evidence })),
-  note: "First-pass. Until the sourced adjudication is run, verdicts are honestly mostly review. Nothing here enters specimens.json.",
+  every_decided_verdict_has_a_verified_pinned_claim: decided.every((r) =>
+    r.citations.some((c) => c.revision && c.content_sha256 && c.basis)),
+  diagnostic_evidence_contradicts_wall: evidenceContradictsWall.map((r) => ({ performer: r.performer, character: r.character, wall_ids: r.wall_ids, reason: r.reason })),
+  note: "Honestly mostly review until adjudication broadens. Nothing here enters specimens.json.",
 };
 
-await writeFile("data/ds9/eligibility.json", JSON.stringify({ version: 2, count: rulings.length, rulings }, null, 1) + "\n");
+await writeFile("data/ds9/eligibility.json", JSON.stringify({ version: 3, count: rulings.length, rulings }, null, 1) + "\n");
 await writeFile("data/ds9/eligibility-summary.json", JSON.stringify(summary, null, 1) + "\n");
 
 console.log(`canonical performances: ${rulings.length}`);
-console.log(`  eligible:   ${eligible.length}  (evidence-backed)`);
-console.log(`  ineligible: ${ineligible.length}  (evidence-backed)`);
-console.log(`  review:     ${review.length}`);
-console.log(`sourced evidence present for ${decided.length} decided verdict(s)`);
-console.log(`evidence-contradicts-wall diagnostics: ${evidenceContradictsWall.length}`);
+console.log(`  eligible:   ${eligible.length}  (verified qualifying transformation)`);
+console.log(`  ineligible: ${ineligible.length}  (verified appears-as-self)`);
+console.log(`  review:     ${review.length}  (no affirmative evidence — honest)`);
+console.log(`evidence-contradicts-wall: ${evidenceContradictsWall.length}`);

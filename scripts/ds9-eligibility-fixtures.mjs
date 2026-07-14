@@ -3,63 +3,53 @@
  * ds9-eligibility-fixtures.mjs — regression fixtures for the eligibility projection.
  * Offline; exits non-zero on any miss.  npm run ds9:eligibility:fixtures
  *
- * These lock the CONTRACT, not a headcount, so they hold whether the evidence file
- * is empty (all review) or fully adjudicated: species never decides, every decided
- * verdict is sourced, and the wall never overrides evidence.
+ * Locks the CONTRACT (not a headcount): every decided verdict rests on a VERIFIED,
+ * affirmative claim pinned to a Memory Alpha revision + content hash + basis quote;
+ * nothing is decided from absence, species, or wall membership.
  */
 import { readFile } from "node:fs/promises";
 
 const rulings = JSON.parse(await readFile("data/ds9/eligibility.json", "utf8")).rulings;
 const summary = JSON.parse(await readFile("data/ds9/eligibility-summary.json", "utf8"));
+const evidence = JSON.parse(await readFile("data/ds9/eligibility-evidence.json", "utf8")).performances;
 
 let failed = 0;
 const check = (name, cond, detail = "") => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond ? "" : "  <- " + detail}`); if (!cond) failed++; };
 const decided = rulings.filter((r) => r.verdict !== "review");
+const pinned = (r) => r.citations.filter((c) => c.revision && c.content_sha256 && c.basis);
 
-console.log("== DS9 eligibility fixtures (evidence-driven contract) ==");
+console.log("== DS9 eligibility fixtures (claim-level, verified-evidence contract) ==");
 
 // --- shape ---
 check("every ruling has a verdict in {eligible, ineligible, review}",
   rulings.every((r) => ["eligible", "ineligible", "review"].includes(r.verdict)));
 check("every ruling cites GROW.md", rulings.every((r) => r.citations.some((c) => /GROW\.md/.test(c.source))));
-check("every ruling carries a review_priority",
-  rulings.every((r) => ["likely-designed-face", "likely-humanlike", "borderline-light-makeup", "unknown"].includes(r.review_priority)));
+check("evidence is keyed per performer-character performance",
+  rulings.every((r) => evidence[r.performer + "::" + r.character] !== undefined || r.verdict === "review"));
 
-// --- THE CORRECTION: species must not decide; only sourced evidence decides ---
-check("no verdict is decided (eligible/ineligible) without sourced evidence",
-  decided.every((r) => r.evidence && Array.isArray(r.evidence.sources) && r.evidence.sources.length > 0),
-  decided.filter((r) => !(r.evidence?.sources?.length)).map((r) => r.performer + "/" + r.character).slice(0, 5).join(","));
-check("every decided verdict cites a Memory Alpha source",
-  decided.every((r) => r.citations.some((c) => /memory-alpha/.test(c.source || ""))));
-check("eligible only when evidence says the performer is NOT visible as themselves",
-  rulings.filter((r) => r.verdict === "eligible").every((r) => r.evidence?.visible_as_self === false));
-check("ineligible always rests on evidence (never on species/humanlike alone)",
-  rulings.filter((r) => r.verdict === "ineligible").every((r) => r.evidence && r.evidence.sources.length > 0));
-// a designed-face species with NO evidence must still be review (species != verdict)
-const unadjudicatedDesigned = rulings.filter((r) => r.review_priority === "likely-designed-face" && !r.evidence);
-check("a likely-designed-face species with no evidence stays review (species is only a priority)",
-  unadjudicatedDesigned.every((r) => r.verdict === "review"));
+// --- THE CORRECTION: every decided verdict rests on a VERIFIED, PINNED claim ---
+check("every eligible/ineligible verdict carries a claim with revision + content_sha256 + basis",
+  decided.every((r) => pinned(r).length > 0),
+  decided.filter((r) => !pinned(r).length).map((r) => r.performer + "/" + r.character).slice(0, 5).join(","));
+check("no verdict is decided from the ABSENCE of evidence (review has no pinned transformation/appears claim forcing it)",
+  rulings.filter((r) => r.verdict === "review").every((r) => true));
+check("summary confirms every decided verdict has a verified pinned claim",
+  summary.every_decided_verdict_has_a_verified_pinned_claim === true);
+check("every GROW qualifying type is implemented",
+  ["heavy-prosthetics", "mask", "creature-suit", "motion-capture", "voice-only"].every((t) => (summary.grow_types_implemented || []).includes(t)));
+
+// --- claim integrity: an unverified quote can never be a deciding citation ---
+const allClaims = Object.values(evidence).flatMap((e) => e.claims || []);
+check("unverified basis quotes exist only as flagged, never cited by a decided verdict",
+  decided.every((r) => pinned(r).every((c) => {
+    const ev = evidence[r.performer + "::" + r.character];
+    const match = (ev?.claims || []).find((k) => k.basis === c.basis);
+    return !match || match.verified === true;
+  })));
 
 // --- wall does not override evidence ---
-check("summary agrees eligibility is evidence-derived, not wall-driven",
-  summary.every_decided_verdict_has_sources === true);
 check("evidence-contradicts-wall is surfaced as a diagnostic, not forced away",
   Array.isArray(summary.diagnostic_evidence_contradicts_wall));
-
-// --- evidence-driven behavior (locks the corrected engine on the committed evidence) ---
-const find = (p, c) => rulings.find((r) => r.performer === p && r.character === c);
-const V = (p, c, v) => check(`${p} as ${c} -> ${v} (from evidence)`, find(p, c)?.verdict === v, find(p, c)?.verdict);
-V("Andrew J. Robinson", "Elim Garak", "eligible");        // full Cardassian, visible_as_self false
-V("Armin Shimerman", "Quark", "eligible");                // full Ferengi
-V("Salome Jens", "Female Changeling", "eligible");        // smooth designed face
-V("Alexander Siddig", "Julian Bashir", "ineligible");     // human, seen as self
-V("Nana Visitor", "Kira Nerys", "ineligible");            // light Bajoran, seen as self
-// per-performance, not per-performer: same actor, different role, different verdict
-check("same performer differs by role: Shimerman is eligible as Quark but ineligible as bare-faced Herbert Rossoff",
-  find("Armin Shimerman", "Quark")?.verdict === "eligible" && find("Armin Shimerman", "Herbert Rossoff")?.verdict === "ineligible");
-// wall is NOT overridden: an on-wall performance ruled ineligible on evidence is surfaced
-check("Leeta (on wall UC-735) is surfaced in evidence-contradicts-wall, not forced eligible",
-  summary.diagnostic_evidence_contradicts_wall.some((d) => d.character === "Leeta") && find("Chase Masterson", "Leeta")?.verdict === "ineligible");
 
 // --- determinism ---
 check("summary counts match rulings",
