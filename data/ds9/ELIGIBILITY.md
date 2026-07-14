@@ -47,7 +47,20 @@ npm run ds9:eligibility:fixtures      # prove the contract on 10 hard performanc
 
 ## How the owner decides
 
-Add an entry to `eligibility-decisions.json`, citing the evidence IDs from that
+The authoring tool makes recording a *valid* decision cheap (it never records one
+on its own — dry-run is the default, and it validates with the queue's own shared
+validator before any write):
+
+```
+npm run ds9:decide -- --list             # rank the queue by decidability
+npm run ds9:decide -- <duplicate_key>    # inspect that performance's dossier
+npm run ds9:decide -- <duplicate_key> --verdict eligible \
+    --cite 2 --rationale "..." --by <you> --write   # validate, record, rebuild, prove
+```
+
+The GROW.md law version is stamped automatically as a `sha256:` content hash of
+GROW.md at decision time. Equivalently, add an entry to
+`eligibility-decisions.json` by hand, citing the evidence IDs from that
 performance's dossier:
 
 ```json

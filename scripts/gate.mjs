@@ -76,7 +76,8 @@ for (const s of runnable) {
   }
   const t = Date.now();
   process.stdout.write(`  > ${s.name}\n`);
-  const r = spawnSync("bash", ["-c", s.run], { stdio: "inherit" });
+  // GitHub Actions runs steps under `bash -eo pipefail`; match it exactly
+  const r = spawnSync("bash", ["-eo", "pipefail", "-c", s.run], { stdio: "inherit" });
   if (r.status !== 0) {
     console.error(`\ngate: FAILED at "${s.name}" (exit ${r.status}) after ${ran} passing step(s)`);
     console.error(`      re-run from here: npm run gate -- --from "${s.name}"`);
