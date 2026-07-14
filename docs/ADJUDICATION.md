@@ -59,13 +59,17 @@ fails the build (and CI) via the shared validator in `scripts/lib/eligibility.mj
   decisions; it does not make them.
 - **Maker / designer attribution** (`data/ds9/maker*.json`): reader-agents fan out
   over character *and* species pages and return verbatim quotes naming who built
-  each face; `ds9-maker-adjudicate.mjs` pins and verifies, attaching a maker
-  character-scoped (a character's makeup maker) or species-scoped (a species'
-  makeup maker, to every character of that species); `ds9-maker-queue.mjs` builds
-  the review queue where every performance is `review` until the owner curates a
-  `canonical_maker` in `maker-decisions.json`. Species-page quotes span all Star
-  Trek productions (each carries its own marker, e.g. `{{s|PIC}}`); the owner
-  disambiguates DS9 applicability — the machine does not filter by production.
+  each face; `ds9-maker-adjudicate.mjs` pins and verifies, then judges
+  **applicability** — a pinned quote is provenance, not proof it applies to a
+  performance. An item is `substantive` for a performance only when it is
+  DS9-applicable (no other-production marker), names no other performer, and is
+  unambiguously about that performance (single-performer named character, or
+  performer-named). Species-design, cross-production, multi-performer-unnamed, and
+  aggregate-page quotes stay context. Owner decisions in `maker-decisions.json` are
+  **plural typed credits** (designer/sculptor/applicator/supervisor/shop), each
+  citing a substantive item whose `maker` and `maker_type` it must match. The
+  lesson: pin/verify establish provenance; applicability and credit are separate,
+  and the owner's.
 
 ## Good candidates to fan out next
 

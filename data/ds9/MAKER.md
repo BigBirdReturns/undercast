@@ -1,65 +1,72 @@
 # DS9 maker attribution — a review queue, not a verdict machine
 
-"Who built this designed face?" — makeup supervisor, artist, prosthetics/creature
-shop, sculptor — is an attribution that must rest on a **sourced production note**,
-never a guess. So this is a **review queue**, the same shape as DS9 eligibility:
-machines assemble sourced, pinned, verified maker quotes and prepare decisions; the
-**owner** curates the canonical maker.
+"Who built this designed face?" is answered with **plural, typed credits** —
+designer, sculptor, applicator, supervisor, shop — each resting on a sourced,
+pinned, verified production note. Same shape as DS9 eligibility: machines assemble
+receipts and judge applicability; the **owner** curates the credits.
 
 ```
-CONTACT=you@example.com npm run ds9:maker:adjudicate   # collect+pin+verify maker quotes (network)
+CONTACT=you@example.com npm run ds9:maker:adjudicate   # collect+pin+verify+judge applicability (network)
 npm run ds9:maker:queue        # build the review queue from evidence + owner decisions (offline)
 npm run ds9:maker:fixtures      # prove the contract
 ```
 
-## The durable boundary
+## The durable boundary — provenance is not applicability
 
-- **Machines collect, pin, hash, and verify.** Every evidence item is a verbatim
-  Memory Alpha quote naming a maker, pinned to a `revision` + `content_sha256` and
-  checked to be present in it. No maker is invented; a page that names no maker
-  yields no claim (silence is not evidence).
-- **Every dossier is keyed by the canonical `duplicate_key`** (557 performances).
-- **A maker is character-scoped.** A character's makeup design is one thing, shared
-  by every performer of that character, so a maker read off the character page
-  attaches to all of that character's performances. This is correct sharing — not
-  the cross-performer leakage the eligibility lane forbids (there the transformation
-  is per-performer; here the maker is per-design).
-- **`verified_makers` are hints, not verdicts.** They never move a performance out
-  of review.
-- **The canonical maker lives only in `maker-decisions.json`**, owner-controlled.
-  Each decision names the `canonical_maker`, cites the `evidence_ids` it rests on
-  (at least one substantive verified/pinned quote that actually names that maker),
-  and carries `rationale`, `decided_by`, `date`. No machine writes it.
-- **Everything undecided stays `review`.**
+A pinned verbatim quote proves **provenance** (someone wrote this on this page at
+this revision). It does **not** prove the quote applies to a given DS9 performance.
+"Neville Page designed the Romulan makeup for `{{s|PIC}}`" is a real quote that says
+nothing about Adrienne Barbeau's DS9 Cretak. So every pinned item also carries
+structured **applicability**, and a `substantive` flag that is true for a
+performance only when applicability matches it:
+
+- **DS9, not another production** — no `TNG`/`VOY`/`PIC`/film marker in the quote;
+- **not about another performer** — the quote names no performer other than this one;
+- **unambiguously this performance** — a character-page quote on a single-performer,
+  individually-named character, or a quote that names *this* performer.
+
+Everything else stays **context** (`substantive: false`), visible to the owner but
+unable to alone support a credit:
+
+- **species-design notes** ("the Cardassian makeup was designed by …") — a species
+  design, not a performance's maker;
+- **cross-production quotes** — TNG/VOY/PIC/film attributions;
+- **multi-performer, unnamed** quotes — a recast character's season-specific note
+  that names no performer (so it can't be pinned to the right one);
+- **aggregate pages** — "Unnamed … residents/visitors/personnel", where a quote is
+  about one of many subjects.
+
+## Owner decisions are plural typed credits
+
+The canonical credits live only in `maker-decisions.json`, owner-controlled. A
+decision is a **list** of credits — a designed face routinely has more than one
+maker — and each credit cites one substantive evidence item whose `maker` and
+`maker_type` it must match:
+
+```json
+{ "duplicate_key": "p6600|c278203",
+  "credits": [
+    { "maker": "Michael Westmore", "role": "makeup_supervisor", "evidence_id": "<id>" },
+    { "maker": "Dave Quashnick",   "role": "makeup_artist",     "evidence_id": "<id>" }
+  ],
+  "rationale": "Westmore designed and Quashnick applied Martok's makeup.",
+  "decided_by": "owner", "date": "2026-07-14" }
+```
+
+The build fails if any credit cites a non-substantive (context/provenance-only)
+item, names a maker its item does not, uses a `role` that does not equal the item's
+`maker_type`, duplicates a `(maker, role)` pair, or is stale/dangling. Evidence ids
+are content-addressed, so a changed pinned revision or quote yields a new id and
+fails any decision that cited the old snapshot closed.
 
 ## Files
 
 | file | who writes it | what it is |
 | --- | --- | --- |
-| `maker-judgments.json` | reader fan-out | raw reader claims + verbatim quotes (input) |
-| `maker-evidence.json` | machine | per-performance dossiers: pinned, verified maker quotes |
-| `maker-decisions.json` | **owner** | the only place the canonical maker lives |
-| `maker-queue.json` | machine | the review queue: `review` unless the owner decided |
-| `maker-summary.json` | machine | counts + distinct verified makers |
+| `maker-judgments.json` | reader fan-out | raw verbatim claims (input) |
+| `maker-evidence.json` | machine | per-performance dossiers: pinned, verified, applicability-judged |
+| `maker-decisions.json` | **owner** | the only place credits live |
+| `maker-queue.json` / `maker-summary.json` | machine | the review queue: `review` unless decided |
 
-## How the owner decides
-
-Add an entry to `maker-decisions.json`, citing the evidence IDs from that
-performance's dossier and naming the canonical maker exactly as a cited quote does:
-
-```json
-{ "duplicate_key": "p6598|c64886", "canonical_maker": "Michael Westmore",
-  "maker_type": "makeup_supervisor",
-  "rationale": "Production note credits Westmore's department for the Cardassian makeup.",
-  "evidence_ids": ["<content-addressed id from the dossier>"],
-  "decided_by": "owner", "date": "2026-07-14" }
-```
-
-The `evidence_ids` are **content-addressed** (a hash of each item's kind, page,
-source, pinned revision + content hash, basis, and establishes), so a changed
-revision or quote yields a new id and any decision citing the old snapshot fails
-closed. A decision is rejected — and the build fails — if it cites missing evidence,
-cites no substantive quote, names a maker no cited quote establishes, duplicates an
-evidence id or another decision, or carries incomplete metadata. Approved makers
-still go through the normal GROW.md drafting and evidence gate before anything
-enters `specimens.json`.
+Nothing enters `specimens.json` without passing the normal GROW.md drafting and
+evidence gate afterward.

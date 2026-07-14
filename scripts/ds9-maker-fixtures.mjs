@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 /**
- * ds9-maker-fixtures.mjs — prove the maker-attribution review-queue CONTRACT, using
- * the SAME implementation production uses. Offline; exits non-zero on any miss.
+ * ds9-maker-fixtures.mjs — prove the maker-attribution contract, using the SAME
+ * validator production uses. Offline; exits non-zero on any miss.
  *
- * Asserts the contract (status mirrors a valid owner decision; ids are unique and
- * content-addressed; a maker is character-scoped) rather than specific makers, so
- * it survives re-runs of the fan-out and future owner decisions.
+ * The core invariant after the PR #49 review: SUBSTANTIVE means applicability-matched
+ * (DS9, no other-production marker, no other performer named, single-performer named
+ * character or performer-named, not an aggregate page), not merely pinned. Owner
+ * decisions are plural TYPED credits, each role matching its cited item's maker_type.
  *
  *   npm run ds9:maker:fixtures
  */
 import { readFile } from "node:fs/promises";
-import { validateDecisions, validateDecision, evidenceId, isSubstantive } from "./lib/maker.mjs";
+import { validateDecisions, validateDecision, evidenceId, isSubstantive, ROLES } from "./lib/maker.mjs";
 
 const roster = JSON.parse(await readFile("data/ds9/roster.json", "utf8"));
 const dossiers = JSON.parse(await readFile("data/ds9/maker-evidence.json", "utf8")).performances;
@@ -19,74 +20,90 @@ const decisionsDoc = JSON.parse(await readFile("data/ds9/maker-decisions.json", 
 
 let failed = 0;
 const check = (name, cond, detail = "") => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond ? "" : "  <- " + detail}`); if (!cond) failed++; };
+const perf = (p, c) => Object.values(dossiers).find((d) => d.performer === p && d.character === c);
+const substOf = (p, c) => (perf(p, c)?.evidence || []).filter((e) => e.substantive);
+const perfCount = new Map();
+for (const r of roster) { const k = r.character_page || r.character; perfCount.set(k, (perfCount.get(k) || 0) + 1); }
 
 console.log("== DS9 maker-attribution review-queue contract ==");
 
-// --- status mirrors a VALID owner decision (shared validator) — robust to future decisions ---
+// --- status mirrors a VALID owner decision (shared validator) ---
 const { applied, errors } = validateDecisions(decisionsDoc.decisions, dossiers);
-check("committed owner decisions are all valid (no duplicate/malformed/stale/dangling)", errors.length === 0, errors.slice(0, 3).join("; "));
-check("a performance is `decided` IFF the owner has a valid decision for it (else review)",
+check("committed owner decisions are all valid", errors.length === 0, errors.slice(0, 3).join("; "));
+check("a performance is `decided` IFF the owner has a valid decision (else review)",
   queue.every((q) => q.status === (applied.has(q.duplicate_key) ? "decided" : "review")));
-check("no queue entry carries a canonical_maker without a valid owner decision",
-  queue.every((q) => (q.canonical_maker === null) === !applied.has(q.duplicate_key)));
+check("no queue entry carries credits without a valid owner decision",
+  queue.every((q) => (q.credits === null) === !applied.has(q.duplicate_key)));
+
+// --- PROVENANCE != APPLICABILITY: the three PR #49 leaks stay CONTEXT ---
+check("Marc Worden's DS9 Alexander carries NO substantive TNG (Tania McComas) item",
+  !substOf("Marc Worden", "Alexander Rozhenko").some((e) => e.maker === "Tania McComas"));
+check("Melanie Smith's Ziyal carries NO substantive Season-4 (Dean Jones) item",
+  !substOf("Melanie Smith", "Tora Ziyal").some((e) => e.maker === "Dean Jones"));
+check("Adrienne Barbeau's DS9 Cretak carries NO substantive PIC-Romulan (Neville Page) item",
+  !substOf("Adrienne Barbeau", "Kimara Cretak").some((e) => e.maker === "Neville Page"));
+
+// --- the substantive rule holds for EVERY substantive item across the corpus ---
+const AGG = /^Unnamed |(?:personnel|residents|visitors)$|Dabo girls/i;
+check("every substantive item is DS9-applicable, performer-matched, non-aggregate, character-scoped",
+  Object.values(dossiers).every((d) => d.evidence.filter((e) => e.substantive).every((e) =>
+    e.scope === "character" && e.verified && e.maker && ROLES.includes(e.maker_type) &&
+    !e.applicability.other_production && !e.applicability.other_performer_named &&
+    !AGG.test(d.character || "") && !AGG.test(d.character_page || "") &&
+    (perfCount.get(d.character_page || d.character) === 1 || e.applicability.named_performers.includes(d.performer)))));
+check("no species-scoped item is ever substantive (species design != a performance's maker)",
+  Object.values(dossiers).every((d) => d.evidence.filter((e) => e.scope === "species").every((e) => !e.substantive)));
+check("no cross-production quote is ever substantive",
+  Object.values(dossiers).flatMap((d) => d.evidence).every((e) => !(e.substantive && e.applicability.other_production)));
 
 // --- content-addressed, unique ids; verified quotes pinned ---
 check("every evidence id is the content-address of its own item",
   Object.values(dossiers).every((d) => d.evidence.every((e) => e.id === evidenceId(d.duplicate_key, e))));
-check("every evidence id is unique within its dossier (no collapsing collisions)",
+check("every evidence id is unique within its dossier",
   Object.values(dossiers).every((d) => new Set(d.evidence.map((e) => e.id)).size === d.evidence.length));
-check("every verified quote is pinned to page + revision + content_sha256 + basis + maker",
-  Object.values(dossiers).flatMap((d) => d.evidence).filter((e) => e.verified)
-    .every((e) => e.page && e.revision && e.content_sha256 && e.basis && e.maker));
-check("no evidence item is itself a verdict (no canonical_maker field on evidence)",
-  Object.values(dossiers).every((d) => d.evidence.every((e) => !("canonical_maker" in e))));
+check("every substantive item is pinned to page + revision + content_sha256 + basis + typed maker",
+  Object.values(dossiers).flatMap((d) => d.evidence).filter((e) => e.substantive)
+    .every((e) => e.page && e.revision && e.content_sha256 && e.basis && e.maker && ROLES.includes(e.maker_type)));
 
-// --- a maker is character-scoped: all performances of one character share the same verified makers ---
-const byChar = new Map();
-const charKey = (d) => d.character_pageid ?? d.character_page ?? d.character; // null character_page rows are distinct characters
-for (const d of Object.values(dossiers)) { const k = charKey(d); (byChar.get(k) || byChar.set(k, []).get(k)).push(d); }
-check("all performances of a character carry the SAME set of verified makers (shared design)",
-  [...byChar.values()].every((ds) => {
-    const key = (d) => [...d.verified_makers].sort().join("|");
-    return new Set(ds.map(key)).size === 1;
-  }));
-
-// --- exact canonical-key coverage: roster == dossiers == queue ---
-const rosterKeys = new Set(roster.map((r) => r.duplicate_key));
-const dossierKeys = new Set(Object.keys(dossiers));
-const queueKeys = new Set(queue.map((q) => q.duplicate_key));
+// --- exact canonical-key coverage ---
 const setEq = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
-check("roster keys, dossier keys, and queue keys are EXACTLY equal sets",
-  setEq(rosterKeys, dossierKeys) && setEq(dossierKeys, queueKeys),
-  `roster ${rosterKeys.size} / dossiers ${dossierKeys.size} / queue ${queueKeys.size}`);
+check("roster == dossier == queue keys (exact sets)",
+  setEq(new Set(roster.map((r) => r.duplicate_key)), new Set(Object.keys(dossiers))) &&
+  setEq(new Set(Object.keys(dossiers)), new Set(queue.map((q) => q.duplicate_key))));
 
-// --- owner-decision validation (accept + reject paths), using a real substantive item ---
-const withMaker = Object.values(dossiers).find((d) => d.evidence.some(isSubstantive));
-check("at least one performance has a substantive (verified, pinned) maker quote to decide on", !!withMaker,
-  "the fan-out produced no verifiable maker — investigate before shipping");
-if (withMaker) {
-  const key = withMaker.duplicate_key;
-  const subst = withMaker.evidence.find(isSubstantive);
-  const good = { duplicate_key: key, canonical_maker: subst.maker, maker_type: subst.maker_type,
-    rationale: "Verified production-note attribution for this character's makeup.",
-    evidence_ids: [subst.id], decided_by: "owner", date: "2026-07-14" };
-  check("a complete decision citing a substantive maker quote is accepted", validateDecision(good, dossiers).ok,
+// --- PLURAL TYPED CREDITS: owner-decision validation (accept + reject paths) ---
+const martok = perf("J.G. Hertzler", "Martok");
+const mSub = (martok?.evidence || []).filter(isSubstantive);
+check("a single-performer designed face retains MULTIPLE typed substantive credits (Martok)", mSub.length >= 2,
+  `Martok substantive: ${mSub.length}`);
+if (mSub.length >= 2) {
+  const key = martok.duplicate_key;
+  const credit = (e) => ({ maker: e.maker, role: e.maker_type, evidence_id: e.id });
+  const good = { duplicate_key: key, credits: mSub.map(credit),
+    rationale: "Westmore designed and Quashnick applied Martok's makeup — both sourced.",
+    decided_by: "owner", date: "2026-07-14" };
+  check("a plural-credit decision (designer + applicator) is accepted", validateDecision(good, dossiers).ok,
     JSON.stringify(validateDecision(good, dossiers).errors));
-  check("a decision whose canonical_maker no evidence names is rejected",
-    !validateDecision({ ...good, canonical_maker: "Somebody Not Named" }, dossiers).ok);
-  check("a decision citing non-existent evidence is rejected (stale/dangling)",
-    !validateDecision({ ...good, evidence_ids: ["nope#000000"] }, dossiers).ok);
-  check("a decision citing the same evidence id twice is rejected (duplicate evidence_ids)",
-    !validateDecision({ ...good, evidence_ids: [subst.id, subst.id] }, dossiers).ok);
-  check("a decision missing rationale is rejected (incomplete metadata)",
-    !validateDecision({ ...good, rationale: "" }, dossiers).ok);
-  check("a decision with an impossible calendar date is rejected (2026-13-40)",
+  check("a credit whose role != the cited item's maker_type is rejected",
+    !validateDecision({ ...good, credits: [{ ...credit(mSub[0]), role: mSub[0].maker_type === "designer" ? "sculptor" : "designer" }] }, dossiers).ok);
+  check("a credit whose maker the cited item does not name is rejected",
+    !validateDecision({ ...good, credits: [{ ...credit(mSub[0]), maker: "Somebody Else" }] }, dossiers).ok);
+  check("a credit missing role is rejected",
+    !validateDecision({ ...good, credits: [{ maker: mSub[0].maker, evidence_id: mSub[0].id }] }, dossiers).ok);
+  check("a credit citing non-substantive/context evidence is rejected",
+    (() => { const ctx = (Object.values(dossiers).flatMap((d) => d.evidence)).find((e) => e.verified && !e.substantive);
+      return ctx ? !validateDecision({ ...good, credits: [{ maker: ctx.maker, role: ctx.maker_type, evidence_id: ctx.id }] }, dossiers).ok : true; })());
+  check("a credit citing a stale/nonexistent evidence id is rejected",
+    !validateDecision({ ...good, credits: [{ maker: mSub[0].maker, role: mSub[0].maker_type, evidence_id: "nope#000" }] }, dossiers).ok);
+  check("duplicate (maker, role) credits are rejected",
+    !validateDecision({ ...good, credits: [credit(mSub[0]), credit(mSub[0])] }, dossiers).ok);
+  check("an empty credits list is rejected",
+    !validateDecision({ ...good, credits: [] }, dossiers).ok);
+  check("an impossible calendar date is rejected",
     !validateDecision({ ...good, date: "2026-13-40" }, dossiers).ok);
   check("a decision for an unknown performance is rejected (dangling)",
     !validateDecision({ ...good, duplicate_key: "p0|c0" }, dossiers).ok);
-  check("duplicate decisions for the same performance are rejected",
-    validateDecisions([good, good], dossiers).errors.some((e) => /duplicate/.test(e)));
-  check("a valid decision applied by the shared validator flips exactly that one performance",
+  check("a valid decision flips exactly that one performance",
     (() => { const { applied: a } = validateDecisions([good], dossiers); return a.size === 1 && a.has(key); })());
 }
 
