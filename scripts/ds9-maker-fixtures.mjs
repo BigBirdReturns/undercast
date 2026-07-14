@@ -43,7 +43,8 @@ check("no evidence item is itself a verdict (no canonical_maker field on evidenc
 
 // --- a maker is character-scoped: all performances of one character share the same verified makers ---
 const byChar = new Map();
-for (const d of Object.values(dossiers)) (byChar.get(d.character_page) || byChar.set(d.character_page, []).get(d.character_page)).push(d);
+const charKey = (d) => d.character_pageid ?? d.character_page ?? d.character; // null character_page rows are distinct characters
+for (const d of Object.values(dossiers)) { const k = charKey(d); (byChar.get(k) || byChar.set(k, []).get(k)).push(d); }
 check("all performances of a character carry the SAME set of verified makers (shared design)",
   [...byChar.values()].every((ds) => {
     const key = (d) => [...d.verified_makers].sort().join("|");

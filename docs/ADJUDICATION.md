@@ -57,13 +57,20 @@ fails the build (and CI) via the shared validator in `scripts/lib/eligibility.mj
   an offline review queue where every performance is `review` until the owner
   records a verdict in `eligibility-decisions.json`. The machine prepares
   decisions; it does not make them.
+- **Maker / designer attribution** (`data/ds9/maker*.json`): reader-agents fan out
+  over character *and* species pages and return verbatim quotes naming who built
+  each face; `ds9-maker-adjudicate.mjs` pins and verifies, attaching a maker
+  character-scoped (a character's makeup maker) or species-scoped (a species'
+  makeup maker, to every character of that species); `ds9-maker-queue.mjs` builds
+  the review queue where every performance is `review` until the owner curates a
+  `canonical_maker` in `maker-decisions.json`. Species-page quotes span all Star
+  Trek productions (each carries its own marker, e.g. `{{s|PIC}}`); the owner
+  disambiguates DS9 applicability — the machine does not filter by production.
 
 ## Good candidates to fan out next
 
 The same harness extends to any read-and-judge question, e.g.:
 
-- **Designer / maker attribution** — who built each face (makeup/creature shop),
-  with a quote from the production notes.
 - **Performance conditions** — heat, restricted vision, full enclosure, stunt work
   — each condition quote-sourced (the schema already exists in `specimen.schema.json`).
 - **Image provenance / licence** — confirm each still/portrait's source and licence
