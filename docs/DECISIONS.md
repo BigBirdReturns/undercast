@@ -39,25 +39,24 @@ patterns elsewhere.
 ---
 
 ## DEC-0002 — Retire the seam comparison mechanic
-**Status:** Accepted; implementation pending (#42) · 2026-07-13
+**Status:** Active · Implemented by #42, merged 2026-07-14
 
-Retire the "Compare in one frame" seam (it composited two half-faces into one
-frame). Change to **Active only when the shipped site and validation contract no
-longer contain it.**
+The "Compare in one frame" seam is retired. It composited two half-faces into one
+frame and no longer exists in the shipped site or validation contract.
 
-**Repo state:** `main` still ships the seam and requires it in `validate.mjs` and
-the rendered tests. PR #42 removes it.
+**Repo state:** #42 removed the seam from Recognition and removed `comparison`
+from schema, data, validation, documentation, and rendered tests.
 
 ---
 
 ## DEC-0003 — Recognition keeps the focused record; loses the seam
-**Status:** Accepted; implementation pending (#42) · 2026-07-13
+**Status:** Active · Implemented by #42, merged 2026-07-14
 
-Recognition keeps the focused record and loses the comparison seam; `focus` is
-retained, `comparison` removed (schema/data/validator/docs/tests). Change to
-**Active only after implementation lands.**
+Recognition keeps the focused record and no longer contains the comparison seam.
+`focus` is retained; `comparison` is removed from schema, data, validation,
+documentation, and tests.
 
-**Repo state:** `main` still defines and validates `comparison`. PR #42 removes it.
+**Repo state:** implemented on `main` by #42.
 
 ---
 
