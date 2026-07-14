@@ -1,63 +1,60 @@
-# DS9 eligibility — a per-performance GROW.md projection
+# DS9 eligibility — GROW.md, from verified evidence
 
-A ruling on every canonical performance in `roster.json` against the GROW.md wall
-law:
+A ruling on every canonical performance in `roster.json` against GROW.md:
 
 > a real, verifiable performer who **vanishes under a designed face** — heavy
 > prosthetics, a mask, a full creature suit, motion capture, or an unseen
 > voice-only role. … If the audience mostly sees the performer *as themselves*,
 > it doesn't qualify.
 
-**This decides nothing about the wall.** It is a sourced projection, not an
-ingestion. Nothing here enters `specimens.json`.
+**Decides nothing about the wall.** Sourced projection, not an ingestion. `review`
+verdicts are candidates for a later, separately-authorized pass. Built with the
+reusable adjudication harness — see [`docs/ADJUDICATION.md`](../../docs/ADJUDICATION.md).
 
 ```
-npm run ds9:eligibility            # rebuild eligibility.json + summary (offline, deterministic)
-npm run ds9:eligibility:fixtures    # contract checks
+# 1. reader fan-out returns verbatim basis quotes  -> data/ds9/eligibility-judgments.json
+# 2. pin + verify (network):
+CONTACT=you@example.com npm run ds9:eligibility:adjudicate   # -> eligibility-evidence.json
+# 3. derive verdicts (offline, deterministic):
+npm run ds9:eligibility            # -> eligibility.json + summary
+npm run ds9:eligibility:fixtures
 ```
 
-## Species does not decide — evidence does
+## A verdict rests on a verified, affirmative quote — nothing else
 
-A verdict of `eligible` / `ineligible` is **derived from performance-specific,
-sourced evidence** held in `eligibility-evidence.json` — never from species:
+Species does not decide. Wall membership does not decide. The **absence** of a
+makeup mention is not evidence. `eligible`/`ineligible` are derived only from a
+claim that is:
 
-- **transformation** — what was used (full facial prosthetic, creature suit, mask,
-  motion capture, voice-only, light nasal appliance, none).
-- **extent** — full / partial / light / none.
-- **visible_as_self** — was the audience seeing the performer as themselves?
-- **sources** — the Memory Alpha pages that support those facts.
+- **verified** — the reader-agent's verbatim quote is present in the page's pinned
+  revision (`verifyBasis`), and
+- **affirmative** — the quote positively states the fact for its claim type. A
+  quote that merely names a performer ("Bashir was played by Alexander Siddig")
+  is verified but **not** affirmative, so it decides nothing → `review`.
 
-The engine derives the verdict:
+Each claim carries `{page, revision, content_sha256, basis}` — a receipt anyone
+can re-check by fetching that immutable revision and finding the quote.
 
 | verdict | derived when |
 | --- | --- |
-| `eligible` | `visible_as_self: false` and a full/partial designed transformation, with sources |
-| `ineligible` | `visible_as_self: true`, or transformation none/light, with sources |
-| `review` | no sourced evidence yet, or the evidence is not decisive |
+| `eligible` | a verified + affirmative quote documents a GROW qualifying transformation (heavy prosthetics / mask / creature suit / motion capture / voice-only) and the performer is not visible as themselves |
+| `ineligible` | a verified + affirmative quote says the performer is seen as themselves (bare-faced, played himself, only a light appliance) |
+| `review` | no verified, affirmative quote either way — most rows, and honest |
 
-Species is recorded only as a `review_priority`
-(`likely-designed-face` / `likely-humanlike` / `borderline-light-makeup` /
-`unknown`) — a hint for ordering the adjudication queue. A Cardassian with no
-adjudicated evidence is still `review`; a heavily-transformed Bajoran can become
-`eligible` once the evidence says so.
+Examples: **Garak** eligible on the Cardassian page's *"forehead piece … chin piece
+and a nose appliance"*; **Quark**/**Martok** eligible on quoted Ferengi/Klingon
+prosthetic notes; **Herbert Rossoff** ineligible on *"bizarre to be bare-faced on
+a Star Trek show"*; **Bashir** and **Kira** → `review` (no affirmative quote — not
+inferred from silence). Per-performance, not per-performer: Armin Shimerman is
+eligible as Quark but ineligible as the bare-faced Rossoff.
 
 ## The wall does not override evidence
 
-There is no rule forcing a wall member to be eligible. If sourced evidence rules
-an on-wall performance `ineligible`, that is recorded in
-`diagnostic_evidence_contradicts_wall` for a human to reconcile — evidence is
-never overridden by membership, in either direction.
+If a verified quote ruled an on-wall performance `ineligible`, it is surfaced in
+`diagnostic_evidence_contradicts_wall`, never forced eligible. (Currently 0.)
 
-## Trajectory
+## Scope
 
-Until the sourced adjudication pass populates `eligibility-evidence.json`, the
-honest result is **every performance `review`**. The adjudication (a
-Memory-Alpha-grounded, per-character reading of the actual transformation) then
-turns sourced facts into verdicts. `review` verdicts that remain are candidates
-for further, separately-authorized adjudication.
-
-## Row fields
-
-`performer`, `character` (+ pageids), `species` (context only), `review_priority`,
-`verdict`, `reason`, `evidence` (`transformation` / `extent` / `visible_as_self` /
-`sources`, or `null`), `on_wall` / `wall_ids`, `citations[]`.
+Evidence covers the 273 named characters read in the adjudication; unnamed
+background extras and page-less prose roles stay `review` pending a later scoped
+pass. The current honest totals are **mostly review** by design.

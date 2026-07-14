@@ -27,9 +27,12 @@ const GROW_TYPES = evidenceDoc.grow_types || ["heavy-prosthetics", "mask", "crea
 
 function derive(ev) {
   if (!ev) return { verdict: "review", reason: "No adjudicated evidence for this performance yet.", claims: [] };
-  const verified = (ev.claims || []).filter((c) => c.verified);
-  const transformation = verified.find((c) => c.type === "transformation");
-  const appearsAsSelf = verified.find((c) => c.type === "appears-as-self");
+  // a claim decides only if it is both VERIFIED (quote present in the pinned page)
+  // and AFFIRMATIVE (the quote positively states the fact — not merely "played by X").
+  const decisive = (ev.claims || []).filter((c) => c.verified && c.affirmative);
+  const transformation = decisive.find((c) => c.type === "transformation");
+  const appearsAsSelf = decisive.find((c) => c.type === "appears-as-self");
+  const verified = decisive;
   if (transformation && ev.visible_as_self !== true) {
     return { verdict: "eligible",
       reason: `${ev.transformation_type} affirmed on the pinned page ("${transformation.basis.slice(0, 90)}…"); the performer is not seen as themselves — GROW.md "vanishes under a designed face."`,

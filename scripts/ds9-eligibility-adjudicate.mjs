@@ -14,7 +14,16 @@
  *   CONTACT=you@example.com node scripts/ds9-eligibility-adjudicate.mjs
  */
 import { readFile, writeFile } from "node:fs/promises";
-import { pinPages, verifyBasis } from "./lib/adjudicate.mjs";
+import { pinPages, verifyBasis, normalizeText } from "./lib/adjudicate.mjs";
+
+// A quote is AFFIRMATIVE only if it positively states the fact for its claim type.
+// "was played by Alexander Siddig" names a performer but affirms nothing about the
+// face, so it must not decide a verdict. These patterns run on the quote text.
+const AFFIRMS = {
+  transformation: /prosthetic|appliance|make-?up|foam latex|headpiece|forehead|chin piece|nose (appliance|piece|prosthetic)|cranial|hours (in|of)|\bmask\b|(creature|body|rubber|foam|monster) suit|animatronic|motion capture|performance capture|mo-?cap|\bcgi\b|voiced|voice of|provided the voice|vocal|greasepaint|airbrush|cowl|glued|\bteeth\b|dentures|contact lens|skullcap|bald cap|encas/i,
+  "appears-as-self": /bare-?faced|no (ferengi |alien |special )?(makeup|prosthetic)|without[\w ]*makeup|out of[\w ]*makeup|lack of[\w ]*make-?up|played (him|her)self|(his|her) own face|as (him|her)self|only a (wig|light|nasal)|light[\w ]*(makeup|appliance)|airbrush|no make-?up/i,
+};
+const isAffirmative = (claimType, quote) => AFFIRMS[claimType] ? AFFIRMS[claimType].test(normalizeText(quote)) : false;
 
 const roster = JSON.parse(await readFile("data/ds9/roster.json", "utf8"));
 const judgments = JSON.parse(await readFile("data/ds9/eligibility-judgments.json", "utf8")).judgments;
@@ -51,11 +60,13 @@ for (const row of roster) {
     const pin = pins.get(b.page);
     const claimType = GROW_QUALIFYING.has(type) ? "transformation"
       : (type === "appears-as-self" || type === "light-makeup") ? "appears-as-self" : "other";
+    const verified = pin && !pin.missing ? verifyBasis(b.quote, pin.wikitext) : false;
     claims.push({
       type: claimType, page: pin?.title || b.page, source: pin?.url || null,
       revision: pin?.revision ?? null, content_sha256: pin?.content_sha256 ?? null,
       basis: b.quote, establishes: b.establishes,
-      verified: pin && !pin.missing ? verifyBasis(b.quote, pin.wikitext) : false,
+      verified,                                   // the quote is present in the pinned revision
+      affirmative: isAffirmative(claimType, b.quote),  // the quote positively states the fact
     });
   }
 
@@ -77,9 +88,11 @@ const doc = {
   performance_count: Object.keys(evidence).length,
   basis_quotes_total: nonSpecies.length,
   basis_quotes_verified: nonSpecies.filter((c) => c.verified).length,
+  basis_quotes_verified_and_affirmative: nonSpecies.filter((c) => c.verified && c.affirmative).length,
+  basis_quotes_verified_but_not_affirmative: nonSpecies.filter((c) => c.verified && !c.affirmative).length,
   basis_quotes_unverified: nonSpecies.filter((c) => !c.verified).length,
   performances: evidence,
 };
 await writeFile("data/ds9/eligibility-evidence.json", JSON.stringify(doc, null, 1) + "\n");
 console.log(`performances: ${doc.performance_count}`);
-console.log(`basis quotes: ${doc.basis_quotes_total} (verified ${doc.basis_quotes_verified}, unverified ${doc.basis_quotes_unverified})`);
+console.log(`basis quotes: ${doc.basis_quotes_total} — verified+affirmative ${doc.basis_quotes_verified_and_affirmative}, verified-not-affirmative ${doc.basis_quotes_verified_but_not_affirmative}, unverified ${doc.basis_quotes_unverified}`);

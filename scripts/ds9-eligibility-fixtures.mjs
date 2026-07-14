@@ -38,14 +38,28 @@ check("summary confirms every decided verdict has a verified pinned claim",
 check("every GROW qualifying type is implemented",
   ["heavy-prosthetics", "mask", "creature-suit", "motion-capture", "voice-only"].every((t) => (summary.grow_types_implemented || []).includes(t)));
 
-// --- claim integrity: an unverified quote can never be a deciding citation ---
-const allClaims = Object.values(evidence).flatMap((e) => e.claims || []);
-check("unverified basis quotes exist only as flagged, never cited by a decided verdict",
+// --- claim integrity: a deciding citation must be VERIFIED and AFFIRMATIVE ---
+check("every deciding citation is a verified AND affirmative claim (not merely 'played by X')",
   decided.every((r) => pinned(r).every((c) => {
     const ev = evidence[r.performer + "::" + r.character];
     const match = (ev?.claims || []).find((k) => k.basis === c.basis);
-    return !match || match.verified === true;
+    return match && match.verified === true && match.affirmative === true;
   })));
+check("verified-but-not-affirmative quotes exist and never decide a verdict",
+  (summary.method || "").length > 0 && Object.values(evidence).flatMap((e) => e.claims || [])
+    .some((c) => c.verified && c.affirmative === false));
+
+// --- specific verdicts, each backed by a real quote (locks the recovered cases) ---
+const find = (p, c) => rulings.find((r) => r.performer === p && r.character === c);
+const V = (p, c, v) => check(`${p} as ${c} -> ${v}`, find(p, c)?.verdict === v, find(p, c)?.verdict);
+V("Andrew J. Robinson", "Elim Garak", "eligible");        // full Cardassian prosthetic, quoted
+V("Armin Shimerman", "Quark", "eligible");                // Ferengi prosthetic nose, quoted
+V("J.G. Hertzler", "Martok", "eligible");                 // Klingon (teeth) makeup, quoted
+V("Armin Shimerman", "Herbert Rossoff", "ineligible");    // "bare-faced" quote
+V("Alexander Siddig", "Julian Bashir", "review");         // no affirmative bare-faced quote -> honest review
+V("Nana Visitor", "Kira Nerys", "review");                // light Bajoran, no affirmative quote
+check("same performer differs by role: Shimerman eligible as Quark, ineligible as bare-faced Rossoff",
+  find("Armin Shimerman", "Quark")?.verdict === "eligible" && find("Armin Shimerman", "Herbert Rossoff")?.verdict === "ineligible");
 
 // --- wall does not override evidence ---
 check("evidence-contradicts-wall is surfaced as a diagnostic, not forced away",

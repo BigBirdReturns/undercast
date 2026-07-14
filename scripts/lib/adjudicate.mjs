@@ -27,6 +27,9 @@ export const wikiUrl = (title) => `https://memory-alpha.fandom.com/wiki/${encode
 export const normalizeText = (s) => String(s || "")
   .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, " ").replace(/<ref[^>]*\/>/gi, " ")
   .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2").replace(/\[\[([^\]]+)\]\]/g, "$1")
+  // render MA link templates ({{e|Emissary}}, {{s|DS9}}, {{dis|Name|...}}) to their
+  // display text so a verbatim quote of the rendered page still verifies.
+  .replace(/\{\{(?:e|s|m|ep|dis|d|al)\s*\|\s*([^|}]+)[^}]*\}\}/gi, "$1")
   .replace(/'''?|<[^>]+>|\{\{[^{}]*\}\}/g, " ").replace(/&ndash;|&mdash;/g, "-").replace(/&[a-z]+;/gi, " ")
   .replace(/\(\s*\)/g, " ").replace(/\[\d+\]/g, " ")
   .replace(/[\s ]+/g, " ").trim().toLowerCase();
