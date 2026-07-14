@@ -1,9 +1,10 @@
 # UNDERCAST — Design System
 
 Implementation doctrine for the experience, subordinate to
-`docs/PRODUCT-CONSTITUTION.md` and `docs/DECISIONS.md`. Draft for owner
-ratification. This document does not invent rules the decision log has not made; it
-describes how to build the ones it has, and records current conventions.
+`docs/PRODUCT-CONSTITUTION.md` and `docs/DECISIONS.md`. Ratified through delegated
+product/design review, 2026-07-13. This document does not invent rules the decision
+log has not made; it describes how to build the ones it has, and records current
+conventions.
 
 ## 1. The aesthetic is load-bearing
 
@@ -50,7 +51,7 @@ Self-host the fonts when a build must be hermetic.
   revealed control. Match the pattern to the control count — do not copy one onto
   the other.
 
-## 3. Image and crop rules — DEC-0003 (pending #42)
+## 3. Image and crop rules — DEC-0003
 
 - Fixed frames default to an **upper-center crop**; optional per-image `focus`
   (`{x,y}`) overrides it. `focus` is the only crop-tuning field and is retained.
