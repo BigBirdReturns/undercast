@@ -1,0 +1,200 @@
+/**
+ * Maker-attribution review contract.
+ *
+ * Machines may pin and verify receipts. They may also surface possible roster
+ * matches as signals. Only an owner decision may attach a typed maker credit to a
+ * performance. In particular, no regex or census uniqueness heuristic turns a
+ * receipt into authoritative performance evidence.
+ */
+import { createHash } from "node:crypto";
+
+export const ENTITY_TYPES = ["person", "organization", "credited_team"];
+export const ROLE_CATEGORIES = [
+  "makeup_design", "creature_design", "costume_design", "makeup_supervision",
+  "makeup_application", "prosthetic_makeup", "sculpting", "fabrication",
+  "mold_making", "mask_suit_build", "creature_effects", "other",
+];
+export const COVERAGE = ["partial", "complete"];
+export const SUPPORT_MODES = ["direct", "design_lineage"];
+
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const GROW_PIN = /^GROW\.md@([0-9a-f]{40}|sha256:[0-9a-f]{64})$/;
+
+const stable = (value) => {
+  if (Array.isArray(value)) return value.map(stable);
+  if (value && typeof value === "object") return Object.fromEntries(
+    Object.keys(value).sort().map((key) => [key, stable(value[key])]),
+  );
+  return value;
+};
+
+const digest = (value) => createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
+
+export const receiptIdentity = (receipt) => ({
+  reader_assertion: receipt.reader_assertion,
+  source: {
+    page: receipt.source.page,
+    url: receipt.source.url,
+    revision: receipt.source.revision,
+    content_sha256: receipt.source.content_sha256,
+    basis: receipt.source.basis,
+  },
+});
+
+export const receiptId = (receipt) => `mkr:sha256:${digest(receiptIdentity(receipt))}`;
+
+export const normalizeBasis = (value) => String(value || "")
+  .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2")
+  .replace(/\[\[([^\]]+)\]\]/g, "$1")
+  .replace(/\{\{(?:e|s|m|ep|dis|d|al)\s*\|\s*([^|}]+)[^}]*\}\}/gi, "$1")
+  .replace(/'''?|<[^>]+>|\{\{[^{}]*\}\}/g, " ")
+  .replace(/&ndash;|&mdash;/g, "-")
+  .replace(/&[a-z]+;/gi, " ")
+  .replace(/[^\p{L}\p{N}]+/gu, " ")
+  .replace(/\s+/g, " ").trim().toLowerCase();
+
+const containsBasis = (receipt, excerpt) => {
+  const whole = normalizeBasis(receipt?.source?.basis);
+  const part = normalizeBasis(excerpt);
+  return part.length >= 3 && whole.includes(part);
+};
+
+function isRealDate(value) {
+  if (!DATE.test(value || "")) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+const unknownKeys = (object, allowed) => Object.keys(object || {}).filter((key) => !allowed.includes(key));
+
+function rosterContext(roster) {
+  const byKey = new Map(roster.map((row) => [row.duplicate_key, row]));
+  const performersByCharacter = new Map();
+  for (const row of roster) {
+    const key = row.character_pageid ?? row.character_page ?? row.character;
+    (performersByCharacter.get(key) || performersByCharacter.set(key, new Set()).get(key)).add(row.performer);
+  }
+  return { byKey, performersByCharacter };
+}
+
+function directApplicability(receipt, support, row, performersByCharacter, episodeTitles) {
+  const basis = normalizeBasis(receipt.source.basis);
+  const character = normalizeBasis(row.character);
+  const performer = normalizeBasis(row.performer);
+  const characterKey = row.character_pageid ?? row.character_page ?? row.character;
+  const performerCount = performersByCharacter.get(characterKey)?.size || 1;
+  const namesCharacter = character.length >= 3 && basis.includes(character);
+  const namesPerformer = performer.length >= 3 && basis.includes(performer);
+  const namesDs9 = /\bds9\b|deep space nine/.test(basis);
+  const namesDs9Episode = episodeTitles.some((title) => title.length >= 4 && basis.includes(title));
+  const productionBound = namesDs9 || namesDs9Episode;
+  const targetBound = namesCharacter && (performerCount === 1 || namesPerformer);
+  return productionBound && targetBound && containsBasis(receipt, support.production_basis);
+}
+
+function validateSupport(support, credit, row, evidence, performersByCharacter, episodeTitles, errors, where) {
+  const allowed = ["receipt_id", "mode", "maker_basis", "target_basis", "production_basis", "applicability_rationale", "bridge_receipt_id", "bridge_target_basis"];
+  const extra = unknownKeys(support, allowed);
+  if (extra.length) errors.push(`${where}: unknown support field(s): ${extra.join(", ")}`);
+  if (!SUPPORT_MODES.includes(support?.mode)) errors.push(`${where}: mode must be ${SUPPORT_MODES.join("|")}`);
+  if (typeof support?.receipt_id !== "string" || !support.receipt_id) { errors.push(`${where}: missing receipt_id`); return; }
+  const receipt = evidence.receipts?.[support.receipt_id];
+  if (!receipt) { errors.push(`${where}: stale receipt_id ${support.receipt_id}`); return; }
+  if (!receipt.verified || !receipt.source?.revision || !receipt.source?.content_sha256 || !receipt.source?.basis) {
+    errors.push(`${where}: receipt is not pinned and verified`);
+  }
+  for (const field of ["maker_basis", "target_basis", "production_basis"]) {
+    if (typeof support?.[field] !== "string" || !containsBasis(receipt, support[field])) errors.push(`${where}: ${field} is not an exact span of the cited receipt`);
+  }
+  if (typeof support?.applicability_rationale !== "string" || support.applicability_rationale.trim().length < 12) {
+    errors.push(`${where}: missing or too-short applicability_rationale`);
+  }
+  const makerName = normalizeBasis(credit?.maker?.name);
+  if (!normalizeBasis(support.maker_basis).includes(makerName)) errors.push(`${where}: maker_basis does not name ${credit?.maker?.name}`);
+  if (!containsBasis(receipt, credit?.role?.source_label)) errors.push(`${where}: role.source_label is not an exact span of the cited receipt`);
+
+  if (support.mode === "direct") {
+    if (support.bridge_receipt_id || support.bridge_target_basis) errors.push(`${where}: direct support must not carry a lineage bridge`);
+    if (!directApplicability(receipt, support, row, performersByCharacter, episodeTitles)) {
+      errors.push(`${where}: direct support does not explicitly bind a DS9 production/episode and the canonical performance`);
+    }
+  }
+
+  if (support.mode === "design_lineage") {
+    if (typeof support.bridge_receipt_id !== "string" || !support.bridge_receipt_id) { errors.push(`${where}: design_lineage requires bridge_receipt_id`); return; }
+    const bridge = evidence.receipts?.[support.bridge_receipt_id];
+    if (!bridge || !bridge.verified) { errors.push(`${where}: lineage bridge is missing or unverified`); return; }
+    if (typeof support.bridge_target_basis !== "string" || !containsBasis(bridge, support.bridge_target_basis)) {
+      errors.push(`${where}: bridge_target_basis is not an exact span of the bridge receipt`);
+    }
+    if (!directApplicability(bridge, { ...support, production_basis: support.bridge_target_basis }, row, performersByCharacter, episodeTitles)) {
+      errors.push(`${where}: lineage bridge does not explicitly bind the design to this DS9 performance`);
+    }
+  }
+}
+
+export function validateDecision(decision, evidence, roster, episodeTitles = []) {
+  const errors = [];
+  const need = (condition, message) => { if (!condition) errors.push(message); };
+  const allowed = ["duplicate_key", "coverage", "credits", "rationale", "decided_by", "date", "grow_md_version"];
+  const extra = unknownKeys(decision, allowed);
+  if (extra.length) errors.push(`unknown decision field(s): ${extra.join(", ")}`);
+  need(typeof decision?.duplicate_key === "string" && decision.duplicate_key.trim(), "missing duplicate_key");
+  need(COVERAGE.includes(decision?.coverage), `coverage must be ${COVERAGE.join("|")}`);
+  need(Array.isArray(decision?.credits) && decision.credits.length > 0, "credits must be a non-empty list");
+  need(typeof decision?.rationale === "string" && decision.rationale.trim().length >= 12, "missing or too-short rationale");
+  need(typeof decision?.decided_by === "string" && decision.decided_by.trim(), "missing decided_by");
+  need(isRealDate(decision?.date), "missing or invalid date");
+  need(GROW_PIN.test(decision?.grow_md_version || ""), "grow_md_version must pin an immutable GROW.md commit/content hash");
+
+  const { byKey, performersByCharacter } = rosterContext(roster);
+  const row = byKey.get(decision?.duplicate_key);
+  if (!row) { errors.push(`dangling duplicate_key ${decision?.duplicate_key}`); return { ok: false, errors }; }
+
+  const creditSeen = new Set();
+  for (const [index, credit] of (decision.credits || []).entries()) {
+    const where = `credit[${index}]`;
+    const creditExtra = unknownKeys(credit, ["maker", "role", "credit_scope", "supports"]);
+    if (creditExtra.length) errors.push(`${where}: unknown field(s): ${creditExtra.join(", ")}`);
+    const makerExtra = unknownKeys(credit?.maker, ["entity_type", "name", "authority_id"]);
+    if (makerExtra.length) errors.push(`${where}.maker: unknown field(s): ${makerExtra.join(", ")}`);
+    const roleExtra = unknownKeys(credit?.role, ["category", "source_label"]);
+    if (roleExtra.length) errors.push(`${where}.role: unknown field(s): ${roleExtra.join(", ")}`);
+    need(ENTITY_TYPES.includes(credit?.maker?.entity_type), `${where}: invalid maker.entity_type`);
+    need(typeof credit?.maker?.name === "string" && credit.maker.name.trim(), `${where}: missing maker.name`);
+    need(typeof credit?.maker?.authority_id === "string" && credit.maker.authority_id.trim(), `${where}: missing maker.authority_id`);
+    need(ROLE_CATEGORIES.includes(credit?.role?.category), `${where}: invalid role.category`);
+    need(typeof credit?.role?.source_label === "string" && credit.role.source_label.trim(), `${where}: missing role.source_label`);
+    need(["performance", "design_lineage"].includes(credit?.credit_scope), `${where}: invalid credit_scope`);
+    need(Array.isArray(credit?.supports) && credit.supports.length > 0, `${where}: supports must be non-empty`);
+    const pair = JSON.stringify([credit?.maker?.entity_type, credit?.maker?.authority_id, credit?.role?.category, credit?.credit_scope]);
+    if (creditSeen.has(pair)) errors.push(`${where}: duplicate maker/role/scope credit`);
+    creditSeen.add(pair);
+    const supportSeen = new Set();
+    for (const [supportIndex, support] of (credit.supports || []).entries()) {
+      const supportKey = JSON.stringify([support?.receipt_id, support?.mode, support?.bridge_receipt_id || null]);
+      if (supportSeen.has(supportKey)) errors.push(`${where}.supports[${supportIndex}]: duplicate support`);
+      supportSeen.add(supportKey);
+      if ((credit.credit_scope === "performance") !== (support?.mode === "direct")) errors.push(`${where}.supports[${supportIndex}]: support mode must match credit_scope`);
+      validateSupport(support, credit, row, evidence, performersByCharacter, episodeTitles, errors, `${where}.supports[${supportIndex}]`);
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+export function validateDecisions(document, evidence, roster, episodeTitles = []) {
+  const errors = [];
+  const applied = new Map();
+  if (document?.version !== 3) errors.push(`maker decisions version must be 3 (got ${JSON.stringify(document?.version)})`);
+  if (!Array.isArray(document?.decisions)) errors.push("maker decisions must contain a decisions array");
+  const seen = new Set();
+  for (const decision of document?.decisions || []) {
+    if (seen.has(decision?.duplicate_key)) { errors.push(`duplicate decision for ${decision?.duplicate_key}`); continue; }
+    seen.add(decision?.duplicate_key);
+    const result = validateDecision(decision, evidence, roster, episodeTitles);
+    if (result.ok) applied.set(decision.duplicate_key, decision);
+    else errors.push(...result.errors.map((error) => `${decision?.duplicate_key}: ${error}`));
+  }
+  return { applied, errors };
+}
