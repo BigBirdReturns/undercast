@@ -61,8 +61,8 @@ its composition and crop are judged separately in visual review.)
 - **Honest failure.** Broken images, unavailable shards, partial pages shown as such.
 - **Accessible by construction** (`docs/DESIGN-SYSTEM.md`).
 - **The aesthetic is load-bearing** — not "modernized" into a generic grid.
-- **Retire, don't remove-in-name-only** the seam and its `comparison` contract
-  (DEC-0002/0003, pending #42); `focus` stays.
+- **Retire, don't remove-in-name-only.** The seam and its `comparison` contract
+  are retired; `focus` stays (DEC-0002/0003).
 - **`validate.yml` is the canonical gate** (DEC-0011); **shared CSS is canonical for
   tokens** (DEC-0010).
 
