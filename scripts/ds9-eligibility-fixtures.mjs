@@ -76,29 +76,61 @@ check("Garak dossier carries species as CONTEXT and no evidence item is a verdic
 check("Female Changeling (Salome Jens) collision keeps two distinct dossiers",
   CASES.changeling.length === 2 && CASES.changeling.every((k) => dossiers[k]));
 
-// --- evidence IDs are content-addressed (stable, not positional) ---
+// --- evidence IDs are content-addressed (stable, not positional) and UNIQUE ---
 check("every evidence id is the content-address of its own item",
   Object.values(dossiers).every((d) => d.evidence.every((e) => e.id === evidenceId(d.duplicate_key, e))));
+check("every evidence id is unique within its dossier (no collapsing collisions)",
+  Object.values(dossiers).every((d) => new Set(d.evidence.map((e) => e.id)).size === d.evidence.length));
+check("Julian Bashir's Augment and Human species-context items have DISTINCT ids",
+  (() => { const ev = dossiers[CASES.bashir]?.evidence.filter((e) => e.kind === "species-context") || [];
+    return ev.length >= 2 && new Set(ev.map((e) => e.id)).size === ev.length; })());
+check("Tora Ziyal's Bajoran/Cardassian/hybrid context items have DISTINCT ids",
+  (() => { const ev = dossiers[CASES.battenZiyal]?.evidence.filter((e) => e.kind === "species-context") || [];
+    return ev.length >= 2 && new Set(ev.map((e) => e.id)).size === ev.length; })());
 check("every verified quote is pinned to page + revision + content_sha256 + basis",
   Object.values(dossiers).flatMap((d) => d.evidence).filter((e) => e.basis && e.verified)
     .every((e) => e.page && e.revision && e.content_sha256 && e.basis));
+
+// --- exact canonical-key coverage: roster == dossiers == queue (not just counts) ---
+const rosterKeys = new Set(roster.map((r) => r.duplicate_key));
+const dossierKeys = new Set(Object.keys(dossiers));
+const queueKeys = new Set(queue.map((q) => q.duplicate_key));
+const setEq = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
+check("roster keys, dossier keys, and queue keys are EXACTLY equal sets",
+  setEq(rosterKeys, dossierKeys) && setEq(dossierKeys, queueKeys),
+  `roster ${rosterKeys.size} / dossiers ${dossierKeys.size} / queue ${queueKeys.size}`);
 
 // --- owner-decision validation: substantive evidence + complete metadata; bad ones rejected ---
 const gk = CASES.garak, gEv = dossiers[gk].evidence;
 const substantiveId = gEv.find((e) => isSubstantive(e))?.id;
 const speciesId = gEv.find((e) => e.kind === "species-context")?.id;
-const good = { duplicate_key: gk, verdict: "eligible", rationale: "Full Cardassian facial prosthetic; performer not visible.", evidence_ids: [substantiveId], decided_by: "owner", date: "2026-07-14", grow_md_version: "GROW.md@abc" };
+const SHA = "0123456789abcdef0123456789abcdef01234567"; // an immutable 40-hex pin
+const good = { duplicate_key: gk, verdict: "eligible", rationale: "Full Cardassian facial prosthetic; performer not visible.", evidence_ids: [substantiveId], decided_by: "owner", date: "2026-07-14", grow_md_version: `GROW.md@${SHA}` };
 check("a complete decision citing substantive evidence is accepted", validateDecision(good, dossiers).ok, JSON.stringify(validateDecision(good, dossiers).errors));
 check("a decision citing only species-context is rejected (not substantive)",
   !validateDecision({ ...good, evidence_ids: [speciesId] }, dossiers).ok);
 check("a decision citing non-existent evidence is rejected (stale/dangling)",
   !validateDecision({ ...good, evidence_ids: ["nope#000000"] }, dossiers).ok);
+check("a decision citing the same evidence id twice is rejected (duplicate evidence_ids)",
+  !validateDecision({ ...good, evidence_ids: [substantiveId, substantiveId] }, dossiers).ok);
 check("a decision missing rationale is rejected (incomplete metadata)",
   !validateDecision({ ...good, rationale: "" }, dossiers).ok);
 check("a decision with a bad verdict value is rejected (malformed)",
   !validateDecision({ ...good, verdict: "maybe" }, dossiers).ok);
 check("a decision for an unknown performance is rejected (dangling)",
   !validateDecision({ ...good, duplicate_key: "p0|c0" }, dossiers).ok);
+// immutable GROW.md pin — movable refs, short hashes and arbitrary strings are rejected
+check("grow_md_version GROW.md@main is rejected (movable ref, not immutable)",
+  !validateDecision({ ...good, grow_md_version: "GROW.md@main" }, dossiers).ok);
+check("grow_md_version GROW.md@abc is rejected (short hash, not a full sha)",
+  !validateDecision({ ...good, grow_md_version: "GROW.md@abc" }, dossiers).ok);
+check("grow_md_version banana is rejected (arbitrary string)",
+  !validateDecision({ ...good, grow_md_version: "banana" }, dossiers).ok);
+check("grow_md_version accepts a sha256: content-hash pin",
+  validateDecision({ ...good, grow_md_version: "GROW.md@sha256:" + "a".repeat(64) }, dossiers).ok);
+// a real calendar date is required, not merely YYYY-MM-DD shape
+check("a decision with an impossible calendar date is rejected (2026-13-40)",
+  !validateDecision({ ...good, date: "2026-13-40" }, dossiers).ok);
 check("duplicate decisions for the same performance are rejected",
   validateDecisions([good, good], dossiers).errors.some((e) => /duplicate/.test(e)));
 check("a valid decision applied by the shared validator flips exactly that one performance",

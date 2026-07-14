@@ -53,11 +53,20 @@ performance's dossier:
 ```json
 { "duplicate_key": "p6598|c64886", "verdict": "eligible",
   "rationale": "Full Cardassian facial + cranial prosthetic; performer not visible.",
-  "evidence_ids": ["p6598|c64886#2"], "decided_by": "owner", "date": "2026-07-14",
-  "grow_md_version": "GROW.md@<sha>" }
+  "evidence_ids": ["p6598|c64886#e2a38c6cf1f56ca9"], "decided_by": "owner", "date": "2026-07-14",
+  "grow_md_version": "GROW.md@0123456789abcdef0123456789abcdef01234567" }
 ```
 
+The `evidence_ids` are **content-addressed** — each is the hash of that evidence
+item's complete identity (kind, page, source, pinned revision + content hash,
+basis, establishes). If a source revision or the quote changes, its id changes, so
+a decision citing the old snapshot fails closed instead of silently rebinding. The
+`grow_md_version` must be an **immutable** pin (a git commit SHA or a
+`sha256:` content hash), never a movable ref like `@main`.
+
 Re-run `ds9:eligibility:queue`; that one performance becomes `decided`, the rest
-stay `review`. A decision that cites evidence which doesn't exist is rejected as
-dangling, never silently applied. Approved candidates still go through the normal
-GROW.md drafting and evidence gate before anything enters `specimens.json`.
+stay `review`. A decision is rejected — and the build fails closed — if it cites
+evidence that doesn't exist (stale/dangling), cites no substantive pinned evidence,
+duplicates an evidence id or another decision, or carries an incomplete or mutable
+`grow_md_version`/date. Approved candidates still go through the normal GROW.md
+drafting and evidence gate before anything enters `specimens.json`.
