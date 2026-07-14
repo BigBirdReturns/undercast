@@ -64,6 +64,23 @@ test("wall controls execute, announce, and survive browser history",async({page}
   expect(new Set(labels).size).toBe(labels.length);
   expect(labels.every(Boolean)).toBeTruthy();
 
+  const first=articles.first();
+  const frontControl=first.getByRole("button",{name:/Reveal the performer for/});
+  await expect(frontControl).toHaveAttribute("aria-pressed","false");
+  await frontControl.focus();
+  await page.keyboard.press("Enter");
+  const backControl=first.getByRole("button",{name:/Return to/});
+  await expect(backControl).toBeFocused();
+  await expect(backControl).toHaveAttribute("aria-pressed","true");
+  await expect(first.locator(".front")).toHaveAttribute("aria-hidden","true");
+  await expect(first.locator(".back")).toHaveAttribute("aria-hidden","false");
+  const story=first.locator(".back .reveal");
+  await expect(story).toBeVisible();
+  await expect(story).toHaveCSS("display","block");
+  await page.keyboard.press("Enter");
+  await expect(frontControl).toBeFocused();
+  await expect(frontControl).toHaveAttribute("aria-pressed","false");
+
   await page.getByRole("button",{name:"Pull a random specimen",exact:true}).click();
   await expect(page).toHaveURL(/#UC-\d+$/);
   const focused=page.locator("article.cast:focus");
@@ -135,12 +152,12 @@ test("archive navigation stays complete, consistent, and inside every viewport",
 test("wall search, current decade, flip semantics, and partial failure are honest",async({page})=>{
   await open(page,"index.html");
   await waitForWall(page);
-  await page.getByRole("searchbox",{name:"Search a character, an actor, or a production",exact:true}).fill("Borg Queen");
+  await page.getByRole("searchbox",{name:"Search a character, a performer, or a production",exact:true}).fill("Borg Queen");
   await expect(page.locator("#result-status")).toHaveText("2 specimens match; 2 shown.");
   await expect(page.locator(".cast-shell")).toHaveCount(2);
   await expect(page.locator(".looplink")).toHaveCount(2);
 
-  await page.getByRole("searchbox",{name:"Search a character, an actor, or a production",exact:true}).fill("");
+  await page.getByRole("searchbox",{name:"Search a character, a performer, or a production",exact:true}).fill("");
   await page.getByRole("button",{name:"20s",exact:true}).click();
   await expect(page.locator("#result-status")).toHaveText("79 specimens match; 79 shown.");
 
@@ -156,12 +173,37 @@ test("wall search, current decade, flip semantics, and partial failure are hones
   await expect(page.locator(".cast-shell")).toHaveCount(0);
 });
 
+test("mobile typed search reaches matching cards without a reveal-bypassing lobby",async({page})=>{
+  await page.setViewportSize({width:390,height:844});
+  await open(page,"index.html");
+  await waitForWall(page);
+  await expect(page.locator(".featured-block, #featuredRow, .feat")).toHaveCount(0);
+  await page.getByRole("link",{name:/Explore all specimens/}).click();
+  await page.getByRole("searchbox",{name:"Search a character, a performer, or a production",exact:true}).fill("Garak");
+  const first=page.locator(".cast-shell").first();
+  await expect(first).toBeVisible();
+  await expect(first).toContainText("Garak");
+  const top=await first.evaluate(node=>node.getBoundingClientRect().top);
+  expect(top).toBeLessThan(844);
+});
+
 test("homepage Morn hero flips on click and keyboard, keeping focus on the one button",async({page})=>{
   await open(page,"index.html");
   const card=page.locator("#mornCard");
   await expect(card).toBeVisible();
   await expect(card).toHaveAttribute("data-flipped","false");
   await expect(card).toHaveAttribute("aria-pressed","false");
+  await expect(card).not.toHaveAttribute("aria-label",/Mark Allen Shepherd/);
+  await expect(page.locator("#reveal-title")).not.toContainText("Mark Allen Shepherd");
+  await page.setViewportSize({width:390,height:844});
+  const cue=page.locator(".hero-turn");
+  await expect(cue).toBeVisible();
+  const cueGeometry=await cue.evaluate(node=>{
+    const cueRect=node.getBoundingClientRect(),cardRect=node.closest(".hero-card").getBoundingClientRect();
+    return {inside:cueRect.top>=cardRect.top&&cueRect.right<=cardRect.right&&cueRect.bottom<=cardRect.bottom,top:cueRect.top};
+  });
+  expect(cueGeometry.inside).toBeTruthy();
+  expect(cueGeometry.top).toBeLessThan(844);
   // click flips to the performer, and the state is reflected visibly + accessibly
   await card.click();
   await expect(card).toHaveAttribute("data-flipped","true");
@@ -177,7 +219,7 @@ test("homepage Morn hero flips on click and keyboard, keeping focus on the one b
   await expect(card).toHaveAttribute("data-flipped","true");
   await expect(card).toBeFocused();
   // the retired seam is not here either — no slider in the hero
-  await expect(page.locator("#mornCard input[type=range], .reveal .uc-wipe-frame")).toHaveCount(0);
+  await expect(page.locator("#mornCard input[type=range], .landing-reveal .uc-wipe-frame")).toHaveCount(0);
 });
 
 test.describe("homepage without JavaScript",()=>{
@@ -397,6 +439,8 @@ test("coverage and constellation preserve human-searchable, unique evidence",asy
 
   await open(page,"coverage.html?franchise=Star+Trek&category=Ferengi&mode=physical-any");
   await expect(page.locator("#rows tr").first()).toBeVisible();
+  await expect(page.locator(".record-links a",{hasText:"interactive"}).first()).toBeVisible();
+  await expect(page.getByRole("link",{name:"compare",exact:true})).toHaveCount(0);
   await page.locator("#query").fill("Max Grodenchik");
   await expect(page.locator("#rows")).toContainText("Max Grodénchik");
 
