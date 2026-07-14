@@ -11,6 +11,11 @@ export default defineConfig({
   reporter: process.env.CI ? "github" : "list",
   use: {
     ...devices["Desktop Chrome"],
+    // opt-in for local `npm run gate` on machines without this Playwright
+    // version's browser build (CI installs its own and never sets this)
+    ...(process.env.UNDERCAST_CHROMIUM
+      ? { launchOptions: { executablePath: process.env.UNDERCAST_CHROMIUM } }
+      : {}),
     baseURL: "http://127.0.0.1:4173/undercast",
     screenshot: "only-on-failure",
     trace: "retain-on-failure"
