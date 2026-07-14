@@ -24,6 +24,7 @@
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { pinPages, verifyBasis, normalizeText } from "./lib/adjudicate.mjs";
+import { evidenceId } from "./lib/eligibility.mjs";
 
 const roster = JSON.parse(await readFile("data/ds9/roster.json", "utf8"));
 const judgments = JSON.parse(await readFile("data/ds9/eligibility-judgments.json", "utf8")).judgments;
@@ -67,16 +68,18 @@ for (const row of roster) {
   const j = judgeByChar.get(char);
   const species = speciesByChar.get(char) || [];
   const evidence = [];
-  let n = 0;
   const add = (kind, page, basis, establishes) => {
     const pin = pins.get(page);
-    evidence.push({ id: row.duplicate_key + "#" + (++n), kind, page: pin?.title || page, source: pin?.url || null,
+    const item = { kind, page: pin?.title || page, source: pin?.url || null,
       revision: pin?.revision ?? null, content_sha256: pin?.content_sha256 ?? null, basis, establishes,
-      verified: pin && !pin.missing && basis ? verifyBasis(basis, pin.wikitext) : false });
+      verified: pin && !pin.missing && basis ? verifyBasis(basis, pin.wikitext) : false };
+    evidence.push({ id: evidenceId(row.duplicate_key, item), ...item });
   };
   // species membership — CONTEXT ONLY, never a verdict
-  for (const s of species) evidence.push({ id: row.duplicate_key + "#" + (++n), kind: "species-context",
-    page: char, source: s.source, establishes: `character species: ${s.species}`, basis: null, verified: true });
+  for (const s of species) {
+    const item = { kind: "species-context", page: char, source: s.source, establishes: `character species: ${s.species}`, basis: null, verified: true };
+    evidence.push({ id: evidenceId(row.duplicate_key, item), ...item });
+  }
 
   for (const b of j?.basis || []) {
     const isSpeciesPage = speciesPages.includes(b.page);
