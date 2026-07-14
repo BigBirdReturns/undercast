@@ -4,8 +4,8 @@
  *
  * The ledger holds EVERY asset with its `kind`. This file surfaces the subset
  * that legally requires visible attribution — the free-licensed portraits
- * (CC-BY / CC-BY-SA). Character stills and generated images are recorded in the
- * ledger for lineage but don't need a credits roll; that's the whole point.
+ * (CC-BY / CC-BY-SA). Character stills are recorded in the ledger for lineage
+ * but don't need a credits roll; that's the whole point.
  */
 import { readFile, writeFile } from "node:fs/promises";
 
@@ -15,7 +15,6 @@ const freebies = ledger
   .filter((r) => r.portrait && r.portrait.kind === "free")
   .sort((a, b) => a.id.localeCompare(b.id));
 
-const genCount = ledger.filter((r) => (r.portrait?.kind === "generated") || (r.still?.kind === "generated")).length;
 const stillCount = ledger.filter((r) => r.still && r.still.kind === "still").length;
 
 const lines = [];
@@ -42,11 +41,10 @@ lines.push("## Ledger summary");
 lines.push("");
 lines.push(`- Free-licensed portraits (attributed above): **${freebies.length}**`);
 lines.push(`- Character stills (studio-copyright, shown under fan-use; see ledger): **${stillCount}**`);
-lines.push(`- Generated fill images (marked \`gen\` on the wall; see ledger): **${genCount}**`);
 lines.push("");
 lines.push("Copyright holders: this is a fan project. See the takedown note in the README —");
 lines.push("email and any specific asset comes down.");
 lines.push("");
 
 await writeFile("CREDITS.md", lines.join("\n"));
-console.log(`CREDITS.md written: ${freebies.length} attributed, ${stillCount} stills, ${genCount} generated.`);
+console.log(`CREDITS.md written: ${freebies.length} attributed, ${stillCount} character stills.`);

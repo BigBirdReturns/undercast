@@ -143,10 +143,17 @@ test("homepage Morn hero flips on click and keyboard, keeping focus on the one b
 
 test.describe("homepage without JavaScript",()=>{
   test.use({javaScriptEnabled:false});
-  test("hides the dead flip control and offers a durable permanent-record link",async({page})=>{
+  test("hides every dead discovery control and offers durable archive paths",async({page})=>{
     await open(page,"index.html");
     await expect(page.locator("#mornCard")).toBeHidden(); // JS-gated: no dead control
-    await expect(page.locator('a[href="./records/UC-001/"]')).toBeVisible(); // durable fallback, not the JS view
+    for(const selector of [".lenses","#q","#sort","#random","#grid","#makerChips"]){
+      await expect(page.locator(selector)).toBeHidden();
+    }
+    await expect(page.getByRole("heading",{name:"The interactive wall needs JavaScript."})).toBeVisible();
+    await expect(page.locator('a[href="./records/UC-001/"]')).toHaveCount(2); // hero + archive fallbacks
+    await expect(page.locator('.nojs-archive a[href="./records/UC-001/"]')).toBeVisible();
+    await expect(page.locator('.nojs-archive a[href="./data/archive.json"]')).toBeVisible();
+    expect(await page.locator("#archive").evaluate(node=>node.innerText)).not.toContain("0 records on file");
   });
 });
 

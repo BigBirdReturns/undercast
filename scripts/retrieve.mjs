@@ -6,8 +6,8 @@
  *   - a CHARACTER still (the mask / in-character shot) from the matching wiki
  *   - an ACTOR portrait from Wikipedia (with its license, if any)
  * It caches both into images/, records everything in data/SOURCES.json with a
- * `kind` on every asset (free | copyright | generated), and writes any card it
- * couldn't illustrate to data/GAPS.json — your worklist for hand/gen fills.
+ * `kind` on every real sourced asset (free | copyright | still), and writes any
+ * card it couldn't illustrate to data/GAPS.json — the sourcing worklist.
  *
  * This is a FAN project. It keeps character stills. It does NOT gate images out
  * on license — it labels them honestly instead. The ledger tells the truth;
