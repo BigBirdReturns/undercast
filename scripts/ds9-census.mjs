@@ -131,7 +131,9 @@ function linksOf(text) {
 // unnamed, page-less character (character_page = null) so credited extras with
 // prose-only role descriptions are still counted.
 function charactersFrom(tail) {
-  return tail.split(/\s+\/\s+/).map((seg) => {
+  // "/", "and", "&" all separate multiple roles in one credit line
+  // ("Weyoun 6 and Weyoun 7", "Odo / Odo Alien").
+  return tail.split(/\s+\/\s+|\s+&\s+|\s+and\s+/i).map((seg) => {
     const links = linksOf(seg);
     const named = links.filter((l) => !RANKS.has(l.target.toLowerCase()) && !RANKS.has(l.display.toLowerCase()));
     if (named.length) return { ...named[named.length - 1], linked: true };

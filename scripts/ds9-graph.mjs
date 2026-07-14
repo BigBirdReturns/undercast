@@ -105,13 +105,17 @@ async function fetchPages(titles) {
   return out;
 }
 
+// relationship-word links ([[son]], [[daughter]]) are the field's own label, not
+// a named relative — never a family node.
+const GENERIC_KIN = /^(son|daughter|child|children|brother|sister|sibling|mother|father|parent|wife|husband|spouse|twin)s?$/i;
+const kin = (value) => [...new Set(fieldLinks(value).filter((t) => !GENERIC_KIN.test(t)))];
 function parseCharacter(page) {
   const head = page.wikitext.split(/\n==[^=]/)[0];
   const family = { parents: [], children: [], sibling_of: [], spouse_of: [] };
-  for (const f of FAMILY_PARENT_FIELDS) family.parents.push(...fieldLinks(infoboxField(head, f)));
-  for (const f of FAMILY_CHILD_FIELDS) family.children.push(...fieldLinks(infoboxField(head, f)));
+  for (const f of FAMILY_PARENT_FIELDS) family.parents.push(...kin(infoboxField(head, f)));
+  for (const f of FAMILY_CHILD_FIELDS) family.children.push(...kin(infoboxField(head, f)));
   for (const [pred, fields] of Object.entries(FAMILY_PEER_FIELDS))
-    for (const f of fields) family[pred].push(...fieldLinks(infoboxField(head, f)));
+    for (const f of fields) family[pred].push(...kin(infoboxField(head, f)));
   return {
     title: page.title, source: wikiUrl(page.title), pageid: page.pageid, revision: page.revision,
     timestamp: page.timestamp, content_sha256: digest(page.wikitext),
@@ -143,21 +147,24 @@ const addEdge = (type, from, to, citation) => {
   edges.push({ type, from, to, ...citation });
 };
 
-let charData;
+// --project-only is a PURE PROJECTION: load the committed nodes + edges exactly
+// as they are and re-derive only projections/relationships/summary/manifest from
+// them. It never rebuilds an edge, so the derived files can never drift from the
+// nodes/edges they claim to project.
 if (PROJECT_ONLY) {
-  const prior = JSON.parse(await readFile("data/ds9/graph/nodes.json", "utf8"));
-  charData = new Map(prior.nodes.filter((n) => n.type === "character" && n.page)
-    .map((n) => [n.page, { title: n.page, source: n.source, pageid: n.pageid, revision: n.revision,
-      timestamp: n.timestamp, content_sha256: n.content_sha256, species: n.species || [], affiliations: n.affiliations || [],
-      rank: n.rank, status: n.status, raw_categories: n.raw_categories || [], family: n.family || { parents: [], children: [], sibling_of: [], spouse_of: [] } }]));
-} else {
-  console.log(`== reading ${characterPages.length} DS9 character pages ==`);
-  const pages = await fetchPages(characterPages);
-  charData = new Map();
-  for (const [title, page] of pages) charData.set(title, page.missing ? { title, missing: true } : parseCharacter(page));
+  for (const n of JSON.parse(await readFile("data/ds9/graph/nodes.json", "utf8")).nodes) nodes.set(n.type + ":" + n.id, n);
+  for (const e of JSON.parse(await readFile("data/ds9/graph/edges.json", "utf8")).edges) {
+    edges.push(e); edgeSeen.add(e.type + "|" + e.from + "|" + e.to);
+  }
 }
 
 // ---- performer -> character (episode-cited) + base character nodes ----
+if (!PROJECT_ONLY) {
+  console.log(`== reading ${characterPages.length} DS9 character pages ==`);
+  const pages = await fetchPages(characterPages);
+  const charData = new Map();
+  for (const [title, page] of pages) charData.set(title, page.missing ? { title, missing: true } : parseCharacter(page));
+
 for (const row of roster) {
   const cid = row.character_page || row.character;
   addNode("performer", row.performer, { pageid: row.performer_pageid || null });
@@ -203,41 +210,73 @@ for (const [page, c] of charData) {
 }
 
 // ---- sourced doctrine + succession edges (from named pages, not prose inference) ----
-// In --project-only mode these are not re-derivable (they came from doctrine pages),
-// so re-seed them and their non-cast nodes from the prior graph to keep the
-// relationship charts intact.
-if (PROJECT_ONLY) {
-  // member_of Houses come from the infobox affiliation field, which nodes.json
-  // stores already split out — so re-seed those too, not just the doctrine edges.
-  const DOCTRINE = new Set(["host_of", "commands", "allied_with", "belligerent_in", "succeeded_by", "member_of"]);
-  const prior = JSON.parse(await readFile("data/ds9/graph/edges.json", "utf8")).edges;
-  const priorNodes = JSON.parse(await readFile("data/ds9/graph/nodes.json", "utf8")).nodes;
-  const nodeById = new Map(priorNodes.map((n) => [n.type + ":" + n.id, n]));
-  for (const e of prior) if (DOCTRINE.has(e.type)) {
-    for (const ref of [e.from, e.to]) { const n = nodeById.get(ref); if (n && !nodes.has(ref)) addNode(n.type, n.id, { label: n.label, ...(n.in_cast === false ? { in_cast: false } : {}) }); }
-    const { type, from, to, ...cite } = e; addEdge(type, from, to, cite);
+// The nine primary Dax hosts, plus the temporary and alternate-timeline hosts, as
+// an explicit CURATED evidence table. Memory Alpha's host succession is not a
+// parseable structure on the symbiont page, so this is stated, typed, and cited
+// to each host's own page — not silently inferred from a naming convention.
+const DAX_HOSTS = [
+  { host: "Lela Dax", type: "primary" }, { host: "Tobin Dax", type: "primary" },
+  { host: "Emony Dax", type: "primary" }, { host: "Audrid Dax", type: "primary" },
+  { host: "Torias Dax", type: "primary" }, { host: "Joran Dax", type: "primary" },
+  { host: "Curzon Dax", type: "primary" }, { host: "Jadzia Dax", type: "primary" },
+  { host: "Ezri Dax", type: "primary" },
+  { host: "Verad", type: "temporary", note: "forcibly joined; DS9: Invasive Procedures" },
+  { host: "Yedrin Dax", type: "alternate", note: "alternate timeline; DS9: Children of Time" },
+];
+
+// Curated Dominion War coalition membership, verified against each coalition page
+// but labelled curated — the page is the basis, not a deterministic parse.
+const COALITION_MEMBERS = {
+  "Federation Alliance": ["United Federation of Planets", "Klingon Empire", "Romulan Star Empire"],
+  "Breen-Dominion Alliance": ["Dominion", "Cardassian Union", "Breen Confederacy"],
+};
+
+// find the sentence in a page lead that explicitly names this clone's predecessor.
+// A predecessor must be a LOWER-numbered clone (the intro also mentions this
+// clone's own death and later clones, so those must be excluded).
+function clonePredecessor(wt, thisN) {
+  const lead = wt.split(/\n==[^=]/)[0].replace(/\{\{[^}]*\}\}/g, " ").replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, "$1");
+  const cands = [];
+  for (const re of [/after (?:the [\w ]*?death|the [\w ]*?demise) of Weyoun (\d)/gi,
+    /after Weyoun (\d)'s (?:demise|death)/gi, /death of Weyoun (\d)/gi,
+    /(?:replaced|succeeded) Weyoun (\d)/gi, /prevent Weyoun (\d) from/gi]) {
+    for (const m of lead.matchAll(re)) {
+      const n = +m[1]; if (n >= thisN) continue;
+      const s = lead.slice(0, m.index + m[0].length); const sentence = s.slice(s.lastIndexOf(".") + 1).trim();
+      cands.push({ n, basis: sentence.slice(0, 160) });
+    }
   }
+  if (!cands.length) return null;
+  return cands.sort((a, b) => b.n - a.n)[0];   // closest lower-numbered predecessor
 }
-if (!PROJECT_ONLY) {
-  const special = await fetchPages(["Dax (symbiont)", "Vorta", "Jem'Hadar", "Dominion War", "Federation Alliance", "Breen-Dominion Alliance"]);
+
+  const cloneTitles = [...nodes.keys()].filter((k) => /^character:Weyoun \d+$/.test(k)).map((k) => k.replace("character:", ""));
+  const special = await fetchPages(["Dax (symbiont)", "Vorta", "Jem'Hadar", "Dominion War",
+    "Federation Alliance", "Breen-Dominion Alliance", ...DAX_HOSTS.map((h) => h.host), ...cloneTitles]);
   const cite = (t) => { const p = special.get(t); return p && !p.missing ? { citation_type: "page", source: wikiUrl(t), revision: p.revision, content_sha256: digest(p.wikitext) } : { citation_type: "page", source: wikiUrl(t) }; };
 
-  // host_of: the Trill symbiont Dax and its hosts. A Dax host is a character whose
-  // canonical page is "<name> Dax" — the wiki's naming convention for a joined
-  // host — confirmed present as a link on the symbiont page. Order is NOT machine-
-  // extractable from the source, so no succeeded_by is fabricated for the hosts.
-  const dax = special.get("Dax (symbiont)");
-  if (dax && !dax.missing) {
-    addNode("symbiont", "Dax", { label: "Dax (symbiont)" });
-    const daxHosts = [...nodes.values()].filter((n) => n.type === "character" && /^[A-Z][a-zà-þ'.-]+ Dax$/.test(n.id));
-    for (const h of daxHosts) addEdge("host_of", "symbiont:Dax", "character:" + h.id, { ...cite("Dax (symbiont)"), predicate: "host_of",
-      basis: "canonical page titled '<host> Dax' — Memory Alpha's joined-host naming convention" });
+  // host_of: Dax symbiont -> each host it hosted, from the curated table, typed and
+  // cited to the host's own page (only hosts whose page really exists).
+  addNode("symbiont", "Dax", { label: "Dax (symbiont)" });
+  for (const h of DAX_HOSTS) {
+    const p = special.get(h.host); if (!p || p.missing) continue;
+    addNode("character", h.host, nodes.has("character:" + h.host) ? {} : { label: h.host, in_cast: false });
+    addEdge("host_of", "symbiont:Dax", "character:" + h.host, { ...cite(h.host), predicate: "host_of",
+      citation_type: "curated-evidence", host_type: h.type, ...(h.note ? { note: h.note } : {}) });
   }
 
-  // succeeded_by: Weyoun clones are numbered; consecutive existing clones succeed.
-  const clones = [...nodes.keys()].filter((k) => /^character:Weyoun \d+$/.test(k)).map((k) => ({ k, n: +k.match(/(\d+)$/)[1] })).sort((a, b) => a.n - b.n);
-  for (let i = 0; i + 1 < clones.length; i++)
-    addEdge("succeeded_by", clones[i].k, clones[i + 1].k, { citation_type: "page", source: wikiUrl(clones[i + 1].k.replace("character:", "")), predicate: "succeeded_by", basis: "Vorta clone succession (numbered)" });
+  // clone identity + sourced succession. Every Weyoun clone is an instance of the
+  // Weyoun line (with its designation number); succeeded_by is emitted ONLY where
+  // the successor's page explicitly names its predecessor, cited with that text.
+  addNode("character", "Weyoun", nodes.has("character:Weyoun") ? {} : { label: "Weyoun (Vorta clone line)", in_cast: false });
+  for (const title of cloneTitles) {
+    const n = +title.match(/(\d+)$/)[1];
+    addEdge("clone_instance_of", "character:" + title, "character:Weyoun", { ...cite(title), predicate: "clone_instance_of", designation: n });
+    const p = special.get(title); if (!p || p.missing) continue;
+    const pred = clonePredecessor(p.wikitext, n);
+    if (pred && nodes.has("character:Weyoun " + pred.n))
+      addEdge("succeeded_by", "character:Weyoun " + pred.n, "character:" + title, { ...cite(title), predicate: "succeeded_by", basis: pred.basis });
+  }
 
   // commands: Dominion chain of command, species-level doctrine, each edge cited to
   // the page that states it.
@@ -247,17 +286,9 @@ if (!PROJECT_ONLY) {
   addEdge("commands", "species:Vorta", "species:Jem'Hadar", { ...cite("Vorta"), predicate: "commands",
     basis: 'Vorta act as "field commanders"; Jem\'Hadar are "the military arm of the Dominion"' });
 
-  // allied_with: the two Dominion War coalitions, from the war infobox, and their
-  // member powers from each coalition page's lead links.
-  // The two coalition pages state their membership in prose, not a members= field.
-  // For each coalition we name the major powers that formed it and emit an edge
-  // ONLY for those actually linked on that coalition's page — the page is the
-  // citation and the gate, so the enemy power mentioned in passing is never
-  // mis-assigned.
-  const COALITION_MEMBERS = {
-    "Federation Alliance": ["United Federation of Planets", "Klingon Empire", "Romulan Star Empire"],
-    "Breen-Dominion Alliance": ["Dominion", "Cardassian Union", "Breen Confederacy"],
-  };
+  // allied_with: the two Dominion War coalitions (from the war infobox) and their
+  // member powers (curated per COALITION_MEMBERS, verified present on the coalition
+  // page). Labelled curated — the coalition page is the basis, not a parse.
   const war = special.get("Dominion War");
   if (war && !war.missing) {
     const head = war.wikitext.split(/\n==[^=]/)[0];
@@ -268,11 +299,11 @@ if (!PROJECT_ONLY) {
       addNode("coalition", coalition);
       addEdge("belligerent_in", "coalition:" + coalition, "coalition:Dominion War", { ...cite("Dominion War"), predicate: "belligerent_in" });
       const cpage = special.get(coalition);
-      if (!cpage || cpage.missing) continue;
       for (const m of COALITION_MEMBERS[coalition] || []) {
-        if (!cpage.wikitext.includes("[[" + m)) continue;   // verified against the coalition page
+        const present = cpage && !cpage.missing && cpage.wikitext.includes("[[" + m);
         addNode("power", m);
-        addEdge("allied_with", "power:" + m, "coalition:" + coalition, { ...cite(coalition), predicate: "allied_with", verified_on: coalition });
+        addEdge("allied_with", "power:" + m, "coalition:" + coalition, { citation_type: "curated", predicate: "allied_with",
+          source: wikiUrl(coalition), basis: `curated member of the ${coalition}`, verified_link_present: !!present });
       }
     }
   }
@@ -315,23 +346,40 @@ for (const bloc of BLOCS)
   projections[bloc.key] = projection(bloc.label, (n) => inBloc(bloc, n), ["is_species", "affiliated_with", "member_of", "portrayed"]);
 
 // ---- relationship charts (explicit predicates only) ----
-const chart = (label, predicates, nodeFilter) => {
-  let subEdges = edges.filter((e) => predicates.includes(e.type));
-  if (nodeFilter) subEdges = subEdges.filter((e) => nodeFilter(e));
+// Each chart names exactly which predicates it contains — a faction web folds in
+// the family edges among that people so parentage (Tain→Garak, Dukat→Ziyal) is
+// present, not just affiliation.
+const chart = (label, note, edgeFilter) => {
+  const subEdges = edges.filter(edgeFilter);
   const ids = new Set(); for (const e of subEdges) { ids.add(e.from); ids.add(e.to); }
-  return { label, predicates, node_count: ids.size, edge_count: subEdges.length,
+  return { label, note, predicates: [...new Set(subEdges.map((e) => e.type))].sort(),
+    node_count: ids.size, edge_count: subEdges.length,
     nodes: nodeList.filter((n) => ids.has(n.type + ":" + n.id)).map((n) => ({ id: n.type + ":" + n.id, label: n.label })),
     edges: subEdges };
 };
-const orgIn = (re) => (e) => e.to.startsWith("organization:") && re.test(e.to) || e.to.startsWith("lineage:") && re.test(e.to);
+const FAMILY = new Set(["parent_of", "sibling_of", "spouse_of"]);
+const membersOf = (re) => new Set(characterNodes.filter((n) => (n.species || []).some((s) => re.test(s))).map((n) => "character:" + n.id));
+const familyAmong = (set) => (e) => FAMILY.has(e.type) && (set.has(e.from) || set.has(e.to));
+const orgTo = (re) => (e) => (e.type === "affiliated_with" || e.type === "member_of") && re.test(e.to);
+const cardassians = membersOf(/^Cardassian$/i), bajorans = membersOf(/^Bajoran$/i), klingons = membersOf(/^Klingon$/i);
 const relationships = {
-  family: chart("Family & marriage web", ["parent_of", "sibling_of", "spouse_of"]),
-  klingon_houses: chart("Klingon Houses", ["member_of"], (e) => /^lineage:House of/.test(e.to)),
-  dax_hosts: chart("Dax symbiont host line", ["host_of", "succeeded_by"], (e) => e.from === "symbiont:Dax" || /Dax/.test(e.from) || /Dax/.test(e.to)),
-  dominion_command: chart("Dominion chain of command", ["commands", "member_of", "affiliated_with"], (e) => e.type === "commands" || /Dominion|Vorta|Jem'Hadar|Founder/i.test(e.to)),
-  cardassian_web: chart("Cardassian political & military web", ["affiliated_with", "member_of"], orgIn(/Cardassian|Obsidian Order|Detapa|Gul|Legate/i)),
-  bajoran_orders: chart("Bajoran militia, government & religious orders", ["affiliated_with", "member_of"], orgIn(/Bajoran|Militia|Vedek|Kai|Resistance/i)),
-  war_coalitions: chart("Dominion War coalitions", ["allied_with", "belligerent_in"]),
+  family: chart("Family & marriage web", "parent_of (parent→child), sibling_of, spouse_of — from character infoboxes.",
+    (e) => FAMILY.has(e.type)),
+  klingon_houses: chart("Klingon Houses & bloodlines", "House membership (member_of) plus family edges among Klingons.",
+    (e) => (e.type === "member_of" && /^lineage:House of/.test(e.to)) || familyAmong(klingons)(e)),
+  dax_hosts: chart("Dax symbiont host set", "host_of only. Hosts are typed primary/temporary/alternate; the source gives no machine-readable succession order, so none is charted.",
+    (e) => e.type === "host_of"),
+  dominion_command: chart("Dominion chain of command & Weyoun clone line",
+    "commands (species doctrine), clone_instance_of + succeeded_by (Weyoun, sourced per clone page), and Dominion org membership.",
+    (e) => ["commands", "clone_instance_of", "succeeded_by"].includes(e.type) || orgTo(/Dominion|Vorta|Jem'Hadar/i)(e)),
+  cardassian_web: chart("Cardassian affiliations & families",
+    "Cardassian/Obsidian Order org membership plus family edges among Cardassians (Tain→Garak, Dukat→Ziyal).",
+    (e) => orgTo(/Cardassian|Obsidian Order|Detapa|Gul|Legate/i)(e) || familyAmong(cardassians)(e)),
+  bajoran_web: chart("Bajoran affiliations & families",
+    "Bajoran militia/government/religious org membership plus family among Bajorans. Affiliation membership, not a command hierarchy.",
+    (e) => orgTo(/Bajoran|Militia|Vedek|Kai|Resistance/i)(e) || familyAmong(bajorans)(e)),
+  war_coalitions: chart("Dominion War coalitions", "allied_with (curated coalition membership) and belligerent_in (war infobox).",
+    (e) => e.type === "allied_with" || e.type === "belligerent_in"),
 };
 
 // ---- write ----
@@ -344,29 +392,59 @@ const edgesDoc = { version: 2, production: "Star Trek: Deep Space Nine",
     affiliated_with: "character affiliated with organization (infobox/category)", member_of: "character belongs to House/family (infobox/category)",
     parent_of: "character is parent of character (infobox)", sibling_of: "characters are siblings (infobox)",
     spouse_of: "characters are/were married (infobox)", host_of: "symbiont hosted character (symbiont page)",
-    succeeded_by: "character succeeded by character (numbered clone succession)", commands: "species commands species (Dominion doctrine, cited)",
-    allied_with: "power allied within coalition (coalition page)", belligerent_in: "coalition fought in war (war infobox)" },
+    succeeded_by: "character succeeded by character (successor page names the predecessor; cited per edge)",
+    clone_instance_of: "clone is an instance of a character line, with a designation number",
+    commands: "species commands species (Dominion doctrine, cited)",
+    allied_with: "power is a curated member of a coalition (verified present on the coalition page)",
+    belligerent_in: "coalition fought in war (war infobox)" },
   counts: edgeCounts, edges };
 
-if (!PROJECT_ONLY) {
-  await writeFile("data/ds9/graph/nodes.json", JSON.stringify(nodesDoc, null, 1) + "\n");
-  await writeFile("data/ds9/graph/edges.json", JSON.stringify(edgesDoc, null, 1) + "\n");
-  await writeFile("data/ds9/graph/relationships.json", JSON.stringify({ version: 1,
-    note: "Explicitly-predicated relationship charts. Every edge is separately cited to the infobox field, category, or named page that states it. Directed predicates: parent_of (parent→child), host_of (symbiont→host), succeeded_by (earlier→later), commands (commander→commanded). sibling_of/spouse_of/allied_with are undirected.",
-    charts: relationships }, null, 1) + "\n");
-}
-await writeFile("data/ds9/graph/projections.json", JSON.stringify({ version: 2,
+// nodes, edges and relationships are the authoritative artifacts; projections and
+// summary derive from them. All five are written in both modes so --project-only
+// can never leave a stale file behind, and all five are hashed into the manifest.
+const relationshipsDoc = { version: 2,
+  note: "Explicitly-predicated relationship charts, each a pure projection of edges.json. Every edge is separately cited to the infobox field, category, curated table, or named page that states it. Directed: parent_of (parent→child), host_of (symbiont→host), succeeded_by (predecessor→successor), commands (commander→commanded), clone_instance_of (clone→line). sibling_of/spouse_of/allied_with are undirected.",
+  charts: relationships };
+const projectionsDoc = { version: 2,
   note: "Mechanical VIEWS over the crawl — filters, not relationship claims. Power-bloc membership is a regex projection of sourced species/affiliation/lineage; a character in more than one bloc appears in each. The real relationship charts are in relationships.json.",
   bloc_rules: BLOCS.map((b) => ({ key: b.key, label: b.label, species: String(b.species), affiliation: String(b.affil) })),
   projections: Object.fromEntries(Object.entries(projections).map(([k, g]) => [k, { label: g.label, node_count: g.node_count, edge_count: g.edge_count }])),
-  detail: projections }, null, 1) + "\n");
-await writeFile("data/ds9/graph/graph-summary.json", JSON.stringify({ version: 2,
+  detail: projections };
+const summaryDoc = { version: 2,
   generated_from: ["data/ds9/graph/nodes.json", "data/ds9/graph/edges.json"],
   node_counts: nodeCounts, edge_counts: edgeCounts,
   characters_with_species: characterNodes.filter((n) => (n.species || []).length).length,
   characters_without_species: characterNodes.filter((n) => !(n.species || []).length).length,
   projections: Object.fromEntries(Object.entries(projections).map(([k, g]) => [k, { node_count: g.node_count, edge_count: g.edge_count }])),
-  relationships: Object.fromEntries(Object.entries(relationships).map(([k, g]) => [k, { node_count: g.node_count, edge_count: g.edge_count }])) }, null, 1) + "\n");
+  relationships: Object.fromEntries(Object.entries(relationships).map(([k, g]) => [k, { node_count: g.node_count, edge_count: g.edge_count }])) };
+
+const write = async (name, doc) => {
+  const path = "data/ds9/graph/" + name;
+  await writeFile(path, JSON.stringify(doc, null, 1) + "\n");
+  return { path, sha256: digest(JSON.stringify(doc, null, 1) + "\n") };
+};
+// In project-only mode nodes/edges are inputs, not outputs — leave them untouched
+// so the manifest can prove the derived files match the committed nodes/edges.
+const snapshots = {};
+if (!PROJECT_ONLY) {
+  snapshots.nodes = await write("nodes.json", nodesDoc);
+  snapshots.edges = await write("edges.json", edgesDoc);
+} else {
+  snapshots.nodes = { path: "data/ds9/graph/nodes.json", sha256: digest(await readFile("data/ds9/graph/nodes.json", "utf8")) };
+  snapshots.edges = { path: "data/ds9/graph/edges.json", sha256: digest(await readFile("data/ds9/graph/edges.json", "utf8")) };
+}
+snapshots.relationships = await write("relationships.json", relationshipsDoc);
+snapshots.projections = await write("projections.json", projectionsDoc);
+snapshots.summary = await write("graph-summary.json", summaryDoc);
+// captured_at reflects when the graph was crawled — in --project-only nothing was
+// re-crawled, so preserve the committed value instead of stamping null.
+const capturedAt = PROJECT_ONLY
+  ? JSON.parse(await readFile("data/ds9/graph/manifest.json", "utf8")).captured_at
+  : CAPTURED_AT;
+await writeFile("data/ds9/graph/manifest.json", JSON.stringify({ version: 1,
+  generator: "scripts/ds9-graph.mjs", production: "Star Trek: Deep Space Nine", captured_at: capturedAt,
+  note: "sha256 of every graph artifact, so the whole evidence package is auditable — not only the roster.",
+  snapshots }, null, 1) + "\n");
 
 console.log(`\nnodes: ${JSON.stringify(nodeCounts)}`);
 console.log(`edges: ${JSON.stringify(edgeCounts)}`);

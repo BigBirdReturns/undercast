@@ -22,8 +22,14 @@ eligibility is judged in a later, separately-sourced pass.
 npm run ds9:census          # re-crawl episodes + resolve identity, rewrite roster/*
 npm run ds9:summary         # rebuild coverage.json + summary.json from the roster, no network
 npm run ds9:graph           # crawl character + doctrine pages, rewrite graph/*
-npm run ds9:graph:project   # rebuild projections from nodes/edges, no network
+npm run ds9:graph:project   # re-derive projections/relationships from committed nodes+edges, no network
+npm run ds9:fixtures        # offline regression checks (identity, wall, relationships, provenance)
 ```
+
+`ds9:summary` and `ds9:graph:project` are **pure projections**: they read the
+committed inputs and rewrite only the derived files, byte-for-byte. CI runs both
+offline and fails on any drift, so the derived charts can never disagree with the
+nodes/edges they claim to project.
 
 Set `CONTACT=you@example.com` so the crawl identifies itself to the wiki.
 
@@ -85,6 +91,7 @@ inferred from prose narrative.
 | `graph/relationships.json` | the **relationship charts** — explicit predicates only (below). |
 | `graph/projections.json` | the **projections** — mechanical views, not relationship claims (below). |
 | `graph/graph-summary.json` | reproducible node/edge/projection/relationship counts. |
+| `graph/manifest.json` | a sha256 of every graph artifact, so the whole evidence package — not just the roster — is hash-auditable. |
 
 ### Relationship charts (`relationships.json`)
 
@@ -92,18 +99,27 @@ Actual relationships, each edge separately cited to the infobox field, category
 or named page that states it:
 
 - `parent_of` (parent→child), `sibling_of`, `spouse_of` — from character infobox
-  family fields.
+  family fields. Generic relationship-word links (`[[son]]`) are dropped.
 - `member_of` — House / family / organization membership (infobox + category).
-- `host_of` — the Trill symbiont Dax to each of its hosts (symbiont page).
-- `succeeded_by` — Weyoun's numbered clone succession.
+- `host_of` — the Trill symbiont Dax to each host, from a **curated evidence
+  table** typed `primary` (the nine), `temporary` (Verad), or `alternate`
+  (Yedrin). No succession order is charted — the source gives none machine-readable.
+- `clone_instance_of` — each Weyoun clone to the Weyoun line, with its designation
+  number. `succeeded_by` — emitted **only where a clone's page explicitly names
+  its predecessor**, cited with that sentence (5→6, 6→7, 7→8; 4→5 is not stated,
+  so not asserted).
 - `commands` — the Dominion chain of command at the species level
   (Changeling → Vorta → Jem'Hadar), each edge cited to the page stating it.
 - `allied_with` / `belligerent_in` — the two Dominion War coalitions and their
-  member powers (war infobox + coalition pages).
+  member powers. `belligerent_in` is from the war infobox; `allied_with` is
+  **curated** membership (`citation_type: "curated"`), verified present on the
+  coalition page but not claimed as a parse.
 
-Seven charts are assembled from these: family & marriage web, Klingon Houses,
-Dax host line, Dominion chain of command, Cardassian political/military web,
-Bajoran orders, and the Dominion War coalitions.
+Seven charts are assembled from these: family & marriage web, Klingon Houses &
+bloodlines, Dax host set, Dominion chain of command & Weyoun clone line,
+Cardassian affiliations & families (incl. Tain→Garak, Dukat→Ziyal), Bajoran
+affiliations & families, and the Dominion War coalitions. Each chart names
+exactly which predicates it contains.
 
 ### Projections (`projections.json`)
 
