@@ -35,7 +35,7 @@ data/
   index.json + shards/ generated serving projections, rebuilt by scripts/shard.mjs
   media-manifest.json / media-live.json  images on GitHub Releases (see MEDIA.md)
   SOURCES.json        the provenance ledger — every asset, its origin and kind
-  GAPS.json           cards with no image yet — the worklist for hand/gen fills
+  GAPS.json           cards with no image yet — the sourcing worklist
   CANDIDATES.json     the ingest queue — harvested leads awaiting triage
   drafts.json         model-drafted specimens waiting for `grow --drafts` to merge
 images/               cached image files (populated by the crawler)
@@ -125,7 +125,7 @@ Makers are parsed from each specimen's free-form `designer` field, so the way to
 credit a maker is simply to name them there — `"Rick Baker"`, `"KNB EFX"`,
 `"sculpt by …"`. No separate list to maintain; the leaderboard rebuilds itself.
 
-## Images — the three tiers
+## Images — two sourced tiers
 
 Every asset lands in `data/SOURCES.json` with a `kind`, and the card shows what
 it has:
@@ -134,13 +134,9 @@ it has:
    Attributed in `CREDITS.md`; safe to rehost, which the crawler does.
 2. **`still`** — the in-character shot (the mask). Studio-copyright, shown under
    fan-use. Cached and logged, not license-cleared — because this is a fan wall.
-3. **`generated`** — a fill image for a gap the crawl couldn't cover. Stamped
-   `gen` on the card and `kind: "generated"` in the ledger, always, so the
-   lineage never lies about which faces are real photos, which are stills, and
-   which the machine made up.
-
 No image for a card -> it keeps the abstract "cast" illustration, and the card
-lands in `GAPS.json` as your gen worklist.
+lands in `GAPS.json` as a sourcing worklist. A missing image remains an explicit
+absence; UNDERCAST never fills an evidence gap with a fabricated face.
 
 **Provenance, not a credits roll.** The ledger is the honesty — machine-readable,
 per-asset origin + kind. The card stays clean. `CREDITS.md` carries only the
