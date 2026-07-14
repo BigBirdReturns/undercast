@@ -11,16 +11,23 @@ const errors = [];
 const expect = (condition, message) => { if (!condition) errors.push(message); };
 const has = (path, pattern) => pattern.test(files[path]);
 
-for (const path of ["index.html","recognition.html","coverage.html","constellation.html"]) {
+for (const path of ["index.html","recognition.html","coverage.html"]) {
   expect(has(path, /class="skip-link"/), `${path}: missing skip link`);
   expect(has(path, /aria-current="page"/), `${path}: current surface is not exposed`);
 }
+expect(has("constellation.html", /class="skip-link"/), "constellation.html: missing skip link");
 
 for (const path of ["index.html","recognition.html","coverage.html","constellation.html","404.html"]) {
-  for (const label of ["Browse","Recognition Loop","Coverage","Constellations","Makers","About"]) {
-    expect(has(path, new RegExp(`>${label}<`)), `${path}: archive navigation is missing ${label}`);
+  const nav = files[path].match(/<nav[^>]*class="[^"]*\bsite-nav\b[^"]*"[^>]*>[\s\S]*?<\/nav>/)?.[0] || "";
+  for (const label of ["Browse","Recognition Loop","Coverage","Makers","About"]) {
+    expect(new RegExp(`>${label}<`).test(nav), `${path}: archive navigation is missing ${label}`);
   }
+  expect(!/>Constellations</.test(nav), `${path}: Constellations must stay out of permanent navigation`);
 }
+expect(!/>Constellations<\/a>/.test(files["scripts/build-record-pages.mjs"]), "record templates: Constellations must stay out of permanent navigation");
+expect(has("recognition.html", />Open constellation →</), "recognition: contextual constellation link is missing");
+expect(has("coverage.html", /href="constellation\.html\?id=/), "coverage: contextual constellation link is missing");
+expect(has("scripts/build-record-pages.mjs", /constellationAction=.*Open constellation/), "record templates: contextual constellation action is missing");
 expect(!has("index.html", />One record</), "index: obsolete Recognition Loop label returned");
 expect(!has("recognition.html", />One record</), "recognition: obsolete Recognition Loop label returned");
 expect(has("index.html", /href="\.\/coverage\.html">Coverage</), "index: global Coverage link must open the coverage surface, not one benchmark");

@@ -55,11 +55,11 @@ test("archive navigation stays complete, consistent, and inside every viewport",
     {path:"index.html",ready:"#result-status",align:".controls",current:1},
     {path:"recognition.html#UC-001",ready:"#record-title",align:".uc-record",current:1},
     {path:"coverage.html",ready:"#rows tr",align:".eyebrow",current:1},
-    {path:"constellation.html",ready:".person-row",align:".hero",current:1},
+    {path:"constellation.html",ready:".person-row",align:".hero",current:0},
     {path:"records/UC-001/",ready:"#record-main",align:".record-meta",current:1},
     {path:"404.html",ready:"#recovery",align:".kicker",current:0}
   ];
-  const core=["Browse","Coverage","Constellations","Makers","About"];
+  const core=["Browse","Coverage","Makers","About"];
   for(const viewport of [{width:1280,height:900},{width:390,height:844}]){
     await page.setViewportSize(viewport);
     for(const surface of surfaces){
@@ -68,6 +68,7 @@ test("archive navigation stays complete, consistent, and inside every viewport",
       const nav=page.getByRole("navigation",{name:"Archive navigation",exact:true});
       await expect(nav).toBeVisible();
       for(const label of core) await expect(nav.getByRole("link",{name:label,exact:true})).toBeVisible();
+      await expect(nav.getByRole("link",{name:"Constellations",exact:true})).toHaveCount(0);
       const browseTarget=await nav.getByRole("link",{name:"Browse",exact:true}).evaluate(link=>new URL(link.href).hash);
       expect(browseTarget,`${surface.path} Browse destination`).toBe("#archive");
       await expect(nav.locator('[aria-current="page"]')).toHaveCount(surface.current);
