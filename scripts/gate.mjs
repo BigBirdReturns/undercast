@@ -39,10 +39,18 @@ function parseSteps(yml) {
   for (let i = 0; i < lines.length; i++) {
     const name = lines[i].match(/^\s*- name:\s*(.+?)\s*$/);
     if (!name) continue;
-    const run = lines[i + 1]?.match(/^\s*run:\s*(.+?)\s*$/);
+    const runLine = lines[i + 1] ?? "";
+    if (/^\s*run:\s*[|>]/.test(runLine))
+      throw new Error(`step "${name[1]}" uses a multi-line run block — scripts/gate.mjs only parses single-line run: steps; update the parser before trusting this gate`);
+    const run = runLine.match(/^\s*run:\s*(.+?)\s*$/);
     steps.push({ name: name[1], run: run ? run[1] : null });
   }
   if (!steps.length) throw new Error(`no steps parsed from ${WORKFLOW} — its shape changed; update scripts/gate.mjs`);
+  // every runnable line in the file must be accounted for — silence is drift
+  const runCount = (yml.match(/^\s*run:/gm) || []).length;
+  const parsedRuns = steps.filter((s) => s.run).length;
+  if (runCount !== parsedRuns)
+    throw new Error(`${WORKFLOW} has ${runCount} run: lines but only ${parsedRuns} parsed — a step shape this gate doesn't understand; update scripts/gate.mjs`);
   return steps;
 }
 

@@ -30,8 +30,10 @@ const LAW = "GROW.md";
 
 const argv = process.argv.slice(2);
 const has = (f) => argv.includes(f);
-const opt = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : null; };
-const positional = argv.filter((a, i) => !a.startsWith("--") && (i === 0 || !argv[i - 1].startsWith("--") || has(argv[i - 1]) === false && false));
+const opt = (f) => { const i = argv.indexOf(f); return i >= 0 && !String(argv[i + 1] ?? "").startsWith("--") ? argv[i + 1] : null; };
+// a positional is any non-flag token that is not the value of a value-taking flag
+const VALUE_FLAGS = new Set(["--verdict", "--cite", "--rationale", "--by", "--date", "--list", "--from"]);
+const positional = argv.filter((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1]));
 
 const dossiers = JSON.parse(await readFile(EVIDENCE, "utf8")).performances;
 const decisionsDoc = JSON.parse(await readFile(DECISIONS, "utf8"));
