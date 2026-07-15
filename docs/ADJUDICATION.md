@@ -57,13 +57,20 @@ fails the build (and CI) via the shared validator in `scripts/lib/eligibility.mj
   an offline review queue where every performance is `review` until the owner
   records a verdict in `eligibility-decisions.json`. The machine prepares
   decisions; it does not make them.
+- **Maker / designer attribution** (`data/ds9/maker*.json`): reader-agents returned
+  47 character/species-page excerpts. `ds9-maker-adjudicate.mjs` pins each excerpt
+  once as a content-addressed receipt and surfaces possible roster joins only as
+  non-authoritative signals. It does not infer applicability or attach credits.
+  The owner alone attaches plural typed credits in `maker-decisions.json`, citing
+  exact maker/work/target/production spans, an applicability rationale, review
+  coverage (`partial`/`complete`), and an immutable GROW.md pin. Design-lineage
+  credits require a separate pinned bridge to the DS9 performance. See
+  `data/ds9/MAKER.md`.
 
 ## Good candidates to fan out next
 
 The same harness extends to any read-and-judge question, e.g.:
 
-- **Designer / maker attribution** — who built each face (makeup/creature shop),
-  with a quote from the production notes.
 - **Performance conditions** — heat, restricted vision, full enclosure, stunt work
   — each condition quote-sourced (the schema already exists in `specimen.schema.json`).
 - **Image provenance / licence** — confirm each still/portrait's source and licence

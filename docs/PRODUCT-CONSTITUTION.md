@@ -88,7 +88,7 @@ its composition and crop are judged separately in visual review.)
 - **Constellations** — **curated relationships.** It stays **contextual** and does
   **not** hold permanent top-navigation until it demonstrates repeatable visitor
   value and enough curated coverage to justify a global destination — no numeric
-  threshold applies (DEC-0009; implementation pending, as the nav still lists it).
+  threshold applies (DEC-0009).
 
 ## 8. What must remain mysterious
 

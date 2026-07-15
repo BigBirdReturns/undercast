@@ -664,7 +664,6 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 - Free-licensed portraits (attributed above): **639**
 - Character stills (studio-copyright, shown under fan-use; see ledger): **684**
-- Generated fill images (marked `gen` on the wall; see ledger): **0**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
 email and any specific asset comes down.

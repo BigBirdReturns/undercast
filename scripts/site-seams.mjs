@@ -5,7 +5,8 @@ import { readFileSync } from "node:fs";
 const read = path => readFileSync(path, "utf8");
 const files = Object.fromEntries([
   "index.html","recognition.html","coverage.html","constellation.html","404.html",
-  "assets/site-shell.css","assets/constellation.css","assets/record-page.css","scripts/build-record-pages.mjs"
+  "assets/site-shell.css","assets/constellation.css","assets/record-page.css","scripts/build-record-pages.mjs",
+  "schema/specimen.schema.json","schema/source.schema.json"
 ].map(path => [path, read(path)]));
 const errors = [];
 const expect = (condition, message) => { if (!condition) errors.push(message); };
@@ -41,6 +42,17 @@ expect(has("index.html", /grid\.setAttribute\("aria-busy","true"\)/), "index: as
 expect(has("index.html", /ucWall/), "index: history-entry return state missing");
 expect(!has("index.html", /Every portrait here is an original plaster relief/), "index: obsolete blank-portrait explanation returned");
 expect(has("index.html", /specimens\.json",\{cache:"no-store"\}/), "index: canonical fallback may mix cached generations");
+expect(has("index.html", /class="nojs-archive"/), "index: no-JavaScript archive fallback is missing");
+expect(has("index.html", /html:not\(\.js\) \.lenses\{display:none;\}/), "index: no-JavaScript lens controls remain active");
+expect(has("index.html", /class="js-only"/), "index: interactive wall is not gated on JavaScript");
+
+for (const path of ["schema/specimen.schema.json","schema/source.schema.json"]) {
+  const imageKinds = JSON.parse(files[path]).$defs.image.properties.kind.enum;
+  expect(!imageKinds.includes("generated"), `${path}: fabricated image kind returned`);
+}
+for (const path of ["index.html","recognition.html"]) {
+  expect(!/kind==="generated"|(?:uc-)?gen-badge/.test(files[path]), `${path}: fabricated-image renderer returned`);
+}
 
 expect(has("recognition.html", /<main id="record-view"/), "recognition: persistent main landmark missing");
 expect(has("recognition.html", /connections-nav[\s\S]{0,220}prefers-reduced-motion/), "recognition: Connections ignores reduced motion");
@@ -67,6 +79,7 @@ expect(has("404.html", /href="\/undercast\/index\.html#archive"/), "404: nested-
 expect(has("404.html", /href="\/undercast\/data\/archive\.json"/), "404: machine archive recovery missing");
 expect(has("scripts/build-record-pages.mjs", /class="skip-link" href="#record-main"/), "records: skip link missing from generator");
 expect(has("scripts/build-record-pages.mjs", /aria-current="page">Permanent record/), "records: current surface missing from generator");
+expect(!has("scripts/build-record-pages.mjs", /interactive view adds comparison/i), "records: retired comparison promise returned");
 expect(has("assets/record-page.css", /@media\(max-width:420px\)\{\.record-pair\{grid-template-columns:1fr/), "records: narrow comparison breakpoint missing");
 
 for (const path of ["index.html","recognition.html","coverage.html","constellation.html"]) {
