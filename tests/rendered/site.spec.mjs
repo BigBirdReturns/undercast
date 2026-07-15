@@ -238,6 +238,42 @@ test.describe("homepage without JavaScript",()=>{
   });
 });
 
+test.describe("depth surfaces without JavaScript",()=>{
+  test.use({javaScriptEnabled:false});
+
+  test("retires dead controls and loading shells at desktop and mobile sizes",async({page})=>{
+    for(const viewport of [{width:1280,height:900},{width:390,height:844}]){
+      await page.setViewportSize(viewport);
+
+      await open(page,"recognition.html#UC-035");
+      await expect(page.getByRole("heading",{name:"The records are still here."})).toBeVisible();
+      await expect(page.locator("#record-view .uc-loading")).toBeHidden();
+      await expect(page.locator("#connections-nav:visible,#theme:visible")).toHaveCount(0);
+      await expect(page.locator('[aria-busy="true"]')).toHaveCount(0);
+      await expect(page.locator('#record-view a[href="./records/UC-001/"]')).toBeVisible();
+      await expect(page.locator('button:visible,input:visible,select:visible')).toHaveCount(0);
+
+      await open(page,"coverage.html");
+      await expect(page.getByRole("heading",{name:"The filed coverage remains available."})).toBeVisible();
+      for(const selector of ["#benchmark",".filters","#metrics",".table-wrap"]){
+        await expect(page.locator(selector)).toBeHidden();
+      }
+      for(const href of ["data/CENSUS-COVERAGE.json","data/CENSUS-SUMMARY.json","data/CENSUS-FERENGI-TEST.json"]){
+        await expect(page.locator(`a[href="${href}"]`)).toBeVisible();
+      }
+      await expect(page.locator('button:visible,input:visible,select:visible')).toHaveCount(0);
+
+      await open(page,"constellation.html?id=constellation%3Aevery-ferengi-performer");
+      await expect(page.getByRole("heading",{name:"No relationship path has been inferred."})).toBeVisible();
+      for(const selector of ["#summary","#constellation","#metrics","#map",".ledger"]){
+        await expect(page.locator(selector)).toBeHidden();
+      }
+      await expect(page.locator('a[href="data/constellations.json"]')).toBeVisible();
+      await expect(page.locator('button:visible,input:visible,select:visible')).toHaveCount(0);
+    }
+  });
+});
+
 test.describe("permanent records without JavaScript",()=>{
   test.use({javaScriptEnabled:false});
 
@@ -463,6 +499,40 @@ test("coverage and constellation preserve human-searchable, unique evidence",asy
   await expect(page.locator("#map")).toContainText("William Frankfather");
   await expect(page.locator("#map")).toContainText("Tami Peterson");
   await expect(page.locator("#edges")).toContainText("Changeling trio — second male Founder");
+});
+
+test("Constellation mobile rows keep visual, reading, heading, and focus order aligned",async({page})=>{
+  await page.setViewportSize({width:390,height:844});
+  await open(page,"constellation.html?id=constellation%3Aevery-ferengi-performer");
+  const rows=page.locator(".person-row");
+  await expect(rows.first()).toBeVisible();
+  const mobileOrder=await rows.evaluateAll(nodes=>nodes.map(row=>{
+    const focusables=[...row.querySelectorAll("a")];
+    const headings=[...row.querySelectorAll("h2,h3")];
+    const person=row.querySelector(".person-node");
+    const roleTops=[...row.querySelectorAll(".role-stack .node")].map(node=>node.getBoundingClientRect().top);
+    return {
+      personFirst:focusables[0]===person,
+      headings:[...headings].map(node=>node.tagName),
+      visualFirst:roleTops.every(top=>person.getBoundingClientRect().top<=top)
+    };
+  }));
+  expect(mobileOrder.every(row=>row.personFirst&&row.headings[0]==="H2"&&row.headings.slice(1).every(tag=>tag==="H3")&&row.visualFirst)).toBeTruthy();
+
+  const firstRow=rows.first();
+  await firstRow.locator(".person-node").focus();
+  await page.keyboard.press("Tab");
+  await expect(firstRow.locator(".role-stack .node").first()).toBeFocused();
+
+  await page.setViewportSize({width:1280,height:900});
+  await expect(firstRow).toBeVisible();
+  const desktopOrder=await firstRow.evaluate(row=>{
+    const trek=row.querySelector(".role-stack-trek").getBoundingClientRect();
+    const person=row.querySelector(".person-node").getBoundingClientRect();
+    const elsewhere=row.querySelector(".role-stack-elsewhere").getBoundingClientRect();
+    return trek.right<person.left&&person.right<elsewhere.left;
+  });
+  expect(desktopOrder).toBeTruthy();
 });
 
 test("all canonical sitemap routes resolve and merged aliases stay out",async({request})=>{
