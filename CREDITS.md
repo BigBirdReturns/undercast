@@ -663,7 +663,7 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 ## Ledger summary
 
 - Free-licensed portraits (attributed above): **639**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **684**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **697**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
 email and any specific asset comes down.
