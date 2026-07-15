@@ -31,7 +31,9 @@ npm run ds9:eligibility:fixtures      # prove the contract on 10 hard performanc
   performance out of review.
 - **Editorial decisions live in `eligibility-decisions.json`**, owner-controlled.
   Each decision carries `verdict`, `rationale`, the `evidence_ids` it rests on,
-  `decided_by`, `date`, and `grow_md_version`. No machine writes to it.
+  `decided_by`, `date`, and `grow_md_version`. No machine decides: entries are
+  recorded only by the owner — by hand, or via `npm run ds9:decide`, which
+  validates and writes exactly what the owner commands, under `--write` only.
 - **Everything undecided stays `review`.** No regex, species rule, signal, or
   agent recommendation can change that — only an owner decision.
 
@@ -52,10 +54,11 @@ on its own — dry-run is the default, and it validates with the queue's own sha
 validator before any write):
 
 ```
-npm run ds9:decide -- --list             # rank the queue by decidability
-npm run ds9:decide -- <duplicate_key>    # inspect that performance's dossier
-npm run ds9:decide -- <duplicate_key> --verdict eligible \
+npm run ds9:decide -- --list               # rank the queue by decidability
+npm run ds9:decide -- "p6598|c64886"       # inspect that performance's dossier
+npm run ds9:decide -- "p6598|c64886" --verdict eligible \
     --cite 2 --rationale "..." --by <you> --write   # validate, record, rebuild, prove
+# quote the duplicate_key — every key contains "|", which the shell treats as a pipe
 ```
 
 The GROW.md law version is stamped automatically as a `sha256:` content hash of
