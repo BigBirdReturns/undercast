@@ -264,6 +264,7 @@ derivative work: Masem (talk), CC BY 2.0 — [source](https://commons.wikimedia.
 - **Bela Lugosi** (UC-229) — Nicholas Ház, Public domain — [source](https://commons.wikimedia.org/wiki/File:Bela_Lugosi_-_Mar_1923_Shadowland.jpg)
 - **Kathryn Mullen** (UC-230) — Pburka, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Kathy_Mullen.jpg)
 - **Karen Prell** (UC-231) — Kris Awesome from San Diego, CA, USA, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Red_and_Karen_Prell_(2712248243).jpg)
+- **Troy James** (UC-232) — Mike Morbeck, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Troy_Smith_(cropped).jpg)
 - **Clarence Nash** (UC-233) — Alan Light, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Clarence_%22Ducky%22_Nash_(1116850785).jpg)
 - **Paul Frees** (UC-236) — Film screenshot (United Artists), Public domain — [source](https://commons.wikimedia.org/wiki/File:Paul_Frees_in_Suddenly_(1954).jpg)
 - **Daws Butler** (UC-237) — Alan Light, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Daws_Butler_(1976).jpg)
@@ -662,8 +663,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **639**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **697**
+- Free-licensed portraits (attributed above): **640**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **705**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
 email and any specific asset comes down.
