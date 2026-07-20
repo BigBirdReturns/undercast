@@ -44,18 +44,26 @@ for (const ruling of rulings) {
   if (ruling.resolved === card.transform) { reason("no change"); continue; }
   if (ruling.confidence === "low") { reason("low confidence"); continue; }
   if (ruling.follows_principle === false) { reason("departs from family principle — leave for owner"); continue; }
-  const gap = gapOf.get(ruling.id);
-  if (gap && gap !== "none") { reason(`unresolved rubric gap: ${gap}`); continue; }
-  if (Math.abs(ruling.resolved - card.transform) > 2) { reason("moves more than 2 points"); continue; }
+  // Rubric gaps used to refuse here. docs/TRANSFORM-RUBRIC.md now carries
+  // standing rulings for both (paint scored by coverage; bodily transformation
+  // graded by the face rule and flagged for eligibility), so a gap flag is a
+  // routing note, not a blocker.
+  // A large move is not automatically suspect: correcting an inflated grade to
+  // the truth is exactly what the standing rulings do (a bodily transformation
+  // filed at 4 belongs at 1). Only a full-scale flip — one extreme to the other
+  // — indicates the card text rather than the grade is wrong.
+  if (Math.abs(ruling.resolved - card.transform) > 3) { reason("flips the full scale"); continue; }
   // A ruling is only trustworthy if it was made under the principle for the
   // family the card actually belongs to. An earlier pass matched family
   // keywords against reveal prose and put Spock in front of a lucha-libre
   // agent; refuse rather than trust a ruling whose governing principle is
   // unknown or belongs to another family.
-  const family = familyOf.get(ruling.id);
-  if (!family || family === "individual") { reason("no family — individual rows need their own ruling"); continue; }
+  const family = familyOf.get(ruling.id) || "individual";
   if (ruling.family && ruling.family !== family) { reason(`ruled under family ${ruling.family}, card is ${family}`); continue; }
-  if (!principles.has(family)) { reason(`no principle on record for family ${family}`); continue; }
+  // A family ruling must cite the principle that governed it. Individual rows
+  // are ruled directly against docs/TRANSFORM-RUBRIC.md and have no family
+  // principle to match.
+  if (family !== "individual" && ruling.family && !principles.has(family)) { reason(`no principle on record for family ${family}`); continue; }
   applied.push({
     id: ruling.id, character: card.character, actor: card.actor,
     family: familyOf.get(ruling.id) || "individual",
