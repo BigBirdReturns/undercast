@@ -65,6 +65,10 @@ const ACTOR_FIELDS = /\|\s*(actor|actors|performer|performers|played ?by|portray
 const FRANCHISES = {
   "star-trek": {
     label: "Star Trek", api: "https://memory-alpha.fandom.com/api.php",
+    // full-canon scope discovered by census-scope.mjs; unioned in at run time.
+    // The hand list below stays authoritative for categories not filed under
+    // Category:Individuals on the source wiki (e.g. Q, Borg).
+    scopeFile: "data/CENSUS-SCOPE.json",
     categories: ["Klingons", "Cardassians", "Vulcans", "Romulans", "Bajorans", "Ferengi",
       "Borg", "Andorians", "Trill", "Vorta", "Jem'Hadar", "Talaxians", "Ocampa", "Hirogen",
       "Kazon", "Xindi", "Suliban", "Denobulans", "Tellarites", "Orions", "Gorn", "Betazoids",
@@ -160,6 +164,21 @@ function namesFrom(value) {
 
 async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
   console.log(`\n== ${cfg.label} (${cfg.api}) ==`);
+  // A declared scope file widens the hand list; a missing file falls back to
+  // the hand list alone (loudly), but a present-yet-unreadable one stops the
+  // run — a silently narrowed scope would publish false zeros for every
+  // category it dropped.
+  if (cfg.scopeFile) {
+    let raw = null;
+    try { raw = await readFile(cfg.scopeFile, "utf8"); }
+    catch { console.log(`  scope: ${cfg.scopeFile} not found — hand list only (${(cfg.categories || []).length} categories)`); }
+    if (raw !== null) {
+      const discovered = (JSON.parse(raw).included || []).map((row) => row.category);
+      if (!discovered.length) throw new Error(`${cfg.scopeFile} has no included categories; refusing a scope that narrows the hand list`);
+      cfg.categories = [...new Set([...(cfg.categories || []), ...discovered])];
+      console.log(`  scope: ${discovered.length} discovered + hand list -> ${cfg.categories.length} categories`);
+    }
+  }
   // portrayal subcategories: "Actors who have portrayed <Character>" — members are
   // the real performers, the suffix names the character they wore.
   if (cfg.portrayalPrefix) {
@@ -229,7 +248,10 @@ async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
 const categoryAt = args.indexOf("--category");
 const onlyCategory = categoryAt >= 0 ? args[categoryAt + 1] : null;
 if (categoryAt >= 0 && !onlyCategory) throw new Error("--category requires a category name");
-const requested = args.filter((arg, index) => !arg.startsWith("--") && index !== categoryAt + 1);
+// categoryAt is -1 when --category is absent; without the guard, categoryAt + 1
+// is 0 and the first positional franchise arg is silently dropped, turning a
+// scoped "census.mjs star-trek" into a full every-franchise crawl.
+const requested = args.filter((arg, index) => !arg.startsWith("--") && (categoryAt < 0 || index !== categoryAt + 1));
 const keys = requested.length ? requested : Object.keys(FRANCHISES);
 const freshRows = [];
 const freshUnresolved = [];
