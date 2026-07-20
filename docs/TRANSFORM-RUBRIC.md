@@ -43,6 +43,15 @@ appliances is scored on the combined coverage like any other design.
 
 Affected designs include the Wicked Witch, Darth Maul, Mystique, and Art the Clown.
 
+### Bodily-transformation cards stay on the wall
+
+*Ruled by the owner, 2026-07-20.* The five cards identified under the ruling below
+(`data/ELIGIBILITY-REVIEW.json`) **remain on the wall, graded honestly at 1–2**.
+An honest low grade is the archive showing its own edges, which is what
+"provenance never lies" requires; retiring them would hide a boundary rather than
+document it. The eligibility file is retained as the record of the question and
+its answer, not as a pending worklist.
+
 ### Bodily transformation is not facial disappearance — and is an eligibility question
 
 *Ruled 2026-07-20.* Some cards record transformations that are bodily rather than
@@ -83,8 +92,27 @@ principles, and every grade they set, are journalled in
   own persona rather than a creature is a different axis and must not lower the
   grade. Paint on bare skin is not a mask; score it by the paint rule above.
 
-## Voice roles
+## Voice roles — the second axis
 
-Cards with `kind: "voice"` are outside this scale. Concealment of a *voice* is a
-different axis and has not been defined; voice cards were deliberately excluded
-from the 2026-07-20 audit rather than graded by a face rule.
+Cards with `kind: "voice"` are scored on the same 1–5 field, but the question is
+different: **how completely does the performance prevent a listener from
+recognising the performer's own voice?** A face rule cannot be applied to a
+performance that has no face, and until 2026-07-20 these 422 cards carried a
+number that measured nothing.
+
+| | |
+| --- | --- |
+| **5** | **Unrecognisable.** Pitch-shifted, processed, growled, or built so far from the performer's own instrument that no listener would place them. Creature vocalisations and heavily treated performances live here. |
+| **4** | **Substantially altered.** A sustained character voice far outside the performer's natural range or register — a different apparent age, sex, species or accent held throughout — with little or no processing. |
+| **3** | **Characterised within their own range.** Clearly an acting choice rather than the performer talking, but an attentive listener who knows them could place it. |
+| **2** | **Lightly characterised.** Mostly the performer's own voice with an accent, a register shift, or an inflection. |
+| **1** | **Their own voice.** Essentially themselves, recognisable immediately. |
+
+The same discipline applies as for faces: judge the performance **as heard**, not
+the fame of the performer or how beloved the character is. A star cast *because*
+audiences recognise their voice is a 1 or 2 however famous the role. Range and
+versatility are not concealment — an actor who plays many distinct characters
+still scores each one on how hidden they are in it.
+
+Voice cards were deliberately excluded from the face audit rather than graded by a
+rule that did not fit them.
