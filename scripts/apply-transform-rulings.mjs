@@ -21,6 +21,7 @@ import { readFile, writeFile, appendFile, mkdir } from "node:fs/promises";
 
 const [, , rulingsPath] = process.argv;
 const WRITE = process.argv.includes("--write");
+const REPLACE_AXIS = process.argv.includes("--replace-axis");
 if (!rulingsPath) { console.error("usage: apply-transform-rulings.mjs <rulings.json> [--write]"); process.exit(2); }
 
 const payload = JSON.parse(await readFile(rulingsPath, "utf8"));
@@ -52,14 +53,23 @@ for (const ruling of rulings) {
   // the truth is exactly what the standing rulings do (a bodily transformation
   // filed at 4 belongs at 1). Only a full-scale flip — one extreme to the other
   // — indicates the card text rather than the grade is wrong.
-  if (Math.abs(ruling.resolved - card.transform) > 3) { reason("flips the full scale"); continue; }
+  //
+  // --replace-axis exempts a run from that guard, for the case where the old
+  // value was never a grade on this scale at all (voice cards carried a number
+  // produced by a face rule). The distance between a meaningless number and a
+  // measured one carries no information, so it cannot be evidence of error.
+  if (!REPLACE_AXIS && Math.abs(ruling.resolved - card.transform) > 3) { reason("flips the full scale"); continue; }
   // A ruling is only trustworthy if it was made under the principle for the
   // family the card actually belongs to. An earlier pass matched family
   // keywords against reveal prose and put Spock in front of a lucha-libre
   // agent; refuse rather than trust a ruling whose governing principle is
   // unknown or belongs to another family.
-  const family = familyOf.get(ruling.id) || "individual";
-  if (ruling.family && ruling.family !== family) { reason(`ruled under family ${ruling.family}, card is ${family}`); continue; }
+  // Only the face queue records families. A card it has never seen (a voice
+  // card, say) cannot contradict a ruling's family claim, so the mismatch check
+  // fires only where the queue actually holds a family for the card.
+  const queueFamily = familyOf.get(ruling.id);
+  const family = queueFamily || ruling.family || "individual";
+  if (queueFamily && ruling.family && ruling.family !== queueFamily) { reason(`ruled under family ${ruling.family}, card is ${queueFamily}`); continue; }
   // A family ruling must cite the principle that governed it. Individual rows
   // are ruled directly against docs/TRANSFORM-RUBRIC.md and have no family
   // principle to match.

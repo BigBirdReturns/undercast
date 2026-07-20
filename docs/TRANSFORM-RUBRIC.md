@@ -114,5 +114,19 @@ audiences recognise their voice is a 1 or 2 however famous the role. Range and
 versatility are not concealment — an actor who plays many distinct characters
 still scores each one on how hidden they are in it.
 
+Calibration anchors: James Earl Jones as Mufasa is **1** (the voice *is* the
+casting). Nancy Cartwright as Bart Simpson and Kevin Conroy's Batman are **2** —
+sustained register shifts over their own instrument. Frank Oz as Yoda is **4**.
+A ring-modulated Dalek or a processed creature snarl is **5**.
+
+**This axis is measurably softer than the face scale, and grades are only filed
+by consensus.** Three independent passes over a 60-card control agreed
+unanimously on 18% of cards (mean spread 0.98), against 67% and 0.37 for faces —
+concealment of a voice is genuinely harder to judge from a text record than
+concealment of a face. Voice grades are therefore taken as the median of three
+independent blind passes, filed only where those passes fall within one point of
+each other, and queued for review where they do not. A single-pass voice score is
+not evidence.
+
 Voice cards were deliberately excluded from the face audit rather than graded by a
 rule that did not fit them.
