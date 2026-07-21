@@ -1,0 +1,332 @@
+-const claimedAgain = claimTasks({ state: claimed.state, agent: "luna-2", scope: "star-trek", limit: 10, leaseMinutes: 60, now: T1 });
++assert.equal(claimed.batch.readiness.lease_token, readiness("star-trek").lease_token, "batch pins its certified snapshot");
++assert.ok(claimed.state.jobs.filter((job) => job.status === "leased").every((job) => job.lease.readiness_token === claimed.batch.readiness.lease_token), "state leases pin the same readiness token");
++const claimedAgain = claimTasks({ state: claimed.state, agent: "luna-2", scope: "star-trek", readiness: readiness("star-trek"), limit: 10, leaseMinutes: 60, now: T1 });
+ assert.equal(claimedAgain.batch, null, "leased tasks cannot be claimed twice");
+ assert.equal(claimedAgain.reason, "inflight");
+ 
++const tamperedReadinessBatch = structuredClone(claimed.batch);
++tamperedReadinessBatch.readiness.lease_token = "0".repeat(64);
++const tamperedReadinessResults = {
++  version: 1,
++  lease_id: tamperedReadinessBatch.lease_id,
++  agent: "luna",
++  results: tamperedReadinessBatch.tasks.map((task) => ({
++    task_id: task.id,
++    decision: "reject",
++    reason: "The exact performance does not qualify under the designed-face rule.",
++    evidence: [{ label: "performance context", source: task.sources[0] }],
++  })),
++};
++assert.throws(() => submitResults({ state: claimed.state, batch: tamperedReadinessBatch, resultsDoc: tamperedReadinessResults, drafts: [], now: T2 }), /lease readiness token does not match/);
++
+ const incomplete = {
+   version: 1,
+   lease_id: claimed.batch.lease_id,
+@@ -81,6 +108,9 @@
+   results: [{ task_id: claimed.batch.tasks[0].id, decision: "reject", reason: "not actually a qualifying designed-face performance", evidence: [{ label: "performance context", source: claimed.batch.tasks[0].sources[0] }] }],
+ };
+ assert.throws(() => submitResults({ state: claimed.state, batch: claimed.batch, resultsDoc: incomplete, drafts: [], now: T2 }), /incomplete/);
++const staleFingerprintBatch = structuredClone(claimed.batch);
++staleFingerprintBatch.tasks[0].source_fingerprint = "f".repeat(64);
++assert.throws(() => submitResults({ state: claimed.state, batch: staleFingerprintBatch, resultsDoc: { ...incomplete, results: claimed.batch.tasks.map((task) => ({ task_id: task.id, decision: "reject", reason: "not a qualifying designed-face performance after source review", evidence: [{ label: "source", source: task.sources[0] }] })) }, drafts: [], now: T2 }), /source fingerprint changed/);
+ 
+ const bruntTask = claimed.batch.tasks.find((task) => task.character === "Brunt");
+ const clownTask = claimed.batch.tasks.find((task) => task.character === "The Clown");
+@@ -122,18 +152,18 @@
+ assert.equal(submitted.drafts.length, 1);
+ assert.equal(submitted.drafts[0]._autopilot.task_id, bruntTask.id);
+ validateState(submitted.state);
+-const blockedByPendingDraft = claimTasks({ state: submitted.state, agent: "luna-2", scope: "star-trek", limit: 1, now: T3 });
++const blockedByPendingDraft = claimTasks({ state: submitted.state, agent: "luna-2", scope: "star-trek", readiness: readiness("star-trek"), limit: 1, now: T3 });
+ assert.equal(blockedByPendingDraft.reason, "inflight", "a pending draft applies backpressure before another batch");
+ 
+ const pendingDraft = syncState({
+   coverage, scopes, state: submitted.state, coverageSha256: "a".repeat(64),
+-  drafts: submitted.drafts, specimens: [], growthRejections: [], now: T3,
++  drafts: submitted.drafts, specimens: [], growthRejections: [], readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3,
+ });
+ assert.equal(pendingDraft.state.jobs.find((job) => job.id === bruntTask.id).status, "drafted", "tagged pending drafts survive reconciliation");
+ 
+ const acceptedDraft = syncState({
+   coverage, scopes, state: submitted.state, coverageSha256: "a".repeat(64),
+-  drafts: [], specimens: [{ id: "UC-999", actor: "Jeffrey Combs", character: "Brunt" }], growthRejections: [], now: T3,
++  drafts: [], specimens: [{ id: "UC-999", actor: "Jeffrey Combs", character: "Brunt" }], growthRejections: [], readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3,
+ });
+ const acceptedBrunt = acceptedDraft.state.jobs.find((job) => job.id === bruntTask.id);
+ assert.equal(acceptedBrunt.status, "merged", "an exact canonical specimen advances a draft to post-merge review even before census coverage refreshes");
+@@ -153,15 +183,16 @@
+     }],
+   }],
+ };
+-const completed = completeReviews({ state: acceptedDraft.state, reviewDoc: mediaReview, sourceLedger, corpusSha256: "e".repeat(64), now: T3 });
++const completed = completeReviews({ state: acceptedDraft.state, reviewDoc: mediaReview, sourceLedger, corpusSha256: "e".repeat(64), readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3 });
+ assert.equal(completed.state.jobs.find((job) => job.id === bruntTask.id).status, "resolved", "post-merge visual receipt closes the task");
+ assert.equal(completed.state.jobs.find((job) => job.id === bruntTask.id).outcome.kind, "audited-wall");
++assert.throws(() => completeReviews({ state: acceptedDraft.state, reviewDoc: mediaReview, sourceLedger, corpusSha256: "e".repeat(64), readinessTokens: { "star-trek": "7".repeat(64) }, now: T3 }), /no longer current/, "media closure cannot bypass a stale producer snapshot");
+ const wrongSubjectReview = structuredClone(mediaReview);
+ wrongSubjectReview.reviews[0].records[0].portrait.subject = "The Orion constellation";
+-assert.throws(() => completeReviews({ state: acceptedDraft.state, reviewDoc: wrongSubjectReview, sourceLedger, corpusSha256: "e".repeat(64), now: T3 }), /portrait subject must be Jeffrey Combs/);
++assert.throws(() => completeReviews({ state: acceptedDraft.state, reviewDoc: wrongSubjectReview, sourceLedger, corpusSha256: "e".repeat(64), readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3 }), /portrait subject must be Jeffrey Combs/);
+ 
+ const rejectedDraft = syncState({
+-  coverage, scopes, state: submitted.state, coverageSha256: "a".repeat(64), drafts: [], specimens: [],
++  coverage, scopes, state: submitted.state, coverageSha256: "a".repeat(64), drafts: [], specimens: [], readinessTokens: { "star-trek": readiness("star-trek").lease_token },
+   growthRejections: [{
+     ts: T3, actor: "grow.mjs@0.1", op: "draft.reject", reason: "unverified on Wikipedia",
+     actor_name: "Jeffrey Combs", character: "Brunt", wiki: "",
+@@ -171,17 +202,39 @@
+ assert.equal(rejectedDraft.state.jobs.find((job) => job.id === bruntTask.id).status, "blocked", "grow rejection receipts close the drafted limbo state");
+ 
+ const orphanRecovered = syncState({
+-  coverage, scopes, state: emptyState(), coverageSha256: "a".repeat(64), drafts: submitted.drafts, specimens: [], growthRejections: [], now: T3,
++  coverage, scopes, state: emptyState(), coverageSha256: "a".repeat(64), drafts: submitted.drafts, specimens: [], growthRejections: [], readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3,
+ });
+ const recoveredBrunt = orphanRecovered.state.jobs.find((job) => job.id === bruntTask.id);
+ assert.equal(recoveredBrunt.status, "drafted", "sync recovers a tagged draft written before state after a crash");
+ assert.equal(recoveredBrunt.outcome.lease_id, claimed.batch.lease_id, "crash recovery preserves the originating lease for media closure");
+ 
++const mergedCrashRecovery = syncState({
++  coverage, scopes, state: emptyState(), coverageSha256: "a".repeat(64), drafts: submitted.drafts,
++  specimens: [{ id: "UC-999", actor: "Jeffrey Combs", character: "Brunt" }], growthRejections: [],
++  readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3,
++});
++assert.equal(mergedCrashRecovery.state.jobs.find((job) => job.id === bruntTask.id).status, "merged", "a tagged draft plus an exact wall receipt recovers directly into mandatory media review");
++
++const staleCrashDrafts = structuredClone(submitted.drafts);
++staleCrashDrafts[0]._autopilot.readiness_token = "9".repeat(64);
++const staleCrashRecovery = syncState({
++  coverage, scopes, state: emptyState(), coverageSha256: "a".repeat(64), drafts: staleCrashDrafts,
++  specimens: [], growthRejections: [], readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3,
++});
++assert.equal(staleCrashRecovery.state.jobs.find((job) => job.id === bruntTask.id).status, "attention", "crash recovery quarantines a draft from a stale producer snapshot");
++
++const staleMerged = syncState({
++  coverage, scopes, state: acceptedDraft.state, coverageSha256: "a".repeat(64), drafts: [],
++  specimens: [{ id: "UC-999", actor: "Jeffrey Combs", character: "Brunt" }], growthRejections: [],
++  readinessTokens: { "star-trek": "8".repeat(64) }, now: T3,
++});
++assert.equal(staleMerged.state.jobs.find((job) => job.id === bruntTask.id).status, "attention", "a changed certification or source snapshot quarantines an unreviewed merged result");
++
+ const wrongRole = structuredClone(validResults);
+ wrongRole.results[0].draft.character = "Weyoun";
+ assert.throws(() => submitResults({ state: claimed.state, batch: claimed.batch, resultsDoc: wrongRole, drafts: [], now: T2 }), /must match leased role/);
+ 
+-const expired = claimTasks({ state: claimed.state, agent: "luna-3", scope: "doctor-who", limit: 1, leaseMinutes: 5, now: T1 });
++const expired = claimTasks({ state: claimed.state, agent: "luna-3", scope: "doctor-who", readiness: readiness("doctor-who", "e"), limit: 1, leaseMinutes: 5, now: T1 });
+ assert.equal(expired.batch, null, "attention rows remain non-claimable");
+ 
+ const receiptState = syncState({ coverage, scopes, manifest: manifestV1, state: emptyState(), coverageSha256: "d".repeat(64), now: T0 });
+diff -ruN /tmp/autopilot-original/scripts/autopilot.mjs ./scripts/autopilot.mjs
+--- /tmp/autopilot-original/scripts/autopilot.mjs	2026-07-21 07:04:34.000000000 +0000
++++ ./scripts/autopilot.mjs	2026-07-21 07:37:42.885880806 +0000
+@@ -5,19 +5,25 @@
+ import { spawnSync } from "node:child_process";
+ import {
+   AUTOPILOT_VERSION,
++  certifyScope,
+   claimTasks,
+   completeReviews,
++  emptyCertifications,
+   emptyState,
+   requeueTask,
++  resolveScopeReadiness,
++  runRefreshSteps,
+   sha256,
+   statusSummary,
+   submitResults,
+   syncState,
++  validateCertifications,
+   validateState,
+ } from "./lib/autopilot.mjs";
+ 
+ const DEFAULT_STATE = "data/AUTOPILOT.json";
+ const DEFAULT_SCOPES = "data/AUTOPILOT-SCOPES.json";
++const DEFAULT_CERTIFICATIONS = "data/AUTOPILOT-CERTIFICATIONS.json";
+ const DEFAULT_COVERAGE = "data/CENSUS-COVERAGE.json";
+ const DEFAULT_MANIFEST = "data/CENSUS-MANIFEST.json";
+ const DEFAULT_DRAFTS = "data/drafts.json";
+@@ -50,6 +56,19 @@
+   }
+ }
+ 
++async function readJsonBytes(path, fallback) {
++  try {
++    const bytes = await readFile(path);
++    return { bytes, value: JSON.parse(bytes) };
++  } catch (error) {
++    if (error.code === "ENOENT" && fallback !== undefined) {
++      const value = structuredClone(fallback);
++      return { bytes: Buffer.from(JSON.stringify(value)), value };
++    }
++    throw new Error(`cannot read ${path}: ${error.message}`);
++  }
++}
++
+ async function readJsonl(path) {
+   let text;
+   try { text = await readFile(path, "utf8"); }
+@@ -66,21 +85,86 @@
+   return rows;
+ }
+ 
++function jsonBytes(value) {
++  return Buffer.from(JSON.stringify(value, null, 2) + "\n");
++}
++
++function journalLines(events) {
++  if (!events?.length) return "";
++  return events.map((entry) => {
++    const body = { version: AUTOPILOT_VERSION, ...entry };
++    const id = `apj_${createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 24)}`;
++    return JSON.stringify({ id, ...body });
++  }).join("\n") + "\n";
++}
++
+ async function atomicJson(path, value) {
+   await mkdir(dirname(path), { recursive: true });
+   const tmp = `${path}.tmp.${process.pid}`;
+-  await writeFile(tmp, JSON.stringify(value, null, 2) + "\n");
++  await writeFile(tmp, jsonBytes(value));
+   await rename(tmp, path);
+ }
+ 
++async function atomicWriteTransaction(writes) {
++  const unique = new Set();
++  const prepared = [];
++  try {
++    for (const [index, write] of writes.entries()) {
++      if (!write?.path || unique.has(write.path)) throw new Error(`atomic write transaction has duplicate or missing path ${write?.path || "<missing>"}`);
++      unique.add(write.path);
++      await mkdir(dirname(write.path), { recursive: true });
++      let original = null;
++      let existed = true;
++      try { original = await readFile(write.path); }
++      catch (error) {
++        if (error.code !== "ENOENT") throw error;
++        existed = false;
++      }
++      const tmp = `${write.path}.tmp.${process.pid}.${index}`;
++      const entry = { ...write, tmp, original, existed, committed: false };
++      prepared.push(entry);
++      await writeFile(tmp, write.bytes);
++    }
++    for (const write of prepared) {
++      await rename(write.tmp, write.path);
++      write.committed = true;
++    }
++  } catch (error) {
++    const restoreErrors = [];
++    for (const [index, write] of prepared.entries()) {
++      if (!write.committed) continue;
++      try {
++        if (write.existed) {
++          const restore = `${write.path}.restore.${process.pid}.${index}`;
++          await writeFile(restore, write.original);
++          await rename(restore, write.path);
++        } else {
++          await rm(write.path, { force: true });
++        }
++      } catch (restoreError) {
++        restoreErrors.push(`${write.path}: ${restoreError.message}`);
++      }
++    }
++    if (restoreErrors.length) throw new Error(`atomic transaction failed (${error.message}) and rollback was incomplete: ${restoreErrors.join("; ")}`);
++    throw error;
++  } finally {
++    for (const write of prepared) await rm(write.tmp, { force: true }).catch(() => {});
++  }
++}
++async function journalAppendBytes(path, events) {
++  let original;
++  try { original = await readFile(path); }
++  catch (error) {
++    if (error.code !== "ENOENT") throw error;
++    original = Buffer.alloc(0);
++  }
++  return Buffer.concat([original, Buffer.from(journalLines(events))]);
++}
++
+ async function appendJournal(path, events) {
+-  if (!events?.length) return;
++  const lines = journalLines(events);
++  if (!lines) return;
+   await mkdir(dirname(path), { recursive: true });
+-  const lines = events.map((entry) => {
+-    const body = { version: AUTOPILOT_VERSION, ...entry };
+-    const id = `apj_${createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 24)}`;
+-    return JSON.stringify({ id, ...body });
+-  }).join("\n") + "\n";
+   await appendFile(path, lines);
+ }
+ 
+@@ -108,9 +192,73 @@
+   return state;
+ }
+ 
++function queuePaths() {
++  return {
++    state: option("state", DEFAULT_STATE),
++    scopes: option("scopes", DEFAULT_SCOPES),
++    certifications: option("certifications", DEFAULT_CERTIFICATIONS),
++    coverage: option("coverage", DEFAULT_COVERAGE),
++    manifest: option("manifest", DEFAULT_MANIFEST),
++    drafts: option("drafts", DEFAULT_DRAFTS),
++    specimens: option("specimens", DEFAULT_SPECIMENS),
++    growthRejections: option("growth-rejections", DEFAULT_GROWTH_REJECTIONS),
++    journal: option("journal", DEFAULT_JOURNAL),
++  };
++}
++
++async function loadQueueInputs({ downstream = true } = {}) {
++  const paths = queuePaths();
++  const [coverageDoc, manifestDoc, scopes, certifications] = await Promise.all([
++    readJsonBytes(paths.coverage),
++    readJsonBytes(paths.manifest, { observations: [] }),
++    readJson(paths.scopes),
++    readJson(paths.certifications, emptyCertifications()),
++  ]);
++  validateCertifications(certifications);
++  const readiness = await resolveScopeReadiness({
++    scopesDoc: scopes,
++    certificationsDoc: certifications,
++    coverage: coverageDoc.value,
++    manifest: manifestDoc.value,
++    coverageSha256: sha256(coverageDoc.bytes),
++    manifestSha256: sha256(manifestDoc.bytes),
++    root: option("root", "."),
++    now: option("now", new Date().toISOString()),
++  });
++  const result = {
++    paths,
++    coverage: coverageDoc.value,
++    coverageBytes: coverageDoc.bytes,
++    manifest: manifestDoc.value,
++    manifestBytes: manifestDoc.bytes,
++    scopes,
++    certifications,
++    effectiveScopes: readiness.effectiveScopes,
++    readiness: readiness.readiness,
++  };
++  if (downstream) {
++    [result.drafts, result.specimens, result.growthRejections] = await Promise.all([
++      readJson(paths.drafts, []),
++      readJson(paths.specimens, []),
++      readJsonl(paths.growthRejections),
++    ]);
++  }
++  return result;
++}
++
++function readyScope(inputs, scopeId, { requireActive = true } = {}) {
++  if (!scopeId) throw new Error("leasing requires --scope; one lease may not span independently certified producers");
++  const row = inputs.readiness.find((item) => item.scope_id === scopeId);
++  if (!row) throw new Error(`unknown scope ${scopeId}`);
++  if (requireActive && row.effective_status !== "active") {
++    throw new Error(`scope ${scopeId} is not ready for autonomous work (${row.reasons.join(", ") || row.effective_status})`);
++  }
++  return row;
++}
++
+ function renderPrompt(batch) {
+   const taskBlocks = batch.tasks.map((task, index) => `### ${index + 1}. ${task.performer} — ${task.character}\n- Task: \`${task.id}\`\n- Scope: ${task.scope} / ${task.franchise}\n- Categories: ${task.category.join(", ") || "unclassified"}\n- Mode hints: ${task.performance_modes.join(", ") || "unresolved"}\n- Performer already represented: ${task.performer_on_wall ? "yes" : "no"}\n- Sources:\n${task.sources.map((source) => `  - ${source}`).join("\n")}`).join("\n\n");
