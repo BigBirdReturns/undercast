@@ -18,191 +18,60 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: agent/pr55-semantic-review
+          path: tools
+          fetch-depth: 1
+
+      - uses: actions/checkout@v4
+        with:
           ref: claude/full-canon-census
+          path: target
           fetch-depth: 0
 
-      - name: Verify exact repair base
-        run: test "$(git rev-parse HEAD)" = "fda67ed3cb808fa48e1ebf7dc086cabd9242bafe"
-
-      - name: Wire semantic demotion and corpus fixtures
+      - name: Verify exact repair base and apply reviewed patch
+        working-directory: target
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          census = Path('scripts/census.mjs')
-          text = census.read_text()
-          old = 'import { performerFieldValues, namesFrom, PERSONISH, loadScope } from "./lib/census-core.mjs";'
-          new = '''import {
-            performerFieldValues, namesFrom, PERSONISH, loadScope, demoteCharacterOnlyPerformers,
-          } from "./lib/census-core.mjs";'''
-          assert old in text
-          text = text.replace(old, new, 1)
-
-          old = '''  "muppets": {
-              label: "Muppets & Henson", api: "https://muppet.fandom.com/api.php",
-              categories: ["Muppet Show Characters", "Sesame Street Characters", "Fraggle Rock Characters",'''
-          new = '''  "muppets": {
-              label: "Muppets & Henson", api: "https://muppet.fandom.com/api.php",
-              // Alter-ego pages sometimes name another Muppet in PERFORMER rather than a
-              // human puppeteer. Demote only all-character fields; mixed fields fail closed.
-              demoteCharacterPerformers: true,
-              categories: ["Muppet Show Characters", "Sesame Street Characters", "Fraggle Rock Characters",'''
-          assert old in text
-          text = text.replace(old, new, 1)
-
-          old = '''const freshRows = [];
-          const freshUnresolved = [];
-          if (!PROJECT_ONLY) {
-          for (const k of keys) {
-            const cfg = FRANCHISES[k];
-            if (!cfg) { console.log("unknown franchise:", k, "— known:", Object.keys(FRANCHISES).join(", ")); continue; }
-            await censusFranchise(k, cfg, freshRows, freshUnresolved, onlyCategory);
-          }
-          }
-          '''
-          new = '''const freshRows = [];
-          const freshUnresolved = [];
-          if (!PROJECT_ONLY) {
-          for (const k of keys) {
-            const cfg = FRANCHISES[k];
-            if (!cfg) { console.log("unknown franchise:", k, "— known:", Object.keys(FRANCHISES).join(", ")); continue; }
-            const rowStart = freshRows.length, unresolvedStart = freshUnresolved.length;
-            await censusFranchise(k, cfg, freshRows, freshUnresolved, onlyCategory);
-            if (cfg.demoteCharacterPerformers) {
-              const result = demoteCharacterOnlyPerformers(
-                freshRows.slice(rowStart), freshUnresolved.slice(unresolvedStart), cfg.label);
-              freshRows.splice(rowStart, freshRows.length - rowStart, ...result.rows);
-              freshUnresolved.splice(unresolvedStart, freshUnresolved.length - unresolvedStart, ...result.unresolved);
-              for (const demoted of result.demoted) {
-                for (const observation of observations) {
-                  if (observation.franchise === demoted.franchise && observation.category === demoted.category
-                    && observation.title === demoted.character && observation.source === demoted.source) {
-                    observation.disposition = "unresolved";
-                  }
-                }
-              }
-              if (result.demoted.length) console.log(`  semantic demotion: ${result.demoted.length} character-as-performer row(s) -> unresolved`);
-            }
-          }
-          }
-          '''
-          assert old in text
-          census.write_text(text.replace(old, new, 1))
-
-          fixtures = Path('scripts/census-fixtures.mjs')
-          text = fixtures.read_text()
-          old = 'import { performerFieldValues, namesFrom, loadScope } from "./lib/census-core.mjs";'
-          new = '''import { readFile } from "node:fs/promises";
-          import { performerFieldValues, namesFrom, loadScope, demoteCharacterOnlyPerformers } from "./lib/census-core.mjs";'''
-          assert old in text
-          text = text.replace(old, new, 1)
-
-          marker = '''expect("nested template inside the value is part of the value",
-            extract(`|portrayed_by={{small|[[Andrew Robinson]]}}|affiliation=[[Obsidian Order]]`),
-            ["Andrew Robinson"]);
-          '''
-          addition = marker + '''
-          expect("parenthetical disguise links are annotations, not performers",
-            extract(`|played by=[[Garth Kemp]] (as [[The Face]]), [[Kate Mulgrew]] (posing as [[Kathryn Janeway]])`),
-            ["Garth Kemp", "Kate Mulgrew"]);
-
-          expect("parenthesized performer at a new segment remains a performer",
-            extract(`|played by=[[Jane Actor]] (adult), ([[June Actor]] as a child)`),
-            ["Jane Actor", "June Actor"]);
-          '''
-          assert marker in text
-          text = text.replace(marker, addition, 1)
-
-          marker = '// 6. Scope loading: ENOENT falls back, everything else aborts.'
-          addition = '''// 6. Character-on-character performer fields are not human credits.
-          const demoted = demoteCharacterOnlyPerformers(
-            [{ franchise: "Muppets & Henson", category: "Sesame Street Characters", character: "Alistair Cookie",
-              performers: ["Cookie Monster"], performance_mode: "unresolved", source: "https://example.test/alistair" }],
-            [{ franchise: "Muppets & Henson", category: "Sesame Street Characters", character: "Cookie Monster",
-              performance_mode: "unresolved", source: "https://example.test/cookie", reason: "fixture" }],
-            "Muppets & Henson");
-          expect("character-only performer field is demoted", demoted.rows.length, 0);
-          expect("character-only performer field becomes unresolved", demoted.unresolved.at(-1).character, "Alistair Cookie");
-
-          let mixedThrew = false;
-          try {
-            demoteCharacterOnlyPerformers(
-              [{ franchise: "Muppets & Henson", category: "Sesame Street Characters", character: "Alistair Cookie",
-                performers: ["Frank Oz", "Cookie Monster"], source: "https://example.test/alistair" }],
-              [{ franchise: "Muppets & Henson", category: "Sesame Street Characters", character: "Cookie Monster",
-                source: "https://example.test/cookie", reason: "fixture" }],
-              "Muppets & Henson");
-          } catch { mixedThrew = true; }
-          expect("mixed human/character performer field fails closed", mixedThrew, true);
-
-          // 7. Scope loading: ENOENT falls back, everything else aborts.'''
-          assert marker in text
-          text = text.replace(marker, addition, 1)
-
-          marker = '''console.log(failures ? `\n${failures} fixture(s) FAILED` : "\nall census fixtures pass");'''
-          addition = '''// 8. The committed regenerated corpus must not carry the exact semantic leaks
-          // that motivated the second-desk review, and Muppet performers may not resolve
-          // to another captured Muppet character page.
-          const committed = JSON.parse(await readFile("data/CENSUS.json", "utf8"));
-          const forbidden = new Set(["The Face", "Ocam Sadal", "Kathryn Janeway", "B'Elanna Torres",
-            "Fourth Cyber Legion", "New Dalek Paradigm", "Reality Virus", "Papal Mainframe",
-            "Rutan Host", "Large Lavender Live Hand", "Orange Gold"]);
-          const leaked = committed.flatMap((row) => row.performers
-            .filter((name) => forbidden.has(name)).map((name) => `${row.franchise}/${row.character}/${name}`));
-          expect("known fictional performer leaks are absent from committed census", leaked, []);
-
-          const norm = (value) => String(value || "").normalize("NFKD").replace(/[\\u0300-\\u036f]/g, "")
-            .replace(/[’‘]/g, "'").replace(/[^a-zA-Z0-9']+/g, " ").trim().toLowerCase();
-          const unresolvedCorpus = JSON.parse(await readFile("data/CENSUS-UNRESOLVED.json", "utf8"));
-          const muppetTitles = new Set([...committed, ...unresolvedCorpus]
-            .filter((row) => row.franchise === "Muppets & Henson").map((row) => norm(row.character)));
-          const muppetCharacterCredits = committed.filter((row) => row.franchise === "Muppets & Henson")
-            .flatMap((row) => row.performers.filter((name) => muppetTitles.has(norm(name)))
-              .map((name) => `${row.character}/${name}`));
-          expect("Muppet character pages are not promoted as human performers", muppetCharacterCredits, []);
-
-          ''' + marker
-          assert marker in text
-          fixtures.write_text(text.replace(marker, addition, 1))
-          PY
+          test "$(git rev-parse HEAD)" = "fda67ed3cb808fa48e1ebf7dc086cabd9242bafe"
+          git apply --check ../tools/.github/review/pr55-wire.patch
+          git apply ../tools/.github/review/pr55-wire.patch
           node --check scripts/census.mjs
           node --check scripts/census-fixtures.mjs
           node --check scripts/lib/census-core.mjs
           git diff --check
 
       - name: Capture pre-repair census identity set
+        working-directory: target
         run: |
           mkdir -p /tmp/pr55-review
           cp data/CENSUS.json /tmp/pr55-review/CENSUS.before.json
           cp data/CENSUS-UNRESOLVED.json /tmp/pr55-review/CENSUS-UNRESOLVED.before.json
 
       - name: Regenerate every affected extractor-backed franchise
+        working-directory: target
         env:
           CONTACT: bigbirdreturns@proton.me
         run: node scripts/census.mjs star-trek doctor-who muppets power-rangers
 
       - name: Build semantic diff and assert reviewed identities
+        working-directory: target
         run: |
           python - <<'PY'
-          import json
+          import json, re
           from collections import Counter
           from pathlib import Path
-
           before = json.loads(Path('/tmp/pr55-review/CENSUS.before.json').read_text())
           after = json.loads(Path('data/CENSUS.json').read_text())
           unresolved = json.loads(Path('data/CENSUS-UNRESOLVED.json').read_text())
           key = lambda r, p: (r.get('franchise'), r.get('category'), r.get('character'), p)
           b = {key(r,p) for r in before for p in r.get('performers',[])}
           a = {key(r,p) for r in after for p in r.get('performers',[])}
-          removed = sorted(b-a)
-          added = sorted(a-b)
           forbidden = {"The Face", "Ocam Sadal", "Kathryn Janeway", "B'Elanna Torres",
             "Fourth Cyber Legion", "New Dalek Paradigm", "Reality Virus", "Papal Mainframe",
             "Rutan Host", "Large Lavender Live Hand", "Orange Gold"}
           leaks = sorted(x for x in a if x[3] in forbidden)
           if leaks: raise SystemExit(f'known semantic leaks remain: {leaks}')
-          norm = lambda s: ''.join(ch.lower() if ch.isalnum() or ch == "'" else ' ' for ch in str(s)).split()
-          norm = lambda s: ' '.join(norm(s))
+          def norm(value):
+            return re.sub(r"[^a-z0-9']+", ' ', str(value).lower()).strip()
           titles = {norm(r['character']) for r in after+unresolved if r['franchise']=='Muppets & Henson'}
           collisions = sorted((r['character'],p) for r in after if r['franchise']=='Muppets & Henson' for p in r['performers'] if norm(p) in titles)
           if collisions: raise SystemExit(f'Muppet character-as-performer rows remain: {collisions}')
@@ -212,8 +81,8 @@ jobs:
             'producer_repair_base':'fda67ed3cb808fa48e1ebf7dc086cabd9242bafe',
             'credits_by_franchise':dict(sorted(counts.items())),
             'star_trek_credits':counts['Star Trek'],
-            'removed_credits':[list(x) for x in removed],
-            'added_credits':[list(x) for x in added],
+            'removed_credits':[list(x) for x in sorted(b-a)],
+            'added_credits':[list(x) for x in sorted(a-b)],
             'known_false_performers_remaining':[],
             'muppet_character_as_performer_remaining':[],
           }
@@ -225,13 +94,16 @@ jobs:
         with:
           node-version: "24"
           cache: npm
+          cache-dependency-path: target/package-lock.json
 
       - name: Install deterministic and rendered test runtime
+        working-directory: target
         run: |
           npm ci
           npx playwright install --with-deps chromium
 
       - name: Run repaired producer and archive gates
+        working-directory: target
         run: |
           npm run test:census
           node scripts/shard.mjs
@@ -252,6 +124,7 @@ jobs:
           npm run ds9:maker:fixtures
 
       - name: Package exact semantically reviewed checkout
+        working-directory: target
         run: |
           tar --exclude=.git --exclude=node_modules --exclude=records --exclude=test-results --exclude=playwright-report -czf /tmp/pr55-review/undercast-pr55-reviewed.tar.gz .
           git status --short > /tmp/pr55-review/status.txt
@@ -266,6 +139,7 @@ jobs:
           retention-days: 3
 
       - name: Commit and push repaired regenerated corpus
+        working-directory: target
         run: |
           git config user.name "undercast-bot"
           git config user.email "undercast-bot@users.noreply.github.com"
