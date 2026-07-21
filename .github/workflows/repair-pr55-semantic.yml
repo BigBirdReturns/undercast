@@ -1,107 +1,45 @@
-name: integrate-pr55-with-main
+name: inspect-pr56-main-integration
 
 on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: integrate-pr55-with-main
+  group: inspect-pr56-main-integration
   cancel-in-progress: true
 
 jobs:
-  integrate:
+  inspect:
     if: github.event.pull_request.number == 58
     runs-on: ubuntu-latest
-    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: claude/full-canon-census
+          ref: agent/luna-autopilot
           fetch-depth: 0
-      - name: Merge current main with reviewed conflict policy
+      - name: Attempt current-main merge and capture exact conflicts
         run: |
-          test "$(git rev-parse HEAD)" = "70712fd098548b5cb111bae166e9fbb75cf340ab"
+          test "$(git rev-parse HEAD)" = "0c77d15cdef111040c7bad7c2153df21616f4b02"
           git config user.name "undercast-integration"
           git config user.email "undercast-integration@users.noreply.github.com"
           git fetch origin main
           set +e
-          git merge --no-commit --no-ff origin/main
+          git merge --no-commit --no-ff origin/main > /tmp/merge.out 2>&1
           status=$?
           set -e
-          if [ "$status" -ne 0 ]; then
-            actual="$(git diff --name-only --diff-filter=U | sort)"
-            expected="$(printf '%s\n' \
-              CREDITS.md \
-              data/SOURCES.json \
-              data/archive.json \
-              data/entities.json \
-              data/search/manifest.json \
-              data/shard-manifest.json \
-              data/shards/0000.json \
-              data/specimens.json | sort)"
-            test "$actual" = "$expected" || { echo "unexpected merge conflicts:"; printf '%s\n' "$actual"; exit 1; }
-            git checkout --ours -- \
-              CREDITS.md \
-              data/SOURCES.json \
-              data/archive.json \
-              data/entities.json \
-              data/search/manifest.json \
-              data/shard-manifest.json \
-              data/shards/0000.json \
-              data/specimens.json
-            git add \
-              CREDITS.md \
-              data/SOURCES.json \
-              data/archive.json \
-              data/entities.json \
-              data/search/manifest.json \
-              data/shard-manifest.json \
-              data/shards/0000.json \
-              data/specimens.json
-          fi
-          test -z "$(git diff --name-only --diff-filter=U)"
-          git status --short
-
-      - uses: actions/setup-node@v4
+          mkdir -p /tmp/pr56-main-integration
+          cp /tmp/merge.out /tmp/pr56-main-integration/merge.out
+          git status --short > /tmp/pr56-main-integration/status.txt
+          git diff --name-only --diff-filter=U > /tmp/pr56-main-integration/conflicts.txt
+          git diff --cc > /tmp/pr56-main-integration/conflicts.diff || true
+          printf '%s\n' "$status" > /tmp/pr56-main-integration/merge-status.txt
+          cat /tmp/pr56-main-integration/status.txt
+          cat /tmp/pr56-main-integration/conflicts.txt
+      - uses: actions/upload-artifact@v4
         with:
-          node-version: "24"
-          cache: npm
-      - name: Install deterministic and rendered test runtime
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-
-      - name: Rebuild all canonical projections after merge
-        run: |
-          node scripts/credits.mjs
-          node scripts/sync-sources.mjs
-          node scripts/shard.mjs
-          node scripts/build-contract.mjs
-          node scripts/build-record-pages.mjs
-          node scripts/ds9-census.mjs --project-only
-          node scripts/ds9-graph.mjs --project-only
-          node scripts/ds9-eligibility-queue.mjs
-          node scripts/ds9-maker-queue.mjs
-          git diff --check
-
-      - name: Run exact merged-head gate
-        run: |
-          npm run test:census
-          node scripts/validate.mjs
-          npm run audit:corpus
-          npm run test:site-seams
-          npm run test:rendered -- --reporter=line
-          test "$(find records -mindepth 1 -maxdepth 1 -type d | wc -l)" = "$(node -p "require('./data/specimens.json').length + require('./data/tombstones.json').records.length")"
-          npm run ds9:fixtures
-          npm run ds9:eligibility:fixtures
-          npm run ds9:maker:fixtures
-          git diff --check
-
-      - name: Commit and push integrated reviewed branch
-        run: |
-          git add CREDITS.md data sitemap.xml
-          git add images/uc-246-still.jpg 2>/dev/null || true
-          git commit -m "Merge main into semantically reviewed full-canon census"
-          git push origin HEAD:claude/full-canon-census
+          name: pr56-main-integration-diagnostics
+          path: /tmp/pr56-main-integration
+          if-no-files-found: error
+          retention-days: 3
