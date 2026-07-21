@@ -34,6 +34,9 @@ export function validateRoadmap(roadmap) {
   invariant(roadmap?.version === 1, "ROADMAP must be version 1");
   invariant(String(roadmap.document || "").trim(), "ROADMAP needs document");
   invariant(roadmap.horizon?.start && roadmap.horizon?.end, "ROADMAP needs horizon");
+  invariant(Number.isFinite(Date.parse(roadmap.horizon.start)), "ROADMAP horizon.start must be a date");
+  invariant(Number.isFinite(Date.parse(roadmap.horizon.end)), "ROADMAP horizon.end must be a date");
+  invariant(Date.parse(roadmap.horizon.start) < Date.parse(roadmap.horizon.end), "ROADMAP horizon must move forward");
   invariant(String(roadmap.north_star || "").trim(), "ROADMAP needs north_star");
   invariant(Array.isArray(roadmap.metrics) && roadmap.metrics.length, "ROADMAP needs metrics");
   invariant(Array.isArray(roadmap.adoption) && roadmap.adoption.length, "ROADMAP needs adoption stages");
@@ -59,12 +62,17 @@ export function validateRoadmap(roadmap) {
     invariant(String(row.window || "").trim(), `milestone ${row.id} needs window`);
     invariant(ROLES.has(row.authority), `milestone ${row.id} has invalid authority ${row.authority}`);
     invariant(Array.isArray(row.deps), `milestone ${row.id} deps must be an array`);
+    invariant(new Set(row.deps).size === row.deps.length, `milestone ${row.id} has duplicate dependencies`);
     invariant(Array.isArray(row.decisions), `milestone ${row.id} decisions must be an array`);
+    invariant(new Set(row.decisions).size === row.decisions.length, `milestone ${row.id} has duplicate decisions`);
     invariant(Array.isArray(row.triggers), `milestone ${row.id} triggers must be an array`);
-    invariant(String(row.guide || "").startsWith(`${roadmap.document}#`), `milestone ${row.id} guide must point into ${roadmap.document}`);
+    invariant(row.guide === `${roadmap.document}#${row.id}`, `milestone ${row.id} guide must be exactly ${roadmap.document}#${row.id}`);
     for (const decision of row.decisions) invariant(ID.test(decision || ""), `milestone ${row.id} has invalid decision id ${decision}`);
     for (const [index, trigger] of row.triggers.entries()) triggerObject(trigger, `milestone ${row.id} trigger[${index}]`, metrics);
   }
+
+  const orderedSeqs = [...seqs].sort((a, b) => a - b);
+  for (let index = 0; index < orderedSeqs.length; index++) invariant(orderedSeqs[index] === index, `roadmap milestone seq must be contiguous from 0; missing ${index}`);
 
   for (const row of roadmap.milestones) {
     for (const dep of row.deps) {
@@ -85,6 +93,8 @@ export function validateRoadmap(roadmap) {
     stageOrders.add(row.order);
     invariant(row.entry == null || ids.has(row.entry), `adoption ${row.id} references unknown entry ${row.entry}`);
   }
+  const orderedStages = [...stageOrders].sort((a, b) => a - b);
+  for (let index = 0; index < orderedStages.length; index++) invariant(orderedStages[index] === index, `adoption order must be contiguous from 0; missing ${index}`);
 
   const scaleIds = new Set();
   for (const row of roadmap.scale) {
@@ -92,6 +102,35 @@ export function validateRoadmap(roadmap) {
     invariant(!scaleIds.has(row.id), `duplicate scale id ${row.id}`);
     scaleIds.add(row.id);
     triggerObject(row.trigger, `scale ${row.id}`, metrics);
+  }
+  return true;
+}
+
+function playbookSection(markdown, milestoneId) {
+  const lines = String(markdown || "").split(/\r?\n/);
+  const heading = `## ${milestoneId}`;
+  const start = lines.findIndex((line) => line.trim() === heading);
+  invariant(start >= 0, `playbook is missing exact section ${heading}`);
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index++) {
+    if (/^##\s+/.test(lines[index])) { end = index; break; }
+  }
+  return lines.slice(start, end).join("\n").trim();
+}
+
+export function extractPlaybookSection(roadmap, markdown, milestoneId) {
+  validateRoadmap(roadmap);
+  invariant(roadmap.milestones.some((row) => row.id === milestoneId), `unknown milestone ${milestoneId}`);
+  return playbookSection(markdown, milestoneId);
+}
+
+export function validatePlaybooks(roadmap, markdown) {
+  validateRoadmap(roadmap);
+  for (const row of roadmap.milestones) {
+    const section = playbookSection(markdown, row.id);
+    for (const heading of ["### Build sequence", "### Acceptance proof", "### Do not", "### Outcome metrics"]) {
+      invariant(section.split(/\r?\n/).some((line) => line.trim() === heading), `playbook ${row.id} is missing ${heading}`);
+    }
   }
   return true;
 }
@@ -117,6 +156,7 @@ export function validateRoadmapState(roadmap, state) {
   invariant(Array.isArray(state.decisions), "ROADMAP-STATE decisions must be an array");
   invariant(state.metrics && typeof state.metrics === "object" && !Array.isArray(state.metrics), "ROADMAP-STATE metrics must be an object");
   invariant(Array.isArray(state.notes || []), "ROADMAP-STATE notes must be an array");
+  invariant(!state.updated_at || Number.isFinite(Date.parse(state.updated_at)), "ROADMAP-STATE updated_at must be empty or a timestamp");
 
   const knownMetrics = new Set(roadmap.metrics);
   for (const key of Object.keys(state.metrics)) invariant(knownMetrics.has(key), `ROADMAP-STATE has unknown metric ${key}`);
@@ -125,9 +165,11 @@ export function validateRoadmapState(roadmap, state) {
     invariant(value == null || Number.isFinite(value), `ROADMAP-STATE metric ${key} must be numeric or null`);
   }
 
+  const requiredDecisionIds = new Set(roadmap.milestones.flatMap((row) => row.decisions));
   const decisions = new Set();
   for (const row of state.decisions) {
     invariant(row && ID.test(row.id || ""), `invalid roadmap decision id ${row?.id || "<missing>"}`);
+    invariant(requiredDecisionIds.has(row.id), `ROADMAP-STATE decision ${row.id} is not required by any milestone`);
     invariant(!decisions.has(row.id), `duplicate roadmap decision ${row.id}`);
     decisions.add(row.id);
     invariant(String(row.decided_by || "").trim(), `roadmap decision ${row.id} needs decided_by`);
@@ -137,11 +179,15 @@ export function validateRoadmapState(roadmap, state) {
 
   const byId = new Map(roadmap.milestones.map((row) => [row.id, row]));
   const completed = new Set();
+  let priorCompletionTime = -Infinity;
   for (const row of state.completed) {
     invariant(row && byId.has(row.milestone), `completion references unknown milestone ${row?.milestone || "<missing>"}`);
     invariant(!completed.has(row.milestone), `duplicate milestone completion ${row.milestone}`);
     const milestone = byId.get(row.milestone);
-    invariant(Number.isFinite(Date.parse(row.completed_at || "")), `milestone ${row.milestone} needs completed_at`);
+    const completedAt = Date.parse(row.completed_at || "");
+    invariant(Number.isFinite(completedAt), `milestone ${row.milestone} needs completed_at`);
+    invariant(completedAt >= priorCompletionTime, `milestone completion receipts must be chronological; ${row.milestone} is out of order`);
+    priorCompletionTime = completedAt;
     invariant(String(row.reviewed_by || "").trim(), `milestone ${row.milestone} needs reviewed_by`);
     invariant(ROLES.has(row.reviewed_role), `milestone ${row.milestone} has invalid reviewed_role`);
     invariant(roleCanClose(milestone.authority, row.reviewed_role), `${row.reviewed_role} cannot close ${milestone.authority} milestone ${row.milestone}`);
