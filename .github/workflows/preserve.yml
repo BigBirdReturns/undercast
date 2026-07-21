@@ -1,0 +1,243 @@
+name: preservation-export
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "preservation/**"
+      - "scripts/preserve-*.mjs"
+      - "scripts/preservation-fixtures.mjs"
+      - "scripts/lib/preservation.mjs"
+      - "scripts/autopilot.mjs"
+      - "scripts/lib/autopilot-certification.mjs"
+      - "data/AUTOPILOT-SCOPES.json"
+      - "package.json"
+      - ".github/workflows/preserve.yml"
+  push:
+    branches: [main]
+    paths:
+      - "data/CENSUS-MANIFEST.json"
+      - "preservation/baseline-manifest.json"
+      - "scripts/preserve-*.mjs"
+      - "scripts/preservation-fixtures.mjs"
+      - "scripts/lib/preservation.mjs"
+      - ".github/workflows/preserve.yml"
+  workflow_dispatch:
+    inputs:
+      full_originals:
+        description: "Re-export the pre-R1 originals even when an offsite copy is already receipted"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: preservation-export
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Validate preservation contracts and offline corruption fixtures
+        run: |
+          for file in scripts/preserve-*.mjs scripts/preservation-fixtures.mjs scripts/lib/preservation.mjs; do
+            node --check "$file"
+          done
+          npm run preserve:fixtures
+          npm run preserve:status -- --json
+
+  export:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Decide whether this commit needs a preservation export
+        id: plan
+        env:
+          FORCE_FULL: ${{ inputs.full_originals || false }}
+        run: |
+          bootstrap=false
+          test -f preservation/BOOTSTRAP-PENDING && bootstrap=true
+          npm run preserve:status -- --json > /tmp/preservation-status-before.json
+          run=true
+          if [ "$bootstrap" = false ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            if node - <<'NODE'
+          const fs = require('fs');
+          const status = JSON.parse(fs.readFileSync('/tmp/preservation-status-before.json','utf8'));
+          const active = JSON.parse(fs.readFileSync('data/AUTOPILOT-SCOPES.json','utf8')).scopes.filter(s => s.status === 'active').map(s => s.id);
+          const missing = status.scopes.filter(s => active.includes(s.scope_id) && !s.archived);
+          if (missing.length) process.exit(1);
+          NODE
+            then
+              run=false
+            fi
+          fi
+          full=false
+          if [ "$bootstrap" = true ] || [ "$FORCE_FULL" = true ]; then full=true; fi
+          node -e 'const s=require("/tmp/preservation-status-before.json"); if(!s.history_guard.independent_originals_copy_verified) process.exit(1)' || full=true
+          snapshot_commit="$(git rev-parse HEAD)"
+          tag="preservation-$(date -u +%Y%m%d)-${snapshot_commit::12}"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "bootstrap=$bootstrap" >> "$GITHUB_OUTPUT"
+          echo "full_originals=$full" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "snapshot_commit=$snapshot_commit" >> "$GITHUB_OUTPUT"
+          echo "branch=${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}" >> "$GITHUB_OUTPUT"
+          echo "plan: run=$run bootstrap=$bootstrap full_originals=$full tag=$tag commit=$snapshot_commit"
+
+      - name: Capture every exact census source revision
+        if: steps.plan.outputs.run == 'true'
+        env:
+          CONTACT: bigbirdreturns@proton.me
+          PRESERVATION_COMMIT: ${{ steps.plan.outputs.snapshot_commit }}
+        run: |
+          rm -rf /tmp/undercast-preservation
+          mkdir -p /tmp/undercast-preservation/public /tmp/undercast-preservation/private
+          node scripts/preserve-sources.mjs /tmp/undercast-preservation/source-bag
+          node scripts/preserve-verify.mjs /tmp/undercast-preservation/source-bag --json \
+            > /tmp/undercast-preservation/source-verification.json
+          tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+            -C /tmp/undercast-preservation -czf \
+            "/tmp/undercast-preservation/public/undercast-sources-${{ steps.plan.outputs.tag }}.tar.gz" source-bag
+
+      - name: Export and verify pre-R1 full-resolution originals
+        if: steps.plan.outputs.run == 'true' && steps.plan.outputs.full_originals == 'true'
+        env:
+          PRESERVATION_COMMIT: ${{ steps.plan.outputs.snapshot_commit }}
+        run: |
+          node scripts/preserve-bag.mjs /tmp/undercast-preservation/originals-bag
+          node scripts/preserve-verify.mjs /tmp/undercast-preservation/originals-bag --json \
+            > /tmp/undercast-preservation/originals-verification.json
+          tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+            -C /tmp/undercast-preservation -cf \
+            "/tmp/undercast-preservation/private/undercast-originals-${{ steps.plan.outputs.tag }}.tar" originals-bag
+          sha256sum /tmp/undercast-preservation/private/* \
+            > /tmp/undercast-preservation/private/SHA256SUMS
+
+      - name: Package a restorable current repository snapshot
+        if: steps.plan.outputs.run == 'true'
+        run: |
+          tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+            --exclude=.git --exclude=node_modules --exclude=records \
+            --exclude=test-results --exclude=playwright-report \
+            -czf "/tmp/undercast-preservation/public/undercast-repository-${{ steps.plan.outputs.tag }}.tar.gz" .
+
+      - name: Record the public snapshot and re-certify the preservation-gated scope
+        if: steps.plan.outputs.run == 'true'
+        run: |
+          args=(
+            --source-receipt /tmp/undercast-preservation/source-bag/source-snapshot.json
+            --source-archive "/tmp/undercast-preservation/public/undercast-sources-${{ steps.plan.outputs.tag }}.tar.gz"
+            --repository-snapshot "/tmp/undercast-preservation/public/undercast-repository-${{ steps.plan.outputs.tag }}.tar.gz"
+            --release-tag "${{ steps.plan.outputs.tag }}"
+            --repository-commit "${{ steps.plan.outputs.snapshot_commit }}"
+            --workflow-run "$GITHUB_RUN_ID"
+          )
+          if [ -f /tmp/undercast-preservation/originals-bag/originals-snapshot.json ]; then
+            args+=(--originals-receipt /tmp/undercast-preservation/originals-bag/originals-snapshot.json)
+          fi
+          node scripts/preserve-receipt.mjs "${args[@]}"
+          if [ "${{ steps.plan.outputs.bootstrap }}" = true ]; then
+            node - <<'NODE'
+          const fs = require('fs');
+          const path = 'data/AUTOPILOT-SCOPES.json';
+          const doc = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const scope = doc.scopes.find((row) => row.id === 'star-trek');
+          if (!scope) throw new Error('star-trek scope is missing');
+          scope.certification.require_source_snapshot = true;
+          scope.note = 'First certified full-corpus rollout. New Luna leases require a published exact-revision source snapshot for the current census.';
+          fs.writeFileSync(path, JSON.stringify(doc, null, 2) + '\n');
+          NODE
+            node scripts/autopilot.mjs certify --scope star-trek \
+              --reviewed-by chatgpt-second-desk --activate
+          fi
+          node scripts/autopilot.mjs sync
+          node scripts/autopilot.mjs validate
+          node scripts/preserve-status.mjs --require-scope-archives
+          cp preservation/SNAPSHOTS.json /tmp/undercast-preservation/public/preservation-registry.json
+          cp /tmp/undercast-preservation/source-verification.json /tmp/undercast-preservation/public/
+          if [ -f /tmp/undercast-preservation/originals-verification.json ]; then
+            cp /tmp/undercast-preservation/originals-verification.json /tmp/undercast-preservation/private/
+          fi
+          sha256sum /tmp/undercast-preservation/public/* \
+            > /tmp/undercast-preservation/public/SHA256SUMS
+
+      - name: Publish the source and repository snapshots as immutable release assets
+        if: steps.plan.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.plan.outputs.tag }}"
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "${{ steps.plan.outputs.snapshot_commit }}" \
+              --title "UNDERCAST preservation snapshot $tag" \
+              --notes "Exact MediaWiki revision evidence and a restorable current repository snapshot. Full-resolution originals are intentionally excluded from the public release and exported only to controlled independent storage."
+          fi
+          gh release upload "$tag" /tmp/undercast-preservation/public/* \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Run the exact preservation-aware archive gate
+        if: steps.plan.outputs.run == 'true'
+        run: |
+          npm run preserve:fixtures
+          npm run preserve:status -- --require-scope-archives
+          npm run autopilot:fixtures
+          npm run autopilot -- readiness --scope star-trek --require-active
+          npm run autopilot -- validate
+          npm run roadmap -- validate
+          node scripts/validate.mjs
+          git diff --check
+
+      - name: Upload public preservation package for independent replication
+        if: steps.plan.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: preservation-public-${{ steps.plan.outputs.tag }}
+          path: /tmp/undercast-preservation/public
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload private originals package for controlled independent storage
+        if: steps.plan.outputs.run == 'true' && steps.plan.outputs.full_originals == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: preservation-originals-${{ steps.plan.outputs.tag }}
+          path: /tmp/undercast-preservation/private
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Commit preservation receipt and current lease gate
+        if: steps.plan.outputs.run == 'true'
+        run: |
+          rm -f preservation/BOOTSTRAP-PENDING
+          git config user.name "undercast-preservation"
+          git config user.email "undercast-preservation@users.noreply.github.com"
+          git add preservation/SNAPSHOTS.json data/AUTOPILOT-CERTIFICATIONS.json \
+            data/AUTOPILOT-SCOPES.json data/AUTOPILOT.json data/journal/autopilot.jsonl \
+            preservation/BOOTSTRAP-PENDING 2>/dev/null || true
+          git diff --cached --quiet && exit 0
+          git commit -m "Preservation: receipt exact source snapshot ${{ steps.plan.outputs.tag }}"
+          git push origin "HEAD:${{ steps.plan.outputs.branch }}"
