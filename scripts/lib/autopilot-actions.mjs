@@ -14,8 +14,15 @@ function makeLeaseId(agent, now) {
   return `lease_${sha256(`${agent}|${now}|${randomBytes(16).toString("hex")}`).slice(0, 24)}`;
 }
 
-export function claimTasks({ state, agent, scope, limit = 8, leaseMinutes = 120, allowInflight = false, now = new Date().toISOString() }) {
+export function claimTasks({ state, agent, scope, readiness, limit = 8, leaseMinutes = 120, allowInflight = false, now = new Date().toISOString() }) {
   if (!agent || !/^[a-zA-Z0-9._-]{2,64}$/.test(agent)) throw new Error("--agent must be 2-64 safe characters");
+  if (!scope) throw new Error("claim requires one explicit certified scope");
+  if (!readiness || readiness.scope_id !== scope || !/^[0-9a-f]{64}$/i.test(readiness.lease_token || "")) {
+    throw new Error(`claim requires a current readiness token for scope ${scope}`);
+  }
+  for (const key of ["producer_sha256", "contract_sha256", "coverage_sha256", "manifest_sha256"]) {
+    if (!/^[0-9a-f]{64}$/i.test(readiness[key] || "")) throw new Error(`claim readiness has invalid ${key}`);
+  }
   const boundedLimit = Number(limit);
   const boundedMinutes = Number(leaseMinutes);
   if (!Number.isInteger(boundedLimit) || boundedLimit < 1 || boundedLimit > 50) throw new Error("claim limit must be an integer from 1 to 50");
@@ -38,8 +45,8 @@ export function claimTasks({ state, agent, scope, limit = 8, leaseMinutes = 120,
     if (!ids.has(job.id)) continue;
     job.status = "leased";
     job.attempts = (job.attempts || 0) + 1;
-    job.lease = { id: leaseId, agent, claimed_at: now, expires_at: expiresAt };
-    events.push(event("lease.claimed", job, now, { lease_id: leaseId, agent, expires_at: expiresAt }));
+    job.lease = { id: leaseId, agent, claimed_at: now, expires_at: expiresAt, readiness_token: readiness.lease_token };
+    events.push(event("lease.claimed", job, now, { lease_id: leaseId, agent, expires_at: expiresAt, readiness_token: readiness.lease_token }));
   }
   next.updated_at = now;
   validateState(next);
@@ -49,6 +56,7 @@ export function claimTasks({ state, agent, scope, limit = 8, leaseMinutes = 120,
     agent,
     claimed_at: now,
     expires_at: expiresAt,
+    readiness: copyJson(readiness),
     tasks: selected.map((job) => ({
       id: job.id,
       scope: job.scope,
@@ -59,6 +67,7 @@ export function claimTasks({ state, agent, scope, limit = 8, leaseMinutes = 120,
       performance_modes: job.performance_modes,
       sources: job.sources,
       source_receipts: job.source_receipts || [],
+      source_fingerprint: job.source_fingerprint,
       performer_on_wall: job.performer_on_wall,
       priority: job.priority,
       attempt: job.attempts || 1,
@@ -112,6 +121,7 @@ function draftIdentity(draft) {
 
 export function submitResults({ state, batch, resultsDoc, drafts = [], now = new Date().toISOString() }) {
   if (!batch || batch.version !== AUTOPILOT_VERSION || !batch.lease_id || !Array.isArray(batch.tasks)) throw new Error("invalid batch file");
+  if (!batch.readiness || !/^[0-9a-f]{64}$/i.test(batch.readiness.lease_token || "")) throw new Error("batch lacks a valid readiness token");
   if (!resultsDoc || resultsDoc.version !== AUTOPILOT_VERSION || resultsDoc.lease_id !== batch.lease_id) throw new Error("results lease_id/version does not match batch");
   if (resultsDoc.agent !== batch.agent) throw new Error("results agent does not match batch");
   if (!Array.isArray(resultsDoc.results)) throw new Error("results must be an array");
@@ -129,6 +139,14 @@ export function submitResults({ state, batch, resultsDoc, drafts = [], now = new
   const nextDrafts = copyJson(drafts);
   if (!Array.isArray(nextDrafts)) throw new Error("data/drafts.json must be an array");
   const jobs = new Map(next.jobs.map((job) => [job.id, job]));
+  const batchTasks = new Map(batch.tasks.map((task) => [task.id, task]));
+  for (const taskId of expected) {
+    const task = batchTasks.get(taskId);
+    const job = jobs.get(taskId);
+    if (!job || !task?.source_fingerprint || task.source_fingerprint !== job.source_fingerprint) {
+      throw new Error(`task ${taskId} source fingerprint changed after leasing`);
+    }
+  }
   const existingDrafts = new Map(nextDrafts.map((draft, index) => [draftIdentity(draft), index]));
   const events = [];
 
@@ -137,10 +155,23 @@ export function submitResults({ state, batch, resultsDoc, drafts = [], now = new
     if (!job || job.status !== "leased" || job.lease?.id !== batch.lease_id || job.lease?.agent !== batch.agent) {
       throw new Error(`task ${result.task_id} is no longer leased to ${batch.agent}/${batch.lease_id}`);
     }
+    if (job.lease.readiness_token !== batch.readiness.lease_token) {
+      throw new Error(`task ${result.task_id} lease readiness token does not match its batch`);
+    }
     const decision = result.decision;
     if (decision === "draft") {
       validateDraft(job, result.draft);
-      const row = { ...result.draft, _autopilot: { task_id: job.id, lease_id: batch.lease_id, submitted_by: batch.agent, submitted_at: now } };
+      const row = {
+        ...result.draft,
+        _autopilot: {
+          task_id: job.id,
+          lease_id: batch.lease_id,
+          readiness_token: batch.readiness.lease_token,
+          source_fingerprint: job.source_fingerprint,
+          submitted_by: batch.agent,
+          submitted_at: now,
+        },
+      };
       const key = draftIdentity(row);
       if (!existingDrafts.has(key)) {
         nextDrafts.push(row);
@@ -150,7 +181,15 @@ export function submitResults({ state, batch, resultsDoc, drafts = [], now = new
         nextDrafts[index] = { ...nextDrafts[index], _autopilot: row._autopilot };
       }
       job.status = "drafted";
-      job.outcome = { kind: "draft", submitted_at: now, submitted_by: batch.agent, draft_identity: key, lease_id: batch.lease_id };
+      job.outcome = {
+        kind: "draft",
+        submitted_at: now,
+        submitted_by: batch.agent,
+        draft_identity: key,
+        lease_id: batch.lease_id,
+        readiness_token: batch.readiness.lease_token,
+        source_fingerprint: job.source_fingerprint,
+      };
       events.push(event("task.drafted", job, now, { lease_id: batch.lease_id, agent: batch.agent }));
     } else if (decision === "reject") {
       if (!String(result.reason || "").trim() || String(result.reason).trim().length < 12) throw new Error(`task ${job.id}: rejection needs a specific reason`);
@@ -206,7 +245,7 @@ function validateMediaFacet(job, ledger, report, kind) {
   };
 }
 
-export function completeReviews({ state, reviewDoc, sourceLedger, corpusSha256, now = new Date().toISOString() }) {
+export function completeReviews({ state, reviewDoc, sourceLedger, corpusSha256, readinessTokens = {}, now = new Date().toISOString() }) {
   if (!reviewDoc || reviewDoc.version !== AUTOPILOT_VERSION) throw new Error("invalid media review document version");
   if (!/^[a-zA-Z0-9._-]{2,64}$/.test(reviewDoc.reviewed_by || "")) throw new Error("media review needs reviewed_by");
   if (!reviewDoc.lease_id) throw new Error("media review needs the originating lease_id");
@@ -227,6 +266,10 @@ export function completeReviews({ state, reviewDoc, sourceLedger, corpusSha256, 
     if (!job) throw new Error(`unknown media review task ${review.task_id}`);
     if (job.status !== "merged" || !job.role_on_wall) throw new Error(`task ${job.id} is not awaiting post-merge media review`);
     if (job.outcome?.lease_id !== reviewDoc.lease_id) throw new Error(`task ${job.id} does not belong to lease ${reviewDoc.lease_id}`);
+    const currentToken = readinessTokens instanceof Map ? readinessTokens.get(job.scope) : readinessTokens?.[job.scope];
+    if (!currentToken || job.outcome?.readiness_token !== currentToken) {
+      throw new Error(`task ${job.id} was merged under a producer or census snapshot that is no longer current`);
+    }
     if (!Array.isArray(review.records)) throw new Error(`task ${job.id}: records must be an array`);
     const expectedIds = new Set(job.wall_ids || []);
     if (!expectedIds.size) throw new Error(`task ${job.id}: merged task has no wall IDs to review`);

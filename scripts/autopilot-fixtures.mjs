@@ -23,6 +23,15 @@ const scopes = {
   ],
 };
 
+const readiness = (scope, token = "f") => ({
+  scope_id: scope,
+  lease_token: token.repeat(64),
+  producer_sha256: "a".repeat(64),
+  contract_sha256: "b".repeat(64),
+  coverage_sha256: "c".repeat(64),
+  manifest_sha256: "d".repeat(64),
+});
+
 const manifestV1 = {
   observations: [{
     franchise: "Star Trek", category: "Ferengi", title: "Brunt",
@@ -64,15 +73,33 @@ const stable = syncState({ coverage, scopes, state: first.state, coverageSha256:
 assert.equal(stable.changed, false, "unchanged coverage produces byte-stable state");
 assert.equal(stable.state.updated_at, T0, "no-op sync does not churn updated_at");
 
-const claimed = claimTasks({ state: first.state, agent: "luna", scope: "star-trek", limit: 2, leaseMinutes: 60, now: T1 });
+const claimed = claimTasks({ state: first.state, agent: "luna", scope: "star-trek", readiness: readiness("star-trek"), limit: 2, leaseMinutes: 60, now: T1 });
 assert.ok(claimed.batch);
 assert.equal(claimed.batch.tasks.length, 2);
 assert.ok(claimed.batch.tasks.every((task) => task.attempt === 1), "batch reports the persisted attempt number");
 assert.ok(claimed.batch.tasks.every((task) => task.scope === "star-trek"));
+assert.ok(claimed.batch.tasks.every((task) => /^[0-9a-f]{64}$/.test(task.source_fingerprint)), "lease packets bind each task source fingerprint");
 assert.equal(new Set(claimed.batch.tasks.map((task) => task.id)).size, 2);
-const claimedAgain = claimTasks({ state: claimed.state, agent: "luna-2", scope: "star-trek", limit: 10, leaseMinutes: 60, now: T1 });
+assert.equal(claimed.batch.readiness.lease_token, readiness("star-trek").lease_token, "batch pins its certified snapshot");
+assert.ok(claimed.state.jobs.filter((job) => job.status === "leased").every((job) => job.lease.readiness_token === claimed.batch.readiness.lease_token), "state leases pin the same readiness token");
+const claimedAgain = claimTasks({ state: claimed.state, agent: "luna-2", scope: "star-trek", readiness: readiness("star-trek"), limit: 10, leaseMinutes: 60, now: T1 });
 assert.equal(claimedAgain.batch, null, "leased tasks cannot be claimed twice");
 assert.equal(claimedAgain.reason, "inflight");
+
+const tamperedReadinessBatch = structuredClone(claimed.batch);
+tamperedReadinessBatch.readiness.lease_token = "0".repeat(64);
+const tamperedReadinessResults = {
+  version: 1,
+  lease_id: tamperedReadinessBatch.lease_id,
+  agent: "luna",
+  results: tamperedReadinessBatch.tasks.map((task) => ({
+    task_id: task.id,
+    decision: "reject",
+    reason: "The exact performance does not qualify under the designed-face rule.",
+    evidence: [{ label: "performance context", source: task.sources[0] }],
+  })),
+};
+assert.throws(() => submitResults({ state: claimed.state, batch: tamperedReadinessBatch, resultsDoc: tamperedReadinessResults, drafts: [], now: T2 }), /lease readiness token does not match/);
 
 const incomplete = {
   version: 1,
@@ -81,6 +108,9 @@ const incomplete = {
   results: [{ task_id: claimed.batch.tasks[0].id, decision: "reject", reason: "not actually a qualifying designed-face performance", evidence: [{ label: "performance context", source: claimed.batch.tasks[0].sources[0] }] }],
 };
 assert.throws(() => submitResults({ state: claimed.state, batch: claimed.batch, resultsDoc: incomplete, drafts: [], now: T2 }), /incomplete/);
+const staleFingerprintBatch = structuredClone(claimed.batch);
+staleFingerprintBatch.tasks[0].source_fingerprint = "f".repeat(64);
+assert.throws(() => submitResults({ state: claimed.state, batch: staleFingerprintBatch, resultsDoc: { ...incomplete, results: claimed.batch.tasks.map((task) => ({ task_id: task.id, decision: "reject", reason: "not a qualifying designed-face performance after source review", evidence: [{ label: "source", source: task.sources[0] }] })) }, drafts: [], now: T2 }), /source fingerprint changed/);
 
 const bruntTask = claimed.batch.tasks.find((task) => task.character === "Brunt");
 const clownTask = claimed.batch.tasks.find((task) => task.character === "The Clown");
@@ -122,18 +152,18 @@ assert.equal(submitted.state.jobs.find((job) => job.id === clownTask.id).status,
 assert.equal(submitted.drafts.length, 1);
 assert.equal(submitted.drafts[0]._autopilot.task_id, bruntTask.id);
 validateState(submitted.state);
-const blockedByPendingDraft = claimTasks({ state: submitted.state, agent: "luna-2", scope: "star-trek", limit: 1, now: T3 });
+const blockedByPendingDraft = claimTasks({ state: submitted.state, agent: "luna-2", scope: "star-trek", readiness: readiness("star-trek"), limit: 1, now: T3 });
 assert.equal(blockedByPendingDraft.reason, "inflight", "a pending draft applies backpressure before another batch");
 
 const pendingDraft = syncState({
   coverage, scopes, state: submitted.state, coverageSha256: "a".repeat(64),
-  drafts: submitted.drafts, specimens: [], growthRejections: [], now: T3,
+  drafts: submitted.drafts, specimens: [], growthRejections: [], readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3,
 });
 assert.equal(pendingDraft.state.jobs.find((job) => job.id === bruntTask.id).status, "drafted", "tagged pending drafts survive reconciliation");
 
 const acceptedDraft = syncState({
   coverage, scopes, state: submitted.state, coverageSha256: "a".repeat(64),
-  drafts: [], specimens: [{ id: "UC-999", actor: "Jeffrey Combs", character: "Brunt" }], growthRejections: [], now: T3,
+  drafts: [], specimens: [{ id: "UC-999", actor: "Jeffrey Combs", character: "Brunt" }], growthRejections: [], readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3,
 });
 const acceptedBrunt = acceptedDraft.state.jobs.find((job) => job.id === bruntTask.id);
 assert.equal(acceptedBrunt.status, "merged", "an exact canonical specimen advances a draft to post-merge review even before census coverage refreshes");
@@ -153,15 +183,16 @@ const mediaReview = {
     }],
   }],
 };
-const completed = completeReviews({ state: acceptedDraft.state, reviewDoc: mediaReview, sourceLedger, corpusSha256: "e".repeat(64), now: T3 });
+const completed = completeReviews({ state: acceptedDraft.state, reviewDoc: mediaReview, sourceLedger, corpusSha256: "e".repeat(64), readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3 });
 assert.equal(completed.state.jobs.find((job) => job.id === bruntTask.id).status, "resolved", "post-merge visual receipt closes the task");
 assert.equal(completed.state.jobs.find((job) => job.id === bruntTask.id).outcome.kind, "audited-wall");
+assert.throws(() => completeReviews({ state: acceptedDraft.state, reviewDoc: mediaReview, sourceLedger, corpusSha256: "e".repeat(64), readinessTokens: { "star-trek": "7".repeat(64) }, now: T3 }), /no longer current/, "media closure cannot bypass a stale producer snapshot");
 const wrongSubjectReview = structuredClone(mediaReview);
 wrongSubjectReview.reviews[0].records[0].portrait.subject = "The Orion constellation";
-assert.throws(() => completeReviews({ state: acceptedDraft.state, reviewDoc: wrongSubjectReview, sourceLedger, corpusSha256: "e".repeat(64), now: T3 }), /portrait subject must be Jeffrey Combs/);
+assert.throws(() => completeReviews({ state: acceptedDraft.state, reviewDoc: wrongSubjectReview, sourceLedger, corpusSha256: "e".repeat(64), readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3 }), /portrait subject must be Jeffrey Combs/);
 
 const rejectedDraft = syncState({
-  coverage, scopes, state: submitted.state, coverageSha256: "a".repeat(64), drafts: [], specimens: [],
+  coverage, scopes, state: submitted.state, coverageSha256: "a".repeat(64), drafts: [], specimens: [], readinessTokens: { "star-trek": readiness("star-trek").lease_token },
   growthRejections: [{
     ts: T3, actor: "grow.mjs@0.1", op: "draft.reject", reason: "unverified on Wikipedia",
     actor_name: "Jeffrey Combs", character: "Brunt", wiki: "",
@@ -171,17 +202,39 @@ const rejectedDraft = syncState({
 assert.equal(rejectedDraft.state.jobs.find((job) => job.id === bruntTask.id).status, "blocked", "grow rejection receipts close the drafted limbo state");
 
 const orphanRecovered = syncState({
-  coverage, scopes, state: emptyState(), coverageSha256: "a".repeat(64), drafts: submitted.drafts, specimens: [], growthRejections: [], now: T3,
+  coverage, scopes, state: emptyState(), coverageSha256: "a".repeat(64), drafts: submitted.drafts, specimens: [], growthRejections: [], readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3,
 });
 const recoveredBrunt = orphanRecovered.state.jobs.find((job) => job.id === bruntTask.id);
 assert.equal(recoveredBrunt.status, "drafted", "sync recovers a tagged draft written before state after a crash");
 assert.equal(recoveredBrunt.outcome.lease_id, claimed.batch.lease_id, "crash recovery preserves the originating lease for media closure");
 
+const mergedCrashRecovery = syncState({
+  coverage, scopes, state: emptyState(), coverageSha256: "a".repeat(64), drafts: submitted.drafts,
+  specimens: [{ id: "UC-999", actor: "Jeffrey Combs", character: "Brunt" }], growthRejections: [],
+  readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3,
+});
+assert.equal(mergedCrashRecovery.state.jobs.find((job) => job.id === bruntTask.id).status, "merged", "a tagged draft plus an exact wall receipt recovers directly into mandatory media review");
+
+const staleCrashDrafts = structuredClone(submitted.drafts);
+staleCrashDrafts[0]._autopilot.readiness_token = "9".repeat(64);
+const staleCrashRecovery = syncState({
+  coverage, scopes, state: emptyState(), coverageSha256: "a".repeat(64), drafts: staleCrashDrafts,
+  specimens: [], growthRejections: [], readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3,
+});
+assert.equal(staleCrashRecovery.state.jobs.find((job) => job.id === bruntTask.id).status, "attention", "crash recovery quarantines a draft from a stale producer snapshot");
+
+const staleMerged = syncState({
+  coverage, scopes, state: acceptedDraft.state, coverageSha256: "a".repeat(64), drafts: [],
+  specimens: [{ id: "UC-999", actor: "Jeffrey Combs", character: "Brunt" }], growthRejections: [],
+  readinessTokens: { "star-trek": "8".repeat(64) }, now: T3,
+});
+assert.equal(staleMerged.state.jobs.find((job) => job.id === bruntTask.id).status, "attention", "a changed certification or source snapshot quarantines an unreviewed merged result");
+
 const wrongRole = structuredClone(validResults);
 wrongRole.results[0].draft.character = "Weyoun";
 assert.throws(() => submitResults({ state: claimed.state, batch: claimed.batch, resultsDoc: wrongRole, drafts: [], now: T2 }), /must match leased role/);
 
-const expired = claimTasks({ state: claimed.state, agent: "luna-3", scope: "doctor-who", limit: 1, leaseMinutes: 5, now: T1 });
+const expired = claimTasks({ state: claimed.state, agent: "luna-3", scope: "doctor-who", readiness: readiness("doctor-who", "e"), limit: 1, leaseMinutes: 5, now: T1 });
 assert.equal(expired.batch, null, "attention rows remain non-claimable");
 
 const receiptState = syncState({ coverage, scopes, manifest: manifestV1, state: emptyState(), coverageSha256: "d".repeat(64), now: T0 });

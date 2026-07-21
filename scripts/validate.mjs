@@ -586,8 +586,13 @@ if (existsSync("data/CENSUS-MANIFEST.json")) {
     fail("census.observation_freshness", "observed census pages require a captured_at timestamp");
   const observationKeys = new Set();
   for (const row of censusManifest.observations || []) {
-    const key = `${normalizeCensusKey(row.franchise)}|${normalizeCensusKey(row.category)}|${normalizeCensusKey(row.title)}`;
-    if (observationKeys.has(key)) fail("census.observation_freshness", `duplicate census page observation ${key}`);
+    // Distinct wiki pages can normalize to the same display title ("Pino" and
+    // "Piño", "Dot" and "DOT") — a name collision, not a re-observation. A
+    // duplicate means the SAME source page observed twice, so key on the
+    // durable page identity; rows lacking a pageid still fail the revision
+    // identity check below.
+    const key = `${normalizeCensusKey(row.franchise)}|${normalizeCensusKey(row.category)}|${row.pageid}`;
+    if (observationKeys.has(key)) fail("census.observation_freshness", `duplicate census page observation ${key} (${row.title})`);
     observationKeys.add(key);
     if (!Number.isInteger(row.pageid) || !Number.isInteger(row.revision) || !/^[a-f0-9]{64}$/.test(row.content_sha256 || ""))
       fail("census.observation_freshness", `${key} lacks durable source revision identity`);

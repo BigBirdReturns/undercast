@@ -2,9 +2,9 @@
 
 UNDERCAST already knows how to discover credits, verify people, merge drafts,
 retrieve images, rebuild projections, and publish. Autopilot supplies the control
-plane: every missing performer-role becomes a stable task that can be leased,
-decided, retried, resumed, merged, visually closed, and audited without silently
-disappearing.
+plane: every missing performer-role becomes a stable task that can be certified,
+leased, decided, retried, resumed, merged, visually closed, and audited without
+silently disappearing.
 
 ## Relationship to the roadmap
 
@@ -33,31 +33,39 @@ mark a second-desk or owner milestone complete.
 ## Boundaries
 
 The queue does not decide eligibility and never writes directly to
-`data/specimens.json`. Census producers discover; Luna researches a bounded
-lease; `grow.mjs --drafts` verifies and merges; retrieval and the archive gate
-establish structural readiness; Luna's post-merge media receipt verifies that the
-actual still and portrait show the exact subjects. A source row that is not safely
-person-shaped, names a performer without a role, or belongs to an inactive scope
-is filed as `attention` rather than handed to a drafting model.
+`data/specimens.json`. Census producers discover; a reviewer certifies a producer
+contract; Luna researches a bounded lease; `grow.mjs --drafts` verifies and
+merges; retrieval and the archive gate establish structural readiness; Luna's
+post-merge media receipt verifies that the actual still and portrait show the
+exact subjects.
+
+A source row that is not safely person-shaped, names a performer without a role,
+belongs to a paused scope, comes from an uncertified producer, or loses the
+receipts its adapter promises is filed as `attention` rather than handed to a
+drafting model.
 
 No repository code can summon an external agent by itself. A Luna runner, coding
 session, or scheduler must execute `LUNA.md`. The repository makes that invocation
 deterministic and resumable: it emits the packet, owns the lease, rejects partial
-responses, reconciles downstream merge receipts, applies backpressure, and binds
-completion to the current corpus and source ledger.
+or stale responses, reconciles downstream merge receipts, applies backpressure,
+and binds completion to the current corpus and source ledger.
 
 ## Files
 
-- `data/AUTOPILOT-SCOPES.json` — source/scope registry. Star Trek is first
-  priority; the worker state machine is source-agnostic.
+- `data/AUTOPILOT-SCOPES.json` — source/scope registry, refresh command, producer
+  files, and producer-specific fixture commands. Every scope ships paused.
+- `data/AUTOPILOT-CERTIFICATIONS.json` — reviewed producer-contract receipts.
+  A changed producer file or scope contract makes an active declaration
+  ineffective until recertified.
 - `data/AUTOPILOT.json` — current state, one job per canonical
   `franchise + performer + role` identity.
-- `data/journal/autopilot.jsonl` — append-only creation, lease, decision, reopen,
-  merge, media-verification, resolution, and retirement receipts.
+- `data/journal/autopilot.jsonl` — append-only scope certification/pause,
+  creation, lease, decision, reopen, merge, media-verification, resolution, and
+  retirement receipts.
 - `data/CENSUS-COVERAGE.json` — complete machine input. Autopilot never uses the
   truncated human summary in `CENSUS-GAPS.json` as its queue.
 - `data/CENSUS-MANIFEST.json` — pinned source page/revision/content receipts used
-  in task fingerprints when present.
+  in task fingerprints and scope snapshot readiness.
 - `data/drafts.json`, `data/specimens.json`, `data/journal/rejections.jsonl`, and
   `data/SOURCES.json` — downstream facts reconciled back into task state.
 - `data/ROADMAP.json` and `data/ROADMAP-STATE.json` — strategic dependency,
@@ -67,12 +75,60 @@ completion to the current corpus and source ledger.
   and exact authorized build sequences.
 - `.luna/` — local ignored packets and result/review files.
 
+## The promotion sequence
+
+The producer and the worker are separate review lanes. The order is binding:
+
+1. **Producer PR.** Repair or add the census adapter, add adversarial fixtures,
+   run the network census, regenerate projections, reconcile named false rows,
+   and make the complete archive gate green.
+2. **Second-desk review.** Review the producer semantics and regenerated corpus,
+   not merely the schema result. Do not certify while the producer PR is still
+   under correction.
+3. **Merge the producer.** The trusted producer and its current census land on
+   `main` first.
+4. **Rebase the control plane.** Rebase the Autopilot PR onto that `main`, run its
+   fixtures against the actual corpus, and keep every scope paused.
+5. **Certify one scope.** The reviewer runs the producer's declared fixtures,
+   verifies current manifest receipts, runs the archive gate, pins the exact
+   producer/contract digests, and deliberately activates the scope:
+
+   ```bash
+   npm run autopilot -- certify --scope star-trek \
+     --reviewed-by second-desk --activate
+   npm run autopilot -- readiness --scope star-trek --require-active
+   npm run autopilot -- sync
+   ```
+
+6. **Merge the control plane.** Only then may an external Luna runner request a
+   batch with `next`.
+7. **Operate bounded cycles.** Draft, merge, retrieve, validate, reconcile, and
+   visually close every batch before leasing another. The scheduled Autopilot
+   workflow refreshes at most one certified, due scope per run and refuses to
+   refresh while that scope has work in flight.
+8. **Promote the next show.** A new adapter repeats steps 1–5. Adding a registry
+   row alone never authorizes work.
+
+This keeps PR #55-style producer repair, PR #56-style queue machinery, and Luna's
+research/media decisions independently reviewable. It also makes a rollback
+local: pause a scope without deleting its history.
+
 ## Commands
 
 ```bash
 npm run roadmap -- validate
 npm run roadmap -- status
 npm run roadmap -- next --limit 1
+
+npm run autopilot -- readiness
+npm run autopilot -- readiness --scope star-trek --require-active
+npm run autopilot -- certify --scope star-trek \
+  --reviewed-by second-desk --activate
+npm run autopilot -- pause --scope star-trek \
+  --paused-by second-desk --reason "producer semantics changed"
+npm run autopilot -- refresh --scope star-trek \
+  --refreshed-by undercast-bot
+npm run autopilot -- refresh --due --refreshed-by undercast-bot
 
 npm run autopilot -- sync
 npm run autopilot -- status --scope star-trek
@@ -85,12 +141,50 @@ npm run autopilot -- validate
 npm run autopilot:fixtures
 ```
 
-`next` is the safe high-level Autopilot operation: it runs
-`scripts/validate.mjs`, syncs all current evidence, and leases a batch only when
-that scope has no prior `leased`, `drafted`, or `merged` work. It is still the
-operator's responsibility to confirm that the current roadmap playbook authorizes
-that growth cycle. `claim` is the lower-level primitive; its `--allow-inflight`
-switch exists for deliberate parallel orchestration, not the normal Luna loop.
+`certify` is fail-closed. It runs the scope's declared producer fixtures without a
+shell, verifies that the current scope has coverage, enforces required manifest
+receipts, runs `scripts/validate.mjs`, and proves the prospective active state
+before writing. The certification, optional activation, and journal receipt are
+then committed as one rollback-capable file transaction.
+
+`refresh` is also certification-gated. It refuses scopes with leased, drafted, or
+merged work; executes the adapter's declared steps without a shell; rebuilds the
+deterministic projections; runs the archive gate; re-checks the resulting snapshot;
+and atomically reconciles queue plus refresh receipts. `refresh --due` selects at
+most one active due scope by priority, keeping a single scheduled run bounded.
+
+`next` is the safe worker operation after the current roadmap playbook authorizes roster growth: it runs `scripts/validate.mjs`, re-checks
+scope certification and snapshot readiness, syncs all current evidence, and
+leases a batch only when that scope has no prior `leased`, `drafted`, or `merged`
+work. `claim` skips the archive gate but does **not** bypass certification. Both
+require one explicit `--scope`; one lease cannot span independently reviewed
+producers.
+
+Every emitted batch and persisted lease carries a readiness token over the scope,
+producer contract, scope-local coverage snapshot, and scope-local manifest
+snapshot. `submit` recomputes that token and checks both the state lease and each
+task's source fingerprint. A producer edit or same-scope census refresh therefore
+invalidates an outstanding packet; an unrelated franchise refresh does not.
+
+## Producer certification
+
+Certification is not a claim that every census row belongs on the wall. It is a
+claim that the adapter is currently trustworthy enough to hand exact
+performer-role observations to a research worker.
+
+A scope contract names:
+
+- producer files whose bytes define the adapter;
+- fixture commands that reproduce known extraction failures;
+- the franchise selector and refresh command;
+- whether every current coverage source must have a pinned manifest receipt.
+
+The receipt stores the producer SHA-256, contract SHA-256, fixture commands,
+reviewer, timestamp, and the current snapshot counts/digests. Later census
+refreshes do not require a new human certification when the producer and contract
+are unchanged, but they must still pass archive and snapshot readiness. Editing a
+producer file or its contract automatically pauses effective leasing until a
+reviewer recertifies.
 
 ## Identity and evidence
 
@@ -103,9 +197,11 @@ disappears, the task becomes `attention` rather than silently returning to the
 queue.
 
 The queue performs a conservative person-shape check before leasing. This is a
-backstop, not permission for a weak source adapter: fictional characters, groups,
-and other non-performers that survive extraction still require correction or an
-evidence-backed Luna rejection. Source failure may never be represented as zero.
+backstop, not permission for a weak source adapter. Fictional characters, groups,
+pattern names, colors, and other non-performers that survive extraction are a
+producer defect. They must be repaired and regenerated before that scope is
+certified; they are not a permanent Luna rejection workload. Source failure may
+never be represented as zero.
 
 ## State machine
 
@@ -115,8 +211,8 @@ The successful path is:
 queued -> leased -> drafted -> merged -> resolved
 ```
 
-`drafted` means a tagged draft is waiting for `grow.mjs` or its receipt.
-`sync` closes that feedback loop:
+`drafted` means a tagged draft is waiting for `grow.mjs` or its receipt. `sync`
+closes that feedback loop:
 
 - a still-pending tagged draft remains `drafted`;
 - an exact canonical performer-role specimen moves it to `merged` even if census
@@ -124,7 +220,10 @@ queued -> leased -> drafted -> merged -> resolved
 - a matching grow rejection becomes `blocked` or `attention` rather than leaving
   the task in permanent drafted limbo;
 - a crash after the draft file write but before the state write is recovered from
-  `_autopilot` metadata, including the originating lease.
+  `_autopilot` metadata, including the originating lease, readiness token, and
+  task source fingerprint;
+- a recovered or merged result whose certification/evidence token is stale moves
+  to `attention` rather than being laundered into completion.
 
 `merged` is deliberately not complete. `complete` runs the archive gate and
 requires one media record per exact wall ID. An available still must be attested
@@ -134,32 +233,29 @@ The receipt stores the current corpus SHA-256 and a review digest before the tas
 becomes `resolved`.
 
 A lease may instead produce `rejected` or `blocked`. Expired leases return to
-`queued`. Unsafe source identity lands in `attention`. Retry timestamps reopen
-due blocks; source-revision changes reopen evidence-bound blocks and rejections.
+`queued`. Unsafe source identity or inactive scope lands in `attention`. Retry
+timestamps reopen due blocks; source-revision changes reopen evidence-bound
+blocks and rejections.
 
 A batch submission is atomic and complete. It fails if a task is missing,
-appears twice, belongs to another lease, changes performer/role identity, lacks a
-performance citation, or uses an unsupported decision. This prevents partial
+appears twice, belongs to another lease, changes performer/role identity, has a
+stale producer/census token, has a changed source fingerprint, lacks a performance
+citation, or uses an unsupported decision. This prevents partial or obsolete
 agent output from quietly stranding work.
 
 ## Expanding beyond Star Trek
 
 Autopilot is downstream of discovery. A new show/franchise adapter has one
 contract: emit exact performer-role rows into `CENSUS-COVERAGE.json` (or add a
-`scope_id`), preserve claim-level source URLs and revision receipts, and fail
-closed on source outages. Add the scope and its bounded refresh adapter to
-`AUTOPILOT-SCOPES.json`; no worker or state-machine code changes.
+`scope_id`), preserve claim-level source URLs and revision receipts, fail closed
+on source outages, and ship adversarial fixtures for the source's actual failure
+modes. Add the paused scope and refresh adapter to `AUTOPILOT-SCOPES.json`; review
+and certify it after a fresh crawl. No worker or state-machine code changes.
 
-That adapter is not active merely because it is configured. It must pass the
-current roadmap milestone, semantic producer review, and producer-certification
-contract before it can issue Luna leases. Scope breadth follows the roadmap's
-second-gold-shard and international milestones rather than being enabled all at
-once.
-
-“Every show” is an unbounded registry, not a one-time finite promise. Existing
-adapters cover the current franchises; new shows still require trustworthy source
-adapters. Scheduled reconciliation makes new credits and source revisions become
-work forever, while explicit `paused`, `attention`, `blocked`, and `retired`
+“Every show” is an unbounded registry, not a one-time finite promise. New shows
+still require trustworthy source adapters. Certified cadence refresh plus scheduled
+reconciliation makes new credits and source revisions become work indefinitely,
+while explicit certification, `paused`, `attention`, `blocked`, and `retired`
 states prevent unsupported or ambiguous material from masquerading as complete.
 
 ## Research result document

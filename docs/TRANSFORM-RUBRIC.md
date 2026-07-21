@@ -1,0 +1,132 @@
+# The transform scale
+
+`specimen.transform` is a 1–5 grade. It measures **how completely the audience is
+prevented from seeing the performer** in that role — not how impressive the design
+is, not how famous the performer is, and not how much material was applied.
+
+This document exists because the grade drifted: it was filed by many different
+drafting passes over a long period, and a 2026-07-20 blind audit found the archive
+and an independent scorer agreeing only 48% of the time, while independent scorers
+agreed with *each other* 67% of the time. The scale had been behaving like a smooth
+"how impressive is this" gradient. It is a structural test.
+
+## The scale
+
+| | |
+| --- | --- |
+| **5** | **Total disappearance.** Full creature suit, full-head prosthetic or animatronic mask, a puppet performance where the performer is never on screen, or complete motion-capture replacement. The performer's own face is entirely absent. |
+| **4** | **Face substantially replaced.** Heavy prosthetics rebuild most of the head or face; at most the eyes or mouth remain visibly their own. |
+| **3** | **Partial redesign.** The design changes how the face reads — forehead ridges, ears, nose pieces, full-coverage graphic paint — while an attentive viewer could still recognize the performer. |
+| **2** | **Surface transformation.** Limited makeup, wigs, dental pieces, partial paint. Recognizable at a glance. |
+| **1** | **Light disguise.** Minimal appliances or costume; the audience mostly sees the performer. |
+
+Judge the design **as it appeared on screen**. Where a card's prose calls a
+performer "unrecognizable," that is house style, not evidence.
+
+## Standing rulings
+
+These resolve questions that recurred often enough to need a written answer.
+
+### Paint is scored by coverage, not by construction method
+
+*Ruled 2026-07-20.* An earlier reading capped paint-based designs at 2 on the
+grounds that nothing was structurally rebuilt. That was wrong, and it produced an
+absurdity: Margaret Hamilton's green Wicked Witch scored the same as a wig and a
+dental piece.
+
+The scale measures concealment, not construction. Paint conceals less than
+structural replacement — bone structure, expression, and the performer's own
+features survive underneath — but **full-coverage graphic paint that recolors and
+re-draws the whole face is a partial redesign, which is the definition of 3**, not
+a surface treatment. Partial or limited paint remains 2. Paint combined with
+appliances is scored on the combined coverage like any other design.
+
+Affected designs include the Wicked Witch, Darth Maul, Mystique, and Art the Clown.
+
+### Bodily-transformation cards stay on the wall
+
+*Ruled by the owner, 2026-07-20.* The five cards identified under the ruling below
+(`data/ELIGIBILITY-REVIEW.json`) **remain on the wall, graded honestly at 1–2**.
+An honest low grade is the archive showing its own edges, which is what
+"provenance never lies" requires; retiring them would hide a boundary rather than
+document it. The eligibility file is retained as the record of the question and
+its answer, not as a pending worklist.
+
+### Bodily transformation is not facial disappearance — and is an eligibility question
+
+*Ruled 2026-07-20.* Some cards record transformations that are bodily rather than
+facial: prosthetic limbs, extreme stature, physique, duplication. The performer's
+own face is plainly visible on screen.
+
+`transform` measures the face, so these grade honestly at **1–2**. But a low grade
+on such a card is a symptom, not a fix: UNDERCAST's charter is *performers who
+vanish under a designed face*, and a performer whose face is fully visible has not
+vanished. **These cards are graded by the face rule and flagged for eligibility
+review** in `data/TRANSFORM-REVIEW.json` rather than quietly kept at an inflated
+grade. Eligibility is a separate decision from grading, and removing a card is the
+owner's call — see the review-queue pattern in `GROW.md`.
+
+### Recurring designs get one answer, not many
+
+*Ruled 2026-07-20.* Where a design recurs across many cards — a species makeup, a
+franchise mask, a performance mode — the grade is set once as a family principle
+and applied consistently, so the shelf is internally coherent. Standing family
+principles, and every grade they set, are journalled in
+`data/journal/transform.jsonl` with the reasoning that governed them.
+
+- **Star Trek prosthetic species.** Single-zone appliances — Bajoran nose ridge,
+  Vulcan and Romulan ears and brow, Klingon forehead ridge and wig, Trill spots —
+  are **3**. Cardassian neck-and-forehead scaling and the Ferengi ear-and-cranium
+  appliance are **4**. Full-head species built for unrecognizability (Jem'Hadar,
+  Vorta, Talaxian, Species 8472, Voth, Kelpien, Discovery Klingons) also cap at
+  **4**, because the performer still acts through their own eyes and usually mouth.
+  A Star Trek makeup earns **5** only as a true suit, animatronic or puppet head,
+  or mocap with no exposed skin. Depart downward on an explicit lighter-than-standard
+  signal — TOS-era Klingons predate the ridge redesign and are bronzer and eyebrows,
+  not appliance work.
+- **Puppeteers.** A performer operating a puppet from off screen is **5**. A 4 is
+  defined as "at most the eyes or mouth remain their own," which cannot describe a
+  performer whose face never appears at all.
+- **Full masks** — lucha and masked wrestling, slasher masks. A rigid full-head
+  mask removes the face from the screen: **5**. That the mask is the performer's
+  own persona rather than a creature is a different axis and must not lower the
+  grade. Paint on bare skin is not a mask; score it by the paint rule above.
+
+## Voice roles — the second axis
+
+Cards with `kind: "voice"` are scored on the same 1–5 field, but the question is
+different: **how completely does the performance prevent a listener from
+recognising the performer's own voice?** A face rule cannot be applied to a
+performance that has no face, and until 2026-07-20 these 422 cards carried a
+number that measured nothing.
+
+| | |
+| --- | --- |
+| **5** | **Unrecognisable.** Pitch-shifted, processed, growled, or built so far from the performer's own instrument that no listener would place them. Creature vocalisations and heavily treated performances live here. |
+| **4** | **Substantially altered.** A sustained character voice far outside the performer's natural range or register — a different apparent age, sex, species or accent held throughout — with little or no processing. |
+| **3** | **Characterised within their own range.** Clearly an acting choice rather than the performer talking, but an attentive listener who knows them could place it. |
+| **2** | **Lightly characterised.** Mostly the performer's own voice with an accent, a register shift, or an inflection. |
+| **1** | **Their own voice.** Essentially themselves, recognisable immediately. |
+
+The same discipline applies as for faces: judge the performance **as heard**, not
+the fame of the performer or how beloved the character is. A star cast *because*
+audiences recognise their voice is a 1 or 2 however famous the role. Range and
+versatility are not concealment — an actor who plays many distinct characters
+still scores each one on how hidden they are in it.
+
+Calibration anchors: James Earl Jones as Mufasa is **1** (the voice *is* the
+casting). Nancy Cartwright as Bart Simpson and Kevin Conroy's Batman are **2** —
+sustained register shifts over their own instrument. Frank Oz as Yoda is **4**.
+A ring-modulated Dalek or a processed creature snarl is **5**.
+
+**This axis is measurably softer than the face scale, and grades are only filed
+by consensus.** Three independent passes over a 60-card control agreed
+unanimously on 18% of cards (mean spread 0.98), against 67% and 0.37 for faces —
+concealment of a voice is genuinely harder to judge from a text record than
+concealment of a face. Voice grades are therefore taken as the median of three
+independent blind passes, filed only where those passes fall within one point of
+each other, and queued for review where they do not. A single-pass voice score is
+not evidence.
+
+Voice cards were deliberately excluded from the face audit rather than graded by a
+rule that did not fit them.
