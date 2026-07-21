@@ -1,4 +1,4 @@
-name: verify-pr57-exact-head
+name: verify-trusted-foundation-receipt
 
 on:
   pull_request:
@@ -7,101 +7,64 @@ permissions:
   contents: read
 
 concurrency:
-  group: verify-pr57-exact-head
+  group: verify-trusted-foundation-receipt
   cancel-in-progress: true
 
 jobs:
   verify:
     if: github.event.pull_request.number == 58
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/five-year-operating-system
+          ref: agent/trusted-foundation-receipt
           fetch-depth: 0
 
-      - name: Verify exact reviewed head and static contracts
+      - name: Verify exact receipt and derived roadmap transition
         run: |
-          test "$(git rev-parse HEAD)" = "7421dcee8fd732fc76a6fb9135b16806d54fa696"
-          node --check scripts/roadmap.mjs
-          node --check scripts/roadmap-fixtures.mjs
-          node --check scripts/lib/roadmap.mjs
-          node --check scripts/autopilot.mjs
-          node -e 'JSON.parse(require("fs").readFileSync("package.json","utf8")); JSON.parse(require("fs").readFileSync("data/ROADMAP.json","utf8")); JSON.parse(require("fs").readFileSync("data/ROADMAP-STATE.json","utf8"));'
-          ruby -e 'require "yaml"; YAML.load_file(".github/workflows/validate.yml"); YAML.load_file(".github/workflows/autopilot.yml")'
-          git diff --check
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-      - name: Install deterministic and rendered test runtime
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-
-      - name: Rebuild and refuse deterministic drift
-        run: |
+          test "$(git rev-parse HEAD)" = "8c103844716c0f8605d33269599dfd3ebbcb883c"
+          node scripts/roadmap.mjs validate
+          node scripts/roadmap-fixtures.mjs
+          node scripts/roadmap.mjs status --json > /tmp/roadmap-status.json
+          node scripts/roadmap.mjs next --limit 3 --json > /tmp/roadmap-next.json
+          node scripts/autopilot.mjs readiness --scope star-trek --require-active
+          node scripts/autopilot.mjs validate
+          node scripts/validate.mjs
           node scripts/shard.mjs
           git diff --exit-code
-
-      - name: Validate strategic and certified operational state
-        run: |
-          npm run roadmap -- validate
-          npm run roadmap:fixtures
-          node scripts/roadmap.mjs status --json > /tmp/roadmap-status.json
-          node scripts/roadmap.mjs next --limit 1 --json > /tmp/roadmap-next.json
-          npm run autopilot -- readiness --scope star-trek --require-active
-          npm run autopilot -- validate
-          npm run autopilot:fixtures
           node - <<'NODE'
           const fs = require('fs');
           const status = JSON.parse(fs.readFileSync('/tmp/roadmap-status.json','utf8'));
           const next = JSON.parse(fs.readFileSync('/tmp/roadmap-next.json','utf8'));
-          if (status.counts.complete !== 0 || status.counts.ready !== 1 || status.counts.blocked !== 11 || status.counts.total !== 12) throw new Error(JSON.stringify(status.counts));
-          if (next.length !== 1 || next[0].id !== 'trusted-foundation') throw new Error(JSON.stringify(next));
-          if (typeof next[0].playbook !== 'string' || !next[0].playbook.includes('### Build sequence') || !next[0].playbook.includes('### Acceptance proof')) throw new Error('roadmap next lacks complete playbook');
+          const expectedReady = ['star-trek-gold-shard','operational-reliability'];
+          const actualReady = status.milestones.filter(m => m.state === 'ready').map(m => m.id);
+          const complete = status.milestones.filter(m => m.state === 'complete').map(m => m.id);
+          if (status.counts.complete !== 1 || status.counts.ready !== 2 || status.counts.blocked !== 9 || status.counts.total !== 12) throw new Error(JSON.stringify(status.counts));
+          if (JSON.stringify(complete) !== JSON.stringify(['trusted-foundation'])) throw new Error(`complete=${complete}`);
+          if (JSON.stringify(actualReady) !== JSON.stringify(expectedReady)) throw new Error(`ready=${actualReady}`);
+          if (JSON.stringify(next.map(m => m.id)) !== JSON.stringify(expectedReady)) throw new Error(`next=${next.map(m=>m.id)}`);
+          if (status.adoption_stage?.id !== 'operator-proof') throw new Error(`adoption=${status.adoption_stage?.id}`);
+          const roadmapState = JSON.parse(fs.readFileSync('data/ROADMAP-STATE.json','utf8'));
+          if (roadmapState.metrics.canonical_records !== 1246 || roadmapState.metrics.census_observations !== 17258 || roadmapState.metrics.certified_scopes !== 1) throw new Error(JSON.stringify(roadmapState.metrics));
+          if (roadmapState.metrics.verified_records !== null || roadmapState.metrics.media_audit_ratio !== null) throw new Error('unverified media metrics must remain null');
           const scopes = JSON.parse(fs.readFileSync('data/AUTOPILOT-SCOPES.json','utf8')).scopes;
           const active = scopes.filter(s => s.status === 'active').map(s => s.id);
-          if (JSON.stringify(active) !== JSON.stringify(['star-trek'])) throw new Error(`unexpected active scopes: ${active}`);
-          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
-          const inflight = state.jobs.filter(j => ['leased','drafted','merged'].includes(j.status));
-          if (inflight.length) throw new Error(`unexpected in-flight work: ${inflight.length}`);
+          if (JSON.stringify(active) !== JSON.stringify(['star-trek'])) throw new Error(`active=${active}`);
+          const autopilot = JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const inflight = autopilot.jobs.filter(j => ['leased','drafted','merged'].includes(j.status));
+          if (inflight.length) throw new Error(`inflight=${inflight.length}`);
           NODE
-
-      - name: Run exact archive and rendered gate
-        run: |
-          npm run test:census
-          node scripts/validate.mjs
-          npm run audit:corpus
-          npm run test:site-seams
-          node scripts/build-record-pages.mjs
-          npm run test:rendered -- --reporter=line
-          test "$(find records -mindepth 1 -maxdepth 1 -type d | wc -l)" = "$(node -p "require('./data/specimens.json').length + require('./data/tombstones.json').records.length")"
-
-      - name: Validate DS9 evidence projections
-        run: |
-          node scripts/ds9-census.mjs --project-only
-          node scripts/ds9-graph.mjs --project-only
-          node scripts/ds9-eligibility-queue.mjs
-          node scripts/ds9-maker-queue.mjs
-          git diff --exit-code data/ds9
-          npm run ds9:fixtures
-          npm run ds9:eligibility:fixtures
-          npm run ds9:maker:fixtures
           git diff --check
 
-      - name: Package exact-head evidence
+      - name: Package receipt evidence
         run: |
-          mkdir -p /tmp/pr57-exact
-          cp data/ROADMAP.json data/ROADMAP-STATE.json data/AUTOPILOT-CERTIFICATIONS.json data/AUTOPILOT-SCOPES.json /tmp/pr57-exact/
-          cp /tmp/roadmap-status.json /tmp/roadmap-next.json /tmp/pr57-exact/
-          git status --short > /tmp/pr57-exact/status.txt
-          sha256sum /tmp/pr57-exact/* > /tmp/pr57-exact/SHA256SUMS
+          mkdir -p /tmp/foundation-receipt
+          cp data/ROADMAP-STATE.json /tmp/roadmap-status.json /tmp/roadmap-next.json /tmp/foundation-receipt/
+          sha256sum /tmp/foundation-receipt/* > /tmp/foundation-receipt/SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: pr57-exact-head-evidence
-          path: /tmp/pr57-exact
+          name: trusted-foundation-receipt-evidence
+          path: /tmp/foundation-receipt
           if-no-files-found: error
           retention-days: 7
