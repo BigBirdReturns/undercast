@@ -1,120 +1,43 @@
-name: resume-pr55-semantic-review
+name: inspect-pr55-main-integration
 
 on:
   pull_request:
 
 permissions:
-  contents: write
-  actions: read
+  contents: read
 
 concurrency:
-  group: resume-pr55-semantic-review
+  group: inspect-pr55-main-integration
   cancel-in-progress: true
 
 jobs:
-  resume:
+  inspect:
     if: github.event.pull_request.number == 58
     runs-on: ubuntu-latest
-    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
           ref: claude/full-canon-census
           fetch-depth: 0
-
-      - name: Restore the authoritative regenerated corpus and reviewed rendered assertion
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Attempt current-main merge and capture exact conflicts
         run: |
-          test "$(git rev-parse HEAD)" = "fda67ed3cb808fa48e1ebf7dc086cabd9242bafe"
-          mkdir -p /tmp/pr55-regen
-          gh run download 29849723940 --repo "${{ github.repository }}" \
-            --name pr55-regenerated-corpus --dir /tmp/pr55-regen
-          test -f /tmp/pr55-regen/pr55-regenerated-corpus.tar.gz
-          test -f /tmp/pr55-regen/semantic-report.json
-          tar -xzf /tmp/pr55-regen/pr55-regenerated-corpus.tar.gz -C .
-          gh api "repos/${{ github.repository }}/contents/.github/review/pr55-rendered-count.patch?ref=agent/pr55-semantic-review" \
-            --jq .content | base64 -d > /tmp/pr55-rendered-count.patch
-          git apply --check /tmp/pr55-rendered-count.patch
-          git apply /tmp/pr55-rendered-count.patch
-          node -e 'const r=require("/tmp/pr55-regen/semantic-report.json"); if(r.known_false_performers_remaining.length || r.muppet_character_as_performer_remaining.length || r.star_trek_credits!==2295) throw new Error(JSON.stringify(r)); console.log(`semantic report: Star Trek ${r.star_trek_credits}; known leaks 0; Muppet character credits 0`);'
-          node --check scripts/census.mjs
-          node --check scripts/census-fixtures.mjs
-          node --check scripts/lib/census-core.mjs
-          git diff --check
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-      - name: Install deterministic and rendered test runtime
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-
-      - name: Validate repaired producer and deterministic archive
-        run: |
-          npm run test:census
-          node scripts/shard.mjs
-          node scripts/validate.mjs
-          npm run audit:corpus
-          npm run test:site-seams
-          git diff --check
-
-      - name: Build permanent routes
-        run: node scripts/build-record-pages.mjs
-      - name: Exercise rendered interactions
-        run: npm run test:rendered -- --reporter=line
-      - name: Verify route count
-        run: test "$(find records -mindepth 1 -maxdepth 1 -type d | wc -l)" = "$(node -p "require('./data/specimens.json').length + require('./data/tombstones.json').records.length")"
-
-      - name: Rebuild and verify DS9 evidence projections
-        run: |
-          node scripts/ds9-census.mjs --project-only
-          node scripts/ds9-graph.mjs --project-only
-          node scripts/ds9-eligibility-queue.mjs
-          node scripts/ds9-maker-queue.mjs
-          actual="$(git diff --name-only -- data/ds9 | sort)"
-          expected="$(printf '%s\n' data/ds9/coverage.json data/ds9/summary.json | sort)"
-          test "$actual" = "$expected" || { echo "unexpected DS9 projection set:"; printf '%s\n' "$actual"; exit 1; }
-          npm run ds9:fixtures
-          npm run ds9:eligibility:fixtures
-          npm run ds9:maker:fixtures
-          git diff --check -- data/ds9
-
-      - name: Package exact reviewed checkout
-        run: |
-          mkdir -p /tmp/pr55-reviewed
-          cp /tmp/pr55-regen/semantic-report.json /tmp/pr55-reviewed/
-          tar --exclude=.git --exclude=node_modules --exclude=records --exclude=test-results --exclude=playwright-report \
-            -czf /tmp/pr55-reviewed/undercast-pr55-reviewed.tar.gz .
-          git status --short > /tmp/pr55-reviewed/status.txt
-          git diff --stat > /tmp/pr55-reviewed/stat.txt
-          sha256sum /tmp/pr55-reviewed/* > /tmp/pr55-reviewed/SHA256SUMS
+          test "$(git rev-parse HEAD)" = "70712fd098548b5cb111bae166e9fbb75cf340ab"
+          git fetch origin main
+          set +e
+          git merge --no-commit --no-ff origin/main > /tmp/merge.out 2>&1
+          status=$?
+          set -e
+          mkdir -p /tmp/pr55-main-integration
+          cp /tmp/merge.out /tmp/pr55-main-integration/merge.out
+          git status --short > /tmp/pr55-main-integration/status.txt
+          git diff --name-only --diff-filter=U > /tmp/pr55-main-integration/conflicts.txt
+          git diff --cc > /tmp/pr55-main-integration/conflicts.diff || true
+          printf '%s\n' "$status" > /tmp/pr55-main-integration/merge-status.txt
+          cat /tmp/pr55-main-integration/status.txt
+          cat /tmp/pr55-main-integration/conflicts.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: pr55-semantic-review-result
-          path: /tmp/pr55-reviewed
+          name: pr55-main-integration-diagnostics
+          path: /tmp/pr55-main-integration
           if-no-files-found: error
-          retention-days: 3
-
-      - name: Commit and push the semantically reviewed corpus
-        run: |
-          git config user.name "undercast-bot"
-          git config user.email "undercast-bot@users.noreply.github.com"
-          git add scripts/lib/census-core.mjs scripts/census.mjs scripts/census-fixtures.mjs tests/rendered/site.spec.mjs
-          git add data sitemap.xml
-          git diff --cached --quiet && exit 0
-          git commit -m "Census: remove semantic role leaks and regenerate reviewed scopes"
-          git push origin HEAD:claude/full-canon-census
-
-      - name: Upload rendered diagnostics on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr55-rendered-diagnostics
-          path: |
-            playwright-report
-            test-results
-          if-no-files-found: warn
           retention-days: 3
