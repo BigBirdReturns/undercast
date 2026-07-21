@@ -1,30 +1,32 @@
-# UNDERCAST — handoff, 2026-07-20
+# UNDERCAST — handoff, 2026-07-20 (evening)
 
 Branch `claude/full-canon-census`, open as PR #55, held for review at the second
 Claude desk (owner's routing decision — do not merge without it).
 
-## State: the gate is RED and that is the first job
+## State: the gate is GREEN (commit `ba26c84`)
 
-`node scripts/validate.mjs` fails on 168 `schema.source` rows missing
-`fetched_at`, plus the two `quality.non_regression` floors. **Cause is known and
-benign:** 192 cards were drafted and merged, then two image crawls ran but
-`RETRIEVE_MAX` stopped before covering every new card. Imageless cards are
-supposed to carry a ledger row with `still:null, portrait:null, fetched_at:<the
-date we looked>` — see UC-335 for the shape. Cards the crawler never reached
-have no `fetched_at` at all.
+All 30 profiles pass. What closed it: two crawl rounds (243 + 168 cards
+illustrated; `RETRIEVE_ONLY` targeting for the UC-1086..1277 tail), 26
+byte-identical cross-card image groups ruled by eye (journal:
+`data/journal/image-dedup.jsonl`, revertible as a set), 452 assets uploaded
+to Releases and hash-verified (`media-live.json` now maps 1989 images).
+68 cards remain honestly imageless with `fetched_at` ledger rows.
 
-**Fix:** finish the crawl, then rebuild and validate.
+New standing facts learned closing it:
 
-```
-IMAGE_MODE=loose RETRIEVE_MAX=300 CONTACT=<you> node scripts/retrieve.mjs
-node scripts/credits.mjs && node scripts/sync-sources.mjs
-node scripts/shard.mjs && node scripts/build-contract.mjs && node scripts/validate.mjs
-```
+- **Memory Alpha performer pages carry in-character photos.** Portraits
+  fetched from them can be the character, not the human. The 4 cases caught
+  were only the byte-identical ones — the whole Trek batch needs the
+  exact-subject media audit (PR #56 lane) before portraits are trusted.
+- **Multi-role performers vs the dup invariant.** One card per role × one
+  free photo per performer means `image.no_cross_card_dup` forces N−1 null
+  portraits (Combs ×9, Alaimo ×4…). Current policy: keep lowest-numbered
+  card, journal the rest. A per-performer media pool would need an owner
+  decision (DEC territory).
+- `retrieve.mjs` has no memory of tried-and-failed cards; a bare re-run
+  re-crawls the same gaps. Use `RETRIEVE_ONLY` with an ID list to target.
 
-A crawl was left running in background at handoff; it may already have closed
-some of the 168. Re-run and re-check before assuming work is needed.
-
-**Do not** relax the floors in `data/quality-baseline.json` to make this green.
+**Do not** relax the floors in `data/quality-baseline.json`.
 The floors are correct; the wall genuinely added cards faster than faces.
 
 ## What landed today
