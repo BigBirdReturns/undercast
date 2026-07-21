@@ -20,9 +20,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: Reconcile census, draft, merge, and rejection evidence
+      - name: Report producer and snapshot readiness
+        run: npm run autopilot -- readiness
+      - name: Refresh one certified scope when its cadence is due
+        env:
+          CONTACT: bigbirdreturns@proton.me
+        run: |
+          set +e
+          npm run autopilot -- refresh --due --refreshed-by undercast-bot
+          code=$?
+          set -e
+          if [ "$code" -eq 3 ]; then
+            echo "No certified scope is due."
+          elif [ "$code" -ne 0 ]; then
+            exit "$code"
+          fi
+      - name: Reconcile only certified census scopes with downstream evidence
         run: npm run autopilot -- sync
-      - name: Validate queue contract
+      - name: Validate queue and certification contracts
         run: npm run autopilot -- validate && npm run autopilot:fixtures
       - name: Report queue state
         run: npm run autopilot -- status
@@ -30,9 +45,8 @@ jobs:
         run: |
           git config user.name "undercast-bot"
           git config user.email "undercast-bot@users.noreply.github.com"
-          git add data/AUTOPILOT.json
-          git add data/journal/autopilot.jsonl 2>/dev/null || true
+          git add data sitemap.xml 2>/dev/null || true
           git diff --cached --quiet && exit 0
-          git commit -m "autopilot: reconcile census work ($(date -u +%F))"
+          git commit -m "autopilot: refresh and reconcile certified census work ($(date -u +%F))"
           for i in 1 2 3; do git pull --rebase --autostash origin main && git push && exit 0 || sleep $((i*3)); done
           echo "push failed after retries"; exit 1
