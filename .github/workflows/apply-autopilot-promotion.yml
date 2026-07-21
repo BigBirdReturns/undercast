@@ -1,14 +1,10 @@
 name: apply-autopilot-promotion
 
 on:
-  push:
-    branches:
-      - agent/luna-autopilot
   pull_request:
 
 permissions:
   contents: write
-  issues: write
 
 concurrency:
   group: apply-autopilot-promotion
@@ -16,18 +12,13 @@ concurrency:
 
 jobs:
   apply:
-    if: github.event_name == 'push' || github.event.pull_request.number == 56
+    if: github.event.pull_request.number == 56
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/luna-autopilot
           fetch-depth: 0
-
-      - name: Announce the promotion run
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api repos/${{ github.repository }}/issues/56/comments -f body="Autopilot promotion run ${{ github.run_id }} started from ${{ github.sha }}. It will checksum the reviewed patch, execute the complete gate, self-delete its staging machinery, and push only on success."
 
       - name: Reconstruct and verify the reviewed promotion patch
         run: |
@@ -118,20 +109,28 @@ jobs:
       - name: Refuse unaccounted generated drift
         run: git diff --exit-code -- . ':(exclude).github/workflows/apply-autopilot-promotion.yml' ':(exclude).github/promotion'
 
+      - name: Package the fully validated promotion
+        run: |
+          mkdir -p /tmp/autopilot-promotion-artifact
+          cp /tmp/autopilot-promotion.patch /tmp/autopilot-promotion-artifact/reviewed.patch
+          git diff --binary > /tmp/autopilot-promotion-artifact/validated-worktree.patch
+          git status --short > /tmp/autopilot-promotion-artifact/status.txt
+          sha256sum /tmp/autopilot-promotion-artifact/* > /tmp/autopilot-promotion-artifact/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-autopilot-promotion
+          path: /tmp/autopilot-promotion-artifact
+          if-no-files-found: error
+          retention-days: 3
+
       - name: Commit and push the reviewed promotion
-        id: publish
         run: |
           git config user.name "undercast-bot"
           git config user.email "undercast-bot@users.noreply.github.com"
           git add -A
           git commit -m "Autopilot: certify producers and schedule bounded refresh"
           git push origin HEAD:agent/luna-autopilot
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Report success to PR 56
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api repos/${{ github.repository }}/issues/56/comments -f body="Autopilot promotion run ${{ github.run_id }} passed the full gate and pushed commit ${{ steps.publish.outputs.commit }}. All scopes remain paused; no Luna lease was issued."
 
       - name: Upload reconstruction diagnostics on failure
         if: failure()
@@ -143,9 +142,3 @@ jobs:
             /tmp/autopilot-promotion.part06.fixed
           if-no-files-found: warn
           retention-days: 2
-
-      - name: Report failure to PR 56
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api repos/${{ github.repository }}/issues/56/comments -f body="Autopilot promotion run ${{ github.run_id }} failed closed. No promotion commit was pushed. Inspect the run and its autopilot-promotion-diagnostics artifact."
