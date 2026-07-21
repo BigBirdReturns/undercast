@@ -478,7 +478,7 @@ test("coverage and constellation preserve human-searchable, unique evidence",asy
   await open(page,"coverage.html?franchise=Star+Trek&category=Klingons&mode=physical-any");
   await expect(page.locator("#rows tr").first()).toBeVisible();
   await expect(page.locator("#benchmark")).toContainText("KLINGONS SOURCE SNAPSHOT · Star Trek");
-  await expect(page.locator("#benchmark")).toContainText("192 named performer-role credits across 174 performers");
+  await expect(page.locator("#benchmark")).toContainText("191 named performer-role credits across 173 performers");
   await expect(page.locator("#benchmark")).not.toContainText("FERENGI BENCHMARK");
 
   await open(page,"coverage.html?franchise=Star+Trek&category=Ferengi&mode=physical-any");

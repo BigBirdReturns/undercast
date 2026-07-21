@@ -28,7 +28,9 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { normalizeCensusKey as normalize } from "./census-key.mjs";
-import { performerFieldValues, namesFrom, PERSONISH, loadScope } from "./lib/census-core.mjs";
+import {
+  performerFieldValues, namesFrom, PERSONISH, loadScope, demoteCharacterOnlyPerformers,
+} from "./lib/census-core.mjs";
 
 const UA = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT || "census"})`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -87,6 +89,9 @@ const FRANCHISES = {
   },
   "muppets": {
     label: "Muppets & Henson", api: "https://muppet.fandom.com/api.php",
+    // Alter-ego pages sometimes name another Muppet in PERFORMER rather than a
+    // human puppeteer. Demote only all-character fields; mixed fields fail closed.
+    demoteCharacterPerformers: true,
     categories: ["Muppet Show Characters", "Sesame Street Characters", "Fraggle Rock Characters",
       "Dark Crystal Characters", "Labyrinth Characters", "Muppets Tonight Characters"],
   },
@@ -244,7 +249,23 @@ if (!PROJECT_ONLY) {
 for (const k of keys) {
   const cfg = FRANCHISES[k];
   if (!cfg) { console.log("unknown franchise:", k, "— known:", Object.keys(FRANCHISES).join(", ")); continue; }
+  const rowStart = freshRows.length, unresolvedStart = freshUnresolved.length;
   await censusFranchise(k, cfg, freshRows, freshUnresolved, onlyCategory);
+  if (cfg.demoteCharacterPerformers) {
+    const result = demoteCharacterOnlyPerformers(
+      freshRows.slice(rowStart), freshUnresolved.slice(unresolvedStart), cfg.label);
+    freshRows.splice(rowStart, freshRows.length - rowStart, ...result.rows);
+    freshUnresolved.splice(unresolvedStart, freshUnresolved.length - unresolvedStart, ...result.unresolved);
+    for (const demoted of result.demoted) {
+      for (const observation of observations) {
+        if (observation.franchise === demoted.franchise && observation.category === demoted.category
+          && observation.title === demoted.character && observation.source === demoted.source) {
+          observation.disposition = "unresolved";
+        }
+      }
+    }
+    if (result.demoted.length) console.log(`  semantic demotion: ${result.demoted.length} character-as-performer row(s) -> unresolved`);
+  }
 }
 }
 
