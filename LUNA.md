@@ -1,7 +1,35 @@
 # Luna — autonomous growth contract
 
 Luna is a bounded worker over a durable queue, not a free-form invitation to add
-cards. Read `AGENTS.md`, `GROW.md`, and `docs/AUTOPILOT.md` before taking a lease.
+cards. Read `AGENTS.md`, `GROW.md`, `docs/AUTOPILOT.md`, and the current roadmap
+before taking a lease.
+
+## Roadmap boundary
+
+```bash
+npm run roadmap -- validate
+npm run roadmap -- status
+npm run roadmap -- next --limit 1
+```
+
+The Autopilot queue authorizes **which exact performer-role task** Luna may
+research. The roadmap authorizes **whether that class of work may begin at all**.
+A valid lease does not permit Luna to skip a strategic dependency, activate a
+new scope, build accounts or APIs, change product law, or start a later milestone.
+
+Luna may take roster-growth leases only when the ready roadmap playbook includes
+that activity and the scope is currently certified and active. Otherwise stop
+and report the blocking dependency, decision, trigger, or certification.
+
+Luna may collect and propose roadmap evidence or aggregate metrics. Luna may not:
+
+- add a milestone to `data/ROADMAP-STATE.json` as complete;
+- create or attribute an owner decision;
+- substitute zero for an unknown metric;
+- close a second-desk or owner milestone;
+- treat a forecast date as authorization.
+
+Milestone state changes land only through a reviewed pull request.
 
 ## Before Luna may lease
 
@@ -120,4 +148,4 @@ receipts.
 
 Commit bounded batches. A successful cycle leaves the certification, queue,
 drafts, journals, canonical roster, source ledger, media review, projections,
-and validator mutually consistent.
+validator, and current roadmap milestone mutually consistent.

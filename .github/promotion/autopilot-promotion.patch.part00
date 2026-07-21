@@ -1,0 +1,412 @@
+diff -ruN /tmp/autopilot-original/.github/workflows/autopilot.yml ./.github/workflows/autopilot.yml
+--- /tmp/autopilot-original/.github/workflows/autopilot.yml	2026-07-21 07:04:34.000000000 +0000
++++ ./.github/workflows/autopilot.yml	2026-07-21 07:37:04.743924866 +0000
+@@ -20,9 +20,24 @@
+       - uses: actions/setup-node@v4
+         with:
+           node-version: "24"
+-      - name: Reconcile census, draft, merge, and rejection evidence
++      - name: Report producer and snapshot readiness
++        run: npm run autopilot -- readiness
++      - name: Refresh one certified scope when its cadence is due
++        env:
++          CONTACT: bigbirdreturns@proton.me
++        run: |
++          set +e
++          npm run autopilot -- refresh --due --refreshed-by undercast-bot
++          code=$?
++          set -e
++          if [ "$code" -eq 3 ]; then
++            echo "No certified scope is due."
++          elif [ "$code" -ne 0 ]; then
++            exit "$code"
++          fi
++      - name: Reconcile only certified census scopes with downstream evidence
+         run: npm run autopilot -- sync
+-      - name: Validate queue contract
++      - name: Validate queue and certification contracts
+         run: npm run autopilot -- validate && npm run autopilot:fixtures
+       - name: Report queue state
+         run: npm run autopilot -- status
+@@ -30,9 +45,8 @@
+         run: |
+           git config user.name "undercast-bot"
+           git config user.email "undercast-bot@users.noreply.github.com"
+-          git add data/AUTOPILOT.json
+-          git add data/journal/autopilot.jsonl 2>/dev/null || true
++          git add data sitemap.xml 2>/dev/null || true
+           git diff --cached --quiet && exit 0
+-          git commit -m "autopilot: reconcile census work ($(date -u +%F))"
++          git commit -m "autopilot: refresh and reconcile certified census work ($(date -u +%F))"
+           for i in 1 2 3; do git pull --rebase --autostash origin main && git push && exit 0 || sleep $((i*3)); done
+           echo "push failed after retries"; exit 1
+diff -ruN /tmp/autopilot-original/.github/workflows/validate.yml ./.github/workflows/validate.yml
+--- /tmp/autopilot-original/.github/workflows/validate.yml	2026-07-21 07:04:34.000000000 +0000
++++ ./.github/workflows/validate.yml	2026-07-21 07:13:59.057337954 +0000
+@@ -45,7 +45,7 @@
+         run: node scripts/validate.mjs
+       - name: Validate Luna autopilot queue contract
+         run: node scripts/autopilot.mjs validate && npm run autopilot:fixtures
+-      - name: Compile the current census into an isolated Luna queue
++      - name: Compile the current census into an isolated, certification-aware Luna queue
+         run: |
+           work="$(mktemp -d)"
+           node scripts/autopilot.mjs sync \
+@@ -54,7 +54,7 @@
+             --lock "$work/AUTOPILOT.lock" \
+             --json > "$work/status.json"
+           node scripts/autopilot.mjs validate --state "$work/AUTOPILOT.json"
+-          node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const trek=s.scopes?.["star-trek"]; if (!trek?.total) throw new Error("actual census produced no Star Trek tasks"); console.log(`actual census queue: Star Trek ${trek.total}; claimable ${trek.statuses?.queued||0}; attention ${trek.statuses?.attention||0}; resolved ${trek.statuses?.resolved||0}`);' "$work/status.json"
++          node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const trek=s.scopes?.["star-trek"]; const ready=(s.readiness||[]).find(r=>r.scope_id==="star-trek"); if (!trek?.total) throw new Error("actual census produced no Star Trek tasks"); const queued=trek.statuses?.queued||0; if (ready?.effective_status!=="active" && queued) throw new Error(`uncertified Star Trek scope produced ${queued} claimable tasks`); console.log(`actual census queue: Star Trek ${trek.total}; effective ${ready?.effective_status}; claimable ${queued}; attention ${trek.statuses?.attention||0}; resolved ${trek.statuses?.resolved||0}`);' "$work/status.json"
+       - name: Validate semantic corpus invariants
+         run: npm run audit:corpus
+       - name: Validate public site seams
+diff -ruN /tmp/autopilot-original/AGENTS.md ./AGENTS.md
+--- /tmp/autopilot-original/AGENTS.md	2026-07-21 07:04:34.000000000 +0000
++++ ./AGENTS.md	2026-07-21 07:18:13.561173308 +0000
+@@ -8,7 +8,9 @@
+ 
+ **To grow the roster, read [GROW.md](GROW.md).** A Luna/autonomous worker must
+ also read [LUNA.md](LUNA.md) and [docs/AUTOPILOT.md](docs/AUTOPILOT.md), then
+-claim a bounded lease instead of choosing free-form work. To consume or extend
++claim a bounded lease instead of choosing free-form work. A scope must pass
++`autopilot readiness`; Luna never certifies or activates its own producer. To
++consume or extend
+ the machine-facing archive, read [CRAWLERS.md](CRAWLERS.md) and
+ `data/archive.json`. The drafting model is the compute — you draft verified
+ specimens, a keyless script merges them. Accuracy over volume, always: never
+@@ -41,7 +43,7 @@
+ decision or a "ruling" to the owner they did not actually make.
+ 
+ Key files: `GROW.md` (how to add cards), `LUNA.md` / `docs/AUTOPILOT.md`
+-(bounded autonomous growth), `CRAWLERS.md` (crawler/evidence contract),
++(certified, bounded autonomous growth), `CRAWLERS.md` (crawler/evidence contract),
+ `README.md` (the whole system), `scripts/` (retrieve = images, ingest = lead
+ harvest, grow = merge model drafts, autopilot = durable work leases,
+ credits/needs/adopt = helpers).
+diff -ruN /tmp/autopilot-original/LUNA.md ./LUNA.md
+--- /tmp/autopilot-original/LUNA.md	2026-07-21 07:04:34.000000000 +0000
++++ ./LUNA.md	2026-07-21 07:37:30.791569737 +0000
+@@ -3,17 +3,37 @@
+ Luna is a bounded worker over a durable queue, not a free-form invitation to add
+ cards. Read `AGENTS.md`, `GROW.md`, and `docs/AUTOPILOT.md` before taking a lease.
+ 
++## Before Luna may lease
++
++A scope being listed is not authorization. It must be declared `active`, carry a
++current producer certification in `data/AUTOPILOT-CERTIFICATIONS.json`, and have a
++current census snapshot with the receipts its adapter promises. Check it first:
++
++```bash
++npm run autopilot -- readiness --scope star-trek --require-active
++```
++
++`certify`, `pause`, and scheduled source refresh are reviewer/operator actions,
++never Luna actions. A
++certification pins the exact producer files and scope contract after its declared
++fixtures and the archive gate pass. Editing the producer, changing the adapter
++contract, losing required manifest receipts, or refreshing that scope's census
++invalidates an outstanding lease packet rather than letting Luna submit stale
++work. A different franchise refreshing does not invalidate this scope's lease.
++
+ ## One complete cycle
+ 
+ ```bash
+ mkdir -p .luna
+ 
+-# Runs the existing archive invariant gate, reconciles current evidence, and
+-# leases one bounded batch. Exit 3 means no new lease was issued.
++# Runs the existing archive invariant gate, re-checks scope certification,
++# reconciles current evidence, and leases one bounded batch. Exit 3 means no new
++# lease was issued.
+ npm run autopilot -- next --agent luna --scope star-trek --limit 8 \
+   --out .luna/batch.json --prompt .luna/PROMPT.md
+ 
+-# Research every leased performer-role and write .luna/results.json.
++# Research every leased performer-role and write .luna/results.json. Submission
++# refuses a packet whose producer/census readiness token is no longer current.
+ npm run autopilot -- submit --batch .luna/batch.json --input .luna/results.json
+ 
+ # Existing keyless merge and media pipeline.
+@@ -34,10 +54,10 @@
+ ```
+ 
+ Repeat only after the prior batch has no `leased`, `drafted`, or `merged` tasks.
+-The high-level `next` command refuses to lease against a red archive and applies
+-one-batch backpressure. Exit code 3 means either the scope is drained for now or
+-work is already in flight; inspect `autopilot status` rather than claiming
+-completion.
++The high-level `next` command refuses to lease against a red archive, an
++uncertified producer, a blocked snapshot, or an existing in-flight batch. Exit
++code 3 means either the scope is drained for now or work is already in flight;
++inspect `autopilot status` rather than claiming completion.
+ 
+ For every leased task, return exactly one result:
+ 
+@@ -56,10 +76,11 @@
+ ## Media closure
+ 
+ A canonical row is not enough. The crawler has previously selected namesakes,
+-book covers, concert photographs, and other wrong subjects. A merged task remains
+-in flight until Luna visually checks the actual retrieved assets and files a
+-receipt bound to the originating lease, the exact `SOURCES.json` origins, and a
+-SHA-256 of the current specimens/source ledger.
++book covers, concert photographs, in-character performer-page images, and other
++wrong subjects. A merged task remains in flight until Luna visually checks the
++actual retrieved assets and files a receipt bound to the originating lease, the
++exact `SOURCES.json` origins, and a SHA-256 of the current specimens/source
++ledger.
+ 
+ ```json
+ {
+@@ -93,9 +114,10 @@
+ 
+ When a ledger facet is `null`, use `{"disposition":"absent","note":"..."}`.
+ Do not mark an available asset absent to avoid reviewing it. `complete` runs the
+-archive gate again and rejects mismatched wall IDs, identities, origins, subjects,
+-or missing `fetched_at` receipts.
+-
+-Commit bounded batches. A successful cycle leaves the queue, drafts, journals,
+-canonical roster, source ledger, media review, projections, and validator
+-mutually consistent.
++archive gate again, re-checks the originating readiness token, and rejects
++mismatched wall IDs, identities, origins, subjects, or missing `fetched_at`
++receipts.
++
++Commit bounded batches. A successful cycle leaves the certification, queue,
++drafts, journals, canonical roster, source ledger, media review, projections,
++and validator mutually consistent.
+diff -ruN /tmp/autopilot-original/data/AUTOPILOT-CERTIFICATIONS.json ./data/AUTOPILOT-CERTIFICATIONS.json
+--- /tmp/autopilot-original/data/AUTOPILOT-CERTIFICATIONS.json	1970-01-01 00:00:00.000000000 +0000
++++ ./data/AUTOPILOT-CERTIFICATIONS.json	2026-07-21 07:08:24.532374011 +0000
+@@ -0,0 +1,5 @@
++{
++  "version": 1,
++  "semantics": "A scope may lease autonomous work only while its declared producer contract matches a reviewed certification receipt and its current census snapshot passes the source-receipt gate.",
++  "certifications": []
++}
+diff -ruN /tmp/autopilot-original/data/AUTOPILOT-SCOPES.json ./data/AUTOPILOT-SCOPES.json
+--- /tmp/autopilot-original/data/AUTOPILOT-SCOPES.json	2026-07-21 07:04:34.000000000 +0000
++++ ./data/AUTOPILOT-SCOPES.json	2026-07-21 07:36:50.963717301 +0000
+@@ -1,64 +1,272 @@
+ {
+   "version": 1,
+-  "semantics": "Each scope maps a trustworthy census producer into the generic Luna queue. Adding a show is data configuration once its adapter emits exact performer-role coverage and pinned source receipts; the worker state machine does not change.",
++  "semantics": "Each scope maps a reviewed census producer into the generic Luna queue. Declared active is not enough: the producer contract must also have a current AUTOPILOT-CERTIFICATIONS receipt and the current census snapshot must retain its required source receipts.",
+   "default_worker": "luna",
+   "scopes": [
+     {
+       "id": "star-trek",
+       "label": "Star Trek",
+-      "status": "active",
++      "status": "paused",
+       "priority": 1000,
+-      "coverage_match": { "franchise": "Star Trek" },
+-      "refresh": { "executable": "node", "args": ["scripts/census.mjs", "star-trek"], "cadence_days": 7 },
+-      "note": "First full-corpus rollout. The full-canon census can feed this contract without worker changes."
++      "coverage_match": {
++        "franchise": "Star Trek"
++      },
++      "refresh": {
++        "cadence_days": 7,
++        "steps": [
++          {
++            "label": "rediscover full-canon Star Trek scope",
++            "executable": "node",
++            "args": [
++              "scripts/census-scope.mjs"
++            ]
++          },
++          {
++            "label": "refresh Star Trek performer-role census",
++            "executable": "node",
++            "args": [
++              "scripts/census.mjs",
++              "star-trek"
++            ]
++          }
++        ]
++      },
++      "certification": {
++        "producer_files": [
++          "scripts/census-fixtures.mjs",
++          "scripts/census-key.mjs",
++          "scripts/census-scope.mjs",
++          "scripts/census.mjs",
++          "scripts/lib/census-core.mjs"
++        ],
++        "checks": [
++          {
++            "label": "census producer regression fixtures",
++            "executable": "node",
++            "args": [
++              "scripts/census-fixtures.mjs"
++            ]
++          }
++        ],
++        "require_manifest_receipts": true
++      },
++      "note": "First full-corpus rollout. Activate only after the corrected full-canon recrawl, a green archive gate, and second-desk certification."
+     },
+     {
+       "id": "doctor-who",
+       "label": "Doctor Who",
+-      "status": "active",
++      "status": "paused",
+       "priority": 500,
+-      "coverage_match": { "franchise": "Doctor Who" },
+-      "refresh": { "executable": "node", "args": ["scripts/census.mjs", "doctor-who"], "cadence_days": 30 }
++      "coverage_match": {
++        "franchise": "Doctor Who"
++      },
++      "refresh": {
++        "executable": "node",
++        "args": [
++          "scripts/census.mjs",
++          "doctor-who"
++        ],
++        "cadence_days": 30
++      },
++      "certification": {
++        "producer_files": [
++          "scripts/census-fixtures.mjs",
++          "scripts/census-key.mjs",
++          "scripts/census.mjs",
++          "scripts/lib/census-core.mjs"
++        ],
++        "checks": [
++          {
++            "label": "census producer regression fixtures",
++            "executable": "node",
++            "args": [
++              "scripts/census-fixtures.mjs"
++            ]
++          }
++        ],
++        "require_manifest_receipts": true
++      },
++      "note": "Paused until its regenerated corpus is semantically reviewed after the compact-infobox parser repair."
+     },
+     {
+       "id": "star-wars",
+       "label": "Star Wars",
+-      "status": "active",
++      "status": "paused",
+       "priority": 450,
+-      "coverage_match": { "franchise": "Star Wars" },
+-      "refresh": { "executable": "node", "args": ["scripts/census.mjs", "star-wars"], "cadence_days": 30 }
++      "coverage_match": {
++        "franchise": "Star Wars"
++      },
++      "refresh": {
++        "executable": "node",
++        "args": [
++          "scripts/census.mjs",
++          "star-wars"
++        ],
++        "cadence_days": 30
++      },
++      "certification": {
++        "producer_files": [
++          "scripts/census-fixtures.mjs",
++          "scripts/census-key.mjs",
++          "scripts/census.mjs",
++          "scripts/lib/census-core.mjs"
++        ],
++        "checks": [
++          {
++            "label": "census producer regression fixtures",
++            "executable": "node",
++            "args": [
++              "scripts/census-fixtures.mjs"
++            ]
++          }
++        ],
++        "require_manifest_receipts": false
++      },
++      "note": "Paused until the portrayal-category adapter has its own reviewed fixture and snapshot receipt."
+     },
+     {
+       "id": "muppets-henson",
+       "label": "Muppets & Henson",
+-      "status": "active",
++      "status": "paused",
+       "priority": 400,
+-      "coverage_match": { "franchise": "Muppets & Henson" },
+-      "refresh": { "executable": "node", "args": ["scripts/census.mjs", "muppets"], "cadence_days": 30 }
++      "coverage_match": {
++        "franchise": "Muppets & Henson"
++      },
++      "refresh": {
++        "executable": "node",
++        "args": [
++          "scripts/census.mjs",
++          "muppets"
++        ],
++        "cadence_days": 30
++      },
++      "certification": {
++        "producer_files": [
++          "scripts/census-fixtures.mjs",
++          "scripts/census-key.mjs",
++          "scripts/census.mjs",
++          "scripts/lib/census-core.mjs"
++        ],
++        "checks": [
++          {
++            "label": "census producer regression fixtures",
++            "executable": "node",
++            "args": [
++              "scripts/census-fixtures.mjs"
++            ]
++          }
++        ],
++        "require_manifest_receipts": true
++      },
++      "note": "Paused until the regenerated corpus proves pattern/color fields no longer become performers."
+     },
+     {
+       "id": "kaiju",
+       "label": "Kaiju",
+-      "status": "active",
++      "status": "paused",
+       "priority": 350,
+-      "coverage_match": { "franchise": "Kaiju" },
+-      "refresh": { "executable": "node", "args": ["scripts/census.mjs", "kaiju"], "cadence_days": 30 }
++      "coverage_match": {
++        "franchise": "Kaiju"
++      },
++      "refresh": {
++        "executable": "node",
++        "args": [
++          "scripts/census.mjs",
++          "kaiju"
++        ],
++        "cadence_days": 30
++      },
++      "certification": {
++        "producer_files": [
++          "scripts/census-fixtures.mjs",
++          "scripts/census-key.mjs",
++          "scripts/census.mjs",
++          "scripts/lib/census-core.mjs"
++        ],
++        "checks": [
++          {
++            "label": "census producer regression fixtures",
++            "executable": "node",
++            "args": [
++              "scripts/census-fixtures.mjs"
++            ]
++          }
++        ],
++        "require_manifest_receipts": false
++      },
++      "note": "Paused until direct performer-category membership is reviewed as a role-bearing adapter rather than a performer-only lead source."
+     },
+     {
+       "id": "power-rangers",
+       "label": "Power Rangers",
+-      "status": "active",
++      "status": "paused",
+       "priority": 300,

@@ -6,6 +6,30 @@ plane: every missing performer-role becomes a stable task that can be certified,
 leased, decided, retried, resumed, merged, visually closed, and audited without
 silently disappearing.
 
+## Relationship to the roadmap
+
+Autopilot is an operational executor, not strategic authority. Before leasing
+work, read `docs/FIVE-YEAR-PLAN.md` and run:
+
+```bash
+npm run roadmap -- validate
+npm run roadmap -- status
+npm run roadmap -- next --limit 1
+```
+
+The roadmap determines whether roster growth, a new source adapter, contributor
+work, an API, a product surface, or another class of work is authorized. Autopilot
+determines which exact performer-role Luna may research inside an authorized,
+certified scope. A valid queue lease cannot override a blocked roadmap milestone,
+missing owner decision, unmet demand trigger, inactive scope, or stale producer
+certification.
+
+Roadmap backpressure is intentional. When media review, corrections, producer
+certification, rights work, or review capacity is behind, the current milestone
+may require drafting to slow or stop even when queueable tasks remain. Autopilot
+state and journals may provide milestone evidence, but no Autopilot command may
+mark a second-desk or owner milestone complete.
+
 ## Boundaries
 
 The queue does not decide eligibility and never writes directly to
@@ -44,6 +68,11 @@ and binds completion to the current corpus and source ledger.
   in task fingerprints and scope snapshot readiness.
 - `data/drafts.json`, `data/specimens.json`, `data/journal/rejections.jsonl`, and
   `data/SOURCES.json` — downstream facts reconciled back into task state.
+- `data/ROADMAP.json` and `data/ROADMAP-STATE.json` — strategic dependency,
+  authority, demand-trigger, and completion-receipt contract governing when an
+  Autopilot class of work may begin.
+- `docs/FIVE-YEAR-PLAN.md` and `docs/ROADMAP-PLAYBOOKS.md` — strategic rationale
+  and exact authorized build sequences.
 - `.luna/` — local ignored packets and result/review files.
 
 ## The promotion sequence
@@ -87,6 +116,10 @@ local: pause a scope without deleting its history.
 ## Commands
 
 ```bash
+npm run roadmap -- validate
+npm run roadmap -- status
+npm run roadmap -- next --limit 1
+
 npm run autopilot -- readiness
 npm run autopilot -- readiness --scope star-trek --require-active
 npm run autopilot -- certify --scope star-trek \
@@ -120,7 +153,7 @@ deterministic projections; runs the archive gate; re-checks the resulting snapsh
 and atomically reconciles queue plus refresh receipts. `refresh --due` selects at
 most one active due scope by priority, keeping a single scheduled run bounded.
 
-`next` is the safe worker operation: it runs `scripts/validate.mjs`, re-checks
+`next` is the safe worker operation after the current roadmap playbook authorizes roster growth: it runs `scripts/validate.mjs`, re-checks
 scope certification and snapshot readiness, syncs all current evidence, and
 leases a batch only when that scope has no prior `leased`, `drafted`, or `merged`
 work. `claim` skips the archive gate but does **not** bypass certification. Both

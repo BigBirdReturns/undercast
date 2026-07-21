@@ -1,0 +1,380 @@
++  validateCertifications,
++} from "./lib/autopilot.mjs";
++
++const root = await mkdtemp(join(tmpdir(), "undercast-autopilot-cert-"));
++try {
++  await mkdir(join(root, "scripts/lib"), { recursive: true });
++  await writeFile(join(root, "scripts/census.mjs"), "export const producer = 1;\n");
++  await writeFile(join(root, "scripts/lib/census-core.mjs"), "export const parser = 1;\n");
++
++  const scope = {
++    id: "star-trek",
++    label: "Star Trek",
++    status: "active",
++    coverage_match: { franchise: "Star Trek" },
++    refresh: { executable: "node", args: ["scripts/census.mjs", "star-trek"], cadence_days: 7 },
++    certification: {
++      producer_files: ["scripts/census.mjs", "scripts/lib/census-core.mjs"],
++      checks: [{ label: "fixture", executable: process.execPath, args: ["-e", "process.exit(0)"] }],
++      require_manifest_receipts: true,
++    },
++  };
++  const scopes = { version: 1, scopes: [scope] };
++  const coverage = [{
++    franchise: "Star Trek", category: "Ferengi", character: "Brunt", performer: "Jeffrey Combs",
++    source: "https://memory-alpha.fandom.com/wiki/Brunt", role_on_wall: false,
++  }];
++  const manifest = { observations: [{
++    franchise: "Star Trek", source: coverage[0].source, pageid: 10, revision: 20,
++    content_sha256: "a".repeat(64), timestamp: "2026-07-21T00:00:00Z",
++  }] };
++
++  const empty = emptyCertifications();
++  validateCertifications(empty);
++  const missing = await resolveScopeReadiness({ scopesDoc: scopes, certificationsDoc: empty, coverage, manifest, root });
++  assert.equal(missing.readiness[0].effective_status, "paused", "an active declaration without a certificate cannot lease work");
++  assert.equal(missing.readiness[0].certification, "missing");
++
++  const pausedScopes = structuredClone(scopes);
++  pausedScopes.scopes[0].status = "paused";
++  const declaredPaused = await resolveScopeReadiness({ scopesDoc: pausedScopes, certificationsDoc: empty, coverage, manifest, root });
++  assert.equal(declaredPaused.readiness[0].reasons[0], "scope_declared_paused");
++
++  const certified = await certifyScope({
++    scopesDoc: scopes,
++    certificationsDoc: empty,
++    scopeId: "star-trek",
++    certifiedBy: "second-desk",
++    coverage,
++    manifest,
++    coverageSha256: "1".repeat(64),
++    manifestSha256: "2".repeat(64),
++    root,
++    cwd: root,
++    now: "2026-07-21T12:00:00Z",
++  });
++  assert.equal(certified.certificate.checks[0].status, "passed");
++  validateCertifications(certified.certifications);
++
++  const ready = await resolveScopeReadiness({
++    scopesDoc: scopes,
++    certificationsDoc: certified.certifications,
++    coverage,
++    manifest,
++    coverageSha256: "1".repeat(64),
++    manifestSha256: "2".repeat(64),
++    root,
++  });
++  assert.equal(ready.readiness[0].effective_status, "active");
++  assert.match(ready.readiness[0].lease_token, /^[0-9a-f]{64}$/);
++  assert.equal(ready.readiness[0].snapshot_details.complete_receipts, 1);
++
++  const changedScopeCoverage = coverage.map((row) => ({ ...row, category: "Individuals" }));
++  const changedSnapshot = await resolveScopeReadiness({
++    scopesDoc: scopes,
++    certificationsDoc: certified.certifications,
++    coverage: changedScopeCoverage,
++    manifest,
++    coverageSha256: "3".repeat(64),
++    manifestSha256: "2".repeat(64),
++    root,
++  });
++  assert.notEqual(changedSnapshot.readiness[0].lease_token, ready.readiness[0].lease_token, "a changed scope census invalidates an outstanding lease token");
++
++  const wallProjectionChanged = coverage.map((row) => ({ ...row, performer_on_wall: true, role_on_wall: true, wall_ids: ["UC-999"] }));
++  const wallProjectionSnapshot = await resolveScopeReadiness({
++    scopesDoc: scopes,
++    certificationsDoc: certified.certifications,
++    coverage: wallProjectionChanged,
++    manifest,
++    root,
++  });
++  assert.equal(wallProjectionSnapshot.readiness[0].lease_token, ready.readiness[0].lease_token, "derived wall-coverage changes do not stale the source lease that produced them");
++
++  const unrelatedCoverage = [...coverage, {
++    franchise: "Doctor Who", category: "Daleks", character: "Dalek", performer: "Nicholas Briggs",
++    source: "https://tardis.fandom.com/wiki/Dalek",
++  }];
++  const unrelatedSnapshot = await resolveScopeReadiness({
++    scopesDoc: scopes,
++    certificationsDoc: certified.certifications,
++    coverage: unrelatedCoverage,
++    manifest,
++    coverageSha256: "4".repeat(64),
++    manifestSha256: "2".repeat(64),
++    root,
++  });
++  assert.equal(unrelatedSnapshot.readiness[0].lease_token, ready.readiness[0].lease_token, "another franchise cannot invalidate this scope's lease");
++
++  const reorderedSnapshot = await resolveScopeReadiness({
++    scopesDoc: scopes,
++    certificationsDoc: certified.certifications,
++    coverage: [...coverage].reverse(),
++    manifest,
++    root,
++  });
++  assert.equal(reorderedSnapshot.readiness[0].lease_token, ready.readiness[0].lease_token, "row order does not change a scope lease token");
++
++  const changedManifest = { observations: [{ ...manifest.observations[0], revision: 21, content_sha256: "b".repeat(64) }] };
++  const changedManifestSnapshot = await resolveScopeReadiness({
++    scopesDoc: scopes,
++    certificationsDoc: certified.certifications,
++    coverage,
++    manifest: changedManifest,
++    root,
++  });
++  assert.notEqual(changedManifestSnapshot.readiness[0].lease_token, ready.readiness[0].lease_token, "changed scope evidence invalidates an outstanding lease token");
++
++  await writeFile(join(root, "scripts/lib/census-core.mjs"), "export const parser = 2;\n");
++  const stale = await resolveScopeReadiness({ scopesDoc: scopes, certificationsDoc: certified.certifications, coverage, manifest, root });
++  assert.equal(stale.readiness[0].effective_status, "paused", "producer changes invalidate certification");
++  assert.ok(stale.readiness[0].reasons.includes("producer_changed"));
++  await writeFile(join(root, "scripts/lib/census-core.mjs"), "export const parser = 1;\n");
++
++  const missingReceipt = snapshotReadiness(scope, coverage, { observations: [] });
++  assert.equal(missingReceipt.ready, false);
++  assert.ok(missingReceipt.reasons.includes("manifest_receipts_incomplete"));
++
++  const noReceiptScope = structuredClone(scope);
++  noReceiptScope.certification.require_manifest_receipts = false;
++  const optionalReceipt = snapshotReadiness(noReceiptScope, coverage, { observations: [] });
++  assert.equal(optionalReceipt.ready, true, "category-membership adapters may explicitly defer page-receipt completeness while remaining paused for review");
++
++  const contractChanged = structuredClone(scopes);
++  contractChanged.scopes[0].refresh.cadence_days = 14;
++  const staleContract = await resolveScopeReadiness({ scopesDoc: contractChanged, certificationsDoc: certified.certifications, coverage, manifest, root });
++  assert.ok(staleContract.readiness[0].reasons.includes("scope_contract_changed"));
++
++  const fingerprint = await producerFingerprint(scope, { root });
++  assert.equal(fingerprint.producer_files.length, 2);
++  await assert.rejects(() => producerFingerprint({ ...scope, certification: { ...scope.certification, producer_files: ["../secret"] } }, { root }), /unsafe producer file path/);
++
++  const failingScope = structuredClone(scope);
++  failingScope.certification.checks = [{ label: "fails closed", executable: process.execPath, args: ["-e", "process.exit(7)"] }];
++  assert.throws(() => runScopeChecks(failingScope, { cwd: root }), /failed with exit 7/);
++
++  const duplicate = structuredClone(certified.certifications);
++  duplicate.certifications.push(structuredClone(duplicate.certifications[0]));
++  assert.throws(() => validateCertifications(duplicate), /duplicate certification/);
++
++  console.log("PASS — scope certification, producer drift, snapshot receipts, and lease-token fixtures");
++} finally {
++  await rm(root, { recursive: true, force: true });
++}
+diff -ruN /tmp/autopilot-original/scripts/autopilot-cli-fixtures.mjs ./scripts/autopilot-cli-fixtures.mjs
+--- /tmp/autopilot-original/scripts/autopilot-cli-fixtures.mjs	1970-01-01 00:00:00.000000000 +0000
++++ ./scripts/autopilot-cli-fixtures.mjs	2026-07-21 07:39:10.531988781 +0000
+@@ -0,0 +1,182 @@
++#!/usr/bin/env node
++import assert from "node:assert/strict";
++import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { dirname, join } from "node:path";
++import { fileURLToPath } from "node:url";
++import { spawnSync } from "node:child_process";
++
++const CLI = join(dirname(fileURLToPath(import.meta.url)), "autopilot.mjs");
++const root = await mkdtemp(join(tmpdir(), "undercast-autopilot-cli-"));
++const json = (value) => JSON.stringify(value, null, 2) + "\n";
++
++async function put(path, value) {
++  const target = join(root, path);
++  await mkdir(dirname(target), { recursive: true });
++  await writeFile(target, typeof value === "string" ? value : json(value));
++}
++
++function run(args, { expect = 0 } = {}) {
++  const result = spawnSync(process.execPath, [CLI, ...args, "--root", root], {
++    cwd: root,
++    encoding: "utf8",
++    env: process.env,
++  });
++  if (result.status !== expect) {
++    throw new Error(`autopilot ${args.join(" ")} exited ${result.status}, expected ${expect}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
++  }
++  return result;
++}
++
++try {
++  await put("scripts/census-key.mjs", "export const key = 1;\n");
++  await put("scripts/census-fixtures.mjs", "console.log('PASS — synthetic producer fixtures');\n");
++  await put("scripts/lib/census-core.mjs", "export const parser = 1;\n");
++  await put("scripts/census.mjs", `
++import { readFile, writeFile } from "node:fs/promises";
++const coverage = JSON.parse(await readFile("data/CENSUS-COVERAGE.json", "utf8"));
++coverage[0].category = "Individuals";
++await writeFile("data/CENSUS-COVERAGE.json", JSON.stringify(coverage, null, 2) + "\\n");
++const manifest = JSON.parse(await readFile("data/CENSUS-MANIFEST.json", "utf8"));
++manifest.observations[0].revision = 21;
++manifest.observations[0].content_sha256 = "b".repeat(64);
++manifest.observations[0].observed_at = "2026-07-22T00:00:00Z";
++await writeFile("data/CENSUS-MANIFEST.json", JSON.stringify(manifest, null, 2) + "\\n");
++console.log("PASS — synthetic census refresh");
++`);
++  await put("scripts/shard.mjs", "console.log('PASS — synthetic projection rebuild');\n");
++  await put("scripts/validate.mjs", "console.log('PASS — synthetic archive gate');\n");
++
++  await put("data/AUTOPILOT-SCOPES.json", {
++    version: 1,
++    scopes: [{
++      id: "star-trek",
++      label: "Star Trek",
++      status: "paused",
++      priority: 1000,
++      coverage_match: { franchise: "Star Trek" },
++      refresh: { executable: "node", args: ["scripts/census.mjs", "star-trek"], cadence_days: 7 },
++      certification: {
++        producer_files: [
++          "scripts/census-fixtures.mjs",
++          "scripts/census-key.mjs",
++          "scripts/census.mjs",
++          "scripts/lib/census-core.mjs",
++        ],
++        checks: [{ label: "producer fixtures", executable: "node", args: ["scripts/census-fixtures.mjs"] }],
++        require_manifest_receipts: true,
++      },
++    }],
++  });
++  await put("data/AUTOPILOT-CERTIFICATIONS.json", { version: 1, certifications: [] });
++  await put("data/AUTOPILOT.json", {
++    version: 1,
++    source: {
++      coverage_path: "data/CENSUS-COVERAGE.json",
++      coverage_sha256: "",
++      scopes_path: "data/AUTOPILOT-SCOPES.json",
++      certifications_path: "data/AUTOPILOT-CERTIFICATIONS.json",
++      manifest_path: "data/CENSUS-MANIFEST.json",
++      drafts_path: "data/drafts.json",
++      specimens_path: "data/specimens.json",
++      growth_rejections_path: "data/journal/rejections.jsonl",
++    },
++    updated_at: "",
++    jobs: [],
++  });
++  const originalCoverage = [{
++    franchise: "Star Trek",
++    category: "Ferengi",
++    character: "Brunt",
++    performer: "Jeffrey Combs",
++    performance_mode: "physical-prosthetic",
++    source: "https://memory-alpha.fandom.com/wiki/Brunt",
++    performer_on_wall: false,
++    role_on_wall: false,
++    wall_ids: [],
++  }];
++  await put("data/CENSUS-COVERAGE.json", originalCoverage);
++  await put("data/CENSUS-MANIFEST.json", {
++    observations: [{
++      franchise: "Star Trek",
++      category: "Ferengi",
++      title: "Brunt",
++      source: originalCoverage[0].source,
++      pageid: 10,
++      revision: 20,
++      timestamp: "2026-07-01T00:00:00Z",
++      observed_at: "2026-07-01T00:00:00Z",
++      content_sha256: "a".repeat(64),
++      disposition: "credited",
++    }],
++  });
++  await put("data/drafts.json", []);
++  await put("data/specimens.json", []);
++  await put("data/SOURCES.json", []);
++  await put("data/journal/rejections.jsonl", "");
++  await mkdir(join(root, ".luna"), { recursive: true });
++
++  run(["readiness", "--scope", "star-trek", "--require-active"], { expect: 1 });
++  run(["certify", "--scope", "star-trek", "--reviewed-by", "second-desk", "--activate", "--now", "2026-07-21T00:00:00Z"]);
++  run(["sync", "--now", "2026-07-21T00:00:00Z"]);
++  const before = JSON.parse(run(["readiness", "--scope", "star-trek", "--json", "--now", "2026-07-21T00:00:00Z"]).stdout)[0];
++  assert.equal(before.refresh.due, true);
++
++  run(["refresh", "--due", "--refreshed-by", "undercast-bot", "--now", "2026-07-21T00:00:00Z"]);
++  const after = JSON.parse(run(["readiness", "--scope", "star-trek", "--json", "--now", "2026-07-22T01:00:00Z"]).stdout)[0];
++  assert.notEqual(after.lease_token, before.lease_token, "refresh rotates the scope-local lease token");
++  assert.equal(after.refresh.due, false);
++
++  run([
++    "claim", "--agent", "luna", "--scope", "star-trek", "--limit", "1",
++    "--out", ".luna/batch.json", "--prompt", ".luna/PROMPT.md", "--now", "2026-07-22T02:00:00Z",
++  ]);
++  const batch = JSON.parse(await readFile(join(root, ".luna/batch.json"), "utf8"));
++  const task = batch.tasks[0];
++  await put(".luna/results.json", {
++    version: 1,
++    lease_id: batch.lease_id,
++    agent: "luna",
++    results: [{
++      task_id: task.id,
++      decision: "draft",
++      draft: {
++        character: task.character,
++        actor: task.performer,
++        production: "Star Trek: Deep Space Nine",
++        universe: "Star Trek",
++        years: "1995–99",
++        designer: "Michael Westmore",
++        transform: 5,
++        kind: "face",
++        knownFor: "Ferengi Commerce Authority liquidator.",
++        reveal: "Jeffrey Combs disappears beneath the Ferengi appliances. The exact role remains independently sourced.",
++        references: [{ claim: "performance", label: "Jeffrey Combs portrayed Brunt", source: task.sources[0] }],
++        wiki: "https://en.wikipedia.org/wiki/Jeffrey_Combs",
++      },
++    }],
++  });
++
++  const changedCoverage = structuredClone(JSON.parse(await readFile(join(root, "data/CENSUS-COVERAGE.json"), "utf8")));
++  changedCoverage[0].category = "Ferengi";
++  await put("data/CENSUS-COVERAGE.json", changedCoverage);
++  const stale = run(["submit", "--batch", ".luna/batch.json", "--input", ".luna/results.json"], { expect: 1 });
++  assert.match(stale.stderr, /different producer or census snapshot/);
++  changedCoverage[0].category = "Individuals";
++  await put("data/CENSUS-COVERAGE.json", changedCoverage);
++  run(["submit", "--batch", ".luna/batch.json", "--input", ".luna/results.json", "--now", "2026-07-22T03:00:00Z"]);
++
++  const state = JSON.parse(await readFile(join(root, "data/AUTOPILOT.json"), "utf8"));
++  const drafts = JSON.parse(await readFile(join(root, "data/drafts.json"), "utf8"));
++  const journal = (await readFile(join(root, "data/journal/autopilot.jsonl"), "utf8"))
++    .trim().split("\n").filter(Boolean).map(JSON.parse);
++  assert.equal(state.jobs[0].status, "drafted");
++  assert.match(drafts[0]._autopilot.readiness_token, /^[0-9a-f]{64}$/);
++  assert.match(drafts[0]._autopilot.source_fingerprint, /^[0-9a-f]{64}$/);
++  assert.ok(journal.some((row) => row.op === "scope.certified"));
++  assert.ok(journal.some((row) => row.op === "scope.refreshed"));
++
++  console.log("PASS — CLI certification, due refresh, token rotation, stale-submit refusal, and durable draft receipts");
++} finally {
++  await rm(root, { recursive: true, force: true });
++}
+diff -ruN /tmp/autopilot-original/scripts/autopilot-fixtures.mjs ./scripts/autopilot-fixtures.mjs
+--- /tmp/autopilot-original/scripts/autopilot-fixtures.mjs	2026-07-21 07:04:34.000000000 +0000
++++ ./scripts/autopilot-fixtures.mjs	2026-07-21 07:32:55.574803478 +0000
+@@ -23,6 +23,15 @@
+   ],
+ };
+ 
++const readiness = (scope, token = "f") => ({
++  scope_id: scope,
++  lease_token: token.repeat(64),
++  producer_sha256: "a".repeat(64),
++  contract_sha256: "b".repeat(64),
++  coverage_sha256: "c".repeat(64),
++  manifest_sha256: "d".repeat(64),
++});
++
+ const manifestV1 = {
+   observations: [{
+     franchise: "Star Trek", category: "Ferengi", title: "Brunt",
+@@ -64,16 +73,34 @@
+ assert.equal(stable.changed, false, "unchanged coverage produces byte-stable state");
+ assert.equal(stable.state.updated_at, T0, "no-op sync does not churn updated_at");
+ 
+-const claimed = claimTasks({ state: first.state, agent: "luna", scope: "star-trek", limit: 2, leaseMinutes: 60, now: T1 });
++const claimed = claimTasks({ state: first.state, agent: "luna", scope: "star-trek", readiness: readiness("star-trek"), limit: 2, leaseMinutes: 60, now: T1 });
+ assert.ok(claimed.batch);
+ assert.equal(claimed.batch.tasks.length, 2);
+ assert.ok(claimed.batch.tasks.every((task) => task.attempt === 1), "batch reports the persisted attempt number");
+ assert.ok(claimed.batch.tasks.every((task) => task.scope === "star-trek"));
++assert.ok(claimed.batch.tasks.every((task) => /^[0-9a-f]{64}$/.test(task.source_fingerprint)), "lease packets bind each task source fingerprint");
+ assert.equal(new Set(claimed.batch.tasks.map((task) => task.id)).size, 2);
