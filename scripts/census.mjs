@@ -28,6 +28,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { normalizeCensusKey as normalize } from "./census-key.mjs";
+import { performerFieldValues, namesFrom, PERSONISH, loadScope } from "./lib/census-core.mjs";
 
 const UA = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT || "census"})`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -58,9 +59,8 @@ async function observeTitles(cfg, cat, titles, disposition = "category-member") 
   }
 }
 
-// Actor-ish infobox fields, in rough order of trust. Different wikis use
-// different keys; all of these mean "the human behind the character".
-const ACTOR_FIELDS = /\|\s*(actor|actors|performer|performers|played ?by|portrayed ?by|suit ?actor|main ?actor|voice ?actor)\s*=\s*([^\n]+)/gi;
+// Performer-field extraction lives in lib/census-core.mjs — nesting-aware,
+// exact-parameter-only, and fixture-tested (scripts/census-fixtures.mjs).
 
 const FRANCHISES = {
   "star-trek": {
@@ -147,20 +147,7 @@ async function categoryMembers(api, cat, depth = 0, subcategoryMode = "all") {
 // strip wiki markup from a captured actor-field value -> clean people names.
 // A performer credit must LOOK like a person: 2+ capitalized words, no digits,
 // no ALL-CAPS citation templates (PROSE/COMIC/TV), no story parentheticals.
-// Initialled professional names (J.G. Hertzler, D.C. Fontana, etc.) are common
-// in source credits. Requiring a lowercase letter in the first name silently
-// turned exact performer fields into "unresolved" rows. Keep the two-word and
-// mixed-case guards below, but accept initials inside an otherwise person-like
-// name.
-const PERSONISH = /^[A-ZÀ-Þ][A-Za-zà-þ'.\-]*(?: [A-ZÀ-Þ][A-Za-zà-þ'.\-]*)+$/;
-function namesFrom(value) {
-  const links = [...value.matchAll(/\[\[([^\]|#]+)(?:[^\]]*)?\]\]/g)]
-    .map((m) => m[1].trim().replace(/\s*\((actor|actress|performer|puppeteer|Dalek operator)\)$/i, ""));
-  return links.filter((n) => n && !/^(File|Image|Category|w:c:|Template):/i.test(n)
-    && !/[()\d]/.test(n) && n !== n.toUpperCase()
-    && !/uncredited|unknown|various|see below/i.test(n)
-    && PERSONISH.test(n) && n.length < 40);
-}
+// PERSONISH and namesFrom moved to lib/census-core.mjs (fixture-tested).
 
 async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
   console.log(`\n== ${cfg.label} (${cfg.api}) ==`);
@@ -169,12 +156,10 @@ async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
   // run — a silently narrowed scope would publish false zeros for every
   // category it dropped.
   if (cfg.scopeFile) {
-    let raw = null;
-    try { raw = await readFile(cfg.scopeFile, "utf8"); }
-    catch { console.log(`  scope: ${cfg.scopeFile} not found — hand list only (${(cfg.categories || []).length} categories)`); }
-    if (raw !== null) {
-      const discovered = (JSON.parse(raw).included || []).map((row) => row.category);
-      if (!discovered.length) throw new Error(`${cfg.scopeFile} has no included categories; refusing a scope that narrows the hand list`);
+    const discovered = await loadScope(readFile, cfg.scopeFile); // ENOENT-only fallback; anything else throws
+    if (discovered === null) {
+      console.log(`  scope: ${cfg.scopeFile} not found — hand list only (${(cfg.categories || []).length} categories)`);
+    } else {
       cfg.categories = [...new Set([...(cfg.categories || []), ...discovered])];
       console.log(`  scope: ${discovered.length} discovered + hand list -> ${cfg.categories.length} categories`);
     }
@@ -226,7 +211,7 @@ async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
           continue;
         }
         const performers = new Set();
-        for (const m of wt.matchAll(ACTOR_FIELDS)) for (const n of namesFrom(m[2])) performers.add(n);
+        for (const value of performerFieldValues(wt)) for (const n of namesFrom(value)) performers.add(n);
         observePage({ cfg, cat, page: p, revision, source, content: fullWikitext,
           disposition: performers.size ? "credited" : "unresolved" });
         if (performers.size) {
