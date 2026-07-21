@@ -121,7 +121,7 @@ const midYear = (years) => {
 // titles that mean a lesser/other version of a character (a game, a reboot, a book)
 const SPINOFF = /\b(video ?game|\(game\)|novel|comic|soundtrack|magazine|action figure|lego|\(disambiguation\)|animated series)\b/i;
 // files that are not a person's photo (logos, flags, ui chrome, signatures, svgs)
-const NONPHOTO = /logo|icon|symbol|commons-|edit-|flag|star_full|ambox|question_|padlock|signature|wikimedia|\.svg$/i;
+const NONPHOTO = /logo|icon|symbol|commons-|edit-|flag|star_full|ambox|question_|padlock|signature|wikimedia|seiyu|\.svg$/i;
 
 let lastReq = 0;
 async function politeFetch(url, tries = 0) {
