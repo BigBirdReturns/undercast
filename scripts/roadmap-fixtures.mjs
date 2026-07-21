@@ -3,15 +3,17 @@ import assert from "node:assert/strict";
 import {
   currentAdoptionStage,
   deriveMilestoneStates,
+  extractPlaybookSection,
   nextMilestones,
   triggerSatisfied,
+  validatePlaybooks,
   validateRoadmap,
   validateRoadmapState,
 } from "./lib/roadmap.mjs";
 
 const roadmap = {
   version: 1,
-  document: "docs/FIVE-YEAR-PLAN.md",
+  document: "docs/PLAYBOOK.md",
   horizon: { start: "2026-01-01", end: "2031-01-01" },
   north_star: "A durable evidence-backed recognition event.",
   metrics: ["demand", "quality"],
@@ -24,16 +26,59 @@ const roadmap = {
     {
       id: "foundation", seq: 0, window: "Y1", authority: "second-desk",
       deps: [], decisions: [], triggers: [],
-      guide: "docs/FIVE-YEAR-PLAN.md#foundation",
+      guide: "docs/PLAYBOOK.md#foundation",
     },
     {
       id: "product", seq: 1, window: "Y2", authority: "owner",
       deps: ["foundation"], decisions: ["product-model"],
       triggers: [["demand", "gte", 3]],
-      guide: "docs/FIVE-YEAR-PLAN.md#product",
+      guide: "docs/PLAYBOOK.md#product",
     },
   ],
 };
+
+const playbooks = `# Playbooks
+
+## foundation
+
+Foundation instructions.
+
+### Build sequence
+
+1. Build it.
+
+### Acceptance proof
+
+- Proof.
+
+### Do not
+
+- Skip review.
+
+### Outcome metrics
+
+- quality
+
+## product
+
+Product instructions.
+
+### Build sequence
+
+1. Build product.
+
+### Acceptance proof
+
+- Product proof.
+
+### Do not
+
+- Invent demand.
+
+### Outcome metrics
+
+- demand
+`;
 
 const emptyState = {
   version: 1, updated_at: "", completed: [], decisions: [],
@@ -41,11 +86,17 @@ const emptyState = {
 };
 
 assert.equal(validateRoadmap(roadmap), true);
+assert.equal(validatePlaybooks(roadmap, playbooks), true);
+assert.match(extractPlaybookSection(roadmap, playbooks, "foundation"), /^## foundation/);
+assert.doesNotMatch(extractPlaybookSection(roadmap, playbooks, "foundation"), /^## product/m);
 assert.equal(validateRoadmapState(roadmap, emptyState), true);
 assert.equal(nextMilestones(roadmap, emptyState)[0].id, "foundation");
 assert.equal(currentAdoptionStage(roadmap, emptyState).id, "operator-proof");
 assert.equal(triggerSatisfied(["demand", "gte", 3], { demand: null }), false);
 assert.equal(triggerSatisfied(["demand", "gte", 3], { demand: 3 }), true);
+
+const missingPlaybook = playbooks.replace("### Acceptance proof\n\n- Product proof.\n", "");
+assert.throws(() => validatePlaybooks(roadmap, missingPlaybook), /playbook product is missing ### Acceptance proof/);
 
 const duplicate = structuredClone(roadmap);
 duplicate.milestones.push(structuredClone(duplicate.milestones[0]));
@@ -55,6 +106,10 @@ const cycle = structuredClone(roadmap);
 cycle.milestones[0].deps = ["product"];
 assert.throws(() => validateRoadmap(cycle), /dependency cycle/);
 
+const badGuide = structuredClone(roadmap);
+badGuide.milestones[0].guide = "docs/PLAYBOOK.md#wrong";
+assert.throws(() => validateRoadmap(badGuide), /guide must be exactly/);
+
 const machineClose = structuredClone(emptyState);
 machineClose.completed = [{
   milestone: "foundation", completed_at: "2027-01-01T00:00:00Z",
@@ -62,6 +117,13 @@ machineClose.completed = [{
   evidence: [{ type: "workflow-run", value: "run-1" }],
 }];
 assert.throws(() => validateRoadmapState(roadmap, machineClose), /cannot close second-desk milestone/);
+
+const orphanDecision = structuredClone(emptyState);
+orphanDecision.decisions = [{
+  id: "unrequested-decision", decided_by: "owner",
+  decided_at: "2027-01-01T00:00:00Z", evidence: "docs/DECISIONS.md#unrequested",
+}];
+assert.throws(() => validateRoadmapState(roadmap, orphanDecision), /not required by any milestone/);
 
 const foundationDone = structuredClone(emptyState);
 foundationDone.completed = [{
@@ -104,4 +166,12 @@ ownerWithoutDecision.completed.push({
 ownerWithoutDecision.metrics.demand = 3;
 assert.throws(() => validateRoadmapState(roadmap, ownerWithoutDecision), /required decision product-model/);
 
-console.log("PASS — roadmap DAG, authority, demand triggers, adoption stages, and completion receipts");
+const outOfOrder = structuredClone(ready);
+outOfOrder.completed.push({
+  milestone: "product", completed_at: "2026-12-01T00:00:00Z",
+  reviewed_by: "owner", reviewed_role: "owner",
+  evidence: [{ type: "workflow-run", value: "run-2" }],
+});
+assert.throws(() => validateRoadmapState(roadmap, outOfOrder), /completion receipts must be chronological/);
+
+console.log("PASS — roadmap DAG, exact playbooks, authority, triggers, adoption, and append-only completion receipts");
