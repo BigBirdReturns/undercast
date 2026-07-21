@@ -1,0 +1,69 @@
+name: install-preservation-rescue
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: install-preservation-rescue
+  cancel-in-progress: false
+
+jobs:
+  install:
+    if: github.head_ref == 'agent/preservation-rescue'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/preservation-rescue
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Reconstruct and verify the reviewed preservation implementation
+        run: |
+          base64 -d .github/preservation-install.tar.gz.b64 > /tmp/preservation-install.tar.gz
+          echo "f6619bc1a4dfa202aa47f6c1c872d5ae6f63a498d62dde192edca57a97cadce4  /tmp/preservation-install.tar.gz" | sha256sum --check --strict
+          tar -tzf /tmp/preservation-install.tar.gz > /tmp/preservation-install.files
+          test -s /tmp/preservation-install.files
+          ! grep -E '(^/|(^|/)\.\.(/|$)|^\.github/workflows/)' /tmp/preservation-install.files
+          tar -xzf /tmp/preservation-install.tar.gz
+          git diff --check
+      - name: Install deterministic test runtime
+        run: npm ci
+      - name: Validate preservation and certification contracts
+        run: |
+          for file in scripts/preserve-*.mjs scripts/preservation-fixtures.mjs scripts/lib/preservation.mjs scripts/autopilot.mjs scripts/lib/autopilot-certification.mjs; do
+            node --check "$file"
+          done
+          npm run preserve:fixtures
+          npm run preserve:status -- --json
+          npm run autopilot:fixtures
+          npm run autopilot -- readiness --scope star-trek --require-active
+          npm run autopilot -- validate
+          npm run roadmap -- validate
+          npm run roadmap:fixtures
+          node scripts/validate.mjs
+          npm run audit:corpus
+          npm run test:site-seams
+          git diff --check
+      - name: Commit the reviewed non-workflow implementation
+        run: |
+          git config user.name "undercast-preservation"
+          git config user.email "undercast-preservation@users.noreply.github.com"
+          git add \
+            package.json \
+            preservation/README.md preservation/SNAPSHOTS.json preservation/BOOTSTRAP-PENDING \
+            scripts/lib/preservation.mjs scripts/lib/autopilot-certification.mjs \
+            scripts/preserve-sources.mjs scripts/preserve-bag.mjs scripts/preserve-verify.mjs \
+            scripts/preserve-status.mjs scripts/preserve-receipt.mjs scripts/preserve-offsite.mjs \
+            scripts/preservation-fixtures.mjs scripts/autopilot.mjs \
+            scripts/autopilot-certification-fixtures.mjs scripts/autopilot-cli-fixtures.mjs
+          git diff --cached --quiet && exit 0
+          git commit -m "Preservation: archive exact source revisions and offsite originals"
+          git push origin HEAD:agent/preservation-rescue
