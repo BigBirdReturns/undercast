@@ -63,7 +63,7 @@ its composition and crop are judged separately in visual review.)
 - **The aesthetic is load-bearing** — not "modernized" into a generic grid.
 - **Retire, don't remove-in-name-only.** The seam and its `comparison` contract
   are retired; `focus` stays (DEC-0002/0003).
-- **`validate.yml` is the canonical gate** (DEC-0011); **shared CSS is canonical for
+- **`npm run gate` is the canonical gate** (DEC-0011); **shared CSS is canonical for
   tokens** (DEC-0010).
 
 ## 6. Anti-goals

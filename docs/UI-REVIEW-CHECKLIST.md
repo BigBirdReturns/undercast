@@ -30,10 +30,10 @@ not carry it. Read `docs/PRODUCT-CONSTITUTION.md`, `docs/DESIGN-SYSTEM.md`, and
 
 ## Gate — run the canonical gate; do not copy its commands here
 
-**`.github/workflows/validate.yml` is the canonical gate (DEC-0011).** Run it in
-full and paste the tail of each step's output. This checklist deliberately does
-**not** reproduce the shell commands — a second copy drifts (DEC-0011). Read
-`validate.yml` for the exact steps each time, and confirm every **category** passes:
+**`npm run gate` is the canonical gate (DEC-0011).** `.github/workflows/validate.yml`
+invokes it. Run it in full and paste the tail of the output. This checklist
+deliberately does **not** reproduce its command list — a second copy drifts
+(DEC-0011). Confirm every **category** passes:
 
 - [ ] **Projections deterministic** — rebuild, refuse drift.
 - [ ] **Archive invariants** — the invariant gate.
@@ -44,9 +44,8 @@ full and paste the tail of each step's output. This checklist deliberately does
 - [ ] **Route count** — records match specimens + tombstones.
 - [ ] `build:contract` run if any web asset changed (hashes rebuilt).
 
-If this summary and the workflow ever disagree, **the workflow wins.** The tracked
-fix is a single **`npm run gate`** that both CI and this checklist invoke; until it
-exists, `validate.yml` is the one source of truth.
+If this summary and the workflow ever disagree, **`validate.yml` wins.** CI and this
+checklist are wired to the same single canonical command: **`npm run gate`**.
 
 ## The honesty rule — non-negotiable
 

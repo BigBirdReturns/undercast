@@ -156,10 +156,8 @@ is tracked implementation work so the canonical source actually exists.
 
 ---
 
-## DEC-0011 — `validate.yml` is the canonical gate until `npm run gate` exists
-**Status:** Active (authority) · Ratified through delegated product/design review, 2026-07-13
+## DEC-0011 — `npm run gate` is the canonical repository gate
+**Status:** Active (authority) · Ratified through delegated product/design review, 2026-07-21
 
-Until a cross-platform **`npm run gate`** exists, **`.github/workflows/validate.yml`
-is the canonical gate.** The UI checklist **points to it and summarizes categories**;
-it must not maintain a fragile second copy of shell commands. Creating `npm run
-gate` is tracked implementation improvement.
+**`npm run gate` is the canonical repository gate.** `.github/workflows/validate.yml`
+invokes it as the only canonical command list.
