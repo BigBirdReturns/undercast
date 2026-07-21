@@ -1,0 +1,135 @@
+diff --git a/scripts/census-fixtures.mjs b/scripts/census-fixtures.mjs
+index 973b715..7fa7b8a 100644
+--- a/scripts/census-fixtures.mjs
++++ b/scripts/census-fixtures.mjs
+@@ -7,7 +7,8 @@
+  *
+  *   node scripts/census-fixtures.mjs    (exit 0 = all pass)
+  */
+-import { performerFieldValues, namesFrom, loadScope } from "./lib/census-core.mjs";
++import { readFile } from "node:fs/promises";
++import { performerFieldValues, namesFrom, loadScope, demoteCharacterOnlyPerformers } from "./lib/census-core.mjs";
+ 
+ let failures = 0;
+ function expect(label, got, want) {
+@@ -43,6 +44,14 @@ expect("nested template inside the value is part of the value",
+   extract(`|portrayed_by={{small|[[Andrew Robinson]]}}|affiliation=[[Obsidian Order]]`),
+   ["Andrew Robinson"]);
+ 
++expect("parenthetical disguise links are annotations, not performers",
++  extract(`|played by=[[Garth Kemp]] (as [[The Face]]), [[Kate Mulgrew]] (posing as [[Kathryn Janeway]])`),
++  ["Garth Kemp", "Kate Mulgrew"]);
++
++expect("parenthesized performer at a new segment remains a performer",
++  extract(`|played by=[[Jane Actor]] (adult), ([[June Actor]] as a child)`),
++  ["Jane Actor", "June Actor"]);
++
+ // 4. Underscore and spaced parameter forms are the same trusted set;
+ //    near-miss parameter names are not examined at all.
+ expect("main_voice_actor and suit_actor forms are read",
+@@ -58,7 +67,28 @@ expect("multi-line value ends at the next top-level pipe",
+   extract(`|performer=[[Dave Goelz]],\n[[Steve Whitmire]]\n|designer=[[Jim Henson]]`),
+   ["Dave Goelz", "Steve Whitmire"]);
+ 
+-// 6. Scope loading: ENOENT falls back, everything else aborts.
++// 6. Character-on-character performer fields are not human credits.
++const demoted = demoteCharacterOnlyPerformers(
++  [{ franchise: "Muppets & Henson", category: "Sesame Street Characters", character: "Alistair Cookie",
++    performers: ["Cookie Monster"], performance_mode: "unresolved", source: "https://example.test/alistair" }],
++  [{ franchise: "Muppets & Henson", category: "Sesame Street Characters", character: "Cookie Monster",
++    performance_mode: "unresolved", source: "https://example.test/cookie", reason: "fixture" }],
++  "Muppets & Henson");
++expect("character-only performer field is demoted", demoted.rows.length, 0);
++expect("character-only performer field becomes unresolved", demoted.unresolved.at(-1).character, "Alistair Cookie");
++
++let mixedThrew = false;
++try {
++  demoteCharacterOnlyPerformers(
++    [{ franchise: "Muppets & Henson", category: "Sesame Street Characters", character: "Alistair Cookie",
++      performers: ["Frank Oz", "Cookie Monster"], source: "https://example.test/alistair" }],
++    [{ franchise: "Muppets & Henson", category: "Sesame Street Characters", character: "Cookie Monster",
++      source: "https://example.test/cookie", reason: "fixture" }],
++    "Muppets & Henson");
++} catch { mixedThrew = true; }
++expect("mixed human/character performer field fails closed", mixedThrew, true);
++
++// 7. Scope loading: ENOENT falls back, everything else aborts.
+ const enoent = await loadScope(async () => { const e = new Error("gone"); e.code = "ENOENT"; throw e; }, "x.json");
+ expect("ENOENT returns null (hand-list fallback allowed)", enoent, null);
+ 
+@@ -77,5 +107,26 @@ let emptyScope = false;
+ try { await loadScope(async () => JSON.stringify({ included: [] }), "x.json"); } catch { emptyScope = true; }
+ expect("empty included[] refuses to narrow the hand list", emptyScope, true);
+ 
++// 8. The committed regenerated corpus must not carry the exact semantic leaks
++// that motivated the second-desk review, and Muppet performers may not resolve
++// to another captured Muppet character page.
++const committed = JSON.parse(await readFile("data/CENSUS.json", "utf8"));
++const forbidden = new Set(["The Face", "Ocam Sadal", "Kathryn Janeway", "B'Elanna Torres",
++  "Fourth Cyber Legion", "New Dalek Paradigm", "Reality Virus", "Papal Mainframe",
++  "Rutan Host", "Large Lavender Live Hand", "Orange Gold"]);
++const leaked = committed.flatMap((row) => row.performers
++  .filter((name) => forbidden.has(name)).map((name) => `${row.franchise}/${row.character}/${name}`));
++expect("known fictional performer leaks are absent from committed census", leaked, []);
++
++const norm = (value) => String(value || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
++  .replace(/[’‘]/g, "'").replace(/[^a-zA-Z0-9']+/g, " ").trim().toLowerCase();
++const unresolvedCorpus = JSON.parse(await readFile("data/CENSUS-UNRESOLVED.json", "utf8"));
++const muppetTitles = new Set([...committed, ...unresolvedCorpus]
++  .filter((row) => row.franchise === "Muppets & Henson").map((row) => norm(row.character)));
++const muppetCharacterCredits = committed.filter((row) => row.franchise === "Muppets & Henson")
++  .flatMap((row) => row.performers.filter((name) => muppetTitles.has(norm(name)))
++    .map((name) => `${row.character}/${name}`));
++expect("Muppet character pages are not promoted as human performers", muppetCharacterCredits, []);
++
+ console.log(failures ? `\n${failures} fixture(s) FAILED` : "\nall census fixtures pass");
+ process.exit(failures ? 1 : 0);
+diff --git a/scripts/census.mjs b/scripts/census.mjs
+index e52a052..b65c8c7 100644
+--- a/scripts/census.mjs
++++ b/scripts/census.mjs
+@@ -28,7 +28,9 @@
+ import { readFile, writeFile } from "node:fs/promises";
+ import { createHash } from "node:crypto";
+ import { normalizeCensusKey as normalize } from "./census-key.mjs";
+-import { performerFieldValues, namesFrom, PERSONISH, loadScope } from "./lib/census-core.mjs";
++import {
++  performerFieldValues, namesFrom, PERSONISH, loadScope, demoteCharacterOnlyPerformers,
++} from "./lib/census-core.mjs";
+ 
+ const UA = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT || "census"})`;
+ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+@@ -87,6 +89,9 @@ const FRANCHISES = {
+   },
+   "muppets": {
+     label: "Muppets & Henson", api: "https://muppet.fandom.com/api.php",
++    // Alter-ego pages sometimes name another Muppet in PERFORMER rather than a
++    // human puppeteer. Demote only all-character fields; mixed fields fail closed.
++    demoteCharacterPerformers: true,
+     categories: ["Muppet Show Characters", "Sesame Street Characters", "Fraggle Rock Characters",
+       "Dark Crystal Characters", "Labyrinth Characters", "Muppets Tonight Characters"],
+   },
+@@ -244,7 +249,23 @@ if (!PROJECT_ONLY) {
+ for (const k of keys) {
+   const cfg = FRANCHISES[k];
+   if (!cfg) { console.log("unknown franchise:", k, "— known:", Object.keys(FRANCHISES).join(", ")); continue; }
++  const rowStart = freshRows.length, unresolvedStart = freshUnresolved.length;
+   await censusFranchise(k, cfg, freshRows, freshUnresolved, onlyCategory);
++  if (cfg.demoteCharacterPerformers) {
++    const result = demoteCharacterOnlyPerformers(
++      freshRows.slice(rowStart), freshUnresolved.slice(unresolvedStart), cfg.label);
++    freshRows.splice(rowStart, freshRows.length - rowStart, ...result.rows);
++    freshUnresolved.splice(unresolvedStart, freshUnresolved.length - unresolvedStart, ...result.unresolved);
++    for (const demoted of result.demoted) {
++      for (const observation of observations) {
++        if (observation.franchise === demoted.franchise && observation.category === demoted.category
++          && observation.title === demoted.character && observation.source === demoted.source) {
++          observation.disposition = "unresolved";
++        }
++      }
++    }
++    if (result.demoted.length) console.log(`  semantic demotion: ${result.demoted.length} character-as-performer row(s) -> unresolved`);
++  }
+ }
+ }
+ 
