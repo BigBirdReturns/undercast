@@ -28,6 +28,9 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { normalizeCensusKey as normalize } from "./census-key.mjs";
+import {
+  performerFieldValues, namesFrom, PERSONISH, loadScope, demoteCharacterOnlyPerformers,
+} from "./lib/census-core.mjs";
 
 const UA = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT || "census"})`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -58,13 +61,16 @@ async function observeTitles(cfg, cat, titles, disposition = "category-member") 
   }
 }
 
-// Actor-ish infobox fields, in rough order of trust. Different wikis use
-// different keys; all of these mean "the human behind the character".
-const ACTOR_FIELDS = /\|\s*(actor|actors|performer|performers|played ?by|portrayed ?by|suit ?actor|main ?actor|voice ?actor)\s*=\s*([^\n]+)/gi;
+// Performer-field extraction lives in lib/census-core.mjs — nesting-aware,
+// exact-parameter-only, and fixture-tested (scripts/census-fixtures.mjs).
 
 const FRANCHISES = {
   "star-trek": {
     label: "Star Trek", api: "https://memory-alpha.fandom.com/api.php",
+    // full-canon scope discovered by census-scope.mjs; unioned in at run time.
+    // The hand list below stays authoritative for categories not filed under
+    // Category:Individuals on the source wiki (e.g. Q, Borg).
+    scopeFile: "data/CENSUS-SCOPE.json",
     categories: ["Klingons", "Cardassians", "Vulcans", "Romulans", "Bajorans", "Ferengi",
       "Borg", "Andorians", "Trill", "Vorta", "Jem'Hadar", "Talaxians", "Ocampa", "Hirogen",
       "Kazon", "Xindi", "Suliban", "Denobulans", "Tellarites", "Orions", "Gorn", "Betazoids",
@@ -83,6 +89,9 @@ const FRANCHISES = {
   },
   "muppets": {
     label: "Muppets & Henson", api: "https://muppet.fandom.com/api.php",
+    // Alter-ego pages sometimes name another Muppet in PERFORMER rather than a
+    // human puppeteer. Demote only all-character fields; mixed fields fail closed.
+    demoteCharacterPerformers: true,
     categories: ["Muppet Show Characters", "Sesame Street Characters", "Fraggle Rock Characters",
       "Dark Crystal Characters", "Labyrinth Characters", "Muppets Tonight Characters"],
   },
@@ -143,23 +152,23 @@ async function categoryMembers(api, cat, depth = 0, subcategoryMode = "all") {
 // strip wiki markup from a captured actor-field value -> clean people names.
 // A performer credit must LOOK like a person: 2+ capitalized words, no digits,
 // no ALL-CAPS citation templates (PROSE/COMIC/TV), no story parentheticals.
-// Initialled professional names (J.G. Hertzler, D.C. Fontana, etc.) are common
-// in source credits. Requiring a lowercase letter in the first name silently
-// turned exact performer fields into "unresolved" rows. Keep the two-word and
-// mixed-case guards below, but accept initials inside an otherwise person-like
-// name.
-const PERSONISH = /^[A-ZÀ-Þ][A-Za-zà-þ'.\-]*(?: [A-ZÀ-Þ][A-Za-zà-þ'.\-]*)+$/;
-function namesFrom(value) {
-  const links = [...value.matchAll(/\[\[([^\]|#]+)(?:[^\]]*)?\]\]/g)]
-    .map((m) => m[1].trim().replace(/\s*\((actor|actress|performer|puppeteer|Dalek operator)\)$/i, ""));
-  return links.filter((n) => n && !/^(File|Image|Category|w:c:|Template):/i.test(n)
-    && !/[()\d]/.test(n) && n !== n.toUpperCase()
-    && !/uncredited|unknown|various|see below/i.test(n)
-    && PERSONISH.test(n) && n.length < 40);
-}
+// PERSONISH and namesFrom moved to lib/census-core.mjs (fixture-tested).
 
 async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
   console.log(`\n== ${cfg.label} (${cfg.api}) ==`);
+  // A declared scope file widens the hand list; a missing file falls back to
+  // the hand list alone (loudly), but a present-yet-unreadable one stops the
+  // run — a silently narrowed scope would publish false zeros for every
+  // category it dropped.
+  if (cfg.scopeFile) {
+    const discovered = await loadScope(readFile, cfg.scopeFile); // ENOENT-only fallback; anything else throws
+    if (discovered === null) {
+      console.log(`  scope: ${cfg.scopeFile} not found — hand list only (${(cfg.categories || []).length} categories)`);
+    } else {
+      cfg.categories = [...new Set([...(cfg.categories || []), ...discovered])];
+      console.log(`  scope: ${discovered.length} discovered + hand list -> ${cfg.categories.length} categories`);
+    }
+  }
   // portrayal subcategories: "Actors who have portrayed <Character>" — members are
   // the real performers, the suffix names the character they wore.
   if (cfg.portrayalPrefix) {
@@ -207,7 +216,7 @@ async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
           continue;
         }
         const performers = new Set();
-        for (const m of wt.matchAll(ACTOR_FIELDS)) for (const n of namesFrom(m[2])) performers.add(n);
+        for (const value of performerFieldValues(wt)) for (const n of namesFrom(value)) performers.add(n);
         observePage({ cfg, cat, page: p, revision, source, content: fullWikitext,
           disposition: performers.size ? "credited" : "unresolved" });
         if (performers.size) {
@@ -229,7 +238,10 @@ async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
 const categoryAt = args.indexOf("--category");
 const onlyCategory = categoryAt >= 0 ? args[categoryAt + 1] : null;
 if (categoryAt >= 0 && !onlyCategory) throw new Error("--category requires a category name");
-const requested = args.filter((arg, index) => !arg.startsWith("--") && index !== categoryAt + 1);
+// categoryAt is -1 when --category is absent; without the guard, categoryAt + 1
+// is 0 and the first positional franchise arg is silently dropped, turning a
+// scoped "census.mjs star-trek" into a full every-franchise crawl.
+const requested = args.filter((arg, index) => !arg.startsWith("--") && (categoryAt < 0 || index !== categoryAt + 1));
 const keys = requested.length ? requested : Object.keys(FRANCHISES);
 const freshRows = [];
 const freshUnresolved = [];
@@ -237,7 +249,23 @@ if (!PROJECT_ONLY) {
 for (const k of keys) {
   const cfg = FRANCHISES[k];
   if (!cfg) { console.log("unknown franchise:", k, "— known:", Object.keys(FRANCHISES).join(", ")); continue; }
+  const rowStart = freshRows.length, unresolvedStart = freshUnresolved.length;
   await censusFranchise(k, cfg, freshRows, freshUnresolved, onlyCategory);
+  if (cfg.demoteCharacterPerformers) {
+    const result = demoteCharacterOnlyPerformers(
+      freshRows.slice(rowStart), freshUnresolved.slice(unresolvedStart), cfg.label);
+    freshRows.splice(rowStart, freshRows.length - rowStart, ...result.rows);
+    freshUnresolved.splice(unresolvedStart, freshUnresolved.length - unresolvedStart, ...result.unresolved);
+    for (const demoted of result.demoted) {
+      for (const observation of observations) {
+        if (observation.franchise === demoted.franchise && observation.category === demoted.category
+          && observation.title === demoted.character && observation.source === demoted.source) {
+          observation.disposition = "unresolved";
+        }
+      }
+    }
+    if (result.demoted.length) console.log(`  semantic demotion: ${result.demoted.length} character-as-performer row(s) -> unresolved`);
+  }
 }
 }
 
