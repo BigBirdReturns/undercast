@@ -3,8 +3,10 @@ import { readFile } from "node:fs/promises";
 import {
   currentAdoptionStage,
   deriveMilestoneStates,
+  extractPlaybookSection,
   firedScaleTriggers,
   nextMilestones,
+  validatePlaybooks,
   validateRoadmapState,
 } from "./lib/roadmap.mjs";
 
@@ -20,16 +22,15 @@ function option(name, fallback = null) {
 }
 const flag = (name) => args.includes(`--${name}`);
 
-async function readJson(path) {
-  let text;
-  try { text = await readFile(path, "utf8"); }
+async function readText(path) {
+  try { return await readFile(path, "utf8"); }
   catch (error) { throw new Error(`cannot read ${path}: ${error.message}`); }
-  try { return JSON.parse(text); }
-  catch (error) { throw new Error(`cannot parse ${path}: ${error.message}`); }
 }
 
-function title(id) {
-  return id.split("-").map((word) => word[0].toUpperCase() + word.slice(1)).join(" ");
+async function readJson(path) {
+  const text = await readText(path);
+  try { return JSON.parse(text); }
+  catch (error) { throw new Error(`cannot parse ${path}: ${error.message}`); }
 }
 
 function summarize(roadmap, state) {
@@ -55,27 +56,34 @@ function printRow(row) {
   console.log(`${String(row.seq).padStart(2, "0")} ${row.state.padEnd(8)} ${row.id} (${row.authority})${suffix}`);
 }
 
+function enrich(row, roadmap, playbooks) {
+  return { ...row, playbook: extractPlaybookSection(roadmap, playbooks, row.id) };
+}
+
 function printMilestone(row) {
-  console.log(`# ${title(row.id)}`);
-  console.log(`State: ${row.state}`);
-  console.log(`Forecast: ${row.window}`);
-  console.log(`Authority: ${row.authority}`);
-  console.log(`Dependencies: ${row.deps.join(", ") || "none"}`);
-  if (row.decisions.length) console.log(`Owner decisions: ${row.decisions.join(", ")}`);
-  if (row.triggers.length) console.log(`Demand/scale triggers: ${row.triggers.map(([m,o,v]) => `${m} ${o} ${v}`).join(", ")}`);
-  if (row.reasons.length) console.log(`Blocked by: ${row.reasons.join("; ")}`);
-  console.log(`Guide: ${row.guide}`);
-  console.log("\nOpen the guide section and execute its build sequence and acceptance proof. The roadmap state may be updated only in a reviewed pull request.");
+  console.log(row.playbook);
+  console.log("\n### Current roadmap state");
+  console.log(`- State: ${row.state}`);
+  console.log(`- Forecast: ${row.window}`);
+  console.log(`- Authority: ${row.authority}`);
+  console.log(`- Dependencies: ${row.deps.join(", ") || "none"}`);
+  if (row.decisions.length) console.log(`- Required owner decisions: ${row.decisions.join(", ")}`);
+  if (row.triggers.length) console.log(`- Demand/scale triggers: ${row.triggers.map(([m,o,v]) => `${m} ${o} ${v}`).join(", ")}`);
+  if (row.reasons.length) console.log(`- Blocked by: ${row.reasons.join("; ")}`);
+  console.log(`- Canonical guide: ${row.guide}`);
+  console.log("\nExecute only this playbook. Update roadmap state only through a reviewed pull request with the required authority and evidence receipts.");
 }
 
 async function main() {
   const roadmapPath = option("roadmap", "data/ROADMAP.json");
   const statePath = option("state", "data/ROADMAP-STATE.json");
-  const [roadmap, state] = await Promise.all([readJson(roadmapPath), readJson(statePath)]);
+  const roadmap = await readJson(roadmapPath);
+  const [state, playbooks] = await Promise.all([readJson(statePath), readText(roadmap.document)]);
   validateRoadmapState(roadmap, state);
+  validatePlaybooks(roadmap, playbooks);
 
   if (command === "validate") {
-    console.log(`PASS — ${roadmap.milestones.length} milestones, ${roadmap.adoption.length} adoption stages, ${roadmap.scale.length} scale triggers`);
+    console.log(`PASS — ${roadmap.milestones.length} milestones, ${roadmap.adoption.length} adoption stages, ${roadmap.scale.length} scale triggers, all playbooks present`);
     return;
   }
 
@@ -92,7 +100,8 @@ async function main() {
   }
 
   if (command === "next") {
-    const rows = nextMilestones(roadmap, state, { limit: Number(option("limit", "3")) });
+    const rows = nextMilestones(roadmap, state, { limit: Number(option("limit", "3")) })
+      .map((row) => enrich(row, roadmap, playbooks));
     if (flag("json")) return console.log(JSON.stringify(rows, null, 2));
     if (!rows.length) {
       console.log("roadmap: no milestone is ready; inspect `npm run roadmap -- status`");
@@ -109,8 +118,9 @@ async function main() {
   if (command === "explain") {
     const id = option("milestone");
     if (!id) throw new Error("explain requires --milestone <id>");
-    const row = deriveMilestoneStates(roadmap, state).find((item) => item.id === id);
-    if (!row) throw new Error(`unknown milestone ${id}`);
+    const base = deriveMilestoneStates(roadmap, state).find((item) => item.id === id);
+    if (!base) throw new Error(`unknown milestone ${id}`);
+    const row = enrich(base, roadmap, playbooks);
     if (flag("json")) console.log(JSON.stringify(row, null, 2));
     else printMilestone(row);
     return;
