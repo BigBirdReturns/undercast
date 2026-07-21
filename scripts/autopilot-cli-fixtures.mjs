@@ -69,6 +69,17 @@ console.log("PASS — synthetic census refresh");
     }],
   });
   await put("data/AUTOPILOT-CERTIFICATIONS.json", { version: 1, certifications: [] });
+  await put("preservation/SNAPSHOTS.json", {
+    version: 1,
+    updated_at: "",
+    history_guard: {
+      baseline_manifest_sha256: "f".repeat(64),
+      status: "awaiting-independent-copy",
+      precondition_met: false,
+      destructive_rewrite_authorized: false,
+    },
+    snapshots: [],
+  });
   await put("data/AUTOPILOT.json", {
     version: 1,
     source: {
