@@ -1,147 +1,72 @@
-name: repair-pr55-semantic
+name: resume-pr55-semantic-review
 
 on:
   pull_request:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
-  group: repair-pr55-semantic
+  group: resume-pr55-semantic-review
   cancel-in-progress: true
 
 jobs:
-  repair:
+  resume:
     if: github.event.pull_request.number == 58
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/pr55-semantic-review
-          path: tools
-          fetch-depth: 1
-      - uses: actions/checkout@v4
-        with:
           ref: claude/full-canon-census
-          path: target
           fetch-depth: 0
 
-      - name: Verify exact repair base and apply reviewed patch
-        working-directory: target
+      - name: Restore the authoritative regenerated corpus artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           test "$(git rev-parse HEAD)" = "fda67ed3cb808fa48e1ebf7dc086cabd9242bafe"
-          git apply --check ../tools/.github/review/pr55-wire.patch
-          git apply ../tools/.github/review/pr55-wire.patch
+          mkdir -p /tmp/pr55-regen
+          gh run download 29849723940 --repo "${{ github.repository }}" \
+            --name pr55-regenerated-corpus --dir /tmp/pr55-regen
+          test -f /tmp/pr55-regen/pr55-regenerated-corpus.tar.gz
+          test -f /tmp/pr55-regen/semantic-report.json
+          tar -xzf /tmp/pr55-regen/pr55-regenerated-corpus.tar.gz -C .
+          node -e 'const r=require("/tmp/pr55-regen/semantic-report.json"); if(r.known_false_performers_remaining.length || r.muppet_character_as_performer_remaining.length || r.star_trek_credits!==2295) throw new Error(JSON.stringify(r)); console.log(`semantic report: Star Trek ${r.star_trek_credits}; known leaks 0; Muppet character credits 0`);'
           node --check scripts/census.mjs
           node --check scripts/census-fixtures.mjs
           node --check scripts/lib/census-core.mjs
           git diff --check
 
-      - name: Capture pre-repair census identity set
-        working-directory: target
-        run: |
-          mkdir -p /tmp/pr55-review
-          cp data/CENSUS.json /tmp/pr55-review/CENSUS.before.json
-          cp data/CENSUS-UNRESOLVED.json /tmp/pr55-review/CENSUS-UNRESOLVED.before.json
-
-      - name: Regenerate every affected extractor-backed franchise
-        working-directory: target
-        env:
-          CONTACT: bigbirdreturns@proton.me
-        run: node scripts/census.mjs star-trek doctor-who muppets power-rangers
-
-      - name: Build semantic diff and assert reviewed identities
-        working-directory: target
-        run: |
-          python - <<'PY'
-          import json, re
-          from collections import Counter
-          from pathlib import Path
-          before = json.loads(Path('/tmp/pr55-review/CENSUS.before.json').read_text())
-          after = json.loads(Path('data/CENSUS.json').read_text())
-          unresolved = json.loads(Path('data/CENSUS-UNRESOLVED.json').read_text())
-          key = lambda r, p: (r.get('franchise'), r.get('category'), r.get('character'), p)
-          b = {key(r,p) for r in before for p in r.get('performers',[])}
-          a = {key(r,p) for r in after for p in r.get('performers',[])}
-          forbidden = {"The Face", "Ocam Sadal", "Kathryn Janeway", "B'Elanna Torres",
-            "Fourth Cyber Legion", "New Dalek Paradigm", "Reality Virus", "Papal Mainframe",
-            "Rutan Host", "Large Lavender Live Hand", "Orange Gold"}
-          leaks = sorted(x for x in a if x[3] in forbidden)
-          if leaks: raise SystemExit(f'known semantic leaks remain: {leaks}')
-          def norm(value): return re.sub(r"[^a-z0-9']+", ' ', str(value).lower()).strip()
-          titles = {norm(r['character']) for r in after+unresolved if r['franchise']=='Muppets & Henson'}
-          collisions = sorted((r['character'],p) for r in after if r['franchise']=='Muppets & Henson' for p in r['performers'] if norm(p) in titles)
-          if collisions: raise SystemExit(f'Muppet character-as-performer rows remain: {collisions}')
-          all_titles = {}
-          for row in after + unresolved:
-            all_titles.setdefault(row['franchise'], set()).add(norm(row['character']))
-          title_collisions = sorted((r['franchise'],r['category'],r['character'],p) for r in after for p in r['performers'] if norm(p) in all_titles.get(r['franchise'], set()))
-          counts = Counter(x[0] for x in a)
-          report = {
-            'reviewed_head_base':'053ff0866939016216223051622be42553f0b00d',
-            'producer_repair_base':'fda67ed3cb808fa48e1ebf7dc086cabd9242bafe',
-            'credits_by_franchise':dict(sorted(counts.items())),
-            'star_trek_credits':counts['Star Trek'],
-            'removed_credits':[list(x) for x in sorted(b-a)],
-            'added_credits':[list(x) for x in sorted(a-b)],
-            'same_franchise_character_title_collisions':[list(x) for x in title_collisions],
-            'known_false_performers_remaining':[],
-            'muppet_character_as_performer_remaining':[],
-          }
-          Path('/tmp/pr55-review/semantic-report.json').write_text(json.dumps(report,indent=2)+'\n')
-          print(json.dumps(report,indent=2))
-          PY
-
-      - name: Persist regenerated source corpus before downstream gates
-        working-directory: target
-        run: |
-          tar -czf /tmp/pr55-review/pr55-regenerated-corpus.tar.gz \
-            scripts/census.mjs scripts/census-fixtures.mjs scripts/lib/census-core.mjs \
-            data/CENSUS.json data/CENSUS-COVERAGE.json data/CENSUS-GAPS.json \
-            data/CENSUS-MANIFEST.json data/CENSUS-SUMMARY.json data/CENSUS-UNRESOLVED.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pr55-regenerated-corpus
-          path: |
-            /tmp/pr55-review/pr55-regenerated-corpus.tar.gz
-            /tmp/pr55-review/semantic-report.json
-          if-no-files-found: error
-          retention-days: 3
-
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: target/package-lock.json
       - name: Install deterministic and rendered test runtime
-        working-directory: target
         run: |
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Validate census fixtures and deterministic projections
-        working-directory: target
+      - name: Validate repaired producer and deterministic archive
         run: |
           npm run test:census
           node scripts/shard.mjs
-          git diff --check
-      - name: Validate archive invariants
-        working-directory: target
-        run: node scripts/validate.mjs
-      - name: Validate semantic corpus and public site seams
-        working-directory: target
-        run: |
+          node scripts/validate.mjs
           npm run audit:corpus
           npm run test:site-seams
-      - name: Build and exercise permanent routes
-        working-directory: target
-        run: |
-          node scripts/build-record-pages.mjs
-          npm run test:rendered
-          test "$(find records -mindepth 1 -maxdepth 1 -type d | wc -l)" = "$(node -p "require('./data/specimens.json').length + require('./data/tombstones.json').records.length")"
+          git diff --check
+
+      - name: Build permanent routes
+        run: node scripts/build-record-pages.mjs
+
+      - name: Exercise rendered interactions
+        run: npm run test:rendered -- --reporter=line
+
+      - name: Verify route count
+        run: test "$(find records -mindepth 1 -maxdepth 1 -type d | wc -l)" = "$(node -p "require('./data/specimens.json').length + require('./data/tombstones.json').records.length")"
+
       - name: Validate DS9 evidence projections
-        working-directory: target
         run: |
           node scripts/ds9-census.mjs --project-only
           node scripts/ds9-graph.mjs --project-only
@@ -152,44 +77,39 @@ jobs:
           npm run ds9:eligibility:fixtures
           npm run ds9:maker:fixtures
 
-      - name: Package exact semantically reviewed checkout
-        working-directory: target
+      - name: Package exact reviewed checkout
         run: |
-          tar --exclude=.git --exclude=node_modules --exclude=records --exclude=test-results --exclude=playwright-report -czf /tmp/pr55-review/undercast-pr55-reviewed.tar.gz .
-          git status --short > /tmp/pr55-review/status.txt
-          git diff --stat > /tmp/pr55-review/stat.txt
-          sha256sum /tmp/pr55-review/* > /tmp/pr55-review/SHA256SUMS
+          mkdir -p /tmp/pr55-reviewed
+          cp /tmp/pr55-regen/semantic-report.json /tmp/pr55-reviewed/
+          tar --exclude=.git --exclude=node_modules --exclude=records --exclude=test-results --exclude=playwright-report \
+            -czf /tmp/pr55-reviewed/undercast-pr55-reviewed.tar.gz .
+          git status --short > /tmp/pr55-reviewed/status.txt
+          git diff --stat > /tmp/pr55-reviewed/stat.txt
+          sha256sum /tmp/pr55-reviewed/* > /tmp/pr55-reviewed/SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: pr55-semantic-review-result
-          path: /tmp/pr55-review
+          path: /tmp/pr55-reviewed
           if-no-files-found: error
           retention-days: 3
 
-      - name: Commit and push repaired regenerated corpus
-        working-directory: target
+      - name: Commit and push the semantically reviewed corpus
         run: |
           git config user.name "undercast-bot"
           git config user.email "undercast-bot@users.noreply.github.com"
           git add scripts/lib/census-core.mjs scripts/census.mjs scripts/census-fixtures.mjs
-          git add data/CENSUS.json data/CENSUS-COVERAGE.json data/CENSUS-GAPS.json data/CENSUS-MANIFEST.json data/CENSUS-SUMMARY.json data/CENSUS-UNRESOLVED.json
-          git add data/CENSUS-FERENGI-TEST.json data/constellations.json data/species.json data/index.json data/shard-manifest.json data/shards data/archive.json data/entities.json data/search sitemap.xml
+          git add data sitemap.xml
           git diff --cached --quiet && exit 0
           git commit -m "Census: remove semantic role leaks and regenerate reviewed scopes"
           git push origin HEAD:claude/full-canon-census
 
-      - name: Capture gate diagnostics on failure
+      - name: Upload rendered diagnostics on failure
         if: failure()
-        working-directory: target
-        run: |
-          mkdir -p /tmp/pr55-failure
-          git status --short > /tmp/pr55-failure/status.txt
-          git diff --stat > /tmp/pr55-failure/stat.txt
-          git diff --binary > /tmp/pr55-failure/worktree.patch
-      - uses: actions/upload-artifact@v4
-        if: failure()
+        uses: actions/upload-artifact@v4
         with:
-          name: pr55-gate-diagnostics
-          path: /tmp/pr55-failure
+          name: pr55-rendered-diagnostics
+          path: |
+            playwright-report
+            test-results
           if-no-files-found: warn
           retention-days: 3
