@@ -1,45 +1,125 @@
-name: inspect-pr56-main-integration
+name: integrate-certify-pr56
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: inspect-pr56-main-integration
+  group: integrate-certify-pr56
   cancel-in-progress: true
 
 jobs:
-  inspect:
+  integrate:
     if: github.event.pull_request.number == 58
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/luna-autopilot
           fetch-depth: 0
-      - name: Attempt current-main merge and capture exact conflicts
+
+      - name: Merge producer main and resolve generated projections
         run: |
           test "$(git rev-parse HEAD)" = "0c77d15cdef111040c7bad7c2153df21616f4b02"
           git config user.name "undercast-integration"
           git config user.email "undercast-integration@users.noreply.github.com"
           git fetch origin main
           set +e
-          git merge --no-commit --no-ff origin/main > /tmp/merge.out 2>&1
+          git merge --no-commit --no-ff origin/main
           status=$?
           set -e
-          mkdir -p /tmp/pr56-main-integration
-          cp /tmp/merge.out /tmp/pr56-main-integration/merge.out
-          git status --short > /tmp/pr56-main-integration/status.txt
-          git diff --name-only --diff-filter=U > /tmp/pr56-main-integration/conflicts.txt
-          git diff --cc > /tmp/pr56-main-integration/conflicts.diff || true
-          printf '%s\n' "$status" > /tmp/pr56-main-integration/merge-status.txt
-          cat /tmp/pr56-main-integration/status.txt
-          cat /tmp/pr56-main-integration/conflicts.txt
+          if [ "$status" -ne 0 ]; then
+            actual="$(git diff --name-only --diff-filter=U | sort)"
+            expected="$(printf '%s\n' data/CENSUS-FERENGI-TEST.json data/quality.json data/species.json | sort)"
+            test "$actual" = "$expected" || { echo "unexpected merge conflicts:"; printf '%s\n' "$actual"; exit 1; }
+            git checkout --theirs -- data/CENSUS-FERENGI-TEST.json data/quality.json data/species.json
+            git add data/CENSUS-FERENGI-TEST.json data/quality.json data/species.json
+          fi
+          test -z "$(git diff --name-only --diff-filter=U)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install deterministic and rendered test runtime
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Rebuild merged corpus and validate Autopilot before activation
+        run: |
+          node scripts/credits.mjs
+          node scripts/sync-sources.mjs
+          node scripts/shard.mjs
+          node scripts/build-contract.mjs
+          node scripts/build-record-pages.mjs
+          node scripts/ds9-census.mjs --project-only
+          node scripts/ds9-graph.mjs --project-only
+          node scripts/ds9-eligibility-queue.mjs
+          node scripts/ds9-maker-queue.mjs
+          npm run autopilot:fixtures
+          node scripts/autopilot.mjs readiness --scope star-trek
+          git diff --check
+
+      - name: Certify and activate only Star Trek
+        run: |
+          node scripts/autopilot.mjs certify \
+            --scope star-trek \
+            --reviewed-by chatgpt-second-desk \
+            --activate
+          node scripts/autopilot.mjs readiness --scope star-trek --require-active
+          node scripts/autopilot.mjs sync
+          node scripts/autopilot.mjs validate
+          node scripts/autopilot.mjs status --scope star-trek --json > /tmp/star-trek-autopilot-status.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const scopes = JSON.parse(fs.readFileSync('data/AUTOPILOT-SCOPES.json','utf8')).scopes;
+          const active = scopes.filter(s => s.status === 'active').map(s => s.id);
+          if (JSON.stringify(active) !== JSON.stringify(['star-trek'])) throw new Error(`unexpected active scopes: ${active}`);
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const inflight = state.jobs.filter(j => ['leased','drafted','merged'].includes(j.status));
+          if (inflight.length) throw new Error(`unexpected in-flight work: ${inflight.length}`);
+          const trek = state.jobs.filter(j => j.scope === 'star-trek');
+          if (!trek.length) throw new Error('certified Star Trek corpus produced no jobs');
+          console.log(`Star Trek queue: ${trek.length} tasks; zero in flight; only certified active scope`);
+          NODE
+
+      - name: Run exact certified merged-head gate
+        run: |
+          npm run test:census
+          node scripts/validate.mjs
+          npm run autopilot:fixtures
+          node scripts/autopilot.mjs validate
+          npm run audit:corpus
+          npm run test:site-seams
+          npm run test:rendered -- --reporter=line
+          test "$(find records -mindepth 1 -maxdepth 1 -type d | wc -l)" = "$(node -p "require('./data/specimens.json').length + require('./data/tombstones.json').records.length")"
+          npm run ds9:fixtures
+          npm run ds9:eligibility:fixtures
+          npm run ds9:maker:fixtures
+          git diff --check
+
+      - name: Package certification evidence
+        run: |
+          mkdir -p /tmp/pr56-certified
+          cp data/AUTOPILOT-CERTIFICATIONS.json data/AUTOPILOT-SCOPES.json data/AUTOPILOT.json /tmp/pr56-certified/
+          cp /tmp/star-trek-autopilot-status.json /tmp/pr56-certified/
+          git status --short > /tmp/pr56-certified/status.txt
+          git diff --stat > /tmp/pr56-certified/stat.txt
+          sha256sum /tmp/pr56-certified/* > /tmp/pr56-certified/SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: pr56-main-integration-diagnostics
-          path: /tmp/pr56-main-integration
+          name: pr56-certified-integration
+          path: /tmp/pr56-certified
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 7
+
+      - name: Commit and push certified integrated branch
+        run: |
+          git add -A
+          git commit -m "Autopilot: integrate trusted census and certify Star Trek"
+          git push origin HEAD:agent/luna-autopilot
