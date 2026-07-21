@@ -213,7 +213,6 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **Annie Wersching** (UC-1178) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Annie_Wersching_by_Gage_Skidmore.jpg)
 - **Ed Speleers** (UC-1179) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Ed_Speleers_Photo_Op_GalaxyCon_San_Jose_2024.jpg)
 - **Frank Oz** (UC-118) — Baltimore Sun, Public domain — [source](https://commons.wikimedia.org/wiki/File:Frank_Oz_-_1984.jpg)
-- **Roy Brocksmith** (UC-1180) — Unknown, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Roy_Brocksmith.png)
 - **Michelle Forbes** (UC-1181) — sookiebontemps, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Michelle_Forbes_2009a_Comic-Con.jpg)
 - **Christopher Collins** (UC-1185) — Procolotor, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:EC1835_C_cut.jpg)
 - **Sherman Howard** (UC-1189) — Howsherm, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Mr._Sherman_Howard.jpg)
@@ -754,7 +753,7 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **724**
+- Free-licensed portraits (attributed above): **723**
 - Character stills (studio-copyright, shown under fan-use; see ledger): **959**
 
 Copyright holders: this is a fan project. See the takedown note in the README —

@@ -153,13 +153,14 @@ test("wall search, current decade, flip semantics, and partial failure are hones
   await open(page,"index.html");
   await waitForWall(page);
   await page.getByRole("searchbox",{name:"Search a character, a performer, or a production",exact:true}).fill("Borg Queen");
-  await expect(page.locator("#result-status")).toHaveText("2 specimens match; 2 shown.");
-  await expect(page.locator(".cast-shell")).toHaveCount(2);
-  await expect(page.locator(".looplink")).toHaveCount(2);
+  // three Borg Queens since UC-1178 (Annie Wersching, PIC) joined Krige and Thompson
+  await expect(page.locator("#result-status")).toHaveText("3 specimens match; 3 shown.");
+  await expect(page.locator(".cast-shell")).toHaveCount(3);
+  await expect(page.locator(".looplink")).toHaveCount(3);
 
   await page.getByRole("searchbox",{name:"Search a character, a performer, or a production",exact:true}).fill("");
   await page.getByRole("button",{name:"20s",exact:true}).click();
-  await expect(page.locator("#result-status")).toHaveText("79 specimens match; 79 shown.");
+  await expect(page.locator("#result-status")).toHaveText("89 specimens match; 89 shown.");
 
   const firstArticle=page.locator("article.cast").first();
   const character=await firstArticle.locator(".charname").textContent();
@@ -310,7 +311,9 @@ test.describe("permanent records without JavaScript",()=>{
     await expect(portrait).toHaveCSS("object-position","50% 28%");
 
     await page.unrouteAll({behavior:"wait"});
-    await page.route("**/images/uc-035-portrait.jpg",route=>route.abort());
+    // the portrait now serves from GitHub Releases under a content-addressed
+    // name — abort it wherever it lives, not just at the legacy local path.
+    await page.route("**/uc-035-portrait*",route=>route.abort());
     await open(page,"records/UC-035/?failed-local=1");
     const fallback=page.locator('.record-image[data-focus-y="upper"] .record-absence.load-failed');
     await expect(fallback).toBeVisible();
@@ -327,6 +330,11 @@ test("small archival labels retain WCAG AA contrast on every display surface",as
 
   await open(page,"coverage.html");
   await expect(page.locator("#rows tr").first()).toBeVisible();
+  // the full-canon scope made "892-IV natives" the default category, which shows
+  // the scope-snapshot box; the .benchmark-status span only renders on the
+  // benchmark's own category — select it before sampling its contrast.
+  await page.locator("#category").selectOption("Ferengi");
+  await expect(page.locator(".benchmark-status")).toBeVisible();
   for(const selector of [".eyebrow",".benchmark-kicker",".benchmark-status",".filters label",".metrics span","th",".mode,.gap"]) await expectContrast(page,selector);
 
   await open(page,"constellation.html");
@@ -541,7 +549,7 @@ test("all canonical sitemap routes resolve and merged aliases stay out",async({r
   expect(sitemapResponse.ok()).toBeTruthy();
   const xml=await sitemapResponse.text();
   const urls=[...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(match=>new URL(match[1]).pathname);
-  expect(urls).toHaveLength(1083);
+  expect(urls).toHaveLength(1251); // 1246 record pages + 5 top-level pages
   expect(urls.some(path=>path.includes("/records/UC-257/"))).toBeFalsy();
   for(let offset=0;offset<urls.length;offset+=40){
     const batch=urls.slice(offset,offset+40);
