@@ -1,0 +1,149 @@
+name: apply-autopilot-promotion
+
+on:
+  push:
+    branches:
+      - agent/luna-autopilot
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: apply-autopilot-promotion
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/luna-autopilot
+          fetch-depth: 0
+
+      - name: Announce the promotion run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/${{ github.repository }}/issues/56/comments -f body="Autopilot promotion run ${{ github.run_id }} started from ${{ github.sha }}. It will checksum the reviewed patch, execute the complete gate, self-delete its staging machinery, and push only on success."
+
+      - name: Reconstruct and verify the reviewed promotion patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('.github/promotion/autopilot-promotion.patch.part06')
+          text = source.read_text()
+          marker = '+diff -ruN /tmp/autopilot-original/scripts/lib/autopilot-model.mjs'
+          if marker not in text:
+              raise SystemExit('expected staged part06 normalization marker is missing')
+          before, after = text.split(marker, 1)
+          tail = marker + after
+          fixed_tail = ''.join(line[1:] if line.startswith('+') else line for line in tail.splitlines(keepends=True))
+          Path('/tmp/autopilot-promotion.part06.fixed').write_text(before + fixed_tail)
+          PY
+
+          cat \
+            .github/promotion/autopilot-promotion.patch.part00 \
+            .github/promotion/autopilot-promotion.patch.part01 \
+            .github/promotion/autopilot-promotion.patch.part02 \
+            .github/promotion/autopilot-promotion.patch.part03 \
+            .github/promotion/autopilot-promotion.patch.part04 \
+            .github/promotion/autopilot-promotion.patch.part05a \
+            .github/promotion/autopilot-promotion.patch.part05b \
+            /tmp/autopilot-promotion.part06.fixed \
+            .github/promotion/autopilot-promotion.patch.part07 \
+            > /tmp/autopilot-promotion.patch
+
+          echo "52f59912b609f048c791afa99e8f4914e9d3b20f3050482b62d444ab5d7831d9  /tmp/autopilot-promotion.patch" \
+            | sha256sum --check --strict
+          git apply --check /tmp/autopilot-promotion.patch
+
+      - name: Apply the promotion and remove staging machinery
+        run: |
+          git apply /tmp/autopilot-promotion.patch
+          rm -f .github/workflows/apply-autopilot-promotion.yml
+          rm -f .github/promotion/autopilot-promotion.patch.part*
+          rm -f .github/promotion/autopilot-payload.part*
+          rmdir .github/promotion 2>/dev/null || true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install deterministic test runtime
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Validate promoted control-plane syntax and fixtures
+        run: |
+          for file in scripts/autopilot*.mjs scripts/lib/autopilot*.mjs; do
+            node --check "$file"
+          done
+          npm run autopilot:fixtures
+          git diff --check
+
+      - name: Rebuild every deterministic projection
+        run: node scripts/shard.mjs
+
+      - name: Validate archive invariants and certification-aware queue
+        run: |
+          node scripts/validate.mjs
+          node scripts/autopilot.mjs validate
+          npm run audit:corpus
+          npm run test:site-seams
+
+      - name: Build and exercise the rendered archive
+        run: |
+          node scripts/build-record-pages.mjs
+          npm run test:rendered
+          test "$(find records -mindepth 1 -maxdepth 1 -type d | wc -l)" = "$(node -p "require('./data/specimens.json').length + require('./data/tombstones.json').records.length")"
+
+      - name: Validate DS9 evidence projections
+        run: |
+          node scripts/ds9-census.mjs --project-only
+          node scripts/ds9-graph.mjs --project-only
+          node scripts/ds9-eligibility-queue.mjs
+          node scripts/ds9-maker-queue.mjs
+          git diff --exit-code data/ds9
+          npm run ds9:fixtures
+          npm run ds9:eligibility:fixtures
+          npm run ds9:maker:fixtures
+
+      - name: Refuse unaccounted generated drift
+        run: git diff --exit-code -- . ':(exclude).github/workflows/apply-autopilot-promotion.yml' ':(exclude).github/promotion'
+
+      - name: Commit and push the reviewed promotion
+        id: publish
+        run: |
+          git config user.name "undercast-bot"
+          git config user.email "undercast-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "Autopilot: certify producers and schedule bounded refresh"
+          git push origin HEAD:agent/luna-autopilot
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Report success to PR 56
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/${{ github.repository }}/issues/56/comments -f body="Autopilot promotion run ${{ github.run_id }} passed the full gate and pushed commit ${{ steps.publish.outputs.commit }}. All scopes remain paused; no Luna lease was issued."
+
+      - name: Upload reconstruction diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autopilot-promotion-diagnostics
+          path: |
+            /tmp/autopilot-promotion.patch
+            /tmp/autopilot-promotion.part06.fixed
+          if-no-files-found: warn
+          retention-days: 2
+
+      - name: Report failure to PR 56
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/${{ github.repository }}/issues/56/comments -f body="Autopilot promotion run ${{ github.run_id }} failed closed. No promotion commit was pushed. Inspect the run and its autopilot-promotion-diagnostics artifact."
