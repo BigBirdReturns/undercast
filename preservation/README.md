@@ -44,10 +44,12 @@ source. Wayback or another web archive may be added as a secondary location.
 - `SNAPSHOTS.json` — append-only preservation registry. It records public release
   assets, scope-local source receipts, independent provider copies, verification
   times, hashes, byte counts, and the history-guard state.
-- `BOOTSTRAP-PENDING` — temporary fail-closed sentinel. The bootstrap workflow
-  removes it only after source and originals bags have been built, verified,
-  published/uploaded, and the Star Trek producer has been re-certified against
-  the source-snapshot gate.
+- `offsite-parts-preservation-20260721-3bbec746c478.json` — deterministic
+  multipart restore manifest for the first independent-provider replication. It
+  pins every raw part plus the reconstructed public/originals package hashes.
+- The former `BOOTSTRAP-PENDING` sentinel was removed only after the source and
+  originals bags were built, verified, published/staged, and Star Trek was
+  re-certified against the source-snapshot gate.
 - `../scripts/preserve-sources.mjs` — fetch exact MediaWiki revisions by revision
   ID and refuse an incomplete or hash-divergent source bag.
 - `../scripts/preserve-bag.mjs` — recover and verify pre-R1 originals from the
@@ -61,6 +63,43 @@ source. Wayback or another web archive may be added as a secondary location.
   scope, and history-guard durability.
 - `.github/workflows/preserve.yml` — bounded export, verification, release,
   artifact, certification, and receipt workflow.
+
+## Completed rescue snapshot
+
+Snapshot `preservation-20260721-3bbec746c478` closes the immediate supplier and
+history single points of failure:
+
+- 15,210 exact source revisions representing 17,258 census observations were
+  captured as original wikitext; all recorded content hashes matched.
+- The public source/repository bundle is published as immutable GitHub Release
+  assets and independently replicated to Google Drive in two transfer parts.
+- All 1,520 pre-R1 originals (1,048,043,426 payload bytes) were recovered from
+  the pinned commit, BagIt-verified, and independently replicated in twelve
+  controlled transfer parts.
+- Every provider object was downloaded back from Google Drive, matched to its
+  artifact SHA-256 and byte count, extracted, and reassembled. The restored
+  packages matched:
+  - public bundle: `644cfed8d3ebd84e0a721c57cb487cb0454f0eeef61f2ea7ec7e71fc90e7045a`
+    / 142,356,480 bytes;
+  - originals bundle: `c5efe294d692608b9fe90395fb7f123161b99d61671ab7197c4153856b3baeba`
+    / 1,050,828,800 bytes.
+- The provider folders and per-part transfer contract are receipted in
+  `SNAPSHOTS.json`; the full part inventory is retained in
+  `offsite-parts-preservation-20260721-3bbec746c478.json`.
+
+This makes `history_guard.status` equal to `offsite-verified` and satisfies only
+the preservation precondition. It does not authorize history rewriting.
+
+### Multipart restore
+
+1. Download every ZIP named by the receipted provider folder.
+2. Verify each downloaded ZIP against the provider-container SHA-256 recorded in
+   the receipt or export evidence.
+3. Extract one raw `*.part-NN` payload from each ZIP.
+4. Concatenate payloads in lexical order.
+5. Verify the reconstructed tar against the package hash and byte count above.
+6. Extract the tar, then run `preserve-verify.mjs` against the contained BagIt
+   source/originals payload before using any bytes.
 
 ## Exact-source archive
 
@@ -90,7 +129,8 @@ No source images are copied into the source-evidence bag.
 
 ## Full-resolution originals and the history guard
 
-The full-resolution pre-R1 images still live in git history until exported:
+The full-resolution pre-R1 images remain recoverable in git history and were
+exported into the verified preservation snapshot. To reproduce the BagIt payload:
 
 ```bash
 node scripts/preserve-bag.mjs /safe/output/originals-bag
