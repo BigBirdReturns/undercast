@@ -114,12 +114,33 @@ jobs:
         run: |
           rm -rf /tmp/undercast-preservation
           mkdir -p /tmp/undercast-preservation/public /tmp/undercast-preservation/private
-          node scripts/preserve-sources.mjs /tmp/undercast-preservation/source-bag
+          set +e
+          set -o pipefail
+          node scripts/preserve-sources.mjs /tmp/undercast-preservation/source-bag 2>&1 \
+            | tee /tmp/undercast-preservation/source-capture.log
+          status=${PIPESTATUS[0]}
+          set +o pipefail
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "source capture failed with exit $status; diagnostics will be uploaded"
+            exit "$status"
+          fi
           node scripts/preserve-verify.mjs /tmp/undercast-preservation/source-bag --json \
             > /tmp/undercast-preservation/source-verification.json
           tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
             -C /tmp/undercast-preservation -czf \
             "/tmp/undercast-preservation/public/undercast-sources-${{ steps.plan.outputs.tag }}.tar.gz" source-bag
+
+      - name: Upload source-capture diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preservation-source-capture-diagnostics-${{ github.run_id }}
+          path: |
+            /tmp/undercast-preservation/source-capture.log
+            /tmp/undercast-preservation/source-bag/source-failures.json
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Export and verify pre-R1 full-resolution originals
         if: steps.plan.outputs.run == 'true' && steps.plan.outputs.full_originals == 'true'
