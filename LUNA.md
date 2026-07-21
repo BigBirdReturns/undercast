@@ -3,17 +3,37 @@
 Luna is a bounded worker over a durable queue, not a free-form invitation to add
 cards. Read `AGENTS.md`, `GROW.md`, and `docs/AUTOPILOT.md` before taking a lease.
 
+## Before Luna may lease
+
+A scope being listed is not authorization. It must be declared `active`, carry a
+current producer certification in `data/AUTOPILOT-CERTIFICATIONS.json`, and have a
+current census snapshot with the receipts its adapter promises. Check it first:
+
+```bash
+npm run autopilot -- readiness --scope star-trek --require-active
+```
+
+`certify`, `pause`, and scheduled source refresh are reviewer/operator actions,
+never Luna actions. A
+certification pins the exact producer files and scope contract after its declared
+fixtures and the archive gate pass. Editing the producer, changing the adapter
+contract, losing required manifest receipts, or refreshing that scope's census
+invalidates an outstanding lease packet rather than letting Luna submit stale
+work. A different franchise refreshing does not invalidate this scope's lease.
+
 ## One complete cycle
 
 ```bash
 mkdir -p .luna
 
-# Runs the existing archive invariant gate, reconciles current evidence, and
-# leases one bounded batch. Exit 3 means no new lease was issued.
+# Runs the existing archive invariant gate, re-checks scope certification,
+# reconciles current evidence, and leases one bounded batch. Exit 3 means no new
+# lease was issued.
 npm run autopilot -- next --agent luna --scope star-trek --limit 8 \
   --out .luna/batch.json --prompt .luna/PROMPT.md
 
-# Research every leased performer-role and write .luna/results.json.
+# Research every leased performer-role and write .luna/results.json. Submission
+# refuses a packet whose producer/census readiness token is no longer current.
 npm run autopilot -- submit --batch .luna/batch.json --input .luna/results.json
 
 # Existing keyless merge and media pipeline.
@@ -34,10 +54,10 @@ npm run autopilot -- complete --input .luna/media-review.json
 ```
 
 Repeat only after the prior batch has no `leased`, `drafted`, or `merged` tasks.
-The high-level `next` command refuses to lease against a red archive and applies
-one-batch backpressure. Exit code 3 means either the scope is drained for now or
-work is already in flight; inspect `autopilot status` rather than claiming
-completion.
+The high-level `next` command refuses to lease against a red archive, an
+uncertified producer, a blocked snapshot, or an existing in-flight batch. Exit
+code 3 means either the scope is drained for now or work is already in flight;
+inspect `autopilot status` rather than claiming completion.
 
 For every leased task, return exactly one result:
 
@@ -56,10 +76,11 @@ work outside its lease.
 ## Media closure
 
 A canonical row is not enough. The crawler has previously selected namesakes,
-book covers, concert photographs, and other wrong subjects. A merged task remains
-in flight until Luna visually checks the actual retrieved assets and files a
-receipt bound to the originating lease, the exact `SOURCES.json` origins, and a
-SHA-256 of the current specimens/source ledger.
+book covers, concert photographs, in-character performer-page images, and other
+wrong subjects. A merged task remains in flight until Luna visually checks the
+actual retrieved assets and files a receipt bound to the originating lease, the
+exact `SOURCES.json` origins, and a SHA-256 of the current specimens/source
+ledger.
 
 ```json
 {
@@ -93,9 +114,10 @@ SHA-256 of the current specimens/source ledger.
 
 When a ledger facet is `null`, use `{"disposition":"absent","note":"..."}`.
 Do not mark an available asset absent to avoid reviewing it. `complete` runs the
-archive gate again and rejects mismatched wall IDs, identities, origins, subjects,
-or missing `fetched_at` receipts.
+archive gate again, re-checks the originating readiness token, and rejects
+mismatched wall IDs, identities, origins, subjects, or missing `fetched_at`
+receipts.
 
-Commit bounded batches. A successful cycle leaves the queue, drafts, journals,
-canonical roster, source ledger, media review, projections, and validator
-mutually consistent.
+Commit bounded batches. A successful cycle leaves the certification, queue,
+drafts, journals, canonical roster, source ledger, media review, projections,
+and validator mutually consistent.

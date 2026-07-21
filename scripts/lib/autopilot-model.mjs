@@ -57,6 +57,7 @@ export function emptyState() {
       coverage_path: "data/CENSUS-COVERAGE.json",
       coverage_sha256: "",
       scopes_path: "data/AUTOPILOT-SCOPES.json",
+      certifications_path: "data/AUTOPILOT-CERTIFICATIONS.json",
       manifest_path: "data/CENSUS-MANIFEST.json",
       drafts_path: "data/drafts.json",
       specimens_path: "data/specimens.json",
@@ -237,14 +238,21 @@ export function validateState(state) {
     if (!Number.isInteger(job.attempts) || job.attempts < 0) throw new Error(`task ${job.id} has invalid attempts`);
     if (job.status === "leased") {
       if (!job.lease?.id || !job.lease?.agent || !Number.isFinite(Date.parse(job.lease.expires_at))) throw new Error(`task ${job.id} has an invalid lease`);
+      if (!/^[0-9a-f]{64}$/i.test(job.lease.readiness_token || "")) throw new Error(`task ${job.id} has an invalid lease readiness token`);
     } else if (job.lease) {
       throw new Error(`task ${job.id} carries a lease outside leased status`);
     }
     if (["resolved", "merged"].includes(job.status) && !job.role_on_wall) throw new Error(`task ${job.id} is ${job.status} without wall coverage`);
     if (job.status === "queued" && !job.queueable) throw new Error(`task ${job.id} is queued despite an unresolved source identity`);
-    if (job.status === "drafted" && (job.outcome?.kind !== "draft" || !job.outcome?.lease_id)) throw new Error(`task ${job.id} has an invalid drafted receipt`);
+    if (job.status === "drafted") {
+      if (job.outcome?.kind !== "draft" || !job.outcome?.lease_id) throw new Error(`task ${job.id} has an invalid drafted receipt`);
+      if (!/^[0-9a-f]{64}$/i.test(job.outcome.readiness_token || "")) throw new Error(`task ${job.id} drafted receipt has an invalid readiness token`);
+      if (job.outcome.source_fingerprint !== job.source_fingerprint) throw new Error(`task ${job.id} drafted receipt has a stale source fingerprint`);
+    }
     if (job.status === "merged") {
       if (job.outcome?.kind !== "merged" || !job.outcome?.lease_id) throw new Error(`task ${job.id} has an invalid merged receipt`);
+      if (!/^[0-9a-f]{64}$/i.test(job.outcome.readiness_token || "")) throw new Error(`task ${job.id} merged receipt has an invalid readiness token`);
+      if (job.outcome.source_fingerprint !== job.source_fingerprint) throw new Error(`task ${job.id} merged receipt has a stale source fingerprint`);
       if (!Array.isArray(job.wall_ids) || !job.wall_ids.length) throw new Error(`task ${job.id} is merged without wall IDs`);
     }
     if (job.status === "resolved" && job.outcome?.kind === "audited-wall") {

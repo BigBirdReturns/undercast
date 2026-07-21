@@ -8,7 +8,9 @@ Actions; keyless crawlers fill images and harvest leads. No servers, no keys.
 
 **To grow the roster, read [GROW.md](GROW.md).** A Luna/autonomous worker must
 also read [LUNA.md](LUNA.md) and [docs/AUTOPILOT.md](docs/AUTOPILOT.md), then
-claim a bounded lease instead of choosing free-form work. To consume or extend
+claim a bounded lease instead of choosing free-form work. A scope must pass
+`autopilot readiness`; Luna never certifies or activates its own producer. To
+consume or extend
 the machine-facing archive, read [CRAWLERS.md](CRAWLERS.md) and
 `data/archive.json`. The drafting model is the compute — you draft verified
 specimens, a keyless script merges them. Accuracy over volume, always: never
@@ -41,7 +43,7 @@ it serves. And no one claims the gate is "green" without running all of
 decision or a "ruling" to the owner they did not actually make.
 
 Key files: `GROW.md` (how to add cards), `LUNA.md` / `docs/AUTOPILOT.md`
-(bounded autonomous growth), `CRAWLERS.md` (crawler/evidence contract),
+(certified, bounded autonomous growth), `CRAWLERS.md` (crawler/evidence contract),
 `README.md` (the whole system), `scripts/` (retrieve = images, ingest = lead
 harvest, grow = merge model drafts, autopilot = durable work leases,
 credits/needs/adopt = helpers).
