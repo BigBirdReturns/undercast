@@ -48,7 +48,16 @@ if (!flag('resume')) await rm(out, { recursive: true, force: true });
 await mkdir(join(out, 'data', 'sources'), { recursive: true });
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const USER_AGENT = `undercast-preservation/1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT || 'preservation'})`;
+const USER_AGENT = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT || 'preservation'})`;
+const WIKIZILLA_API = 'https://wikizilla.org/w/api.php';
+const STATIC_SITE_INFO = Object.freeze({
+  [WIKIZILLA_API]: {
+    api: WIKIZILLA_API, sitename: 'Wikizilla', lang: 'en', generator: 'MediaWiki',
+    server: 'https://wikizilla.org', articlepath: '/wiki/$1',
+    rights_text: 'Creative Commons Attribution-ShareAlike 3.0 Unported; some text may also be available under the GNU Free Documentation License',
+    rights_url: 'https://wikizilla.org/wiki/Wikizilla:Copyrights', retrieval: 'static-after-api-denial',
+  },
+});
 
 function revisionContent(revision) {
   return revision?.slots?.main?.content
@@ -63,7 +72,7 @@ async function requestJson(url, label) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const response = await fetch(url, {
-        headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+        headers: { 'User-Agent': USER_AGENT, Accept: 'application/json', 'Accept-Language': 'en-US,en;q=0.8' },
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -85,13 +94,82 @@ function pagesFrom(json) {
   return [];
 }
 
+async function requestText(url, label) {
+  let last;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': USER_AGENT,
+          Accept: 'text/plain,text/html;q=0.9,*/*;q=0.5',
+          'Accept-Language': 'en-US,en;q=0.8',
+          Referer: 'https://wikizilla.org/',
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.text();
+    } catch (error) {
+      last = error;
+      if (attempt < retries) await sleep(Math.min(10_000, 750 * 2 ** (attempt - 1)));
+    }
+  }
+  throw new Error(`${label} failed after ${retries} attempts: ${last?.message || last}`);
+}
+
+function wikizillaRawUrls(record) {
+  const title = record.facets.find((facet) => facet.title)?.title;
+  if (!title) throw new Error(`Wikizilla revision ${record.revision} has no title facet`);
+  const index = new URL('index.php', WIKIZILLA_API);
+  index.searchParams.set('title', title);
+  index.searchParams.set('oldid', String(record.revision));
+  index.searchParams.set('action', 'raw');
+  const source = new URL(record.facets[0].source);
+  source.searchParams.set('oldid', String(record.revision));
+  source.searchParams.set('action', 'raw');
+  return [...new Set([index.toString(), source.toString()])];
+}
+
+async function fetchWikizillaRaw(record) {
+  const errors = [];
+  for (const url of wikizillaRawUrls(record)) {
+    try {
+      const content = await requestText(url, `Wikizilla raw revision ${record.revision}`);
+      const got = sha256(Buffer.from(content, 'utf8'));
+      if (got !== record.content_sha256) {
+        errors.push(`${url}: hash ${got}`);
+        continue;
+      }
+      return {
+        pageid: record.pageid,
+        title: record.facets.find((facet) => facet.title)?.title || null,
+        timestamp: record.timestamp,
+        parentid: null, user: null, userid: null, comment: '', mediawiki_sha1: null,
+        content, retrieval: 'raw-oldid-hash-match',
+      };
+    } catch (error) {
+      errors.push(`${url}: ${error.message}`);
+    }
+  }
+  console.warn(`Wikizilla revision ${record.revision} raw fallback failed: ${errors.join('; ')}`);
+  return null;
+}
+
 async function fetchExactBatch(api, batch) {
   const params = new URLSearchParams({
     action: 'query', format: 'json', formatversion: '2', origin: '*', prop: 'revisions',
     revids: batch.map((row) => row.revision).join('|'),
     rvprop: 'ids|timestamp|user|userid|comment|sha1|content', rvslots: 'main',
   });
-  const json = await requestJson(`${api}?${params}`, `${api} revisions ${batch[0].revision}..${batch.at(-1).revision}`);
+  let json;
+  try {
+    json = await requestJson(`${api}?${params}`, `${api} revisions ${batch[0].revision}..${batch.at(-1).revision}`);
+  } catch (error) {
+    if (api !== WIKIZILLA_API) throw error;
+    console.warn(`Wikizilla API batch denied; using exact oldid raw fallback (${error.message})`);
+    const pairs = await Promise.all(batch.map(async (record) => [record.revision, await fetchWikizillaRaw(record)]));
+    return new Map(pairs.filter(([, value]) => value));
+  }
   const found = new Map();
   for (const page of pagesFrom(json)) for (const revision of page?.revisions || []) {
     const content = revisionContent(revision);
@@ -101,8 +179,13 @@ async function fetchExactBatch(api, batch) {
   }
   const missing = batch.filter((row) => !found.has(row.revision));
   if (missing.length) {
-    const fallback = await fetchCurrentByPageId(api, missing);
-    for (const [revision, value] of fallback) found.set(revision, value);
+    if (api === WIKIZILLA_API) {
+      const pairs = await Promise.all(missing.map(async (record) => [record.revision, await fetchWikizillaRaw(record)]));
+      for (const [revision, value] of pairs) if (value) found.set(revision, value);
+    } else {
+      const fallback = await fetchCurrentByPageId(api, missing);
+      for (const [revision, value] of fallback) found.set(revision, value);
+    }
   }
   return found;
 }
@@ -134,7 +217,15 @@ async function fetchCurrentByPageId(api, records) {
 
 async function fetchSiteInfo(api) {
   const params = new URLSearchParams({ action: 'query', format: 'json', formatversion: '2', origin: '*', meta: 'siteinfo', siprop: 'general|rights' });
-  const json = await requestJson(`${api}?${params}`, `${api} siteinfo`);
+  let json;
+  try {
+    json = await requestJson(`${api}?${params}`, `${api} siteinfo`);
+  } catch (error) {
+    const fallback = STATIC_SITE_INFO[api];
+    if (!fallback) throw error;
+    console.warn(`${api} siteinfo unavailable; using reviewed static rights metadata (${error.message})`);
+    return fallback;
+  }
   const general = json?.query?.general || {};
   const rights = json?.query?.rightsinfo || {};
   return {
