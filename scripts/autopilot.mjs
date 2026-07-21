@@ -26,6 +26,7 @@ const DEFAULT_SCOPES = "data/AUTOPILOT-SCOPES.json";
 const DEFAULT_CERTIFICATIONS = "data/AUTOPILOT-CERTIFICATIONS.json";
 const DEFAULT_COVERAGE = "data/CENSUS-COVERAGE.json";
 const DEFAULT_MANIFEST = "data/CENSUS-MANIFEST.json";
+const DEFAULT_PRESERVATION = "preservation/SNAPSHOTS.json";
 const DEFAULT_DRAFTS = "data/drafts.json";
 const DEFAULT_SPECIMENS = "data/specimens.json";
 const DEFAULT_SOURCES = "data/SOURCES.json";
@@ -199,6 +200,7 @@ function queuePaths() {
     certifications: option("certifications", DEFAULT_CERTIFICATIONS),
     coverage: option("coverage", DEFAULT_COVERAGE),
     manifest: option("manifest", DEFAULT_MANIFEST),
+    preservation: option("preservation", DEFAULT_PRESERVATION),
     drafts: option("drafts", DEFAULT_DRAFTS),
     specimens: option("specimens", DEFAULT_SPECIMENS),
     growthRejections: option("growth-rejections", DEFAULT_GROWTH_REJECTIONS),
@@ -208,11 +210,12 @@ function queuePaths() {
 
 async function loadQueueInputs({ downstream = true } = {}) {
   const paths = queuePaths();
-  const [coverageDoc, manifestDoc, scopes, certifications] = await Promise.all([
+  const [coverageDoc, manifestDoc, scopes, certifications, preservation] = await Promise.all([
     readJsonBytes(paths.coverage),
     readJsonBytes(paths.manifest, { observations: [] }),
     readJson(paths.scopes),
     readJson(paths.certifications, emptyCertifications()),
+    readJson(paths.preservation, { version: 1, updated_at: "", history_guard: { baseline_manifest_sha256: "0".repeat(64), status: "unconfigured", precondition_met: false, destructive_rewrite_authorized: false }, snapshots: [] }),
   ]);
   validateCertifications(certifications);
   const readiness = await resolveScopeReadiness({
@@ -222,6 +225,7 @@ async function loadQueueInputs({ downstream = true } = {}) {
     manifest: manifestDoc.value,
     coverageSha256: sha256(coverageDoc.bytes),
     manifestSha256: sha256(manifestDoc.bytes),
+    preservation,
     root: option("root", "."),
     now: option("now", new Date().toISOString()),
   });
@@ -233,6 +237,7 @@ async function loadQueueInputs({ downstream = true } = {}) {
     manifestBytes: manifestDoc.bytes,
     scopes,
     certifications,
+    preservation,
     effectiveScopes: readiness.effectiveScopes,
     readiness: readiness.readiness,
   };
@@ -250,8 +255,8 @@ function readyScope(inputs, scopeId, { requireActive = true } = {}) {
   if (!scopeId) throw new Error("leasing requires --scope; one lease may not span independently certified producers");
   const row = inputs.readiness.find((item) => item.scope_id === scopeId);
   if (!row) throw new Error(`unknown scope ${scopeId}`);
-  if (requireActive && row.effective_status !== "active") {
-    throw new Error(`scope ${scopeId} is not ready for autonomous work (${row.reasons.join(", ") || row.effective_status})`);
+  if (requireActive && (row.effective_status !== "active" || !row.lease_token)) {
+    throw new Error(`scope ${scopeId} is not ready for autonomous work (${row.reasons.join(", ") || row.lease_status || row.effective_status})`);
   }
   return row;
 }
@@ -274,7 +279,8 @@ function printReadiness(rows) {
     const reason = row.reasons.length ? ` — ${row.reasons.join(", ")}` : "";
     const details = row.snapshot_details ? `; rows=${row.snapshot_details.rows} receipts=${row.snapshot_details.complete_receipts}/${row.snapshot_details.sources}` : "";
     const refresh = row.refresh ? ` refresh=${row.refresh.due ? "due" : `due-${row.refresh.due_at}`}` : "";
-    console.log(`  ${row.scope_id}: declared=${row.declared_status} effective=${row.effective_status} certification=${row.certification} snapshot=${row.snapshot}${details}${refresh}${reason}`);
+    const preservation = row.preservation ? ` preservation=${row.preservation}` : "";
+    console.log(`  ${row.scope_id}: declared=${row.declared_status} effective=${row.effective_status} lease=${row.lease_status || "blocked"} certification=${row.certification} snapshot=${row.snapshot}${preservation}${details}${refresh}${reason}`);
   }
 }
 
@@ -284,6 +290,7 @@ function sourcePaths(inputs) {
     scopes_path: inputs.paths.scopes,
     certifications_path: inputs.paths.certifications,
     manifest_path: inputs.paths.manifest,
+    preservation_path: inputs.paths.preservation,
     drafts_path: inputs.paths.drafts,
     specimens_path: inputs.paths.specimens,
     growth_rejections_path: inputs.paths.growthRejections,
@@ -481,7 +488,7 @@ async function refreshCommand() {
     archivePreflight(`publish refreshed scope ${scopeId}`, root);
 
     const afterInputs = await loadQueueInputs();
-    const afterReadiness = readyScope(afterInputs, scopeId);
+    const afterReadiness = readyScope(afterInputs, scopeId, { requireActive: false });
     const result = reconcile(state, afterInputs);
     const now = option("now", new Date().toISOString());
     const event = {
@@ -490,7 +497,9 @@ async function refreshCommand() {
       scope: scopeId,
       refreshed_by: refreshedBy,
       before_lease_token: beforeReadiness.lease_token,
-      after_lease_token: afterReadiness.lease_token,
+      after_lease_token: afterReadiness.lease_token || null,
+      after_lease_status: afterReadiness.lease_status || "blocked",
+      preservation: afterReadiness.preservation || null,
       coverage_sha256: afterReadiness.snapshot_details.coverage_sha256,
       manifest_sha256: afterReadiness.snapshot_details.manifest_sha256,
       steps: stepReceipts,
@@ -499,7 +508,7 @@ async function refreshCommand() {
       { path: afterInputs.paths.state, bytes: jsonBytes(result.state) },
       { path: afterInputs.paths.journal, bytes: await journalAppendBytes(afterInputs.paths.journal, [...result.events, event]) },
     ]);
-    console.log(`refreshed ${scopeId}: ${afterReadiness.snapshot_details.rows} source rows, ${afterReadiness.snapshot_details.complete_receipts}/${afterReadiness.snapshot_details.sources} receipts; queue ${result.changed ? "reconciled" : "unchanged"}`);
+    console.log(`refreshed ${scopeId}: ${afterReadiness.snapshot_details.rows} source rows, ${afterReadiness.snapshot_details.complete_receipts}/${afterReadiness.snapshot_details.sources} receipts; lease=${afterReadiness.lease_status || "blocked"}; queue ${result.changed ? "reconciled" : "unchanged"}`);
   });
 }
 
@@ -508,7 +517,7 @@ async function readinessCommand() {
   const selected = option("scope") ? inputs.readiness.filter((row) => row.scope_id === option("scope")) : inputs.readiness;
   if (!selected.length) throw new Error(`unknown scope ${option("scope")}`);
   if (flag("require-active")) for (const row of selected) {
-    if (row.effective_status !== "active") throw new Error(`scope ${row.scope_id} is not active: ${row.reasons.join(", ") || row.effective_status}`);
+    if (row.effective_status !== "active" || !row.lease_token) throw new Error(`scope ${row.scope_id} is not lease-ready: ${row.reasons.join(", ") || row.lease_status || row.effective_status}`);
   }
   if (flag("json")) console.log(JSON.stringify(selected, null, 2)); else printReadiness(selected);
 }
@@ -521,11 +530,12 @@ async function certifyCommand() {
     const now = option("now", new Date().toISOString());
     if (!scopeId) throw new Error("certify requires --scope");
     if (!reviewedBy) throw new Error("certify requires --reviewed-by");
-    const [coverageDoc, manifestDoc, scopes, certifications, state] = await Promise.all([
+    const [coverageDoc, manifestDoc, scopes, certifications, preservation, state] = await Promise.all([
       readJsonBytes(paths.coverage),
       readJsonBytes(paths.manifest, { observations: [] }),
       readJson(paths.scopes),
       readJson(paths.certifications, emptyCertifications()),
+      readJson(paths.preservation),
       loadState(paths.state),
     ]);
     const inFlight = state.jobs.filter((job) => job.scope === scopeId && ["leased", "drafted", "merged"].includes(job.status));
@@ -539,6 +549,7 @@ async function certifyCommand() {
       manifest: manifestDoc.value,
       coverageSha256: sha256(coverageDoc.bytes),
       manifestSha256: sha256(manifestDoc.bytes),
+      preservation,
       root: option("root", "."),
       cwd: option("root", "."),
       now,
@@ -557,11 +568,12 @@ async function certifyCommand() {
       manifest: manifestDoc.value,
       coverageSha256: sha256(coverageDoc.bytes),
       manifestSha256: sha256(manifestDoc.bytes),
+      preservation,
       root: option("root", "."),
     });
     const row = prospective.readiness.find((item) => item.scope_id === scopeId);
-    if (flag("activate") && row.effective_status !== "active") {
-      throw new Error(`scope ${scopeId} cannot be activated: ${row.reasons.join(", ") || row.effective_status}`);
+    if (flag("activate") && (row.effective_status !== "active" || !row.lease_token)) {
+      throw new Error(`scope ${scopeId} cannot be activated for leasing: ${row.reasons.join(", ") || row.lease_status || row.effective_status}`);
     }
     const event = {
       op: "scope.certified",

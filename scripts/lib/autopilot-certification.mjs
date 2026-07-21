@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { normalize, normalizeScopes, sha256 } from "./autopilot-model.mjs";
+import { scopePreservationReceipt, validateSnapshotRegistry } from "./preservation.mjs";
 
 export const AUTOPILOT_CERTIFICATION_VERSION = 1;
 
@@ -93,17 +94,28 @@ export function certificationConfig(scope) {
     producer_files: [...new Set(raw.producer_files.map(safeRelativePath))].sort(),
     checks: raw.checks.map((check, index) => normalizeCheck(check, index, scopeId)),
     require_manifest_receipts: raw.require_manifest_receipts !== false,
+    require_source_snapshot: raw.require_source_snapshot === true,
   };
 }
 
 export function scopeContract(scope) {
   const config = certificationConfig(scope);
+  // Preserve the pre-preservation contract bytes until a scope explicitly opts
+  // into exact-source snapshots. This lets the new control-plane code land green;
+  // the bootstrap export then adds the flag and deliberately re-certifies.
+  const certification = config.require_source_snapshot
+    ? config
+    : {
+        producer_files: config.producer_files,
+        checks: config.checks,
+        require_manifest_receipts: config.require_manifest_receipts,
+      };
   return {
     id: String(scope.id),
     label: String(scope.label || ""),
     coverage_match: stable(scope.coverage_match || {}),
     refresh: refreshConfig(scope),
-    certification: config,
+    certification,
   };
 }
 
@@ -149,6 +161,12 @@ export function validateCertifications(doc) {
     for (const key of ["rows", "sources", "complete_receipts"]) {
       if (!Number.isInteger(row.snapshot[key]) || row.snapshot[key] < 0) throw new Error(`certification ${row.scope_id} snapshot has invalid ${key}`);
     }
+    if (row.snapshot.source_snapshot_id !== undefined && !String(row.snapshot.source_snapshot_id || "").trim()) {
+      throw new Error(`certification ${row.scope_id} snapshot has invalid source_snapshot_id`);
+    }
+    if (row.snapshot.source_archive_sha256 !== undefined && !/^[0-9a-f]{64}$/i.test(row.snapshot.source_archive_sha256 || "")) {
+      throw new Error(`certification ${row.scope_id} snapshot has invalid source_archive_sha256`);
+    }
   }
   return true;
 }
@@ -171,6 +189,7 @@ export async function producerFingerprint(scope, { root = ".", read = readFile }
     producer_files: contract.certification.producer_files,
     checks: contract.certification.checks,
     require_manifest_receipts: contract.certification.require_manifest_receipts,
+    require_source_snapshot: contract.certification.require_source_snapshot,
   };
 }
 
@@ -261,6 +280,7 @@ export async function resolveScopeReadiness({
   manifest = { observations: [] },
   coverageSha256 = "",
   manifestSha256 = "",
+  preservation = { version: 1, updated_at: "", history_guard: { baseline_manifest_sha256: "0".repeat(64), status: "unconfigured", precondition_met: false, destructive_rewrite_authorized: false }, snapshots: [] },
   root = ".",
   now = new Date().toISOString(),
 } = {}) {
@@ -352,12 +372,38 @@ export async function resolveScopeReadiness({
       continue;
     }
     row.effective_status = "active";
+    let preservationReceipt = null;
+    if (fingerprint.require_source_snapshot) {
+      try {
+        validateSnapshotRegistry(preservation);
+        preservationReceipt = scopePreservationReceipt(preservation, scope.id, snapshot.manifest_sha256);
+      } catch (error) {
+        row.preservation = "invalid";
+        row.reasons.push(`preservation_registry_invalid: ${error.message}`);
+      }
+      if (!preservationReceipt) {
+        row.preservation = row.preservation || "missing";
+        row.lease_status = "blocked";
+        row.reasons.push("source_snapshot_missing");
+        readiness.push(row);
+        continue;
+      }
+      const sourceAsset = preservationReceipt.snapshot.public_release.assets.find((asset) => asset.kind === "source-bag");
+      row.preservation = preservationReceipt.snapshot.status;
+      row.preservation_snapshot_id = preservationReceipt.snapshot.id;
+      row.source_archive_sha256 = sourceAsset.sha256;
+    } else {
+      row.preservation = "not-required";
+    }
+    row.lease_status = "ready";
     row.lease_token = sha256(stableJson({
       scope_id: scope.id,
       producer_sha256: fingerprint.producer_sha256,
       contract_sha256: fingerprint.contract_sha256,
       coverage_sha256: snapshot.coverage_sha256,
       manifest_sha256: snapshot.manifest_sha256,
+      preservation_snapshot_id: row.preservation_snapshot_id || "",
+      source_archive_sha256: row.source_archive_sha256 || "",
     }));
     readiness.push(row);
   }
@@ -397,6 +443,7 @@ export async function certifyScope({
   manifest,
   coverageSha256,
   manifestSha256,
+  preservation = { version: 1, updated_at: "", history_guard: { baseline_manifest_sha256: "0".repeat(64), status: "unconfigured", precondition_met: false, destructive_rewrite_authorized: false }, snapshots: [] },
   root = ".",
   cwd = root,
   now = new Date().toISOString(),
@@ -414,6 +461,12 @@ export async function certifyScope({
   const fingerprint = await producerFingerprint(scope, { root });
   const snapshot = snapshotReadiness(scope, coverage, manifest, { coverageSha256, manifestSha256 });
   if (!snapshot.ready) throw new Error(`scope ${scope.id} snapshot is not certifiable: ${snapshot.reasons.join(", ")}`);
+  let preservationReceipt = null;
+  if (fingerprint.require_source_snapshot) {
+    validateSnapshotRegistry(preservation);
+    preservationReceipt = scopePreservationReceipt(preservation, scope.id, snapshot.manifest_sha256);
+    if (!preservationReceipt) throw new Error(`scope ${scope.id} has no published source snapshot for manifest ${snapshot.manifest_sha256}`);
+  }
   const certificate = {
     scope_id: scope.id,
     producer_sha256: fingerprint.producer_sha256,
@@ -428,6 +481,10 @@ export async function certifyScope({
       complete_receipts: snapshot.complete_receipts,
       coverage_file_sha256: snapshot.coverage_file_sha256,
       manifest_file_sha256: snapshot.manifest_file_sha256,
+      ...(preservationReceipt ? {
+        source_snapshot_id: preservationReceipt.snapshot.id,
+        source_archive_sha256: preservationReceipt.snapshot.public_release.assets.find((asset) => asset.kind === "source-bag").sha256,
+      } : {}),
     },
     certified_at: now,
     certified_by: String(certifiedBy).trim(),

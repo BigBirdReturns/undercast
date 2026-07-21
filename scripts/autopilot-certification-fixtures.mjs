@@ -137,6 +137,46 @@ try {
   });
   assert.notEqual(changedManifestSnapshot.readiness[0].lease_token, ready.readiness[0].lease_token, "changed scope evidence invalidates an outstanding lease token");
 
+
+  const preservingScope = structuredClone(scope);
+  preservingScope.certification.require_source_snapshot = true;
+  const preservingScopes = { version: 1, scopes: [preservingScope] };
+  const preservingSnapshot = snapshotReadiness(preservingScope, coverage, manifest);
+  await assert.rejects(() => certifyScope({
+    scopesDoc: preservingScopes, certificationsDoc: empty, scopeId: "star-trek", certifiedBy: "second-desk",
+    coverage, manifest, root, cwd: root, now: "2026-07-21T12:00:00Z",
+  }), /no published source snapshot/, "certification fails closed until exact source revisions are published");
+  const preservation = {
+    version: 1, updated_at: "2026-07-21T11:00:00Z",
+    history_guard: { baseline_manifest_sha256: "9".repeat(64), status: "awaiting-independent-copy", precondition_met: false, destructive_rewrite_authorized: false },
+    snapshots: [{
+      id: "preservation-fixture", status: "pending", created_at: "2026-07-21T11:00:00Z",
+      repository_commit: "8".repeat(40), census_manifest_sha256: "7".repeat(64), baseline_manifest_sha256: "9".repeat(64),
+      scopes: { "star-trek": { manifest_sha256: preservingSnapshot.manifest_sha256 } },
+      public_release: { tag: "preservation-fixture", assets: [
+        { kind: "source-bag", name: "sources.tar.gz", url: "https://example.test/sources.tar.gz", sha256: "6".repeat(64), bytes: 10 },
+        { kind: "repository-snapshot", name: "repo.tar.gz", url: "https://example.test/repo.tar.gz", sha256: "5".repeat(64), bytes: 20 },
+      ] },
+      independent_copies: [],
+    }],
+  };
+  const preservationCertified = await certifyScope({
+    scopesDoc: preservingScopes, certificationsDoc: empty, scopeId: "star-trek", certifiedBy: "second-desk",
+    coverage, manifest, preservation, root, cwd: root, now: "2026-07-21T12:00:00Z",
+  });
+  assert.equal(preservationCertified.certificate.snapshot.source_snapshot_id, "preservation-fixture");
+  const preservationReady = await resolveScopeReadiness({
+    scopesDoc: preservingScopes, certificationsDoc: preservationCertified.certifications, coverage, manifest, preservation, root,
+  });
+  assert.equal(preservationReady.readiness[0].lease_status, "ready");
+  assert.match(preservationReady.readiness[0].lease_token, /^[0-9a-f]{64}$/);
+  const noCurrentPreservation = await resolveScopeReadiness({
+    scopesDoc: preservingScopes, certificationsDoc: preservationCertified.certifications, coverage, manifest: changedManifest, preservation, root,
+  });
+  assert.equal(noCurrentPreservation.readiness[0].effective_status, "active", "producer remains certified after a source refresh");
+  assert.equal(noCurrentPreservation.readiness[0].lease_token, undefined, "new work is blocked until the refreshed exact revisions are archived");
+  assert.ok(noCurrentPreservation.readiness[0].reasons.includes("source_snapshot_missing"));
+
   await writeFile(join(root, "scripts/lib/census-core.mjs"), "export const parser = 2;\n");
   const stale = await resolveScopeReadiness({ scopesDoc: scopes, certificationsDoc: certified.certifications, coverage, manifest, root });
   assert.equal(stale.readiness[0].effective_status, "paused", "producer changes invalidate certification");
