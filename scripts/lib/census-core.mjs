@@ -44,13 +44,86 @@ export function performerFieldValues(wikitext) {
 // name.
 export const PERSONISH = /^[A-ZÀ-Þ][A-Za-zà-þ'.\-]*(?: [A-ZÀ-Þ][A-Za-zà-þ'.\-]*)+$/;
 
+function cleanLinkTarget(raw) {
+  return raw.split("#", 1)[0].split("|", 1)[0].trim()
+    .replace(/\s*\((actor|actress|performer|puppeteer|Dalek operator)\)$/i, "");
+}
+
+function personCandidate(target) {
+  return target && !/^(File|Image|Category|w:c:|Template):/i.test(target)
+    && !/[()\d]/.test(target) && target !== target.toUpperCase()
+    && !/uncredited|unknown|various|see below/i.test(target)
+    && PERSONISH.test(target) && target.length < 40;
+}
+
+/**
+ * Return performer-shaped links while ignoring links that merely annotate a
+ * performer already named in the same list segment. Source infoboxes commonly
+ * use shapes such as `[[Garth Kemp]] (as [[The Face]])` and
+ * `[[Kate Mulgrew]] (posing as [[Kathryn Janeway]])`; the second link is a role
+ * or disguise, not another human credit. A parenthesized segment that starts
+ * with a performer remains valid, e.g. `([[Jane Doe]] as a child)`.
+ */
 export function namesFrom(value) {
-  const links = [...value.matchAll(/\[\[([^\]|#]+)(?:[^\]]*)?\]\]/g)]
-    .map((m) => m[1].trim().replace(/\s*\((actor|actress|performer|puppeteer|Dalek operator)\)$/i, ""));
-  return links.filter((n) => n && !/^(File|Image|Category|w:c:|Template):/i.test(n)
-    && !/[()\d]/.test(n) && n !== n.toUpperCase()
-    && !/uncredited|unknown|various|see below/i.test(n)
-    && PERSONISH.test(n) && n.length < 40);
+  const names = [];
+  let i = 0, parenDepth = 0, segmentHasPerformer = false;
+  while (i < value.length) {
+    if (value.startsWith("[[", i)) {
+      const end = value.indexOf("]]", i + 2);
+      if (end < 0) break;
+      const target = cleanLinkTarget(value.slice(i + 2, end));
+      const candidate = personCandidate(target);
+      if (candidate && (parenDepth === 0 || !segmentHasPerformer)) {
+        names.push(target);
+        segmentHasPerformer = true;
+      }
+      i = end + 2;
+      continue;
+    }
+    if (value[i] === "(") { parenDepth++; i++; continue; }
+    if (value[i] === ")") { if (parenDepth > 0) parenDepth--; i++; continue; }
+    if (parenDepth === 0) {
+      const rest = value.slice(i);
+      const br = rest.match(/^<br\s*\/?\s*>/i);
+      if (br) { segmentHasPerformer = false; i += br[0].length; continue; }
+      const conjunction = rest.match(/^\s+(?:and|or)\s+/i);
+      if (conjunction) { segmentHasPerformer = false; i += conjunction[0].length; continue; }
+      if (/[\n,;*]/.test(value[i])) segmentHasPerformer = false;
+    }
+    i++;
+  }
+  return [...new Set(names)];
+}
+
+const semanticNormalize = (value) => String(value || "")
+  .normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+  .replace(/[’‘]/g, "'").replace(/[^a-zA-Z0-9']+/g, " ").trim().toLowerCase();
+
+/**
+ * Some character wikis use a performer field to name another fictional
+ * character who is performing an alter ego or puppet. For adapters that opt in,
+ * demote a row only when every extracted performer is itself a character page
+ * in the same captured scope. Mixed human/character fields stop the crawl for
+ * review rather than silently dropping one side.
+ */
+export function demoteCharacterOnlyPerformers(rows, unresolvedRows, franchise) {
+  const titles = new Set([...rows, ...unresolvedRows]
+    .filter((row) => row.franchise === franchise)
+    .map((row) => semanticNormalize(row.character)));
+  const kept = [], unresolved = [...unresolvedRows], demoted = [];
+  for (const row of rows) {
+    if (row.franchise !== franchise) { kept.push(row); continue; }
+    const characterPerformers = row.performers.filter((name) => titles.has(semanticNormalize(name)));
+    if (!characterPerformers.length) { kept.push(row); continue; }
+    if (characterPerformers.length !== row.performers.length) {
+      throw new Error(`${franchise} ${row.character} mixes human and character performer targets (${row.performers.join(", ")}); refusing an ambiguous credit`);
+    }
+    const reason = `source performer field names another fictional character (${characterPerformers.join(", ")}), not a human performer`;
+    unresolved.push({ franchise: row.franchise, category: row.category, character: row.character,
+      performance_mode: row.performance_mode || "unresolved", source: row.source, reason });
+    demoted.push({ ...row, reason });
+  }
+  return { rows: kept, unresolved, demoted };
 }
 
 /**
