@@ -1,0 +1,183 @@
+   if (!Array.isArray(resultsDoc.results)) throw new Error("results must be an array");
+@@ -129,6 +139,14 @@
+   const nextDrafts = copyJson(drafts);
+   if (!Array.isArray(nextDrafts)) throw new Error("data/drafts.json must be an array");
+   const jobs = new Map(next.jobs.map((job) => [job.id, job]));
++  const batchTasks = new Map(batch.tasks.map((task) => [task.id, task]));
++  for (const taskId of expected) {
++    const task = batchTasks.get(taskId);
++    const job = jobs.get(taskId);
++    if (!job || !task?.source_fingerprint || task.source_fingerprint !== job.source_fingerprint) {
++      throw new Error(`task ${taskId} source fingerprint changed after leasing`);
++    }
++  }
+   const existingDrafts = new Map(nextDrafts.map((draft, index) => [draftIdentity(draft), index]));
+   const events = [];
+ 
+@@ -137,10 +155,23 @@
+     if (!job || job.status !== "leased" || job.lease?.id !== batch.lease_id || job.lease?.agent !== batch.agent) {
+       throw new Error(`task ${result.task_id} is no longer leased to ${batch.agent}/${batch.lease_id}`);
+     }
++    if (job.lease.readiness_token !== batch.readiness.lease_token) {
++      throw new Error(`task ${result.task_id} lease readiness token does not match its batch`);
++    }
+     const decision = result.decision;
+     if (decision === "draft") {
+       validateDraft(job, result.draft);
+-      const row = { ...result.draft, _autopilot: { task_id: job.id, lease_id: batch.lease_id, submitted_by: batch.agent, submitted_at: now } };
++      const row = {
++        ...result.draft,
++        _autopilot: {
++          task_id: job.id,
++          lease_id: batch.lease_id,
++          readiness_token: batch.readiness.lease_token,
++          source_fingerprint: job.source_fingerprint,
++          submitted_by: batch.agent,
++          submitted_at: now,
++        },
++      };
+       const key = draftIdentity(row);
+       if (!existingDrafts.has(key)) {
+         nextDrafts.push(row);
+@@ -150,7 +181,15 @@
+         nextDrafts[index] = { ...nextDrafts[index], _autopilot: row._autopilot };
+       }
+       job.status = "drafted";
+-      job.outcome = { kind: "draft", submitted_at: now, submitted_by: batch.agent, draft_identity: key, lease_id: batch.lease_id };
++      job.outcome = {
++        kind: "draft",
++        submitted_at: now,
++        submitted_by: batch.agent,
++        draft_identity: key,
++        lease_id: batch.lease_id,
++        readiness_token: batch.readiness.lease_token,
++        source_fingerprint: job.source_fingerprint,
++      };
+       events.push(event("task.drafted", job, now, { lease_id: batch.lease_id, agent: batch.agent }));
+     } else if (decision === "reject") {
+       if (!String(result.reason || "").trim() || String(result.reason).trim().length < 12) throw new Error(`task ${job.id}: rejection needs a specific reason`);
+@@ -206,7 +245,7 @@
+   };
+ }
+ 
+-export function completeReviews({ state, reviewDoc, sourceLedger, corpusSha256, now = new Date().toISOString() }) {
++export function completeReviews({ state, reviewDoc, sourceLedger, corpusSha256, readinessTokens = {}, now = new Date().toISOString() }) {
+   if (!reviewDoc || reviewDoc.version !== AUTOPILOT_VERSION) throw new Error("invalid media review document version");
+   if (!/^[a-zA-Z0-9._-]{2,64}$/.test(reviewDoc.reviewed_by || "")) throw new Error("media review needs reviewed_by");
+   if (!reviewDoc.lease_id) throw new Error("media review needs the originating lease_id");
+@@ -227,6 +266,10 @@
+     if (!job) throw new Error(`unknown media review task ${review.task_id}`);
+     if (job.status !== "merged" || !job.role_on_wall) throw new Error(`task ${job.id} is not awaiting post-merge media review`);
+     if (job.outcome?.lease_id !== reviewDoc.lease_id) throw new Error(`task ${job.id} does not belong to lease ${reviewDoc.lease_id}`);
++    const currentToken = readinessTokens instanceof Map ? readinessTokens.get(job.scope) : readinessTokens?.[job.scope];
++    if (!currentToken || job.outcome?.readiness_token !== currentToken) {
++      throw new Error(`task ${job.id} was merged under a producer or census snapshot that is no longer current`);
++    }
+     if (!Array.isArray(review.records)) throw new Error(`task ${job.id}: records must be an array`);
+     const expectedIds = new Set(job.wall_ids || []);
+     if (!expectedIds.size) throw new Error(`task ${job.id}: merged task has no wall IDs to review`);
+diff -ruN /tmp/autopilot-original/scripts/lib/autopilot-certification.mjs ./scripts/lib/autopilot-certification.mjs
+--- /tmp/autopilot-original/scripts/lib/autopilot-certification.mjs	1970-01-01 00:00:00.000000000 +0000
++++ ./scripts/lib/autopilot-certification.mjs	2026-07-21 07:36:08.494859283 +0000
+@@ -0,0 +1,442 @@
++import { createHash } from "node:crypto";
++import { readFile } from "node:fs/promises";
++import { resolve, relative } from "node:path";
++import { spawnSync } from "node:child_process";
++import { normalize, normalizeScopes, sha256 } from "./autopilot-model.mjs";
++
++export const AUTOPILOT_CERTIFICATION_VERSION = 1;
++
++function stable(value) {
++  if (Array.isArray(value)) return value.map(stable);
++  if (!value || typeof value !== "object") return value;
++  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])]));
++}
++
++function stableJson(value) {
++  return JSON.stringify(stable(value));
++}
++
++function safeRelativePath(value) {
++  const path = String(value || "").trim().replace(/\\/g, "/");
++  if (!path || path.startsWith("/") || path.split("/").includes("..")) {
++    throw new Error(`unsafe producer file path: ${value || "<missing>"}`);
++  }
++  return path;
++}
++
++function normalizeCheck(check, index, scopeId) {
++  if (!check || typeof check !== "object" || Array.isArray(check)) {
++    throw new Error(`scope ${scopeId} certification.checks[${index}] must be an object`);
++  }
++  const executable = String(check.executable || "").trim();
++  const args = Array.isArray(check.args) ? check.args.map(String) : [];
++  if (!executable || /[\r\n\0]/.test(executable)) {
++    throw new Error(`scope ${scopeId} certification.checks[${index}] needs a safe executable`);
++  }
++  if (args.some((arg) => /[\r\n\0]/.test(arg))) {
++    throw new Error(`scope ${scopeId} certification.checks[${index}] contains an unsafe argument`);
++  }
++  return {
++    label: String(check.label || `${executable} ${args.join(" ")}`).trim(),
++    executable,
++    args,
++  };
++}
++
++function normalizeCommandStep(step, index, scopeId, label) {
++  if (!step || typeof step !== "object" || Array.isArray(step)) {
++    throw new Error(`scope ${scopeId} ${label}[${index}] must be an object`);
++  }
++  const executable = String(step.executable || "").trim();
++  const args = Array.isArray(step.args) ? step.args.map(String) : [];
++  if (!executable || /[\r\n\0]/.test(executable) || args.some((arg) => /[\r\n\0]/.test(arg))) {
++    throw new Error(`scope ${scopeId} ${label}[${index}] contains an unsafe command`);
++  }
++  return {
++    label: String(step.label || `${executable} ${args.join(" ")}`).trim(),
++    executable,
++    args,
++  };
++}
++
++export function refreshConfig(scope) {
++  if (!scope || typeof scope !== "object") throw new Error("scope must be an object");
++  const scopeId = String(scope.id || "<missing>");
++  const raw = scope.refresh;
++  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`scope ${scopeId} needs a refresh contract`);
++  const rawSteps = Array.isArray(raw.steps) ? raw.steps : [{ executable: raw.executable, args: raw.args, label: raw.label }];
++  if (!rawSteps.length) throw new Error(`scope ${scopeId} refresh needs at least one step`);
++  const cadenceDays = Number(raw.cadence_days);
++  if (!Number.isInteger(cadenceDays) || cadenceDays < 1 || cadenceDays > 3650) {
++    throw new Error(`scope ${scopeId} refresh.cadence_days must be an integer from 1 to 3650`);
++  }
++  return {
++    steps: rawSteps.map((step, index) => normalizeCommandStep(step, index, scopeId, "refresh.steps")),
++    cadence_days: cadenceDays,
++  };
++}
++
++export function certificationConfig(scope) {
++  if (!scope || typeof scope !== "object") throw new Error("scope must be an object");
++  const scopeId = String(scope.id || "<missing>");
++  const raw = scope.certification;
++  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
++    throw new Error(`scope ${scopeId} needs a certification contract`);
++  }
++  if (!Array.isArray(raw.producer_files) || !raw.producer_files.length) {
++    throw new Error(`scope ${scopeId} certification needs producer_files`);
++  }
++  if (!Array.isArray(raw.checks) || !raw.checks.length) {
++    throw new Error(`scope ${scopeId} certification needs checks`);
++  }
++  return {
++    producer_files: [...new Set(raw.producer_files.map(safeRelativePath))].sort(),
++    checks: raw.checks.map((check, index) => normalizeCheck(check, index, scopeId)),
++    require_manifest_receipts: raw.require_manifest_receipts !== false,
++  };
++}
++
++export function scopeContract(scope) {
++  const config = certificationConfig(scope);
++  return {
