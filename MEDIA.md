@@ -10,6 +10,15 @@ leaves the site, JSON records, provenance ledger, blanks, and code on Pages.
 The archive stays reconstructable from plain records + provenance + assets, all inside
 the same GitHub account. No second provider.
 
+
+## Subject correctness is a separate gate
+
+Storage integrity proves which bytes were published; it does not prove that the
+bytes depict the filed character or performer. The hash-bound consensus workflow
+in [`docs/MEDIA-AUDIT.md`](docs/MEDIA-AUDIT.md) owns exact-subject identity and
+presentation review. A release upload, provenance URL, or successful retrieval is
+never treated as visual verification.
+
 ## How it resolves
 
 `data/media-manifest.json` is the single source of truth for *where an image lives*.

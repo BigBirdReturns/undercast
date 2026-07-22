@@ -9,7 +9,9 @@ Actions; keyless crawlers fill images and harvest leads. No servers, no keys.
 **To grow the roster, read [GROW.md](GROW.md).** A Luna/autonomous worker must
 also read [LUNA.md](LUNA.md) and [docs/AUTOPILOT.md](docs/AUTOPILOT.md), then
 claim a bounded lease instead of choosing free-form work. A scope must pass
-`autopilot readiness`; Luna never certifies or activates its own producer. To
+`autopilot readiness`; Luna never certifies or activates its own producer. Star Trek
+also runs the exact-subject baseline in `docs/MEDIA-AUDIT.md`; unreviewed or known-wrong
+wall media blocks new roster leases without blocking correction work. To
 consume or extend the machine-facing archive, read [CRAWLERS.md](CRAWLERS.md)
 and `data/archive.json`. The drafting model is the compute — you draft verified
 specimens, a keyless script merges them. Accuracy over volume, always: never
