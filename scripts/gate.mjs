@@ -10,7 +10,6 @@ import { fileURLToPath } from "node:url";
 const ROOT = process.cwd();
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const MAX_BUFFER = 128 * 1024 * 1024;
-
 export function runCommand(label, command, args, options = {}) {
   const { cwd = ROOT, env = process.env, stdio = "inherit", allowFail = false } = options;
   const result = spawnSync(command, args, { cwd, env: { ...process.env, ...env }, encoding: "utf8", stdio, maxBuffer: MAX_BUFFER });
@@ -27,16 +26,9 @@ export function runCommand(label, command, args, options = {}) {
   }
   return { status, stdout, stderr, failed: false };
 }
-
-export function runNodeScript(label, scriptPath, args = [], options = {}) {
-  return runCommand(label, process.execPath, [path.resolve(ROOT, scriptPath), ...args], { cwd: ROOT, ...options });
-}
-export function runNpmScript(label, script, extraArgs = [], options = {}) {
-  return runCommand(label, npmCommand, ["run", script, ...extraArgs], { cwd: ROOT, ...options });
-}
-export function countRecordRouteDirs(recordsRoot = path.join(ROOT, "records")) {
-  return readdirSync(recordsRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).length;
-}
+export function runNodeScript(label, scriptPath, args = [], options = {}) { return runCommand(label, process.execPath, [path.resolve(ROOT, scriptPath), ...args], { cwd: ROOT, ...options }); }
+export function runNpmScript(label, script, extraArgs = [], options = {}) { return runCommand(label, npmCommand, ["run", script, ...extraArgs], { cwd: ROOT, ...options }); }
+export function countRecordRouteDirs(recordsRoot = path.join(ROOT, "records")) { return readdirSync(recordsRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).length; }
 export function expectedRouteCount(specimensPath = path.join(ROOT, "data/specimens.json"), tombstonesPath = path.join(ROOT, "data/tombstones.json")) {
   const specimens = JSON.parse(readFileSync(specimensPath, "utf8"));
   const tombstones = JSON.parse(readFileSync(tombstonesPath, "utf8"));
@@ -51,7 +43,6 @@ export function assertCleanWorkingTree(label, repoRoot = ROOT, paths = ["--", ".
   const result = runCommand(label, "git", ["diff", "--exit-code", ...paths], { cwd: repoRoot, allowFail: true, stdio: "pipe" });
   if (result.failed) throw new Error(`${label}: working tree has unexpected changes`);
 }
-
 async function writeProjectionDiagnostics() {
   const driftRoot = path.join(ROOT, ".ci", "projection-drift");
   await mkdir(driftRoot, { recursive: true });
@@ -70,13 +61,8 @@ async function writeProjectionDiagnostics() {
   }
 }
 async function runProjectedSteps() {
-  try {
-    runNodeScript("Rebuild deterministic projection", "scripts/shard.mjs");
-    assertCleanWorkingTree("Refuse generated drift", ROOT);
-  } catch (error) {
-    await writeProjectionDiagnostics();
-    throw error;
-  }
+  try { runNodeScript("Rebuild deterministic projection", "scripts/shard.mjs"); assertCleanWorkingTree("Refuse generated drift", ROOT); }
+  catch (error) { await writeProjectionDiagnostics(); throw error; }
 }
 async function runAutopilotSyncAssertion() {
   const workRoot = await mkdtemp(path.join(tmpdir(), "undercast-gate-autopilot-"));
@@ -93,9 +79,7 @@ async function runAutopilotSyncAssertion() {
     const ready = (status.readiness || []).find((row) => row.scope_id === "star-trek");
     if (ready?.effective_status !== "active" && queued) throw new Error(`uncertified Star Trek scope produced ${queued} claimable tasks`);
     console.log(`actual census queue: Star Trek ${trek.total}; effective ${ready?.effective_status}; claimable ${queued}; attention ${trek.statuses?.attention || 0}; resolved ${trek.statuses?.resolved || 0}`);
-  } finally {
-    await rm(workRoot, { recursive: true, force: true });
-  }
+  } finally { await rm(workRoot, { recursive: true, force: true }); }
 }
 
 const stepDefinitions = [
@@ -107,6 +91,7 @@ const stepDefinitions = [
   { id: "roadmap", label: "Validate roadmap and next-work contract", action: () => { runNpmScript("Roadmap validate", "roadmap", ["--", "validate"]); runNpmScript("Roadmap fixtures", "roadmap:fixtures"); runNpmScript("Roadmap next", "roadmap", ["--", "next", "--limit", "1", "--json"]); } },
   { id: "preservation", label: "Validate preservation machinery and durability", action: () => { runNpmScript("Preservation fixtures", "preserve:fixtures"); runNpmScript("Preservation status", "preserve:status", ["--", "--json"]); } },
   { id: "media-audit", label: "Validate exact-subject media audit tracker", action: () => { runNpmScript("Media audit fixtures", "media:audit:fixtures"); runNpmScript("Media audit state", "media:audit", ["--", "validate"]); runNpmScript("Media audit status", "media:audit", ["--", "status", "--scope", "star-trek"]); } },
+  { id: "waterline", label: "Validate rolling gold waterline", action: () => { runNpmScript("Waterline fixtures", "waterline:fixtures"); runNpmScript("Waterline state", "waterline", ["--", "validate"]); runNpmScript("Waterline status", "waterline", ["--", "status", "--scope", "star-trek"]); } },
   { id: "census-sync", label: "Validate isolated certification-aware census sync", action: runAutopilotSyncAssertion },
   { id: "corpus", label: "Validate semantic corpus", action: () => runNpmScript("Corpus audit", "audit:corpus") },
   { id: "site-seams", label: "Validate public site seams", action: () => runNpmScript("Site seams", "test:site-seams") },
@@ -121,7 +106,6 @@ const stepDefinitions = [
   { id: "ds9-maker-fixtures", label: "Validate DS9 maker fixtures", action: () => runNpmScript("DS9 maker fixtures", "ds9:maker:fixtures") },
   { id: "diff-check", label: "Refuse malformed diff", action: () => runCommand("Diff check", "git", ["diff", "--check"], { cwd: ROOT }) },
 ];
-
 export function selectSteps({ from = null, skipRendered = false } = {}) {
   let started = !from;
   const selected = [];
@@ -138,26 +122,12 @@ export function listSteps() { return stepDefinitions.map(({ id, label, rendered 
 export async function runGate({ from = null, skipRendered = false } = {}) {
   const steps = selectSteps({ from, skipRendered });
   const started = Date.now();
-  for (const step of steps) {
-    const at = Date.now();
-    console.log(`\n>>> ${step.label} [${step.id}]`);
-    await step.action();
-    console.log(`<<< PASS ${step.id} (${((Date.now() - at) / 1000).toFixed(1)}s)`);
-  }
+  for (const step of steps) { const at = Date.now(); console.log(`\n>>> ${step.label} [${step.id}]`); await step.action(); console.log(`<<< PASS ${step.id} (${((Date.now() - at) / 1000).toFixed(1)}s)`); }
   console.log(`\ngate: PASS — ${steps.length} step(s) in ${((Date.now() - started) / 1000).toFixed(0)}s${skipRendered ? " (rendered skipped by explicit request)" : ""}`);
 }
-function cliOption(args, name) {
-  const index = args.indexOf(name);
-  if (index < 0) return null;
-  const value = args[index + 1];
-  if (!value || value.startsWith("--")) throw new Error(`${name} requires a value`);
-  return value;
-}
+function cliOption(args, name) { const index = args.indexOf(name); if (index < 0) return null; const value = args[index + 1]; if (!value || value.startsWith("--")) throw new Error(`${name} requires a value`); return value; }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const argv = process.argv.slice(2);
-  if (argv.includes("--list")) {
-    for (const step of listSteps()) console.log(`${step.id.padEnd(28)} ${step.rendered ? "[rendered] " : "           "}${step.label}`);
-  } else {
-    runGate({ from: cliOption(argv, "--from"), skipRendered: argv.includes("--skip-rendered") }).catch((error) => { console.error(`gate: ${error instanceof Error ? error.message : String(error)}`); process.exit(1); });
-  }
+  if (argv.includes("--list")) for (const step of listSteps()) console.log(`${step.id.padEnd(28)} ${step.rendered ? "[rendered] " : "           "}${step.label}`);
+  else runGate({ from: cliOption(argv, "--from"), skipRendered: argv.includes("--skip-rendered") }).catch((error) => { console.error(`gate: ${error instanceof Error ? error.message : String(error)}`); process.exit(1); });
 }
