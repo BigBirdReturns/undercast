@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   MEDIA_AUDIT_VERSION,
   applyVotes,
@@ -81,4 +85,16 @@ const vote = (itemId, namespace, value, reviewer, role, extra = {}) => ({ item_i
   assert.throws(() => validatePacket({ ...packet, source: { ...packet.source, item_set_sha256: "f".repeat(64) } }, doc), /stale/);
 }
 
-console.log("PASS — media audit consensus, authority, staleness, absence, and tracker fixtures");
+{
+  const root = await mkdtemp(join(tmpdir(), "undercast-media-audit-bad-state-"));
+  try {
+    const badState = join(root, "MEDIA-AUDIT.json"), lock = join(root, "MEDIA-AUDIT.lock");
+    await writeFile(badState, "{ malformed\n");
+    const run = spawnSync(process.execPath, [new URL("./media-audit.mjs", import.meta.url).pathname, "sync", "--state", badState, "--lock", lock, "--root", root], { encoding: "utf8" });
+    assert.notEqual(run.status, 0, "sync must reject malformed existing state rather than replacing it");
+    assert.match(`${run.stdout}${run.stderr}`, /cannot read .*MEDIA-AUDIT\.json/i);
+    assert.equal(await readFile(badState, "utf8"), "{ malformed\n", "malformed state must remain untouched");
+  } finally { await rm(root, { recursive: true, force: true }); }
+}
+
+console.log("PASS — media audit consensus, authority, staleness, absence, tracker, and fail-closed state fixtures");
