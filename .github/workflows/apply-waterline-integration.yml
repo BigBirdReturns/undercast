@@ -1,0 +1,382 @@
+name: apply-waterline-integration
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-waterline-integration
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.number == 66 && github.head_ref == 'agent/rolling-gold-waterline'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/rolling-gold-waterline
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Apply rolling-waterline integration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f"{path}: expected {count} occurrence(s), found {actual}: {old[:100]!r}")
+              p.write_text(text.replace(old, new, count))
+
+          replace(
+              'scripts/autopilot.mjs',
+              '''    const scopeId = option("scope");
+              const inputs = await loadQueueInputs();
+              const readiness = readyScope(inputs, scopeId);
+              await mediaAuditPreflight(scopeId);
+          ''',
+              '''    const scopeId = option("scope");
+              const requestedLimit = Number(option("limit", "8"));
+              const inputs = await loadQueueInputs();
+              const readiness = readyScope(inputs, scopeId);
+              await waterlinePreflight(scopeId, requestedLimit);
+              await mediaAuditPreflight(scopeId);
+          ''')
+          replace('scripts/autopilot.mjs', '      limit: Number(option("limit", "8")),', '      limit: requestedLimit,')
+          replace(
+              'scripts/autopilot.mjs',
+              'async function mediaAuditPreflight(scopeId) {',
+              '''async function waterlinePreflight(scopeId, requestedLimit) {
+            const root = option("root", ".");
+            const configPath = option("waterline-config", "data/WATERLINE.json");
+            const gate = spawnSync(process.execPath, [
+              "scripts/waterline.mjs", "gate",
+              "--scope", scopeId,
+              "--operation", "claim",
+              "--requested", String(requestedLimit),
+              "--config", configPath,
+              "--root", root,
+            ], { cwd: root, stdio: "inherit" });
+            if (gate.error) throw new Error(`rolling waterline preflight could not start: ${gate.error.message}`);
+            if (gate.status !== 0) throw new Error(`scope ${scopeId} is below its rolling gold waterline; refusing another roster cycle`);
+          }
+
+          async function mediaAuditPreflight(scopeId) {''')
+
+          replace(
+              'scripts/autopilot-cli-fixtures.mjs',
+              '''  await put("scripts/validate.mjs", "console.log('PASS — synthetic archive gate');\\n");
+          ''',
+              '''  await put("scripts/validate.mjs", "console.log('PASS — synthetic archive gate');\\n");
+            await put("scripts/waterline.mjs", `
+          import { existsSync } from "node:fs";
+          if (existsSync("data/WATERLINE-BLOCK")) {
+            console.error("synthetic rolling waterline blocker");
+            process.exit(2);
+          }
+          console.log("PASS — synthetic rolling waterline");
+          `);
+          ''')
+          replace(
+              'scripts/autopilot-cli-fixtures.mjs',
+              '''  run([
+              "claim", "--agent", "luna", "--scope", "star-trek", "--limit", "1",
+              "--out", ".luna/batch.json", "--prompt", ".luna/PROMPT.md", "--now", "2026-07-22T02:00:00Z",
+            ]);
+          ''',
+              '''  await put("data/WATERLINE-BLOCK", "blocked\\n");
+            const waterlineBlocked = run([
+              "claim", "--agent", "luna", "--scope", "star-trek", "--limit", "1",
+              "--now", "2026-07-22T01:30:00Z",
+            ], { expect: 1 });
+            assert.match(waterlineBlocked.stderr, /rolling gold waterline/);
+            await rm(join(root, "data/WATERLINE-BLOCK"));
+
+            run([
+              "claim", "--agent", "luna", "--scope", "star-trek", "--limit", "1",
+              "--out", ".luna/batch.json", "--prompt", ".luna/PROMPT.md", "--now", "2026-07-22T02:00:00Z",
+            ]);
+          ''')
+          replace(
+              'scripts/autopilot-cli-fixtures.mjs',
+              'PASS — CLI certification, due refresh, token rotation, stale-submit refusal, and durable draft receipts',
+              'PASS — CLI certification, rolling-waterline refusal, due refresh, token rotation, stale-submit refusal, and durable draft receipts')
+
+          replace(
+              'scripts/waterline.mjs',
+              '''  validateWaterlineConfig(config);
+            validateWaterlineState(state, config);
+            return { config, state, mediaAudit, autopilot, autopilotJournal: parseJsonl(autopilotJournalText), roadmapState, preservation, waterlineJournal };
+          ''',
+              '''  validateWaterlineConfig(config);
+            validateWaterlineState(state, config);
+            parseJsonl(waterlineJournal);
+            return { config, state, mediaAudit, autopilot, autopilotJournal: parseJsonl(autopilotJournalText), roadmapState, preservation, waterlineJournal };
+          ''')
+
+          replace(
+              'AGENTS.md',
+              '''**To grow the roster, read [GROW.md](GROW.md).** A Luna/autonomous worker must
+          also read [LUNA.md](LUNA.md) and [docs/AUTOPILOT.md](docs/AUTOPILOT.md), then
+          claim a bounded lease instead of choosing free-form work. A scope must pass
+          `autopilot readiness`; Luna never certifies or activates its own producer. Star Trek
+          also runs the exact-subject baseline in `docs/MEDIA-AUDIT.md`; unreviewed or known-wrong
+          wall media blocks new roster leases without blocking correction work. To
+          consume or extend the machine-facing archive, read [CRAWLERS.md](CRAWLERS.md)
+          and `data/archive.json`. The drafting model is the compute — you draft verified
+          specimens, a keyless script merges them. Accuracy over volume, always: never
+          invent a person or a fact. The provenance is the point.
+          ''',
+              '''**To grow the roster, read [GROW.md](GROW.md).** A Luna/autonomous worker must
+          also read [LUNA.md](LUNA.md), [docs/AUTOPILOT.md](docs/AUTOPILOT.md), and
+          [docs/WATERLINE.md](docs/WATERLINE.md), then claim a bounded lease instead of
+          choosing free-form work. A scope must pass `autopilot readiness`; Luna never
+          certifies or activates its own producer. Star Trek also runs the exact-subject
+          baseline in `docs/MEDIA-AUDIT.md` and the rolling operating waterline: completing
+          one baseline authorizes one bounded cycle, not unlimited growth. Unreviewed or
+          known-wrong wall media, an unreceipted prior lease, or a blocking incident stops
+          new roster leases without blocking correction work. To consume or extend the
+          machine-facing archive, read [CRAWLERS.md](CRAWLERS.md) and `data/archive.json`.
+          The drafting model is the compute — you draft verified specimens, a keyless script
+          merges them. Accuracy over volume, always: never invent a person or a fact. The
+          provenance is the point.
+          ''')
+          replace(
+              'AGENTS.md',
+              '''npm run roadmap -- next --limit 1
+          ```
+          ''',
+              '''npm run roadmap -- next --limit 1
+          npm run waterline -- validate
+          npm run waterline -- status --scope star-trek
+          ```
+          ''')
+          replace(
+              'AGENTS.md',
+              '''model drafts, autopilot = durable work leases, roadmap = milestone dependency
+          and authority gate, credits/needs/adopt = helpers).
+          ''',
+              '''model drafts, autopilot = durable work leases, waterline = one-cycle-at-a-time
+          gold/reliability evidence, roadmap = milestone dependency and authority gate,
+          credits/needs/adopt = helpers).
+          ''')
+
+          replace('LUNA.md', '`docs/AUTOPILOT.md`, and the current roadmap', '`docs/AUTOPILOT.md`, `docs/WATERLINE.md`, and the current roadmap')
+          replace(
+              'LUNA.md',
+              '''## Before Luna may lease
+          ''',
+              '''## Rolling gold waterline
+
+          ```bash
+          npm run waterline -- validate
+          npm run waterline -- status --scope star-trek
+          npm run waterline -- gate --scope star-trek --operation claim --requested 8
+          ```
+
+          The media baseline becoming complete authorizes **one bounded operating cycle**.
+          It does not authorize Luna to drain the queue. The next cycle stays blocked until
+          the prior lease is terminal, every new media facet is again verified or honestly
+          absent, and a second-desk/owner-reviewed cycle receipt is recorded. Luna may prepare
+          the workflow, commit, restart, media, and accounting evidence; Luna may not record
+          its own reviewed receipt or mark a roadmap milestone complete.
+
+          ## Before Luna may lease
+          ''')
+          replace(
+              'LUNA.md',
+              '''npm run autopilot -- complete --input .luna/media-review.json
+          ```
+
+          Repeat only after the prior batch has no `leased`, `drafted`, or `merged` tasks.
+          ''',
+              '''npm run autopilot -- complete --input .luna/media-review.json
+
+          # Return the entire scope to zero exact-subject debt and prepare the cycle evidence.
+          npm run media:audit -- sync
+          npm run waterline -- status --scope star-trek
+          ```
+
+          Stop after one lease. A second-desk or owner reviewer records the completed or
+          aborted lease through `waterline record-cycle`; only a green waterline may authorize
+          another batch. Merely having no `leased`, `drafted`, or `merged` tasks is no longer
+          sufficient.
+          ''')
+          replace(
+              'LUNA.md',
+              '''Commit bounded batches. A successful cycle leaves the certification, queue,
+          drafts, journals, canonical roster, source ledger, media review, projections,
+          validator, and current roadmap milestone mutually consistent.
+          ''',
+              '''Commit bounded batches. A successful cycle leaves the certification, queue,
+          drafts, journals, canonical roster, source ledger, media review, projections,
+          validator, waterline state, and current roadmap milestone mutually consistent.
+          ''')
+
+          replace(
+              'docs/AUTOPILOT.md',
+              '''This gate blocks new roster leases only. It does not block media correction,
+          independent review, source refresh, or completion of already merged work.
+
+          ## Boundaries
+          ''',
+              '''This gate blocks new roster leases only. It does not block media correction,
+          independent review, source refresh, or completion of already merged work.
+
+          ## Rolling operating waterline
+
+          The exact-subject baseline is a starting waterline, not a one-time unlock. Read
+          `docs/WATERLINE.md`. Before `claim` or `next`, Autopilot also verifies that the
+          requested batch is within capacity, no earlier cycle is active or unreceipted, no
+          high/critical incident is open, preservation remains independently verified, and the
+          current media baseline has zero debt. After a lease changes the wall, the next lease
+          waits for media catch-up and a reviewed cycle receipt.
+
+          Waterline receipts prepare evidence for `star-trek-gold-shard` and
+          `operational-reliability`. They do not edit roadmap milestone state.
+
+          ## Boundaries
+          ''')
+          replace(
+              'docs/AUTOPILOT.md',
+              '''- `data/ROADMAP.json` and `data/ROADMAP-STATE.json` — strategic dependency,
+          ''',
+              '''- `data/WATERLINE.json`, `data/WATERLINE-STATE.json`, and
+            `data/journal/waterline.jsonl` — one-cycle-at-a-time capacity, reviewed cycle,
+            drill, metric, accounting, and incident evidence.
+          - `data/ROADMAP.json` and `data/ROADMAP-STATE.json` — strategic dependency,
+          ''')
+          replace(
+              'docs/AUTOPILOT.md',
+              '''npm run autopilot -- readiness
+          ''',
+              '''npm run waterline -- validate
+          npm run waterline -- status --scope star-trek
+
+          npm run autopilot -- readiness
+          ''')
+          replace(
+              'docs/AUTOPILOT.md',
+              '''7. **Operate bounded cycles.** Draft, merge, retrieve, validate, reconcile, and
+             visually close every batch before leasing another. The scheduled Autopilot
+             workflow refreshes at most one certified, due scope per run and refuses to
+             refresh while that scope has work in flight.
+          ''',
+              '''7. **Operate bounded cycles.** The waterline authorizes one lease. Draft, merge,
+             retrieve, validate, reconcile, return the full scope to zero exact-subject debt,
+             and record a reviewed completed/aborted cycle receipt before another lease. The
+             scheduled Autopilot workflow refreshes at most one certified, due scope per run
+             and refuses to refresh while that scope has work in flight.
+          ''')
+          replace(
+              'docs/AUTOPILOT.md',
+              '''`next` is the safe worker operation after the current roadmap playbook authorizes roster growth: it runs `scripts/validate.mjs`, re-checks
+          scope certification and snapshot readiness, syncs all current evidence, and
+          leases a batch only when that scope has no prior `leased`, `drafted`, or `merged`
+          work. `claim` skips the archive gate but does **not** bypass certification. Both
+          require one explicit `--scope`; one lease cannot span independently reviewed
+          producers.
+          ''',
+              '''`next` is the safe worker operation after the current roadmap playbook authorizes
+          roster growth: it runs `scripts/validate.mjs`, re-checks scope certification and
+          snapshot readiness, syncs all current evidence, and leases only when the rolling
+          waterline is green. `claim` skips the archive gate but does **not** bypass
+          certification, the media baseline, or the waterline. Both require one explicit
+          `--scope`; one lease cannot span independently reviewed producers.
+          ''')
+
+          replace(
+              'docs/ROADMAP-PLAYBOOKS.md',
+              '''1. Compile corrected Trek coverage into the queue.
+          2. Run bounded priority batches.
+          3. Run the hash-bound `media:audit` tracker: independently review identity and presentation for every Trek image facet, replace or null negative rulings, and receipt explicit absence.
+          4. Record owner decision before changing shared performer-media semantics.
+          5. Publish honest coverage and correction surfaces.
+          ''',
+              '''1. Compile corrected Trek coverage into the queue and finish the hash-bound exact-subject baseline.
+          2. Use the rolling waterline to authorize one priority batch of at most eight tasks.
+          3. Draft, merge, retrieve, and return every new still/portrait facet to verified or honestly absent; then record a reviewed completed/aborted cycle receipt.
+          4. Repeat until three successful restart-safe cycles are receipted; never lease the next cycle while media debt, active work, an unreceipted lease, or a blocking incident remains.
+          5. Record current five-way task accounting: eligible, filed, blocked, excluded, unresolved.
+          6. Record owner decision before changing shared performer-media semantics.
+          7. Publish honest coverage and correction surfaces.
+          ''')
+          replace(
+              'docs/ROADMAP-PLAYBOOKS.md',
+              '''- all filed Trek roles have performance receipts
+          - Trek media audit complete
+          - three restart-safe Luna cycles
+          - coverage separates eligible/filed/blocked/excluded/unresolved
+          ''',
+              '''- all filed Trek roles have performance receipts
+          - current Trek media audit has zero debt
+          - three reviewed restart-safe Luna cycle receipts, each with at least one resolved task
+          - current five-way accounting reconciles exactly to the durable task denominator
+          - coverage separates eligible/filed/blocked/excluded/unresolved
+          ''')
+          replace(
+              'docs/ROADMAP-PLAYBOOKS.md',
+              '''1. Define freshness, correction, build, publication, and rights SLOs.
+          2. Record per-run failures, retries, costs, and throughput.
+          3. Document and test backup, restore, rollback, and credential recovery.
+          4. Add scope circuit breakers and capacity budgets.
+          5. Publish incident receipts.
+          ''',
+              '''1. Define measured source-freshness, build, cost, correction, publication, and rights baselines; retain `null` until observed.
+          2. Enforce waterline capacity, cycle receipts, and high/critical incident stops.
+          3. Run and receipt a fresh repository restore through the canonical gate.
+          4. Run and receipt an isolated bad-publication rollback to the known-good release.
+          5. Publish incident events and current operating metrics; do not silently retry or round unknowns to zero.
+          ''')
+          replace(
+              'docs/ROADMAP-PLAYBOOKS.md',
+              '''- fresh restore succeeds
+          - bad publication rollback succeeds
+          - build and cost baselines measured
+          - incident authority fixture-covered
+          ''',
+              '''- reviewed repository-restore drill passes
+          - reviewed publication-rollback drill passes
+          - build, cost-per-verified-record, source-freshness, and rights-response baselines measured
+          - configured SLO targets pass
+          - incident authority and stop/reopen behavior fixture-covered
+          ''')
+
+          replace(
+              'docs/UI-REVIEW-CHECKLIST.md',
+              '**Autopilot, roadmap, preservation, and media audit**',
+              '**Autopilot, roadmap, preservation, media audit, and rolling waterline**')
+          PY
+          git diff --check
+
+      - name: Install deterministic and rendered runtime
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Validate integrated waterline and full archive
+        run: |
+          npm run waterline:fixtures
+          npm run autopilot:fixtures
+          npm run gate
+
+      - name: Commit reviewed integration
+        run: |
+          git config user.name "undercast-waterline"
+          git config user.email "undercast-waterline@users.noreply.github.com"
+          git add scripts/autopilot.mjs scripts/autopilot-cli-fixtures.mjs scripts/waterline.mjs \
+            AGENTS.md LUNA.md docs/AUTOPILOT.md docs/ROADMAP-PLAYBOOKS.md docs/UI-REVIEW-CHECKLIST.md
+          git diff --cached --quiet && exit 0
+          git commit -m "Waterline: gate one restart-safe Luna cycle at a time"
+          git push origin HEAD:agent/rolling-gold-waterline
