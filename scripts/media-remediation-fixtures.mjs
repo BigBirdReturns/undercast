@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { applyVotes, deriveItem, mediaItemId, sha256, stableJson, validateState } from "./lib/media-audit.mjs";
-import { planRemediation, remediationJournalLines, validateRemediationJournal } from "./lib/media-remediation.mjs";
+import { assertUnchangedRemediationInputs, planRemediation, remediationJournalLines, validateRemediationJournal } from "./lib/media-remediation.mjs";
 
 const cli = fileURLToPath(new URL("./media-audit.mjs", import.meta.url));
 const jsonBytes = (value) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
@@ -59,8 +59,22 @@ function inputFor(docs, facets = null) {
   assert.equal(result.events[0].former.audit_item.claims.presentation.state, "enforced");
   assert.deepEqual(result.events[0].former.media_manifest.entry, manifestEntry);
   const lines = remediationJournalLines(result.events);
-  assert.equal(validateRemediationJournal(lines), 1);
-  assert.throws(() => validateRemediationJournal(lines.replace("media.remediated", "media.remediated-tampered")), /tampered event id/);
+  assert.equal(validateRemediationJournal(lines, docs.mediaManifest), 1);
+  const appendedManifest = { ...docs.mediaManifest, assets: { ...docs.mediaManifest.assets, "images/future.jpg": { id: "UC-FUTURE" } } };
+  assert.equal(validateRemediationJournal(lines, appendedManifest), 1, "unrelated future manifest entries may append");
+  const alteredManifest = { ...docs.mediaManifest, assets: { ...docs.mediaManifest.assets, [facet.src]: { ...docs.mediaManifest.assets[facet.src], bytes: imageBytes.length + 1 } } };
+  assert.throws(() => validateRemediationJournal(lines, alteredManifest), /lost its exact immutable manifest entry/);
+  const removedManifest = { ...docs.mediaManifest, assets: {} };
+  assert.throws(() => validateRemediationJournal(lines, removedManifest), /lost its exact immutable manifest entry/);
+  assert.throws(() => validateRemediationJournal(lines.replace("media.remediated", "media.remediated-tampered"), docs.mediaManifest), /tampered event id/);
+}
+
+{
+  const same = { specimens: Buffer.from("a"), sources: Buffer.from("b"), auditState: Buffer.from("c"), mediaManifest: Buffer.from("d"), remediationJournal: Buffer.from("e") };
+  assert.equal(assertUnchangedRemediationInputs(same, Object.fromEntries(Object.entries(same).map(([name, bytes]) => [name, Buffer.from(bytes)]))), true);
+  const changed = Object.fromEntries(Object.entries(same).map(([name, bytes]) => [name, Buffer.from(bytes)]));
+  changed.sources = Buffer.from("changed");
+  assert.throws(() => assertUnchangedRemediationInputs(same, changed), /input changed before commit: sources/);
 }
 
 {
@@ -141,7 +155,7 @@ for (const [name, votes, pattern] of [
     assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
     assert.equal(JSON.parse(await readFile(specimensPath, "utf8"))[0].still, null);
     assert.equal(JSON.parse(await readFile(sourcesPath, "utf8"))[0].fetched_at, "2026-07-22");
-    assert.equal(validateRemediationJournal(await readFile(remediationJournalPath)), 1);
+    assert.equal(validateRemediationJournal(await readFile(remediationJournalPath), docs.mediaManifest), 1);
     assert.deepEqual(await readFile(imagePath), imageBytes, "immutable image bytes must remain untouched");
     assert.deepEqual(await readFile(manifestPath), docs.manifestBytes, "immutable media manifest must remain untouched");
     assert.equal(await readFile(auditJournalPath, "utf8"), "preserved-media-audit-journal\n", "media-audit vote journal must remain untouched");

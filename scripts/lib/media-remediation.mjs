@@ -47,7 +47,18 @@ export function remediationJournalLines(events) {
   }).join("\n") + (events.length ? "\n" : "");
 }
 
-export function validateRemediationJournal(bytes) {
+export function assertUnchangedRemediationInputs(initial, current) {
+  for (const name of ["specimens", "sources", "auditState", "mediaManifest", "remediationJournal"]) {
+    const before = initial?.[name];
+    const after = current?.[name];
+    if (!Buffer.isBuffer(before) || !Buffer.isBuffer(after)) throw new Error(`media remediation race check lacks ${name} bytes`);
+    if (!before.equals(after)) throw new Error(`media remediation input changed before commit: ${name}`);
+  }
+  return true;
+}
+
+export function validateRemediationJournal(bytes, mediaManifest) {
+  if (!mediaManifest?.assets || typeof mediaManifest.assets !== "object" || Array.isArray(mediaManifest.assets)) throw new Error("media-remediation journal validation needs the current media manifest");
   const text = Buffer.isBuffer(bytes) ? bytes.toString("utf8") : String(bytes || "");
   const ids = new Set();
   let count = 0;
@@ -64,6 +75,11 @@ export function validateRemediationJournal(bytes) {
     if (body.version !== MEDIA_REMEDIATION_VERSION || body.op !== "media.remediated") throw new Error(`media-remediation journal line ${index + 1} has an unsupported event`);
     if (!body.former?.specimen_facet || !body.former?.source_facet || !body.former?.audit_item || !body.former?.media_manifest) {
       throw new Error(`media-remediation journal line ${index + 1} lacks former canonical values`);
+    }
+    const recordedManifest = body.former.media_manifest;
+    const retainedManifest = mediaManifest.assets[recordedManifest.path];
+    if (!retainedManifest || stableJson(retainedManifest) !== stableJson(recordedManifest.entry)) {
+      throw new Error(`media-remediation journal line ${index + 1} lost its exact immutable manifest entry`);
     }
     for (const section of [body.before, body.after]) {
       if (!["specimens_sha256", "sources_sha256", "audit_state_sha256", "media_manifest_sha256"].every((key) => /^[0-9a-f]{64}$/i.test(section?.[key] || ""))) {

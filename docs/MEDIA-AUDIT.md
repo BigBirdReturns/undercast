@@ -157,4 +157,8 @@ appends `data/journal/media-remediation.jsonl`. Each deterministic journal event
 retains the former specimen/source values, fetched-at receipt, complete claims
 and votes, immutable manifest entry, request receipt, and before/after file
 hashes. Image bytes, `media-manifest.json`, and `media-audit.jsonl` are never
-changed by remediation.
+changed by remediation. Immediately before commit, all five read inputs are
+re-read byte-for-byte; any out-of-band change aborts before the first write.
+`media:audit validate` also proves that every historical remediation still maps
+to its exact retained immutable manifest entry. Unrelated assets may be appended
+to the manifest without invalidating older remediation receipts.

@@ -18,6 +18,7 @@ import {
   validateState,
 } from "./lib/media-audit.mjs";
 import {
+  assertUnchangedRemediationInputs,
   planRemediation,
   remediationJournalLines,
   validateRemediationJournal,
@@ -69,7 +70,11 @@ async function journalAppendBytes(path, events) {
   catch (error) { if (error.code !== "ENOENT") throw error; original = Buffer.alloc(0); }
   return Buffer.concat([original, Buffer.from(journalLines(events))]);
 }
-async function atomicWriteTransaction(writes) {
+async function readBytesOrEmpty(path) {
+  try { return await readFile(path); }
+  catch (error) { if (error.code === "ENOENT") return Buffer.alloc(0); throw error; }
+}
+async function atomicWriteTransaction(writes, { precommit = null } = {}) {
   const paths = new Set();
   const prepared = [];
   try {
@@ -84,6 +89,7 @@ async function atomicWriteTransaction(writes) {
       prepared.push({ ...write, tmp, original, existed, committed: false });
       await writeFile(tmp, write.bytes);
     }
+    if (precommit) await precommit();
     const failAfter = Number(process.env.MEDIA_AUDIT_TEST_FAIL_AFTER_COMMITS || "0");
     for (const [index, write] of prepared.entries()) {
       await rename(write.tmp, write.path);
@@ -372,10 +378,8 @@ async function remediateCommand() {
     if (stableJson({ source: current.state.source, items: current.state.items.map((item) => ({ ...item, votes: [] })) }) !== stableJson({ source: stateDoc.value.source, items: stateDoc.value.items.map((item) => ({ ...item, votes: [] })) })) {
       throw new Error(`${statePath} is stale; run media:audit sync`);
     }
-    let remediationJournal = Buffer.alloc(0);
-    try { remediationJournal = await readFile(remediationJournalPath); }
-    catch (error) { if (error.code !== "ENOENT") throw error; }
-    validateRemediationJournal(remediationJournal);
+    const remediationJournal = await readBytesOrEmpty(remediationJournalPath);
+    validateRemediationJournal(remediationJournal, mediaDoc.value);
     const result = planRemediation({
       request,
       auditState: stateDoc.value,
@@ -388,13 +392,25 @@ async function remediateCommand() {
       mediaManifestSha256: sha256(mediaDoc.bytes),
     });
     const nextJournal = Buffer.concat([remediationJournal, Buffer.from(remediationJournalLines(result.events))]);
-    validateRemediationJournal(nextJournal);
+    validateRemediationJournal(nextJournal, mediaDoc.value);
     await atomicWriteTransaction([
       { path: specimensPath, bytes: result.bytes.specimens },
       { path: sourcesPath, bytes: result.bytes.sources },
       { path: statePath, bytes: result.bytes.auditState },
       { path: remediationJournalPath, bytes: nextJournal },
-    ]);
+    ], { precommit: async () => {
+      const [currentSpecimens, currentSources, currentAuditState, currentMediaManifest, currentRemediationJournal] = await Promise.all([
+        readFile(specimensPath),
+        readFile(sourcesPath),
+        readFile(statePath),
+        readFile(mediaManifestPath),
+        readBytesOrEmpty(remediationJournalPath),
+      ]);
+      assertUnchangedRemediationInputs(
+        { specimens: specimensDoc.bytes, sources: sourcesDoc.bytes, auditState: stateDoc.bytes, mediaManifest: mediaDoc.bytes, remediationJournal },
+        { specimens: currentSpecimens, sources: currentSources, auditState: currentAuditState, mediaManifest: currentMediaManifest, remediationJournal: currentRemediationJournal },
+      );
+    } });
     console.log(`remediated ${result.events.length} media facet(s); immutable assets and review journal retained`);
     printSummary(summarize(result.auditState, request.scope));
   });
@@ -403,10 +419,11 @@ async function validateCommand() {
   const state = await loadState();
   validateState(state);
   const remediationJournalPath = option("remediation-journal", DEFAULT_REMEDIATION_JOURNAL);
-  let remediationJournal = Buffer.alloc(0);
-  try { remediationJournal = await readFile(remediationJournalPath); }
-  catch (error) { if (error.code !== "ENOENT") throw error; }
-  const remediationEvents = validateRemediationJournal(remediationJournal);
+  const [remediationJournal, mediaManifest] = await Promise.all([
+    readBytesOrEmpty(remediationJournalPath),
+    readJson(option("media-manifest", DEFAULT_MEDIA_MANIFEST)),
+  ]);
+  const remediationEvents = validateRemediationJournal(remediationJournal, mediaManifest);
   console.log(`PASS — ${state.items.length} media facets, immutable asset receipts and consensus state valid; ${remediationEvents} remediation receipt(s) valid`);
 }
 async function gateCommand() {
