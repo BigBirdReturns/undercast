@@ -1,0 +1,57 @@
+name: apply-waterline-integration-v2
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-waterline-integration-v2
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.number == 66 && github.head_ref == 'agent/rolling-gold-waterline'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/rolling-gold-waterline
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Replay reviewed integration patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+          text = Path('.github/workflows/apply-waterline-integration.yml').read_text()
+          block = text.split("python - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+          exec(compile(dedent(block), '<waterline-integration>', 'exec'))
+          PY
+          git diff --check
+      - name: Install deterministic and rendered runtime
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Prove focused contracts before publication
+        run: |
+          npm run waterline:fixtures
+          npm run autopilot:fixtures
+      - name: Create exact candidate commit locally
+        run: |
+          git config user.name "undercast-waterline"
+          git config user.email "undercast-waterline@users.noreply.github.com"
+          git add scripts/autopilot.mjs scripts/autopilot-cli-fixtures.mjs scripts/waterline.mjs \
+            AGENTS.md LUNA.md docs/AUTOPILOT.md docs/ROADMAP-PLAYBOOKS.md docs/UI-REVIEW-CHECKLIST.md
+          git diff --cached --quiet && exit 0
+          git commit -m "Waterline: gate one restart-safe Luna cycle at a time"
+      - name: Run canonical gate on the exact clean candidate
+        run: npm run gate
+      - name: Publish exact gated commit
+        run: git push origin HEAD:agent/rolling-gold-waterline
