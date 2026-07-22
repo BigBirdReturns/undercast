@@ -81,6 +81,9 @@ npm run media:audit -- submit \
   --packet .media-audit/packet.json \
   --input .media-audit/results.json
 
+# Null only hash-bound facets carrying a solid/enforced explicit negative ruling.
+npm run media:audit -- remediate --input .media-audit/remediation.json
+
 npm run media:audit -- validate
 npm run media:audit -- gate --scope star-trek
 npm run media:audit:fixtures
@@ -123,3 +126,35 @@ Never convert uncertainty into a positive vote. `ambiguous` is an honest state,
 not a failure. Wrong assets are replaced or nulled, then `sync` rotates the asset
 hash and discards stale current votes for that facet while the journal retains
 the prior history.
+
+## Canonical remediation request
+
+`remediate` is a fail-closed canonical transaction. It accepts only present
+`attention` facets with a `solid` or `enforced` explicit negative identity or
+presentation ruling. Active, contested, ambiguous, positive, pending, stale,
+duplicate, or mismatched facets are rejected.
+
+```json
+{
+  "version": 1,
+  "scope": "star-trek",
+  "audit_state_sha256": "<exact data/MEDIA-AUDIT.json SHA-256>",
+  "requested_at": "2026-07-22T02:00:00.000Z",
+  "requested_by": "tier-desk-remediator",
+  "request_receipt": "git:<commit>#reviews/remediation-request.json",
+  "facets": [
+    { "item_id": "ma_...", "asset_sha256": "<reviewed asset SHA-256>" }
+  ]
+}
+```
+
+Before writing, the command revalidates the exact audit-state receipt, scope,
+unique item and facet identities, canonical specimen/source equality,
+`fetched_at`, and the release-located media-manifest path, wall ID, side, hash,
+and byte count. It then atomically nulls the facet in `specimens.json` and
+`SOURCES.json`, derives the corresponding `MEDIA-AUDIT.json` absence, and
+appends `data/journal/media-remediation.jsonl`. Each deterministic journal event
+retains the former specimen/source values, fetched-at receipt, complete claims
+and votes, immutable manifest entry, request receipt, and before/after file
+hashes. Image bytes, `media-manifest.json`, and `media-audit.jsonl` are never
+changed by remediation.

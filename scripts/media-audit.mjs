@@ -17,6 +17,11 @@ import {
   validatePacket,
   validateState,
 } from "./lib/media-audit.mjs";
+import {
+  planRemediation,
+  remediationJournalLines,
+  validateRemediationJournal,
+} from "./lib/media-remediation.mjs";
 
 const DEFAULT_STATE = "data/MEDIA-AUDIT.json";
 const DEFAULT_SCOPES = "data/MEDIA-AUDIT-SCOPES.json";
@@ -24,6 +29,7 @@ const DEFAULT_SPECIMENS = "data/specimens.json";
 const DEFAULT_SOURCES = "data/SOURCES.json";
 const DEFAULT_MEDIA_MANIFEST = "data/media-manifest.json";
 const DEFAULT_JOURNAL = "data/journal/media-audit.jsonl";
+const DEFAULT_REMEDIATION_JOURNAL = "data/journal/media-remediation.jsonl";
 const DEFAULT_LOCK = "data/MEDIA-AUDIT.lock";
 const DEFAULT_BASELINE_REVIEW = "data/MEDIA-AUDIT-BASELINE-REVIEW.json";
 
@@ -78,10 +84,15 @@ async function atomicWriteTransaction(writes) {
       prepared.push({ ...write, tmp, original, existed, committed: false });
       await writeFile(tmp, write.bytes);
     }
-    for (const write of prepared) { await rename(write.tmp, write.path); write.committed = true; }
+    const failAfter = Number(process.env.MEDIA_AUDIT_TEST_FAIL_AFTER_COMMITS || "0");
+    for (const [index, write] of prepared.entries()) {
+      await rename(write.tmp, write.path);
+      write.committed = true;
+      if (failAfter === index + 1) throw new Error(`injected media-audit transaction failure after ${failAfter} commit(s)`);
+    }
   } catch (error) {
     const restoreErrors = [];
-    for (const [index, write] of prepared.entries()) {
+    for (const [index, write] of [...prepared].reverse().entries()) {
       if (!write.committed) continue;
       try {
         if (write.existed) {
@@ -340,10 +351,63 @@ async function resolveCommand() {
     printSummary(summarize(result.state, selectedScope(result.state)));
   });
 }
+async function remediateCommand() {
+  return withLock(async () => {
+    const inputPath = option("input");
+    if (!inputPath) throw new Error("remediate requires --input");
+    const statePath = option("state", DEFAULT_STATE);
+    const specimensPath = option("specimens", DEFAULT_SPECIMENS);
+    const sourcesPath = option("sources", DEFAULT_SOURCES);
+    const mediaManifestPath = option("media-manifest", DEFAULT_MEDIA_MANIFEST);
+    const remediationJournalPath = option("remediation-journal", DEFAULT_REMEDIATION_JOURNAL);
+    const [stateDoc, specimensDoc, sourcesDoc, mediaDoc, request] = await Promise.all([
+      readJsonBytes(statePath),
+      readJsonBytes(specimensPath),
+      readJsonBytes(sourcesPath),
+      readJsonBytes(mediaManifestPath),
+      readJson(inputPath),
+    ]);
+    validateState(stateDoc.value);
+    const current = await buildCurrentState({ previous: stateDoc.value });
+    if (stableJson({ source: current.state.source, items: current.state.items.map((item) => ({ ...item, votes: [] })) }) !== stableJson({ source: stateDoc.value.source, items: stateDoc.value.items.map((item) => ({ ...item, votes: [] })) })) {
+      throw new Error(`${statePath} is stale; run media:audit sync`);
+    }
+    let remediationJournal = Buffer.alloc(0);
+    try { remediationJournal = await readFile(remediationJournalPath); }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+    validateRemediationJournal(remediationJournal);
+    const result = planRemediation({
+      request,
+      auditState: stateDoc.value,
+      auditStateSha256: sha256(stateDoc.bytes),
+      specimens: specimensDoc.value,
+      specimensSha256: sha256(specimensDoc.bytes),
+      sources: sourcesDoc.value,
+      sourcesSha256: sha256(sourcesDoc.bytes),
+      mediaManifest: mediaDoc.value,
+      mediaManifestSha256: sha256(mediaDoc.bytes),
+    });
+    const nextJournal = Buffer.concat([remediationJournal, Buffer.from(remediationJournalLines(result.events))]);
+    validateRemediationJournal(nextJournal);
+    await atomicWriteTransaction([
+      { path: specimensPath, bytes: result.bytes.specimens },
+      { path: sourcesPath, bytes: result.bytes.sources },
+      { path: statePath, bytes: result.bytes.auditState },
+      { path: remediationJournalPath, bytes: nextJournal },
+    ]);
+    console.log(`remediated ${result.events.length} media facet(s); immutable assets and review journal retained`);
+    printSummary(summarize(result.auditState, request.scope));
+  });
+}
 async function validateCommand() {
   const state = await loadState();
   validateState(state);
-  console.log(`PASS — ${state.items.length} media facets, immutable asset receipts and consensus state valid`);
+  const remediationJournalPath = option("remediation-journal", DEFAULT_REMEDIATION_JOURNAL);
+  let remediationJournal = Buffer.alloc(0);
+  try { remediationJournal = await readFile(remediationJournalPath); }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
+  const remediationEvents = validateRemediationJournal(remediationJournal);
+  console.log(`PASS — ${state.items.length} media facets, immutable asset receipts and consensus state valid; ${remediationEvents} remediation receipt(s) valid`);
 }
 async function gateCommand() {
   const state = await loadState();
@@ -365,8 +429,9 @@ async function main() {
   if (command === "next") return nextCommand();
   if (command === "submit") return submitCommand();
   if (command === "resolve") return resolveCommand();
+  if (command === "remediate") return remediateCommand();
   if (command === "validate") return validateCommand();
   if (command === "gate") return gateCommand();
-  throw new Error(`unknown media-audit command ${command}. Use sync, status, tracker, next, submit, resolve, validate, or gate.`);
+  throw new Error(`unknown media-audit command ${command}. Use sync, status, tracker, next, submit, resolve, remediate, validate, or gate.`);
 }
 main().catch((error) => { console.error(`media audit: ${error.message}`); process.exitCode = 1; });
