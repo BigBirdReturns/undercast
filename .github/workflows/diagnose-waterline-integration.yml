@@ -1,0 +1,46 @@
+name: diagnose-waterline-integration
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnose-waterline-integration
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: github.event.pull_request.number == 66 && github.head_ref == 'agent/rolling-gold-waterline'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/rolling-gold-waterline
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Replay the reviewed integration patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+          text = Path('.github/workflows/apply-waterline-integration.yml').read_text()
+          marker = "python - <<'PY'\n"
+          block = text.split(marker, 1)[1].split("\n          PY", 1)[0]
+          exec(compile(dedent(block), '<waterline-integration>', 'exec'))
+          PY
+      - run: npm ci
+      - name: Waterline fixtures
+        run: npm run waterline:fixtures
+      - name: Waterline current-state validation
+        run: npm run waterline -- validate && npm run waterline -- status --scope star-trek
+      - name: Autopilot fixtures
+        run: npm run autopilot:fixtures
+      - name: Canonical gate without rendered browser
+        run: npm run gate -- --skip-rendered
