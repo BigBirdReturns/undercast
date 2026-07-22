@@ -335,8 +335,10 @@ async function syncCommand() {
 async function claimCommand({ syncFirst = false } = {}) {
   return withLock(async () => {
     const scopeId = option("scope");
+    const requestedLimit = Number(option("limit", "8"));
     const inputs = await loadQueueInputs();
     const readiness = readyScope(inputs, scopeId);
+    await waterlinePreflight(scopeId, requestedLimit);
     await mediaAuditPreflight(scopeId);
     let state = await loadState(inputs.paths.state);
     let syncEvents = [];
@@ -360,7 +362,7 @@ async function claimCommand({ syncFirst = false } = {}) {
       agent: option("agent"),
       scope: scopeId,
       readiness: leaseReadiness,
-      limit: Number(option("limit", "8")),
+      limit: requestedLimit,
       leaseMinutes: Number(option("lease-minutes", "120")),
       allowInflight: flag("allow-inflight"),
       now: option("now", new Date().toISOString()),
@@ -654,6 +656,21 @@ async function validateCommand() {
     }
   }
   console.log(`PASS — ${state.jobs.length} autopilot jobs, ${inputs.readiness.length} scope contracts, state and certification contracts valid`);
+}
+
+async function waterlinePreflight(scopeId, requestedLimit) {
+  const root = option("root", ".");
+  const configPath = option("waterline-config", "data/WATERLINE.json");
+  const gate = spawnSync(process.execPath, [
+    "scripts/waterline.mjs", "gate",
+    "--scope", scopeId,
+    "--operation", "claim",
+    "--requested", String(requestedLimit),
+    "--config", configPath,
+    "--root", root,
+  ], { cwd: root, stdio: "inherit" });
+  if (gate.error) throw new Error(`rolling waterline preflight could not start: ${gate.error.message}`);
+  if (gate.status !== 0) throw new Error(`scope ${scopeId} is below its rolling gold waterline; refusing another roster cycle`);
 }
 
 async function mediaAuditPreflight(scopeId) {

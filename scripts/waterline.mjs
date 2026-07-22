@@ -118,6 +118,7 @@ async function load() {
   ]);
   validateWaterlineConfig(config);
   validateWaterlineState(state, config);
+  parseJsonl(waterlineJournal);
   return { config, state, mediaAudit, autopilot, autopilotJournal: parseJsonl(autopilotJournalText), roadmapState, preservation, waterlineJournal };
 }
 function statusFor(inputs) {

@@ -1,7 +1,7 @@
 # Luna — autonomous growth contract
 
 Luna is a bounded worker over a durable queue, not a free-form invitation to add
-cards. Read `AGENTS.md`, `GROW.md`, `docs/AUTOPILOT.md`, and the current roadmap
+cards. Read `AGENTS.md`, `GROW.md`, `docs/AUTOPILOT.md`, `docs/WATERLINE.md`, and the current roadmap
 before taking a lease.
 
 ## Roadmap boundary
@@ -45,6 +45,21 @@ npm run media:audit -- gate --scope star-trek
 identity vote cannot close a facet; exact identity needs independent consensus.
 Luna may generate review packets and submit attributable votes, but it may not
 enforce a ruling or turn ambiguity into a match.
+
+## Rolling gold waterline
+
+```bash
+npm run waterline -- validate
+npm run waterline -- status --scope star-trek
+npm run waterline -- gate --scope star-trek --operation claim --requested 8
+```
+
+The media baseline becoming complete authorizes **one bounded operating cycle**.
+It does not authorize Luna to drain the queue. The next cycle stays blocked until
+the prior lease is terminal, every new media facet is again verified or honestly
+absent, and a second-desk/owner-reviewed cycle receipt is recorded. Luna may prepare
+the workflow, commit, restart, media, and accounting evidence; Luna may not record
+its own reviewed receipt or mark a roadmap milestone complete.
 
 ## Before Luna may lease
 
@@ -94,9 +109,16 @@ npm run autopilot -- sync
 # portrait is the exact performer, or attest explicit absence when SOURCES has
 # null. Write .luna/media-review.json, then close the merged tasks.
 npm run autopilot -- complete --input .luna/media-review.json
+
+# Return the entire scope to zero exact-subject debt and prepare the cycle evidence.
+npm run media:audit -- sync
+npm run waterline -- status --scope star-trek
 ```
 
-Repeat only after the prior batch has no `leased`, `drafted`, or `merged` tasks.
+Stop after one lease. A second-desk or owner reviewer records the completed or
+aborted lease through `waterline record-cycle`; only a green waterline may authorize
+another batch. Merely having no `leased`, `drafted`, or `merged` tasks is no longer
+sufficient.
 The high-level `next` command refuses to lease against a red archive, an
 uncertified producer, a blocked snapshot, or an existing in-flight batch. Exit
 code 3 means either the scope is drained for now or work is already in flight;
@@ -163,4 +185,4 @@ receipts.
 
 Commit bounded batches. A successful cycle leaves the certification, queue,
 drafts, journals, canonical roster, source ledger, media review, projections,
-validator, and current roadmap milestone mutually consistent.
+validator, waterline state, and current roadmap milestone mutually consistent.

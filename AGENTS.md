@@ -7,15 +7,18 @@ static site (index.html reads data/specimens.json) deployed to GitHub Pages by
 Actions; keyless crawlers fill images and harvest leads. No servers, no keys.
 
 **To grow the roster, read [GROW.md](GROW.md).** A Luna/autonomous worker must
-also read [LUNA.md](LUNA.md) and [docs/AUTOPILOT.md](docs/AUTOPILOT.md), then
-claim a bounded lease instead of choosing free-form work. A scope must pass
-`autopilot readiness`; Luna never certifies or activates its own producer. Star Trek
-also runs the exact-subject baseline in `docs/MEDIA-AUDIT.md`; unreviewed or known-wrong
-wall media blocks new roster leases without blocking correction work. To
-consume or extend the machine-facing archive, read [CRAWLERS.md](CRAWLERS.md)
-and `data/archive.json`. The drafting model is the compute — you draft verified
-specimens, a keyless script merges them. Accuracy over volume, always: never
-invent a person or a fact. The provenance is the point.
+also read [LUNA.md](LUNA.md), [docs/AUTOPILOT.md](docs/AUTOPILOT.md), and
+[docs/WATERLINE.md](docs/WATERLINE.md), then claim a bounded lease instead of
+choosing free-form work. A scope must pass `autopilot readiness`; Luna never
+certifies or activates its own producer. Star Trek also runs the exact-subject
+baseline in `docs/MEDIA-AUDIT.md` and the rolling operating waterline: completing
+one baseline authorizes one bounded cycle, not unlimited growth. Unreviewed or
+known-wrong wall media, an unreceipted prior lease, or a blocking incident stops
+new roster leases without blocking correction work. To consume or extend the
+machine-facing archive, read [CRAWLERS.md](CRAWLERS.md) and `data/archive.json`.
+The drafting model is the compute — you draft verified specimens, a keyless script
+merges them. Accuracy over volume, always: never invent a person or a fact. The
+provenance is the point.
 
 ## Before non-emergency work — sequence it
 
@@ -25,6 +28,8 @@ Read `docs/FIVE-YEAR-PLAN.md` and run:
 npm run roadmap -- validate
 npm run roadmap -- status
 npm run roadmap -- next --limit 1
+npm run waterline -- validate
+npm run waterline -- status --scope star-trek
 ```
 
 Work only on a milestone reported `ready`, then follow its exact section in
@@ -73,5 +78,6 @@ Key files: `GROW.md` (how to add cards), `LUNA.md` / `docs/AUTOPILOT.md`
 `docs/ROADMAP-PLAYBOOKS.md` / `data/ROADMAP*.json` (authorized strategic
 sequence), `CRAWLERS.md` (crawler/evidence contract), `README.md` (the whole
 system), `scripts/` (retrieve = images, ingest = lead harvest, grow = merge
-model drafts, autopilot = durable work leases, roadmap = milestone dependency
-and authority gate, credits/needs/adopt = helpers).
+model drafts, autopilot = durable work leases, waterline = one-cycle-at-a-time
+gold/reliability evidence, roadmap = milestone dependency and authority gate,
+credits/needs/adopt = helpers).
