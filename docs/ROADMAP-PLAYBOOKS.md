@@ -54,7 +54,7 @@ Prove the full recognition lifecycle on one large, adversarial corpus before bre
 
 1. Compile corrected Trek coverage into the queue.
 2. Run bounded priority batches.
-3. Audit every Trek image facet or receipt explicit absence.
+3. Run the hash-bound `media:audit` tracker: independently review identity and presentation for every Trek image facet, replace or null negative rulings, and receipt explicit absence.
 4. Record owner decision before changing shared performer-media semantics.
 5. Publish honest coverage and correction surfaces.
 

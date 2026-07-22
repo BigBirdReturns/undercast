@@ -31,6 +31,21 @@ Luna may collect and propose roadmap evidence or aggregate metrics. Luna may not
 
 Milestone state changes land only through a reviewed pull request.
 
+## Existing-wall media boundary
+
+Star Trek roster growth is backpressured by the current wall, not only by the
+post-merge batch. Read `docs/MEDIA-AUDIT.md` and run:
+
+```bash
+npm run media:audit -- status --scope star-trek
+npm run media:audit -- gate --scope star-trek
+```
+
+`autopilot next` and `claim` execute the same gate. A single Luna or machine
+identity vote cannot close a facet; exact identity needs independent consensus.
+Luna may generate review packets and submit attributable votes, but it may not
+enforce a ruling or turn ambiguity into a match.
+
 ## Before Luna may lease
 
 A scope being listed is not authorization. It must be declared `active`, carry a

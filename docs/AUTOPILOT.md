@@ -30,6 +30,20 @@ may require drafting to slow or stop even when queueable tasks remain. Autopilot
 state and journals may provide milestone evidence, but no Autopilot command may
 mark a second-desk or owner milestone complete.
 
+## Existing-wall exact-subject baseline
+
+The certified queue does not get to outrun the media debt already on the wall.
+Scopes configured in `data/MEDIA-AUDIT-SCOPES.json` with
+`block_new_autopilot_leases_until_complete` run `media:audit gate` before both
+`next` and `claim`. For Star Trek, every available still and portrait is bound to
+its asset SHA-256 and reviewed through independent `identity` and `presentation`
+claims. One machine vote never establishes identity; disputed and wrong assets
+remain visible in the tracker until replaced, nulled, or resolved. See
+`docs/MEDIA-AUDIT.md`.
+
+This gate blocks new roster leases only. It does not block media correction,
+independent review, source refresh, or completion of already merged work.
+
 ## Boundaries
 
 The queue does not decide eligibility and never writes directly to

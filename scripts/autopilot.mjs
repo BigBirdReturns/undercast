@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { appendFile, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -337,6 +337,7 @@ async function claimCommand({ syncFirst = false } = {}) {
     const scopeId = option("scope");
     const inputs = await loadQueueInputs();
     const readiness = readyScope(inputs, scopeId);
+    await mediaAuditPreflight(scopeId);
     let state = await loadState(inputs.paths.state);
     let syncEvents = [];
     let syncChanged = false;
@@ -653,6 +654,18 @@ async function validateCommand() {
     }
   }
   console.log(`PASS — ${state.jobs.length} autopilot jobs, ${inputs.readiness.length} scope contracts, state and certification contracts valid`);
+}
+
+async function mediaAuditPreflight(scopeId) {
+  const root = option("root", ".");
+  const configPath = option("media-audit-scopes", "data/MEDIA-AUDIT-SCOPES.json");
+  const config = await readJson(resolve(root, configPath), { version: 2, scopes: [] });
+  const rows = Array.isArray(config) ? config : config.scopes;
+  const scope = (rows || []).find((row) => row.id === scopeId);
+  if (!scope?.block_new_autopilot_leases_until_complete) return;
+  const gate = spawnSync(process.execPath, ["scripts/media-audit.mjs", "gate", "--scope", scopeId, "--root", root], { cwd: root, stdio: "inherit" });
+  if (gate.error) throw new Error(`media-audit preflight could not start: ${gate.error.message}`);
+  if (gate.status !== 0) throw new Error(`scope ${scopeId} has an incomplete exact-subject media baseline; refusing to lease more roster work`);
 }
 
 function archivePreflight(action, cwd = option("root", ".")) {
