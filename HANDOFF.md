@@ -1,96 +1,123 @@
-# UNDERCAST — handoff, 2026-07-20 (evening)
+# UNDERCAST — handoff, 2026-07-22
 
-Branch `claude/full-canon-census`, open as PR #55, held for review at the second
-Claude desk (owner's routing decision — do not merge without it).
+`main` is a public, preservation-backed static archive. The trusted foundation,
+certified Star Trek producer, bounded Luna Autopilot, five-year roadmap, exact
+source/original-media preservation, exact-subject media-audit control plane,
+shared site tokens, canonical cross-platform gate, and fail-closed DS9 owner
+decision authoring are merged.
 
-## State: the gate is GREEN (commit `ba26c84`)
+The active review lane is **PR #66 — rolling gold waterline**. It does not add a
+card, issue a Luna lease, close a roadmap milestone, or infer an owner decision.
+It defines the operating boundary after the current media baseline is complete.
 
-All 30 profiles pass. What closed it: two crawl rounds (243 + 168 cards
-illustrated; `RETRIEVE_ONLY` targeting for the UC-1086..1277 tail), 26
-byte-identical cross-card image groups ruled by eye (journal:
-`data/journal/image-dedup.jsonl`, revertible as a set), 452 assets uploaded
-to Releases and hash-verified (`media-live.json` now maps 1989 images).
-68 cards remain honestly imageless with `fetched_at` ledger rows.
+## Current truthful state
 
-New standing facts learned closing it:
+- Canonical wall: **1,246 records**.
+- Reviewed Star Trek census: **2,295 performer-role observations**, **1,657
+  performers**, **2,054 / 2,054** current source receipts.
+- Certified Star Trek Autopilot: **2,226 durable tasks**; foundation receipt
+  recorded **1,904 queued / 322 resolved / zero in flight**.
+- Star Trek is the only active certified producer scope. Every other configured
+  scope remains paused pending its own adapter review and certification.
+- Preservation snapshot `preservation-20260721-3bbec746c478` retains **15,210
+  exact source revisions**, a restorable repository snapshot, and all **1,520
+  pre-R1 originals**. Provider read-back is verified. Destructive history rewrite
+  remains unauthorized.
+- Canonical repository gate: **`npm run gate`**. CI invokes the same command; do
+  not maintain or report a second command list.
 
-- **Memory Alpha performer pages carry in-character photos.** Portraits
-  fetched from them can be the character, not the human. The 4 cases caught
-  were only the byte-identical ones — the whole Trek batch needs the
-  exact-subject media audit (PR #56 lane) before portraits are trusted.
-- **Multi-role performers vs the dup invariant.** One card per role × one
-  free photo per performer means `image.no_cross_card_dup` forces N−1 null
-  portraits (Combs ×9, Alaimo ×4…). Current policy: keep lowest-numbered
-  card, journal the rest. A per-performer media pool would need an owner
-  decision (DEC territory).
-- `retrieve.mjs` has no memory of tried-and-failed cards; a bare re-run
-  re-crawls the same gaps. Use `RETRIEVE_ONLY` with an ID list to target.
+## Exact-subject media waterline
 
-**Do not** relax the floors in `data/quality-baseline.json`.
-The floors are correct; the wall genuinely added cards faster than faces.
+The Star Trek baseline contains **744 facets across 372 records**:
 
-## What landed today
+| State | Facets |
+|---|---:|
+| verified exact identity + presentation | **0** |
+| receipted absent | **96** |
+| available, awaiting independent identity review | **564** |
+| presentation defect or unresolved ambiguity | **84** |
 
-- **Full-canon census.** `scripts/census-scope.mjs` discovers scope from Memory
-  Alpha's `Category:Individuals` tree — 475 categories in, 25 out, every
-  exclusion carrying a written reason. Star Trek: **2,299 performer-role credits
-  known**, against ~380 filed. `CENSUS-GAPS.json` is the drafting worklist.
-- **Transform recalibrated.** `docs/TRANSFORM-RUBRIC.md` is new and is the
-  authority: what the scale measures, standing rulings (paint scored by
-  coverage; bodily transformation graded by the face rule and flagged for
-  eligibility), and per-family principles. 591 grade changes, all journalled in
-  `data/journal/transform.jsonl` with the governing principle — revertible as a
-  set.
-- **Voice axis defined and filed.** Voice cards carried a number produced by a
-  face rule. They now carry a measured grade on their own axis. The instrument
-  is weaker than the face one (18% unanimity on a 3-pass control vs 67%), so
-  grades are the **median of three independent blind passes, filed only where
-  they agree within a point**. 322 filed, 47 queued in `data/VOICE-REVIEW.json`.
-- **Flip craft.** A vision fleet read all 1,252 images. 390 crop `focus` values
-  applied. `data/FLIP-CRAFT.json` holds what focus cannot fix.
-- **192 new Star Trek cards.** Star Trek 204 → ~380. 61% of drafts were declined
-  by the agents themselves; the Wikipedia gate dropped ~38 more.
+Therefore **648 available facets remain open**. The current baseline is not gold,
+`verified_records` and `media_audit_ratio` remain unknown, and new Star Trek
+roster leases are intentionally blocked. Provenance and a byte hash prove source
+and file identity; they do not prove the pictured subject.
 
-## The three things that matter next
+Read `docs/MEDIA-AUDIT.md`. Review identity and presentation independently. One
+machine vote cannot close a facet. Replace or null wrong assets, retain immutable
+history, run `media:audit sync`, and finish with solid multi-reviewer consensus or
+an authorized obvious-negative ruling. Never convert uncertainty into a positive
+identity vote.
 
-1. **The image crawler files wrong subjects.** UC-054 Betelgeuse (Michael
-   Keaton) is a photograph of the Orion constellation — it matched the *star*.
-   Hellboy is a K-pop concert photo; Gary Oldman's Dracula is a book cover. See
-   `data/FLIP-CRAFT.json` → `repick`. This is a provenance failure, not a
-   framing one, and **it will scale with every new card drafted.** Fix sourcing
-   before drafting the next 1,904 Trek credits. The owner's suggestion — capture
-   a good copy directly at the size the card needs — is sound; the only
-   constraint is that the origin must be a real citable URL logged in
-   `SOURCES.json` like every other asset. Note images serve from GitHub Releases
-   (`media-live.json`, `media-upload.mjs`), not from `images/`.
-2. **255 cards have a head-scale mismatch ≥1.8×** (worst 8.75×). `focus` moves
-   the crop window but cannot zoom it. Fixing needs a per-image scale value —
-   a schema change, so DEC-0008 and a decision-log entry — or re-cropped
-   sources. 165 of 255 have the *portrait* larger: free headshots crop tight,
-   film stills frame wide. Structural to the two sourcing tiers.
-3. **One actor, many faces has no destination.** Jeffrey Combs now holds 10
-   cards. `entities.json` already groups them (`performer:` entities with
-   `record_ids`), but nothing renders it. Makers have a shareable view
-   (`?maker=`); performers do not. Cheapest honest move is `?actor=` as a wall
-   filter — same mechanism, no new page, arguably already inside DEC-0006.
-   A true person page is DEC-0006/0009 territory and needs an owner ruling.
+## The rolling-gold sequence
 
-## Open queues (machine-prepared, owner rules)
+PR #66 adds `docs/WATERLINE.md`, `data/WATERLINE*.json`, and
+`npm run waterline`. The derived initial phase is `baseline-review`:
 
-| File | What |
-|---|---|
-| `data/TRANSFORM-REVIEW.json` | 72 face-grade rows: 3 low-confidence, 3 principled departures wanting a signature, a tail too thin to grade without sourcing |
-| `data/VOICE-REVIEW.json` | 47 voice cards where 3 passes disagreed ≥2 points — need a listener, not another scorer |
-| `data/ELIGIBILITY-REVIEW.json` | 5 bodily-transformation cards. **Owner ruled: they stay, graded honestly.** Retained as the record of the question |
-| `data/HELD-DRAFTS.json` | 24 verified cards withheld for an unsourceable air year or missing narrative field. Memory Alpha episode infoboxes carry in-universe stardates; real broadcast dates sit in unstructured production timelines. Re-merge once sourced — **do not invent a year to satisfy the schema** |
-| `data/FLIP-CRAFT.json` | 255 scale mismatches + 23 wrong-or-headless images |
-| `data/SHOOT-SURFACES.json` | The Joshua Tree lane, opened. `scripts/shoot-surfaces.mjs` harvests bounded production surfaces (a work filming at a named place in a named window) with the source sentence and page+revision identity. **Zero of 20 TOS episodes contained a sentence where the source itself states a working condition** — recorded as a finding, not papered over. `conditions[]` remains at 0 uses of 13 vocabulary terms, and a condition may never be inferred from location or costume |
+```bash
+npm run roadmap -- status
+npm run media:audit -- status --scope star-trek
+npm run waterline -- validate
+npm run waterline -- status --scope star-trek
+```
+
+Completing the baseline authorizes **one bounded lease of at most eight tasks**,
+not unlimited queue draining. The cycle is:
+
+```text
+zero current media debt
+→ one bounded Luna lease
+→ research / draft / canonical merge
+→ retrieval and independent exact-subject review
+→ zero media debt again
+→ terminal task state
+→ second-desk/owner-reviewed cycle receipt
+→ only then may another lease begin
+```
+
+`--allow-inflight` does not bypass the waterline. A previous unreceipted lease,
+active work, open media debt, missing preservation, excessive requested batch, or
+an open high/critical incident blocks the next claim.
+
+## Evidence required for the two ready roadmap milestones
+
+### `star-trek-gold-shard`
+
+- current exact-subject baseline at zero debt;
+- **three** reviewed, restart-safe successful Luna cycle receipts;
+- each successful cycle resolves at least one task through the complete lifecycle;
+- current five-way accounting over every durable task:
+  `eligible / filed / blocked / excluded / unresolved`;
+- accounting denominator exactly matches the current task set.
+
+### `operational-reliability`
+
+- reviewed fresh repository-restore drill through `npm run gate`;
+- reviewed isolated bad-publication rollback drill;
+- measured `build_minutes_p95`, `cost_per_verified_record_usd`,
+  `source_freshness_p95_days`, and `rights_response_sla_days`;
+- build p95 ≤20 minutes, source freshness p95 ≤14 days, rights response ≤14 days;
+- no invented cost target: cost must be measured before review;
+- high/critical incident stop and reviewed close/downgrade authority remain green.
+
+The waterline prepares evidence only. Completion still lands through reviewed
+`data/ROADMAP-STATE.json` receipts. If both milestones are reviewed complete, the
+next dependency frontier becomes exactly:
+
+```text
+adapter-sdk-and-second-gold-shard
+public-trust-and-corrections
+```
+
+Do not start either before those roadmap receipts land.
 
 ## Standing discipline
 
-- Machines prepare, the owner rules — but **do not park a 50/50 as "your call"**
-  when the corpus answers it. Decide, document, keep it revertible. Escalate
-  only what is genuinely theirs: taste, irreversible acts, scope.
-- Never invent a fact to satisfy a schema. Hold the card instead.
-- Adding `focus` or any image field drifts the `SOURCES` mirror — repair with
-  `scripts/sync-sources.mjs`, never by relaxing `sources.consistency`.
+- Machines prepare; second desk and owner exercise their named authority.
+- Never invent a fact, identity, metric, owner ruling, or completion state.
+- Unknown is `null`, not zero. Ambiguous is visible debt, not verification.
+- A green schema is not semantic truth; a source URL is not subject identity.
+- Keep source snapshots, immutable media hashes, replacement/expunge history, and
+  provider-read-back receipts intact.
+- Do not relax `data/quality-baseline.json` to create apparent progress.
+- Do not call Star Trek gold until the current media baseline, three cycles,
+  accounting, and reviewed roadmap receipt all exist.
