@@ -1,0 +1,148 @@
+--- a/scripts/media-audit.mjs
++++ b/scripts/media-audit.mjs
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env node
+-import { appendFile, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
++import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+ import { dirname, relative, resolve } from "node:path";
+ import {
+   MEDIA_AUDIT_VERSION,
+@@ -42,7 +42,9 @@
+     if (error.code === "ENOENT" && fallback !== undefined) {
+       const value = copyJson(fallback); return { bytes: Buffer.from(stableJson(value)), value };
+     }
+-    throw new Error(`cannot read ${path}: ${error.message}`);
++    const wrapped = new Error(`cannot read ${path}: ${error.message}`);
++    wrapped.code = error.code;
++    throw wrapped;
+   }
+ }
+ async function readJson(path, fallback) { return (await readJsonBytes(path, fallback)).value; }
+@@ -52,6 +54,47 @@
+   await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`);
+   await rename(tmp, path);
+ }
++function jsonBytes(value) { return Buffer.from(`${JSON.stringify(value, null, 2)}\n`); }
++async function journalAppendBytes(path, events) {
++  let original;
++  try { original = await readFile(path); }
++  catch (error) { if (error.code !== "ENOENT") throw error; original = Buffer.alloc(0); }
++  return Buffer.concat([original, Buffer.from(journalLines(events))]);
++}
++async function atomicWriteTransaction(writes) {
++  const paths = new Set();
++  const prepared = [];
++  try {
++    for (const [index, write] of writes.entries()) {
++      if (!write?.path || paths.has(write.path)) throw new Error(`atomic media-audit transaction has duplicate or missing path ${write?.path || "<missing>"}`);
++      paths.add(write.path);
++      await mkdir(dirname(write.path), { recursive: true });
++      let original = null, existed = true;
++      try { original = await readFile(write.path); }
++      catch (error) { if (error.code !== "ENOENT") throw error; existed = false; }
++      const tmp = `${write.path}.tmp.${process.pid}.${index}`;
++      prepared.push({ ...write, tmp, original, existed, committed: false });
++      await writeFile(tmp, write.bytes);
++    }
++    for (const write of prepared) { await rename(write.tmp, write.path); write.committed = true; }
++  } catch (error) {
++    const restoreErrors = [];
++    for (const [index, write] of prepared.entries()) {
++      if (!write.committed) continue;
++      try {
++        if (write.existed) {
++          const restore = `${write.path}.restore.${process.pid}.${index}`;
++          await writeFile(restore, write.original);
++          await rename(restore, write.path);
++        } else await rm(write.path, { force: true });
++      } catch (restoreError) { restoreErrors.push(`${write.path}: ${restoreError.message}`); }
++    }
++    if (restoreErrors.length) throw new Error(`atomic media-audit transaction failed (${error.message}) and rollback was incomplete: ${restoreErrors.join("; ")}`);
++    throw error;
++  } finally {
++    for (const write of prepared) await rm(write.tmp, { force: true }).catch(() => {});
++  }
++}
+ async function withLock(fn) {
+   const path = option("lock", DEFAULT_LOCK);
+   await mkdir(dirname(path), { recursive: true });
+@@ -68,11 +111,6 @@
+     return JSON.stringify({ id, ...body });
+   }).join("\n") + (events.length ? "\n" : "");
+ }
+-async function appendJournal(path, events) {
+-  if (!events.length) return;
+-  await mkdir(dirname(path), { recursive: true });
+-  await appendFile(path, journalLines(events));
+-}
+ function scopedRows(doc) { return Array.isArray(doc) ? doc : doc.scopes; }
+ function sourceKey(value) {
+   try { const url = new URL(value); url.hash = ""; return url.toString().replace(/\/$/, ""); }
+@@ -198,7 +236,8 @@
+ async function syncCommand() {
+   return withLock(async () => {
+     let previous = null;
+-    try { previous = await readJson(option("state", DEFAULT_STATE)); validateState(previous); } catch (error) { if (!/cannot read/.test(error.message) && error.code !== "ENOENT") { /* initial invalid state must fail */ if (error.message && !error.message.includes("ENOENT")) throw error; } }
++    try { previous = await readJson(option("state", DEFAULT_STATE)); validateState(previous); }
++    catch (error) { if (error.code !== "ENOENT") throw error; }
+     const result = await buildCurrentState({ previous });
+     if (result.changed || !previous) await atomicJson(result.statePath, result.state);
+     console.log(result.changed || !previous ? `synced ${result.statePath}` : "media audit sync: no state change");
+@@ -243,8 +282,11 @@
+     const votes = input.votes.map((vote) => ({ ...vote, reviewer: input.reviewer, role: input.role }));
+     for (const vote of votes) if (!packetIds.has(vote.item_id)) throw new Error(`vote ${vote.item_id} is outside the packet`);
+     const result = applyVotes(state, votes, { now: option("now", new Date().toISOString()) });
+-    await atomicJson(option("state", DEFAULT_STATE), result.state);
+-    await appendJournal(option("journal", DEFAULT_JOURNAL), result.events);
++    const statePath = option("state", DEFAULT_STATE), journalPath = option("journal", DEFAULT_JOURNAL);
++    await atomicWriteTransaction([
++      { path: statePath, bytes: jsonBytes(result.state) },
++      { path: journalPath, bytes: await journalAppendBytes(journalPath, result.events) },
++    ]);
+     console.log(`recorded ${votes.length} media-audit vote(s)`);
+     printSummary(summarize(result.state, selectedScope(result.state)));
+   });
+@@ -259,8 +301,11 @@
+     if (!reviewer || !["second-desk", "owner"].includes(role)) throw new Error("resolution file requires second-desk or owner authority");
+     const votes = input.votes.map((vote) => ({ ...vote, reviewer, role, enforced: vote.enforced !== false }));
+     const result = applyVotes(state, votes, { now: input.reviewed_at || option("now", new Date().toISOString()) });
+-    await atomicJson(option("state", DEFAULT_STATE), result.state);
+-    await appendJournal(option("journal", DEFAULT_JOURNAL), result.events);
++    const statePath = option("state", DEFAULT_STATE), journalPath = option("journal", DEFAULT_JOURNAL);
++    await atomicWriteTransaction([
++      { path: statePath, bytes: jsonBytes(result.state) },
++      { path: journalPath, bytes: await journalAppendBytes(journalPath, result.events) },
++    ]);
+     console.log(`enforced ${votes.length} reviewed media-audit ruling(s)`);
+     printSummary(summarize(result.state, selectedScope(result.state)));
+   });
+--- a/scripts/media-audit-fixtures.mjs
++++ b/scripts/media-audit-fixtures.mjs
+@@ -1,5 +1,9 @@
+ #!/usr/bin/env node
+ import assert from "node:assert/strict";
++import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { spawnSync } from "node:child_process";
+ import {
+   MEDIA_AUDIT_VERSION,
+   applyVotes,
+@@ -81,4 +85,16 @@
+   assert.throws(() => validatePacket({ ...packet, source: { ...packet.source, item_set_sha256: "f".repeat(64) } }, doc), /stale/);
+ }
+ 
+-console.log("PASS — media audit consensus, authority, staleness, absence, and tracker fixtures");
++{
++  const root = await mkdtemp(join(tmpdir(), "undercast-media-audit-bad-state-"));
++  try {
++    const badState = join(root, "MEDIA-AUDIT.json"), lock = join(root, "MEDIA-AUDIT.lock");
++    await writeFile(badState, "{ malformed\n");
++    const run = spawnSync(process.execPath, [new URL("./media-audit.mjs", import.meta.url).pathname, "sync", "--state", badState, "--lock", lock, "--root", root], { encoding: "utf8" });
++    assert.notEqual(run.status, 0, "sync must reject malformed existing state rather than replacing it");
++    assert.match(`${run.stdout}${run.stderr}`, /cannot read .*MEDIA-AUDIT\.json/i);
++    assert.equal(await readFile(badState, "utf8"), "{ malformed\n", "malformed state must remain untouched");
++  } finally { await rm(root, { recursive: true, force: true }); }
++}
++
++console.log("PASS — media audit consensus, authority, staleness, absence, tracker, and fail-closed state fixtures");
