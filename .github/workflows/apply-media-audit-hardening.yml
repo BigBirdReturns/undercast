@@ -1,0 +1,63 @@
+name: apply-media-audit-hardening
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-media-audit-hardening
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.head_ref == 'agent/star-trek-media-audit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-media-audit
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Apply reviewed fail-closed patch
+        run: |
+          echo "d0381f0c6def02e07be0a7503bc9786861209fcdc8ee6d1be33c186bd01a04fe  .github/media-audit-hardening.patch" | sha256sum -c -
+          if grep -q 'atomicWriteTransaction' scripts/media-audit.mjs; then
+            echo "hardening already applied"
+          else
+            git apply --check .github/media-audit-hardening.patch
+            git apply .github/media-audit-hardening.patch
+          fi
+          git diff --check
+
+      - name: Install deterministic test runtime
+        run: npm ci
+
+      - name: Prove fail-closed state and transaction contracts
+        run: |
+          node --check scripts/media-audit.mjs
+          node --check scripts/media-audit-fixtures.mjs
+          npm run media:audit:fixtures
+          npm run media:audit -- validate
+          npm run autopilot:fixtures
+          node scripts/validate.mjs
+          npm run audit:corpus
+          npm run test:site-seams
+          git diff --check
+
+      - name: Commit reviewed hardening
+        run: |
+          git config user.name "undercast-media-audit"
+          git config user.email "undercast-media-audit@users.noreply.github.com"
+          git add scripts/media-audit.mjs scripts/media-audit-fixtures.mjs
+          git diff --cached --quiet && exit 0
+          git commit -m "Media: fail closed on audit-state and journal writes"
+          git push origin HEAD:agent/star-trek-media-audit
