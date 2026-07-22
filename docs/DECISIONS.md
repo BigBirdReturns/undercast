@@ -150,16 +150,16 @@ and may show current values but must not become a second source of truth.
 Page-specific layouts are legitimate. **Typography may change only through an
 explicit design decision, not incidental substitution.**
 
-**Repo state (gap):** tokens currently live **inline in each page**, not yet in a
-shared stylesheet. The authority is ratified; consolidating tokens into shared CSS
-is tracked implementation work so the canonical source actually exists.
+**Repo state:** implemented by PR #62, merged 2026-07-22. Shared token values now
+live in `assets/site-tokens.css`; page-specific layouts and theme overrides remain
+local without becoming competing token sources.
 
 ---
 
-## DEC-0011 — `validate.yml` is the canonical gate until `npm run gate` exists
-**Status:** Active (authority) · Ratified through delegated product/design review, 2026-07-13
+## DEC-0011 — `npm run gate` is the canonical repository gate
+**Status:** Active (authority) · Implemented by PR #63, 2026-07-22
 
-Until a cross-platform **`npm run gate`** exists, **`.github/workflows/validate.yml`
-is the canonical gate.** The UI checklist **points to it and summarizes categories**;
-it must not maintain a fragile second copy of shell commands. Creating `npm run
-gate` is tracked implementation improvement.
+**`npm run gate` is the canonical repository gate.** `.github/workflows/validate.yml`
+installs the runtime and invokes that single command. The workflow, checklists, and
+operator docs must not maintain a second command list; new canonical checks belong
+in `scripts/gate.mjs` and its adversarial fixtures.
