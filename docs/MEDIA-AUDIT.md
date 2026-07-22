@@ -70,6 +70,8 @@ npm run media:audit -- next \
   --reviewer octopode-alpha \
   --role reviewer \
   --namespace presentation \
+  --status review \
+  --side still \
   --limit 16 \
   --out .media-audit/packet.json \
   --html .media-audit/packet.html

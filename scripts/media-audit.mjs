@@ -225,6 +225,7 @@ async function loadState({ requireCurrent = true } = {}) {
   return state;
 }
 function selectedScope(state) { return option("scope") || null; }
+function selectedList(name) { return option(name)?.split(",").map((value) => value.trim()).filter(Boolean) || null; }
 function printSummary(summary) {
   console.log(`media audit${summary.scope ? ` ${summary.scope}` : ""}: ${summary.complete}/${summary.total} complete (${(summary.completion_ratio * 100).toFixed(1)}%); verified=${summary.verified} absent=${summary.absent} review=${summary.review} attention=${summary.attention}`);
   for (const [side, row] of Object.entries(summary.sides).sort()) console.log(`  ${side}: ${row.verified + row.absent}/${row.total} complete; verified=${row.verified} absent=${row.absent} review=${row.review} attention=${row.attention}`);
@@ -280,7 +281,7 @@ async function statusCommand() {
 }
 async function trackerCommand() {
   const state = await loadState();
-  const rows = trackerRows(state, { scope: selectedScope(state), reviewer: option("reviewer"), namespace: option("namespace"), includeVerified: flag("all") });
+  const rows = trackerRows(state, { scope: selectedScope(state), reviewer: option("reviewer"), namespace: option("namespace"), includeVerified: flag("all"), statuses: selectedList("status"), sides: selectedList("side") });
   const limit = Number(option("limit", "100"));
   if (flag("json")) console.log(JSON.stringify(rows.slice(0, limit), null, 2));
   else for (const item of rows.slice(0, limit)) console.log(`${item.status.padEnd(9)} ${item.wall_id} ${item.side.padEnd(8)} ${item.risk_codes.join(",") || "-"} identity=${item.claims.identity?.state || "-"}/${item.claims.identity?.value || "-"} presentation=${item.claims.presentation?.state || "-"}/${item.claims.presentation?.value || "-"}`);
@@ -290,7 +291,7 @@ async function nextCommand() {
   const reviewer = option("reviewer"), role = option("role", "reviewer"), namespace = option("namespace");
   const limit = Number(option("limit", "16"));
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("--limit must be 1..100");
-  const rows = trackerRows(state, { scope: selectedScope(state), reviewer, namespace, includeVerified: flag("all") }).slice(0, limit);
+  const rows = trackerRows(state, { scope: selectedScope(state), reviewer, namespace, includeVerified: flag("all"), statuses: selectedList("status"), sides: selectedList("side") }).slice(0, limit);
   if (!rows.length) { console.log("media audit: no matching review items"); process.exitCode = 3; return; }
   const packet = makePacket(state, rows, { reviewer, role, namespace, now: option("now", new Date().toISOString()) });
   const out = option("out"), html = option("html");

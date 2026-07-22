@@ -124,6 +124,7 @@ const vote = (itemId, namespace, value, reviewer, role, extra = {}) => ({ item_i
   const plain = item("still", { id: mediaItemId("star-trek", "UC-OTHER", "still"), wall_id: "UC-OTHER", asset: { ...asset, sha256: "b".repeat(64) }, risk_codes: [] });
   const doc = state([plain, risky]);
   assert.equal(trackerRows(doc, { scope: "star-trek" })[0].id, risky.id, "risk-first tracker ordering");
+  assert.equal(trackerRows(doc, { scope: "star-trek", sides: ["still"], statuses: ["review"] })[0].id, plain.id, "tracker side and status filters select a bounded desk packet");
   const packet = makePacket(doc, [risky], { reviewer: "reviewer-a", role: "reviewer", namespace: "identity", now: "2026-07-21T00:00:00.000Z" });
   validatePacket(packet, doc);
   assert.equal(packet.items[0].claims, undefined, "packets must not disclose prior consensus");

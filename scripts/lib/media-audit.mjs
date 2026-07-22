@@ -188,8 +188,10 @@ export function summarize(state, scope = null) {
   return { scope, ...counts, complete, completion_ratio: items.length ? complete / items.length : 0, sides, consensus_states: consensusStates };
 }
 
-export function trackerRows(state, { scope = null, reviewer = null, namespace = null, includeVerified = false } = {}) {
+export function trackerRows(state, { scope = null, reviewer = null, namespace = null, includeVerified = false, statuses = null, sides = null } = {}) {
   const rows = state.items.filter((item) => (!scope || item.scope === scope) && (includeVerified || !["verified", "absent"].includes(item.status)))
+    .filter((item) => !statuses || statuses.includes(item.status))
+    .filter((item) => !sides || sides.includes(item.side))
     .filter((item) => !reviewer || !currentVotes(item.votes).some((vote) => vote.reviewer === reviewer && (!namespace || vote.namespace === namespace)))
     .map((item) => ({
       item,
