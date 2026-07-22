@@ -48,6 +48,11 @@ console.log("PASS — synthetic census refresh");
   await put("scripts/validate.mjs", "console.log('PASS — synthetic archive gate');\n");
   await put("scripts/waterline.mjs", `
 import { existsSync } from "node:fs";
+const required = ["--config", "--state", "--journal", "--autopilot", "--autopilot-journal", "--media-audit", "--roadmap-state", "--preservation", "--root", "--requested"];
+for (const flag of required) if (!process.argv.includes(flag)) {
+  console.error("missing waterline binding " + flag);
+  process.exit(4);
+}
 if (existsSync("data/WATERLINE-BLOCK")) {
   console.error("synthetic rolling waterline blocker");
   process.exit(2);

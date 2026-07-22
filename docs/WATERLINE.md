@@ -154,7 +154,9 @@ Metrics stay `null` until measured. Current operating targets are:
   invented.
 
 High and critical incidents stop new leases until a later `closed` event for the
-same incident ID is recorded.
+same incident ID is recorded. Any operator or machine may open a stop; closing or
+downgrading a high/critical incident requires `recorded_role: "second-desk"` or
+`"owner"`, keeps the original severity, and leaves independent evidence.
 
 ## Natural unlocks
 

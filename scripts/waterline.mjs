@@ -204,7 +204,7 @@ async function main() {
       return;
     }
     if (command === "record-incident") {
-      const event = makeIncidentEvent(doc);
+      const event = makeIncidentEvent(doc, next.incidents);
       next.incidents.push(event);
       await save(inputs, next, { op: `incident.${event.status}`, ...event });
       console.log(`recorded ${event.event_id}`);

@@ -660,13 +660,19 @@ async function validateCommand() {
 
 async function waterlinePreflight(scopeId, requestedLimit) {
   const root = option("root", ".");
-  const configPath = option("waterline-config", "data/WATERLINE.json");
   const gate = spawnSync(process.execPath, [
     "scripts/waterline.mjs", "gate",
     "--scope", scopeId,
     "--operation", "claim",
     "--requested", String(requestedLimit),
-    "--config", configPath,
+    "--config", option("waterline-config", "data/WATERLINE.json"),
+    "--state", option("waterline-state", "data/WATERLINE-STATE.json"),
+    "--journal", option("waterline-journal", "data/journal/waterline.jsonl"),
+    "--autopilot", option("state", DEFAULT_STATE),
+    "--autopilot-journal", option("journal", DEFAULT_JOURNAL),
+    "--media-audit", option("media-audit-state", "data/MEDIA-AUDIT.json"),
+    "--roadmap-state", option("roadmap-state", "data/ROADMAP-STATE.json"),
+    "--preservation", option("preservation", DEFAULT_PRESERVATION),
     "--root", root,
   ], { cwd: root, stdio: "inherit" });
   if (gate.error) throw new Error(`rolling waterline preflight could not start: ${gate.error.message}`);

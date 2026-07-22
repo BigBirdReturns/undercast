@@ -8,6 +8,7 @@ export const METRIC_KEYS = [
   "rights_response_sla_days",
 ];
 const REVIEW_ROLES = new Set(["second-desk", "owner"]);
+const INCIDENT_ROLES = new Set(["machine", "operator", "reviewer", "second-desk", "owner"]);
 const ACTIVE_JOB_STATUSES = new Set(["leased", "drafted", "merged"]);
 const CLOSED_CYCLE_STATUSES = new Set(["resolved", "rejected", "blocked", "retired"]);
 const COMPLETE_MEDIA_STATUSES = new Set(["verified", "absent"]);
@@ -62,6 +63,31 @@ function ensureUnique(rows, key, label) {
     seen.add(value);
   }
 }
+function validateIncidentEvents(rows) {
+  const previousById = new Map();
+  for (const row of rows) {
+    const incidentId = requireString(row.incident_id, "incident_id");
+    if (!["open", "closed"].includes(row.status)) throw new Error(`incident ${incidentId} status must be open or closed`);
+    if (!["low", "medium", "high", "critical"].includes(row.severity)) throw new Error(`incident ${incidentId} severity is invalid`);
+    requireDate(row.at, `incident ${incidentId}.at`);
+    requireString(row.recorded_by, `incident ${incidentId}.recorded_by`);
+    const role = requireString(row.recorded_role, `incident ${incidentId}.recorded_role`);
+    if (!INCIDENT_ROLES.has(role)) throw new Error(`incident ${incidentId} recorded_role is invalid`);
+    requireEvidence(row.evidence, `incident ${incidentId}.evidence`);
+    const previous = previousById.get(incidentId);
+    if (previous && Date.parse(row.at) < Date.parse(previous.at)) throw new Error(`incident ${incidentId} events are out of order`);
+    if (row.status === "closed") {
+      if (!previous || previous.status !== "open") throw new Error(`incident ${incidentId} cannot close without an open event`);
+      if (row.severity !== previous.severity) throw new Error(`incident ${incidentId} close severity must match the open event`);
+      if (BLOCKING_INCIDENT_SEVERITIES.has(previous.severity) && !REVIEW_ROLES.has(role)) throw new Error(`closing ${previous.severity} incident ${incidentId} requires second-desk or owner authority`);
+    }
+    if (previous?.status === "open" && BLOCKING_INCIDENT_SEVERITIES.has(previous.severity) && row.status === "open" && !BLOCKING_INCIDENT_SEVERITIES.has(row.severity) && !REVIEW_ROLES.has(role)) {
+      throw new Error(`downgrading ${previous.severity} incident ${incidentId} requires second-desk or owner authority`);
+    }
+    previousById.set(incidentId, row);
+  }
+  return true;
+}
 
 export function validateWaterlineConfig(doc) {
   if (!doc || doc.version !== WATERLINE_VERSION || !Array.isArray(doc.scopes) || !doc.operations) throw new Error(`WATERLINE config must be version ${WATERLINE_VERSION} with scopes[] and operations`);
@@ -109,6 +135,7 @@ export function validateWaterlineState(doc, config) {
     if (drill.passed !== true && drill.passed !== false) throw new Error(`drill ${drill.id} needs passed boolean`);
     requireReview(drill);
   }
+  validateIncidentEvents(doc.incidents);
   return true;
 }
 
@@ -318,13 +345,24 @@ export function makeAccountingReceipt(input, context) {
   const body = { scope_id: input.scope_id, counts, denominator, job_set_sha256: jobSetDigest(context.autopilot, input.scope_id), note: requireString(input.note, "note"), evidence, ...review };
   return { id: `accounting_${sha256(stableJson(body)).slice(0, 24)}`, ...body };
 }
-export function makeIncidentEvent(input) {
+export function makeIncidentEvent(input, existingEvents = []) {
   const incident_id = requireString(input.incident_id, "incident_id");
   const status = requireString(input.status, "status");
   if (!["open", "closed"].includes(status)) throw new Error("incident status must be open or closed");
   const severity = requireString(input.severity, "severity");
   if (!["low", "medium", "high", "critical"].includes(severity)) throw new Error("incident severity is invalid");
   const at = requireDate(input.at, "at");
-  const body = { incident_id, status, severity, at, recorded_by: requireString(input.recorded_by, "recorded_by"), note: requireString(input.note, "note"), evidence: requireEvidence(input.evidence) };
-  return { event_id: `incident_${sha256(stableJson(body)).slice(0, 24)}`, ...body };
+  const body = {
+    incident_id,
+    status,
+    severity,
+    at,
+    recorded_by: requireString(input.recorded_by, "recorded_by"),
+    recorded_role: requireString(input.recorded_role, "recorded_role"),
+    note: requireString(input.note, "note"),
+    evidence: requireEvidence(input.evidence),
+  };
+  const event = { event_id: `incident_${sha256(stableJson(body)).slice(0, 24)}`, ...body };
+  validateIncidentEvents([...existingEvents, event]);
+  return event;
 }

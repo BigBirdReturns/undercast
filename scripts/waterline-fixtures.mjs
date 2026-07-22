@@ -73,9 +73,13 @@ status = deriveWaterlineStatus({ config, state, mediaAudit: media(), autopilot: 
 assert.equal(status.evidence_readiness.operational_reliability, true);
 assert.deepEqual(status.natural_unlocks_when_receipted, ["adapter-sdk-and-second-gold-shard", "public-trust-and-corrections"]);
 
-state.incidents.push(makeIncidentEvent({ incident_id: "inc-1", status: "open", severity: "high", at: "2026-07-22T09:00:00Z", recorded_by: "operator", note: "Publication correctness incident under investigation.", evidence: [{ type: "workflow-run", value: "3" }] }));
+state.incidents.push(makeIncidentEvent({ incident_id: "inc-1", status: "open", severity: "high", at: "2026-07-22T09:00:00Z", recorded_by: "operator", recorded_role: "operator", note: "Publication correctness incident under investigation.", evidence: [{ type: "workflow-run", value: "3" }] }, state.incidents));
 status = deriveWaterlineStatus({ config, state, mediaAudit: media(), autopilot: { jobs: allJobs }, roadmapState, preservation, scopeId: "star-trek", requestedTasks: 1 });
 assert.equal(status.phase, "incident-stop");
 assert.equal(status.claim_allowed, false);
+assert.throws(() => makeIncidentEvent({ incident_id: "inc-1", status: "closed", severity: "high", at: "2026-07-22T10:00:00Z", recorded_by: "operator", recorded_role: "operator", note: "Attempted unreviewed closure.", evidence: [{ type: "report", value: "incident.json" }] }, state.incidents), /second-desk or owner/);
+state.incidents.push(makeIncidentEvent({ incident_id: "inc-1", status: "closed", severity: "high", at: "2026-07-22T10:00:00Z", recorded_by: "second-desk", recorded_role: "second-desk", note: "Correctness restored and independently verified.", evidence: [{ type: "workflow-run", value: "4" }] }, state.incidents));
+status = deriveWaterlineStatus({ config, state, mediaAudit: media(), autopilot: { jobs: allJobs }, roadmapState, preservation, scopeId: "star-trek", requestedTasks: 1 });
+assert.equal(status.claim_allowed, true);
 
-console.log("PASS — rolling gold cycles, receipts, drills, metrics, incident stop, and natural unlocks");
+console.log("PASS — rolling gold cycles, receipts, drills, metrics, incident authority, stop/reopen, and natural unlocks");
