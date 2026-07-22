@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const MEDIA_AUDIT_VERSION = 2;
+export const MEDIA_AUDIT_VERSION = 3;
 
 export const REVIEWER_ROLES = Object.freeze({
   machine: { weight: 1, rank: 0 },
@@ -57,8 +57,14 @@ export function validateVote(vote, item = null) {
   if (!String(vote.note || "").trim() || String(vote.note).trim().length < 12) throw new Error("media-audit vote needs a specific note of at least 12 characters");
   if (!/^[0-9a-f]{64}$/i.test(vote.asset_sha256 || "")) throw new Error("media-audit vote needs the reviewed asset SHA-256");
   if (!Number.isFinite(Date.parse(vote.at || ""))) throw new Error("media-audit vote needs an ISO timestamp");
+  if (!String(vote.review_receipt || "").trim() || String(vote.review_receipt).length > 512 || /[\r\n]/.test(vote.review_receipt)) {
+    throw new Error("media-audit vote needs a durable Tier Desk or repository review receipt");
+  }
   if (vote.enforced === true && REVIEWER_ROLES[vote.role].rank < REVIEWER_ROLES["second-desk"].rank) {
     throw new Error("only second-desk or owner votes may be enforced");
+  }
+  if (vote.enforced === true && (!item || vote.namespace !== "presentation" || vote.value === "ambiguous" || vote.value === POSITIVE_VALUE[item.side])) {
+    throw new Error("enforcement is limited to explicit negative presentation rulings");
   }
   if (item && vote.asset_sha256.toLowerCase() !== item.asset?.sha256) throw new Error(`vote for ${item.id} targets a stale asset`);
   return true;
@@ -72,38 +78,52 @@ export function currentVotes(votes = []) {
 
 export function consensus(votes, namespace, side) {
   const scoped = currentVotes(votes).filter((vote) => vote.namespace === namespace);
-  if (!scoped.length) return { state: "none", value: null, support: 0, reviewers: 0, human_reviewers: 0, competing: [] };
+  if (!scoped.length) return { state: "none", value: null, support: 0, reviewers: 0, independent_reviewers: 0, competing: [] };
   const groups = new Map();
   for (const vote of scoped) {
-    if (!groups.has(vote.value)) groups.set(vote.value, { value: vote.value, support: 0, reviewers: new Set(), human: new Set(), enforced: [] });
+    if (!groups.has(vote.value)) groups.set(vote.value, { value: vote.value, support: 0, reviewers: new Set(), independent: new Set(), enforced: [] });
     const group = groups.get(vote.value);
     group.support += roleWeight(vote.role);
     group.reviewers.add(vote.reviewer);
-    if (vote.role !== "machine") group.human.add(vote.reviewer);
+    if (vote.role !== "machine") group.independent.add(vote.reviewer);
     if (vote.enforced === true) group.enforced.push(vote);
   }
   const rows = [...groups.values()].sort((a, b) => b.support - a.support || b.reviewers.size - a.reviewers.size || a.value.localeCompare(b.value));
   const enforced = rows.filter((row) => row.enforced.length);
   if (enforced.length > 1) {
-    return { state: "contested", value: null, support: enforced.reduce((n, row) => n + row.support, 0), reviewers: new Set(enforced.flatMap((row) => [...row.reviewers])).size, human_reviewers: new Set(enforced.flatMap((row) => [...row.human])).size, competing: enforced.map((row) => row.value) };
+    return { state: "contested", value: null, support: enforced.reduce((n, row) => n + row.support, 0), reviewers: new Set(enforced.flatMap((row) => [...row.reviewers])).size, independent_reviewers: new Set(enforced.flatMap((row) => [...row.independent])).size, competing: enforced.map((row) => row.value) };
   }
   if (enforced.length === 1) {
     const row = enforced[0];
-    return { state: "enforced", value: row.value, support: row.support, reviewers: row.reviewers.size, human_reviewers: row.human.size, competing: rows.filter((other) => other.value !== row.value).map((other) => other.value) };
+    return { state: "enforced", value: row.value, support: row.support, reviewers: row.reviewers.size, independent_reviewers: row.independent.size, competing: rows.filter((other) => other.value !== row.value).map((other) => other.value) };
   }
   if (rows.length > 1) {
     const [top, second] = rows;
     // A unanimous majority may become solid even when an obsolete minority remains,
     // but a close split is explicitly tracked as contested.
     if (top.support - second.support < 3 || top.reviewers.size < 2) {
-      return { state: "contested", value: null, support: top.support, reviewers: top.reviewers.size, human_reviewers: top.human.size, competing: rows.map((row) => row.value) };
+      return { state: "contested", value: null, support: top.support, reviewers: top.reviewers.size, independent_reviewers: top.independent.size, competing: rows.map((row) => row.value) };
     }
   }
   const top = rows[0];
   let state = "weak";
-  if (top.support >= 3 && top.reviewers.size >= 2 && top.human.size >= 1) state = "solid";
+  if (top.support >= 3 && top.reviewers.size >= 2 && top.independent.size >= 1) state = "solid";
   else if (top.support >= 2 || top.reviewers.size >= 2) state = "active";
-  return { state, value: top.value, support: top.support, reviewers: top.reviewers.size, human_reviewers: top.human.size, competing: rows.slice(1).map((row) => row.value) };
+  return { state, value: top.value, support: top.support, reviewers: top.reviewers.size, independent_reviewers: top.independent.size, competing: rows.slice(1).map((row) => row.value) };
+}
+
+export function migrateV2State(state, { legacyReviewReceipt } = {}) {
+  if (!state || state.version !== 2) throw new Error("media-audit migration requires version 2 state");
+  if (!String(legacyReviewReceipt || "").trim()) throw new Error("media-audit migration needs a durable legacy review receipt");
+  const next = copyJson(state);
+  next.version = MEDIA_AUDIT_VERSION;
+  for (const item of next.items || []) {
+    for (const vote of item.votes || []) vote.review_receipt = vote.review_receipt || legacyReviewReceipt;
+    const derived = deriveItem(item);
+    item.status = derived.status;
+    item.claims = derived.claims;
+  }
+  return next;
 }
 
 export function deriveItem(item) {
@@ -124,7 +144,7 @@ export function deriveItem(item) {
 
 export function validateState(state) {
   if (!state || state.version !== MEDIA_AUDIT_VERSION) throw new Error(`media-audit state must be version ${MEDIA_AUDIT_VERSION}`);
-  if (!state.source || !["specimens_sha256", "sources_sha256", "media_manifest_sha256", "item_set_sha256"].every((key) => /^[0-9a-f]{64}$/i.test(state.source[key] || ""))) {
+  if (!state.source || !["specimens_sha256", "sources_sha256", "media_manifest_sha256", "scopes_sha256", "item_set_sha256"].every((key) => /^[0-9a-f]{64}$/i.test(state.source[key] || ""))) {
     throw new Error("media-audit state has invalid source receipts");
   }
   if (!Array.isArray(state.items)) throw new Error("media-audit state needs items[]");
@@ -198,6 +218,7 @@ export function applyVotes(state, votes, { now = new Date().toISOString() } = {}
       value: input.value,
       note: String(input.note || "").trim(),
       evidence: Array.isArray(input.evidence) ? input.evidence : [],
+      review_receipt: String(input.review_receipt || "").trim(),
       enforced: input.enforced === true,
       at: input.at || now,
       asset_sha256: item.asset.sha256,
@@ -221,6 +242,8 @@ export function applyVotes(state, votes, { now = new Date().toISOString() } = {}
       namespace: vote.namespace,
       value: vote.value,
       note: vote.note,
+      evidence: vote.evidence,
+      review_receipt: vote.review_receipt,
       consensus: item.claims[vote.namespace],
       status: item.status,
     });
@@ -247,13 +270,8 @@ export function makePacket(state, items, { reviewer, role, namespace = null, now
       scope: item.scope,
       wall_id: item.wall_id,
       side: item.side,
-      actor: item.actor,
-      character: item.character,
-      expected_subject: item.expected_subject,
       asset: item.asset,
-      risk_codes: item.risk_codes,
-      status: item.status,
-      claims: item.claims,
+      ...(namespace === "presentation" ? {} : { expected_subject: item.expected_subject }),
       allowed_values: namespace === "identity" ? [...CLAIM_VALUES.identity] : namespace === "presentation" ? [...CLAIM_VALUES[item.side]] : { identity: [...CLAIM_VALUES.identity], presentation: [...CLAIM_VALUES[item.side]] },
     })),
   };
@@ -262,7 +280,7 @@ export function makePacket(state, items, { reviewer, role, namespace = null, now
 
 export function validatePacket(packet, state) {
   if (!packet || packet.version !== MEDIA_AUDIT_VERSION || !packet.packet_id || !Array.isArray(packet.items)) throw new Error("invalid media-audit packet");
-  for (const key of ["specimens_sha256", "sources_sha256", "media_manifest_sha256", "item_set_sha256"]) {
+  for (const key of ["specimens_sha256", "sources_sha256", "media_manifest_sha256", "scopes_sha256", "item_set_sha256"]) {
     if (packet.source?.[key] !== state.source[key]) throw new Error(`media-audit packet is stale (${key})`);
   }
   const byId = new Map(state.items.map((item) => [item.id, item]));

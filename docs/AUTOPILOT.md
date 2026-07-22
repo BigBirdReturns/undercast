@@ -37,7 +37,7 @@ Scopes configured in `data/MEDIA-AUDIT-SCOPES.json` with
 `block_new_autopilot_leases_until_complete` run `media:audit gate` before both
 `next` and `claim`. For Star Trek, every available still and portrait is bound to
 its asset SHA-256 and reviewed through independent `identity` and `presentation`
-claims. One machine vote never establishes identity; disputed and wrong assets
+claims. One non-independent screening vote never establishes identity; disputed and wrong assets
 remain visible in the tracker until replaced, nulled, or resolved. See
 `docs/MEDIA-AUDIT.md`.
 

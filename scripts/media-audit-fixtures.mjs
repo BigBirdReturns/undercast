@@ -11,6 +11,7 @@ import {
   deriveItem,
   makePacket,
   mediaItemId,
+  migrateV2State,
   sha256,
   stableJson,
   summarize,
@@ -30,10 +31,10 @@ function item(side = "portrait", overrides = {}) {
 }
 function state(items = [item()]) {
   const set = items.map(({ id, scope, wall_id, side, expected_subject, asset, risk_codes }) => ({ id, scope, wall_id, side, expected_subject, asset, risk_codes }));
-  const doc = { version: MEDIA_AUDIT_VERSION, source: { specimens_sha256: "1".repeat(64), sources_sha256: "2".repeat(64), media_manifest_sha256: "3".repeat(64), item_set_sha256: sha256(stableJson(set)) }, updated_at: "2026-07-21T00:00:00.000Z", items };
+  const doc = { version: MEDIA_AUDIT_VERSION, source: { specimens_sha256: "1".repeat(64), sources_sha256: "2".repeat(64), media_manifest_sha256: "3".repeat(64), scopes_sha256: "4".repeat(64), item_set_sha256: sha256(stableJson(set)) }, updated_at: "2026-07-21T00:00:00.000Z", items };
   validateState(doc); return doc;
 }
-const vote = (itemId, namespace, value, reviewer, role, extra = {}) => ({ item_id: itemId, namespace, value, reviewer, role, note: `Reviewed ${namespace} as ${value} with visible evidence.`, ...extra });
+const vote = (itemId, namespace, value, reviewer, role, extra = {}) => ({ item_id: itemId, namespace, value, reviewer, role, note: `Reviewed ${namespace} as ${value} with visible evidence.`, review_receipt: `repo:review/${reviewer}@sha256:${"5".repeat(64)}`, ...extra });
 
 {
   let doc = state();
@@ -53,6 +54,41 @@ const vote = (itemId, namespace, value, reviewer, role, extra = {}) => ({ item_i
   assert.equal(doc.items[0].claims.identity.state, "solid");
   assert.equal(doc.items[0].claims.presentation.state, "solid");
   assert.equal(doc.items[0].status, "verified");
+  assert.equal(doc.items[0].claims.identity.independent_reviewers, 2);
+}
+{
+  let doc = state(); const id = doc.items[0].id;
+  const octopodes = ["octopode-alpha", "octopode-beta", "octopode-gamma"];
+  doc = applyVotes(doc, octopodes.flatMap((reviewer) => [
+    vote(id, "identity", "expected", reviewer, "reviewer"),
+    vote(id, "presentation", "neutral-human", reviewer, "reviewer"),
+  ])).state;
+  assert.equal(doc.items[0].status, "verified", "independent Octopode reviewers may verify a facet without a human");
+  assert.equal(doc.items[0].claims.identity.independent_reviewers, 3);
+}
+{
+  let doc = state(); const id = doc.items[0].id;
+  for (const reviewer of ["screen-alpha", "screen-beta", "screen-gamma"]) {
+    doc = applyVotes(doc, [vote(id, "identity", "expected", reviewer, "machine")]).state;
+  }
+  assert.equal(doc.items[0].claims.identity.state, "active", "screening votes cannot close a claim");
+  assert.equal(doc.items[0].claims.identity.independent_reviewers, 0);
+}
+{
+  let doc = state(); const id = doc.items[0].id;
+  doc = applyVotes(doc, [vote(id, "identity", "expected", "octopode-alpha", "reviewer")]).state;
+  doc = applyVotes(doc, [vote(id, "identity", "wrong", "octopode-alpha", "reviewer")]).state;
+  assert.equal(doc.items[0].claims.identity.reviewers, 1, "a reviewer revote replaces rather than multiplies its vote");
+}
+{
+  let doc = state(); const id = doc.items[0].id;
+  doc = applyVotes(doc, [
+    vote(id, "identity", "expected", "octopode-alpha", "reviewer"),
+    vote(id, "identity", "expected", "octopode-beta", "reviewer"),
+    vote(id, "identity", "wrong", "octopode-gamma", "reviewer"),
+  ]).state;
+  assert.equal(doc.items[0].claims.identity.state, "contested");
+  assert.equal(doc.items[0].status, "attention");
 }
 {
   let doc = state(); const id = doc.items[0].id;
@@ -61,10 +97,17 @@ const vote = (itemId, namespace, value, reviewer, role, extra = {}) => ({ item_i
   assert.equal(doc.items[0].status, "attention");
 }
 {
+  const doc = state(); const id = doc.items[0].id;
+  assert.throws(() => applyVotes(doc, [vote(id, "identity", "wrong", "desk", "second-desk", { enforced: true })]), /negative presentation/);
+  assert.throws(() => applyVotes(doc, [vote(id, "presentation", "neutral-human", "desk", "second-desk", { enforced: true })]), /negative presentation/);
+  assert.throws(() => applyVotes(doc, [vote(id, "presentation", "ambiguous", "desk", "second-desk", { enforced: true })]), /negative presentation/);
+  assert.throws(() => applyVotes(doc, [vote(id, "presentation", "role-depiction", "screen", "machine", { enforced: true })]), /second-desk or owner/);
+}
+{
   let doc = state(); const id = doc.items[0].id;
   doc = applyVotes(doc, [
     vote(id, "presentation", "role-depiction", "desk", "second-desk", { enforced: true }),
-    vote(id, "presentation", "neutral-human", "owner", "owner", { enforced: true }),
+    vote(id, "presentation", "group", "owner", "owner", { enforced: true }),
   ]).state;
   assert.equal(doc.items[0].claims.presentation.state, "contested");
   assert.equal(doc.items[0].status, "attention");
@@ -83,7 +126,20 @@ const vote = (itemId, namespace, value, reviewer, role, extra = {}) => ({ item_i
   assert.equal(trackerRows(doc, { scope: "star-trek" })[0].id, risky.id, "risk-first tracker ordering");
   const packet = makePacket(doc, [risky], { reviewer: "reviewer-a", role: "reviewer", namespace: "identity", now: "2026-07-21T00:00:00.000Z" });
   validatePacket(packet, doc);
+  assert.equal(packet.items[0].claims, undefined, "packets must not disclose prior consensus");
   assert.throws(() => validatePacket({ ...packet, source: { ...packet.source, item_set_sha256: "f".repeat(64) } }, doc), /stale/);
+  assert.throws(() => validatePacket({ ...packet, source: { ...packet.source, scopes_sha256: "f".repeat(64) } }, doc), /stale/);
+  const presentation = makePacket(doc, [risky], { reviewer: "reviewer-b", role: "reviewer", namespace: "presentation", now: "2026-07-21T00:00:00.000Z" });
+  assert.equal(presentation.items[0].expected_subject, undefined, "presentation packets are blind to expected identity");
+}
+
+{
+  const current = state();
+  const legacy = { ...current, version: 2, items: current.items.map((row) => ({ ...row, votes: [], claims: { identity: { state: "none", value: null, support: 0, reviewers: 0, human_reviewers: 0, competing: [] }, presentation: { state: "none", value: null, support: 0, reviewers: 0, human_reviewers: 0, competing: [] } } })) };
+  const migrated = migrateV2State(legacy, { legacyReviewReceipt: `repo:data/legacy.json@sha256:${"6".repeat(64)}` });
+  validateState(migrated);
+  assert.equal(migrated.version, MEDIA_AUDIT_VERSION);
+  assert.equal(migrated.items[0].claims.identity.independent_reviewers, 0);
 }
 
 {

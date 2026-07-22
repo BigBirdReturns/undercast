@@ -2,7 +2,7 @@
 
 This file is the exact build-sequence target for `data/ROADMAP.json`. Read the five-year strategy in `docs/FIVE-YEAR-PLAN.md` first. A playbook is authorized only when `npm run roadmap -- status` reports it `ready`.
 
-Completion is recorded only in `data/ROADMAP-STATE.json` through a reviewed pull request. Machines cannot close second-desk or owner milestones.
+Completion is recorded only in `data/ROADMAP-STATE.json` through a reviewed pull request. Screening-role agents cannot close second-desk or owner milestones; separately tasked Octopodes may occupy those authority lanes with durable repository receipts.
 
 ## trusted-foundation
 

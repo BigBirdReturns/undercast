@@ -8,6 +8,7 @@ import {
   deriveItem,
   makePacket,
   mediaItemId,
+  migrateV2State,
   normalize,
   sha256,
   stableJson,
@@ -24,6 +25,7 @@ const DEFAULT_SOURCES = "data/SOURCES.json";
 const DEFAULT_MEDIA_MANIFEST = "data/media-manifest.json";
 const DEFAULT_JOURNAL = "data/journal/media-audit.jsonl";
 const DEFAULT_LOCK = "data/MEDIA-AUDIT.lock";
+const DEFAULT_BASELINE_REVIEW = "data/MEDIA-AUDIT-BASELINE-REVIEW.json";
 
 const args = process.argv.slice(2);
 const command = args.shift() || "status";
@@ -228,7 +230,7 @@ function printSummary(summary) {
   for (const [side, row] of Object.entries(summary.sides).sort()) console.log(`  ${side}: ${row.verified + row.absent}/${row.total} complete; verified=${row.verified} absent=${row.absent} review=${row.review} attention=${row.attention}`);
 }
 function renderHtml(packet) {
-  const cards = packet.items.map((item) => `<article><img src="${escapeHtml(item.asset.src)}" alt=""><h2>${escapeHtml(item.wall_id)} · ${escapeHtml(item.side)}</h2><p><strong>Expected:</strong> ${escapeHtml(item.expected_subject)}</p><p><strong>Character:</strong> ${escapeHtml(item.character)}<br><strong>Performer:</strong> ${escapeHtml(item.actor)}</p><p><strong>Risk:</strong> ${escapeHtml(item.risk_codes.join(", ") || "none")}</p><p><code>${item.asset.sha256}</code></p></article>`).join("\n");
+  const cards = packet.items.map((item) => `<article><img src="${escapeHtml(item.asset.src)}" alt=""><h2>${escapeHtml(item.wall_id)} · ${escapeHtml(item.side)}</h2>${item.expected_subject ? `<p><strong>Expected:</strong> ${escapeHtml(item.expected_subject)}</p>` : ""}<p><code>${item.asset.sha256}</code></p></article>`).join("\n");
   return `<!doctype html><meta charset="utf-8"><title>UNDERCAST media audit ${packet.packet_id}</title><style>body{font:15px system-ui;margin:24px;background:#eee;color:#111}header{max-width:900px;margin:auto auto 24px}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}article{background:white;padding:12px;border:1px solid #bbb}img{width:100%;height:260px;object-fit:contain;background:#222}h2{font-size:17px}code{font-size:10px;word-break:break-all}</style><header><h1>UNDERCAST media audit</h1><p>Packet <code>${packet.packet_id}</code>. Reviewer ${escapeHtml(packet.reviewer)} (${escapeHtml(packet.role)}). This sheet supports presentation and identity review; it does not authorize guessing.</p></header><main>${cards}</main>`;
 }
 function escapeHtml(value) { return String(value || "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
@@ -236,10 +238,37 @@ function escapeHtml(value) { return String(value || "").replace(/[&<>"']/g, (cha
 async function syncCommand() {
   return withLock(async () => {
     let previous = null;
-    try { previous = await readJson(option("state", DEFAULT_STATE)); validateState(previous); }
+    let migrationEvent = null;
+    try {
+      previous = await readJson(option("state", DEFAULT_STATE));
+      if (previous.version === 2) {
+        const legacyPath = option("legacy-review", DEFAULT_BASELINE_REVIEW);
+        const legacyBytes = await readFile(legacyPath);
+        const legacyReviewReceipt = `repo:${legacyPath}@sha256:${sha256(legacyBytes)}`;
+        const beforeSha256 = sha256(stableJson(previous));
+        previous = migrateV2State(previous, { legacyReviewReceipt });
+        migrationEvent = {
+          version: MEDIA_AUDIT_VERSION,
+          op: "media-audit.contract-migrated",
+          at: option("now", new Date().toISOString()),
+          from_version: 2,
+          to_version: MEDIA_AUDIT_VERSION,
+          prior_state_sha256: beforeSha256,
+          legacy_review_receipt: legacyReviewReceipt,
+        };
+      }
+      validateState(previous);
+    }
     catch (error) { if (error.code !== "ENOENT") throw error; }
     const result = await buildCurrentState({ previous });
-    if (result.changed || !previous) await atomicJson(result.statePath, result.state);
+    if (migrationEvent) {
+      migrationEvent.state_sha256 = sha256(stableJson(result.state));
+      const journalPath = option("journal", DEFAULT_JOURNAL);
+      await atomicWriteTransaction([
+        { path: result.statePath, bytes: jsonBytes(result.state) },
+        { path: journalPath, bytes: await journalAppendBytes(journalPath, [migrationEvent]) },
+      ]);
+    } else if (result.changed || !previous) await atomicJson(result.statePath, result.state);
     console.log(result.changed || !previous ? `synced ${result.statePath}` : "media audit sync: no state change");
     printSummary(summarize(result.state, selectedScope(result.state)));
   });

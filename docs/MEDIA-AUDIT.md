@@ -34,16 +34,28 @@ ledger receipt is recorded as `absent` and counts as honestly complete.
 - **none** — no current vote.
 - **weak** — one ordinary or machine vote.
 - **active** — some corroboration, but not enough to close the claim.
-- **solid** — at least 3 weighted support, at least 2 independent reviewers, and
-  at least one human reviewer, without a close conflicting result.
+- **solid** — at least 3 weighted support, at least 2 reviewers, and at least
+  one independently tasked Octopode reviewer, without a close conflicting result.
 - **enforced** — an obvious ruling explicitly imposed by second-desk or owner
   authority. This is used for clear negative presentation defects, never to
-  guess an identity.
+  guess an identity, approve a positive presentation, or enforce ambiguity.
 - **contested** — material disagreement requiring tracker review.
 
 A facet is `verified` only when both required claims are solid or enforced on
 the positive value. A negative or ambiguous active/solid/enforced claim becomes
-`attention`. A single machine vote can prioritize work but can never close it.
+`attention`. A `machine` vote is a non-independent screening vote: it can
+prioritize work but can never close it. `reviewer` and `second-desk` are
+substrate-neutral authority lanes used by separately tasked Octopodes; they do
+not imply a human reviewer.
+
+Every submitted vote carries a durable `review_receipt` naming the Tier Desk
+task or repository branch/worktree result that produced it. Separate reviewer
+IDs without separate receipts are not independent review. Packets are bound to
+the scope-policy hash as well as the specimen, source, manifest, item-set, and
+asset hashes, so a contract or byte change invalidates stale work.
+Packets disclose no prior claims or consensus. Presentation packets are also
+blind to the expected identity; identity packets disclose only the expected
+subject needed for comparison.
 
 ## Commands
 
@@ -55,7 +67,7 @@ npm run media:audit -- tracker --scope star-trek --limit 100
 # Emit a risk-first, hash-bound packet and an optional local visual sheet.
 npm run media:audit -- next \
   --scope star-trek \
-  --reviewer reviewer-a \
+  --reviewer octopode-alpha \
   --role reviewer \
   --namespace presentation \
   --limit 16 \
@@ -81,23 +93,25 @@ remain available.
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "packet_id": "map_...",
-  "reviewer": "reviewer-a",
+  "reviewer": "octopode-alpha",
   "role": "reviewer",
   "votes": [
     {
       "item_id": "ma_...",
       "namespace": "presentation",
       "value": "neutral-human",
-      "note": "Solo out-of-character human portrait with no visible role makeup."
+      "note": "Solo out-of-character human portrait with no visible role makeup.",
+      "review_receipt": "git:<result-commit>#reviews/media-round-alpha.json"
     },
     {
       "item_id": "ma_...",
       "namespace": "identity",
       "value": "expected",
       "note": "Compared against two independent performer references; facial identity agrees.",
-      "evidence": ["https://example.invalid/reference"]
+      "evidence": ["https://example.invalid/reference"],
+      "review_receipt": "git:<result-commit>#reviews/media-round-alpha.json"
     }
   ]
 }
