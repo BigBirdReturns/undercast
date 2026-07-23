@@ -1,0 +1,50 @@
+name: diagnose-capability-integration
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnose-capability-integration
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: github.event.pull_request.number == 70 && github.head_ref == 'agent/capability-aware-autopilot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/capability-aware-autopilot
+          fetch-depth: 1
+
+      - name: Replay patch and capture exact failure
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import base64, gzip, re
+          text = Path('.github/workflows/apply-capability-aware-autopilot.yml').read_text()
+          match = re.search(r'^          PAYLOAD: (\S+)$', text, re.M)
+          if not match:
+              raise SystemExit('embedded installer payload not found')
+          Path('/tmp/apply.py').write_bytes(gzip.decompress(base64.b64decode(match.group(1))))
+          PY
+          set +e
+          python /tmp/apply.py > /tmp/apply.log 2>&1
+          code=$?
+          set -e
+          mkdir -p capability-diagnostics
+          cp /tmp/apply.log capability-diagnostics/apply.log
+          printf '%s\n' "$code" > capability-diagnostics/exit-code.txt
+          tail -n 80 /tmp/apply.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capability-integration-diagnostics
+          path: capability-diagnostics
+          if-no-files-found: error
+          retention-days: 7
