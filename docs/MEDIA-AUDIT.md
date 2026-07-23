@@ -107,3 +107,8 @@ Never convert uncertainty into a positive vote. `ambiguous` is an honest state,
 not a failure. Wrong assets are replaced or nulled, then `sync` rotates the asset
 hash and discards stale current votes for that facet while the journal retains
 the prior history.
+
+
+## Reviewed baseline campaigns
+
+A full-scope campaign may apply many rulings only through `npm run media:audit:campaign -- --input data/review/<campaign>.json`. The campaign must cover every current open facet exactly once, bind every ruling to the current asset and item-set hashes, cite a retained source receipt, and carry second-desk or owner authority. Wrong or ambiguous media is nulled from both canonical mirrors while immutable bytes and former objects remain in `data/journal/media-remediation.jsonl`. Positive identity decisions require revision-bound source metadata and may never be inferred from appearance. All canonical mirrors and journals commit as one rollback-capable transaction.

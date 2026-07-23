@@ -26,6 +26,7 @@ MANUAL_SIGNALS = {
     359: ("page-title", "F8"),
     489: ("file-link", "John Schuck / Klingon 23rd ambassador / Star Trek VI"),
     544: ("file-link", "Oh / Tamlyn Tomita / Star Trek: Picard"),
+    609: ("page-title", "File:Day (Colonel).jpg"),
 }
 ARTIFACTS = {
     "contact_sheet": {
@@ -69,6 +70,40 @@ def metadata_values(meta):
         rows.extend((key, value) for value in (meta.get(key) or []))
     return [(key, str(value)) for key, value in rows if value]
 
+GENERIC_STILL_SIGNALS = {
+    compact(value) for value in (
+        "the", "doctor", "dr", "commander", "sub-commander", "captain",
+        "admiral", "ambassador", "general", "colonel", "major",
+        "lieutenant", "senator", "vedek", "kai", "gul", "glinn",
+        "legate", "maje", "daimon", "commodore", "administrator",
+        "nurse", "mr", "first officer", "officer",
+    )
+}
+RANK_PREFIX = re.compile(
+    r"^(?:the|dr\.?|doctor|sub[- ]?commander|commander|captain|admiral|"
+    r"ambassador|general|colonel|major|lieutenant|senator|vedek|kai|gul|"
+    r"glinn|legate|maje|daimon|commodore|administrator|nurse|mr\.?)\s+",
+    re.I,
+)
+
+
+def still_variants(expected_subject):
+    values = []
+    for component in components(expected_subject):
+        candidates = [component]
+        candidates.append(re.sub(r"\s*\([^)]*\)\s*", " ", component).strip())
+        candidates.append(re.sub(r",?\s+son of\b.*$", "", component, flags=re.I).strip())
+        for candidate in list(candidates):
+            candidates.append(re.sub(r"\s*\([^)]*\)\s*", " ", candidate).strip())
+            candidates.append(re.sub(r",?\s+son of\b.*$", "", candidate, flags=re.I).strip())
+        for candidate in list(candidates):
+            candidates.append(RANK_PREFIX.sub("", candidate).strip())
+        for candidate in candidates:
+            if candidate and compact(candidate) not in GENERIC_STILL_SIGNALS and candidate not in values:
+                values.append(candidate)
+    return values
+
+
 def source_signal(row, meta):
     if row["index"] in MANUAL_SIGNALS:
         kind, value = MANUAL_SIGNALS[row["index"]]
@@ -87,22 +122,18 @@ def source_signal(row, meta):
             raise SystemExit(f'no performer source signal for #{row["index"]} {row["expected_subject"]}')
         kind, value = matches[0]
         return {"kind": kind, "value": value}
-    variants = []
-    for component in components(row["expected_subject"]):
-        variants += [
-            component,
-            re.sub(r"^(?:the|dr\.?|doctor|commander|captain|admiral|ambassador|general|colonel|major|lieutenant|senator|vedek|kai|gul|glinn|legate|maje|daimon|commodore|administrator|nurse|mr\.?)\s+", "", component, flags=re.I),
-            re.sub(r"\s*\([^)]*\)\s*", " ", component),
-        ]
+    variants = still_variants(row["expected_subject"])
     matches = []
     for kind, value in candidates:
         packed = compact(value)
+        if not packed or packed in GENERIC_STILL_SIGNALS:
+            continue
         for variant in variants:
             expected = compact(variant)
             if expected and len(expected) >= 3 and (expected in packed or packed in expected) and min(len(expected), len(packed)) >= 3:
                 matches.append((variant, kind, value))
                 break
-    priority = {"title": 0, "links": 1, "ImageDescription": 2, "categories": 3, "globalusage": 4}
+    priority = {"title": 0, "ObjectName": 1, "links": 2, "ImageDescription": 3, "categories": 4, "globalusage": 5}
     matches.sort(key=lambda triple: priority.get(triple[1], 99))
     if not matches:
         raise SystemExit(f'no character source signal for #{row["index"]} {row["expected_subject"]}')
