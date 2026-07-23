@@ -1,0 +1,54 @@
+name: fix-trek-finalizer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-trek-finalizer
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    if: github.head_ref == 'agent/trek-media-baseline-closure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/trek-media-baseline-closure
+          fetch-depth: 0
+
+      - name: Repair the embedded exact source-selector patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/finalize-trek-media-baseline.yml')
+          text = path.read_text()
+          old = '                  variants.extend([\n'
+          new = '                  variants += [\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one variants.extend block, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+          old = '                  ])\n              matches = []\n'
+          new = '                  ]\n              matches = []\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one variants close block, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+          old = '            .github/workflows/finalize-trek-media-baseline.yml\n'
+          new = '            .github/workflows/finalize-trek-media-baseline.yml \\\n            .github/workflows/fix-trek-finalizer.yml\n'
+          if text.count(old) != 1:
+              raise SystemExit('finalizer cleanup block changed unexpectedly')
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+
+      - name: Commit repaired finalizer
+        run: |
+          git config user.name 'undercast-media-audit'
+          git config user.email 'undercast-media-audit@users.noreply.github.com'
+          git add .github/workflows/finalize-trek-media-baseline.yml
+          git commit -m 'Audit: repair exact campaign finalizer'
+          git push origin HEAD:agent/trek-media-baseline-closure
