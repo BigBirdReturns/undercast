@@ -1,0 +1,65 @@
+name: inspect-autopilot-capabilities
+
+on:
+  push:
+    branches: [agent/capability-aware-autopilot]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inspect-autopilot-capabilities
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/capability-aware-autopilot
+          fetch-depth: 1
+
+      - name: Inspect deterministic candidate order and mode hints
+        run: |
+          mkdir -p capability-report
+          node --input-type=module <<'NODE' | tee capability-report/report.txt
+          import { readFile, writeFile } from 'node:fs/promises';
+          const state = JSON.parse(await readFile('data/AUTOPILOT.json', 'utf8'));
+          const queued = state.jobs
+            .filter(job => job.scope === 'star-trek' && job.status === 'queued')
+            .sort((a, b) => b.priority - a.priority || a.scope.localeCompare(b.scope) || a.performer.localeCompare(b.performer) || a.character.localeCompare(b.character));
+          const rows = queued.slice(0, 100).map((job, index) => ({
+            rank: index + 1,
+            id: job.id,
+            performer: job.performer,
+            character: job.character,
+            priority: job.priority,
+            performance_modes: job.performance_modes,
+            categories: job.categories,
+            source_fingerprint: job.source_fingerprint,
+            sources: job.sources,
+          }));
+          const modes = [...new Set(state.jobs.flatMap(job => job.performance_modes || []))].sort();
+          const sargon = state.jobs.find(job => job.scope === 'star-trek' && job.performer === 'James Doohan' && job.character === 'Sargon');
+          const doohan = queued.filter(job => job.performer === 'James Doohan').map(job => ({
+            id: job.id,
+            character: job.character,
+            priority: job.priority,
+            performance_modes: job.performance_modes,
+            categories: job.categories,
+            source_fingerprint: job.source_fingerprint,
+            sources: job.sources,
+          }));
+          const report = { version: 1, queued_count: queued.length, modes, sargon, top_100: rows, queued_james_doohan: doohan };
+          await writeFile('capability-report/report.json', JSON.stringify(report, null, 2) + '\n');
+          console.log(JSON.stringify(report, null, 2));
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: autopilot-capability-report
+          path: capability-report
+          if-no-files-found: error
+          retention-days: 7
