@@ -1,0 +1,77 @@
+name: verify-capability-aware-autopilot-final
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: verify-capability-aware-autopilot-final
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: github.event.pull_request.number == 70 && github.head_ref == 'agent/capability-aware-autopilot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/capability-aware-autopilot
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install deterministic runtime
+        run: npm ci
+
+      - name: Prove capability, queue, and waterline contracts
+        run: |
+          npm run autopilot:fixtures
+          npm run waterline:fixtures
+          npm run autopilot -- validate
+          node scripts/autopilot.mjs candidates \
+            --scope star-trek \
+            --capability-profile text-vision \
+            --limit 200 \
+            --json > /tmp/candidates.json
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const report = JSON.parse(await readFile('/tmp/candidates.json', 'utf8'));
+          const sargon = report.incompatible.find(row => row.task_id === 'ap_8ec80c60cecacc496a658628');
+          if (!sargon || !sargon.missing_capabilities.includes('audio-listening')) {
+            throw new Error('Sargon did not remain source-fingerprint-bound to audio-listening');
+          }
+          const ishka = report.compatible.find(row => row.task_id === 'ap_167ac35ec0c06c7005bcc32f');
+          if (!ishka) throw new Error('reviewed physical proof task is not capability-compatible');
+          if (report.profile.id !== 'text-vision' || report.profile.capabilities.length !== 0) {
+            throw new Error('text-vision profile contract drifted');
+          }
+          if (report.compatible.some(row => row.missing_capabilities.length)) {
+            throw new Error('candidate report marks an incompatible task compatible');
+          }
+          NODE
+
+      - name: Create the exact permanent candidate
+        run: |
+          rm -f .github/workflows/verify-capability-aware-autopilot-final.yml
+          git config user.name 'undercast-autopilot'
+          git config user.email 'undercast-autopilot@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Autopilot: finalize reviewed capability receipts'
+
+      - name: Verify preservation and the complete canonical gate
+        run: |
+          npm run preserve:fixtures
+          npm run preserve:verify
+          npx playwright install --with-deps chromium
+          npm run gate
+
+      - name: Publish exact gated candidate
+        run: git push origin HEAD:agent/capability-aware-autopilot
