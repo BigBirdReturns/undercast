@@ -1,0 +1,102 @@
+name: claim-trek-cycle-001-success
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: claim-trek-cycle-001-success
+  cancel-in-progress: true
+
+jobs:
+  claim:
+    if: github.head_ref == 'agent/trek-cycle-001-success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/trek-cycle-001-success
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install deterministic runtime
+        run: npm ci
+
+      - name: Prove the reviewed task is compatible and the waterline is ready
+        run: |
+          node scripts/autopilot.mjs candidates \
+            --scope star-trek \
+            --capability-profile text-vision \
+            --limit 200 \
+            --json > /tmp/candidates.json
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const report = JSON.parse(await readFile('/tmp/candidates.json', 'utf8'));
+          const ishka = report.compatible.find(row => row.task_id === 'ap_167ac35ec0c06c7005bcc32f');
+          if (!ishka || ishka.performer !== 'Andrea Martin' || ishka.character !== 'Ishka') {
+            throw new Error('Andrea Martin / Ishka is not the reviewed compatible proof task');
+          }
+          const sargon = report.incompatible.find(row => row.task_id === 'ap_8ec80c60cecacc496a658628');
+          if (!sargon || !sargon.missing_capabilities.includes('audio-listening')) {
+            throw new Error('Sargon audio gate is not intact');
+          }
+          NODE
+          npm run waterline -- gate --scope star-trek --operation claim --requested 1
+          npm run autopilot -- readiness --scope star-trek --require-active
+
+      - name: Claim exactly one reviewed physical task
+        run: |
+          mkdir -p .luna
+          npm run autopilot -- next \
+            --agent luna-text-vision \
+            --scope star-trek \
+            --capability-profile text-vision \
+            --task-id ap_167ac35ec0c06c7005bcc32f \
+            --limit 1 \
+            --lease-minutes 1440 \
+            --selection-basis 'Capability-compatible physical proof task reviewed for the first restart-safe successful cycle' \
+            --out .luna/batch.json \
+            --prompt .luna/PROMPT.md
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
+          const batch = JSON.parse(await readFile('.luna/batch.json', 'utf8'));
+          if (batch.tasks.length !== 1 || batch.tasks[0].id !== 'ap_167ac35ec0c06c7005bcc32f') throw new Error('wrong task leased');
+          if (batch.selection.profile_id !== 'text-vision' || batch.selection.strategy !== 'reviewed-task') throw new Error('capability selection was not persisted');
+          await writeFile('.luna/lease-summary.json', JSON.stringify({
+            version: 1,
+            lease_id: batch.lease_id,
+            task_id: batch.tasks[0].id,
+            performer: batch.tasks[0].performer,
+            character: batch.tasks[0].character,
+            capability_profile: batch.selection.profile_id,
+            policy_sha256: batch.selection.policy_sha256,
+            claimed_at: batch.claimed_at,
+            expires_at: batch.expires_at,
+            readiness: batch.readiness,
+          }, null, 2) + '\n');
+          NODE
+
+      - name: Commit durable lease and remove the one-shot claimer
+        run: |
+          rm -f .github/workflows/claim-trek-cycle-001-success.yml
+          git config user.name 'undercast-autopilot'
+          git config user.email 'undercast-autopilot@users.noreply.github.com'
+          git add data/AUTOPILOT.json data/journal/autopilot.jsonl .github/workflows/claim-trek-cycle-001-success.yml
+          git diff --cached --check
+          git commit -m 'Cycle: lease Andrea Martin as Ishka'
+          git push origin HEAD:agent/trek-cycle-001-success
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trek-cycle-001-success-lease
+          path: .luna
+          if-no-files-found: error
+          retention-days: 14
