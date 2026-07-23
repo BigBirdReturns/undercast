@@ -1,0 +1,92 @@
+name: apply-capability-aware-autopilot-v2
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-capability-aware-autopilot-v2
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.number == 70 && github.head_ref == 'agent/capability-aware-autopilot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/capability-aware-autopilot
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Decode and align the reviewed integration patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import base64, gzip, re
+          workflow = Path('.github/workflows/apply-capability-aware-autopilot.yml').read_text()
+          match = re.search(r'^          PAYLOAD: (\S+)$', workflow, re.M)
+          if not match:
+              raise SystemExit('embedded installer payload not found')
+          source = gzip.decompress(base64.b64decode(match.group(1))).decode()
+          old = '''    ''' + "'''also read [LUNA.md](LUNA.md) and [docs/AUTOPILOT.md](docs/AUTOPILOT.md), then\nclaim a bounded lease instead of choosing free-form work. A scope must pass\n'''"
+          new = '''    ''' + "'''also read [LUNA.md](LUNA.md), [docs/AUTOPILOT.md](docs/AUTOPILOT.md), and\n[docs/WATERLINE.md](docs/WATERLINE.md), then claim a bounded lease instead of\nchoosing free-form work. A scope must pass\n'''"
+          replacement = '''    ''' + "'''also read [LUNA.md](LUNA.md), [docs/AUTOPILOT.md](docs/AUTOPILOT.md),\n[docs/AUTOPILOT-CAPABILITIES.md](docs/AUTOPILOT-CAPABILITIES.md), and\n[docs/WATERLINE.md](docs/WATERLINE.md), then claim a bounded lease under an\nexplicit reviewed capability profile instead of choosing free-form work. A scope\nmust pass\n'''"
+          target = "replace_once(\n    'AGENTS.md',\n" + old + ",\n" + "    '''also read [LUNA.md](LUNA.md), [docs/AUTOPILOT.md](docs/AUTOPILOT.md), and\n[docs/AUTOPILOT-CAPABILITIES.md](docs/AUTOPILOT-CAPABILITIES.md), then claim a\nbounded lease under an explicit reviewed capability profile instead of choosing\nfree-form work. A scope must pass\n''',\n)"
+          aligned = "replace_once(\n    'AGENTS.md',\n" + new + ",\n" + replacement + ",\n)"
+          if source.count(target) != 1:
+              raise SystemExit(f'AGENTS installer target count {source.count(target)}')
+          source = source.replace(target, aligned)
+          Path('/tmp/apply.py').write_text(source)
+          PY
+          python /tmp/apply.py
+          node --check scripts/lib/autopilot-capabilities.mjs
+          node --check scripts/lib/autopilot-actions.mjs
+          node --check scripts/lib/autopilot-model.mjs
+          node --check scripts/autopilot.mjs
+          node --check scripts/autopilot-capability-fixtures.mjs
+
+      - name: Prove focused capability and waterline contracts
+        run: |
+          npm ci
+          npm run autopilot:fixtures
+          npm run waterline:fixtures
+          npm run autopilot -- validate
+          npm run autopilot -- candidates --scope star-trek --capability-profile text-vision --limit 200 --json > /tmp/candidates.json
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const report = JSON.parse(await readFile('/tmp/candidates.json', 'utf8'));
+          const sargon = report.incompatible.find(row => row.task_id === 'ap_8ec80c60cecacc496a658628');
+          if (!sargon || !sargon.missing_capabilities.includes('audio-listening')) throw new Error('Sargon did not remain audio-gated');
+          const ishka = report.compatible.find(row => row.task_id === 'ap_167ac35ec0c06c7005bcc32f');
+          if (!ishka) throw new Error('reviewed physical proof task is not capability-compatible');
+          if (report.profile.id !== 'text-vision') throw new Error('wrong capability profile in candidate report');
+          NODE
+
+      - name: Create the exact permanent candidate
+        run: |
+          rm -f \
+            .github/workflows/apply-capability-aware-autopilot.yml \
+            .github/workflows/apply-capability-aware-autopilot-v2.yml \
+            .github/workflows/diagnose-capability-integration.yml
+          git config user.name 'undercast-autopilot'
+          git config user.email 'undercast-autopilot@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Autopilot: make task leasing capability-aware'
+
+      - name: Gate the exact clean candidate
+        run: |
+          npx playwright install --with-deps chromium
+          npm run gate
+
+      - name: Publish exact gated candidate
+        run: git push origin HEAD:agent/capability-aware-autopilot
