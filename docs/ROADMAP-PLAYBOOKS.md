@@ -52,17 +52,20 @@ Prove the full recognition lifecycle on one large, adversarial corpus before bre
 
 ### Build sequence
 
-1. Compile corrected Trek coverage into the queue.
-2. Run bounded priority batches.
-3. Run the hash-bound `media:audit` tracker: independently review identity and presentation for every Trek image facet, replace or null negative rulings, and receipt explicit absence.
-4. Record owner decision before changing shared performer-media semantics.
-5. Publish honest coverage and correction surfaces.
+1. Compile corrected Trek coverage into the queue and finish the hash-bound exact-subject baseline.
+2. Use the rolling waterline to authorize one priority batch of at most eight tasks.
+3. Draft, merge, retrieve, and return every new still/portrait facet to verified or honestly absent; then record a reviewed completed/aborted cycle receipt.
+4. Repeat until three successful restart-safe cycles are receipted; never lease the next cycle while media debt, active work, an unreceipted lease, or a blocking incident remains.
+5. Record current five-way task accounting: eligible, filed, blocked, excluded, unresolved.
+6. Record owner decision before changing shared performer-media semantics.
+7. Publish honest coverage and correction surfaces.
 
 ### Acceptance proof
 
 - all filed Trek roles have performance receipts
-- Trek media audit complete
-- three restart-safe Luna cycles
+- current Trek media audit has zero debt
+- three reviewed restart-safe Luna cycle receipts, each with at least one resolved task
+- current five-way accounting reconciles exactly to the durable task denominator
 - coverage separates eligible/filed/blocked/excluded/unresolved
 
 ### Do not
@@ -89,18 +92,19 @@ Turn a working pipeline into an operating system with service levels, cost bound
 
 ### Build sequence
 
-1. Define freshness, correction, build, publication, and rights SLOs.
-2. Record per-run failures, retries, costs, and throughput.
-3. Document and test backup, restore, rollback, and credential recovery.
-4. Add scope circuit breakers and capacity budgets.
-5. Publish incident receipts.
+1. Define measured source-freshness, build, cost, correction, publication, and rights baselines; retain `null` until observed.
+2. Enforce waterline capacity, cycle receipts, and high/critical incident stops.
+3. Run and receipt a fresh repository restore through the canonical gate.
+4. Run and receipt an isolated bad-publication rollback to the known-good release.
+5. Publish incident events and current operating metrics; do not silently retry or round unknowns to zero.
 
 ### Acceptance proof
 
-- fresh restore succeeds
-- bad publication rollback succeeds
-- build and cost baselines measured
-- incident authority fixture-covered
+- reviewed repository-restore drill passes
+- reviewed publication-rollback drill passes
+- build, cost-per-verified-record, source-freshness, and rights-response baselines measured
+- configured SLO targets pass
+- incident authority and stop/reopen behavior fixture-covered
 
 ### Do not
 

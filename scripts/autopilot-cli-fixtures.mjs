@@ -46,6 +46,19 @@ console.log("PASS — synthetic census refresh");
 `);
   await put("scripts/shard.mjs", "console.log('PASS — synthetic projection rebuild');\n");
   await put("scripts/validate.mjs", "console.log('PASS — synthetic archive gate');\n");
+  await put("scripts/waterline.mjs", `
+import { existsSync } from "node:fs";
+const required = ["--config", "--state", "--journal", "--autopilot", "--autopilot-journal", "--media-audit", "--roadmap-state", "--preservation", "--root", "--requested"];
+for (const flag of required) if (!process.argv.includes(flag)) {
+  console.error("missing waterline binding " + flag);
+  process.exit(4);
+}
+if (existsSync("data/WATERLINE-BLOCK")) {
+  console.error("synthetic rolling waterline blocker");
+  process.exit(2);
+}
+console.log("PASS — synthetic rolling waterline");
+`);
 
   await put("data/AUTOPILOT-SCOPES.json", {
     version: 1,
@@ -138,6 +151,14 @@ console.log("PASS — synthetic census refresh");
   assert.notEqual(after.lease_token, before.lease_token, "refresh rotates the scope-local lease token");
   assert.equal(after.refresh.due, false);
 
+  await put("data/WATERLINE-BLOCK", "blocked\n");
+  const waterlineBlocked = run([
+    "claim", "--agent", "luna", "--scope", "star-trek", "--limit", "1",
+    "--now", "2026-07-22T01:30:00Z",
+  ], { expect: 1 });
+  assert.match(waterlineBlocked.stderr, /rolling gold waterline/);
+  await rm(join(root, "data/WATERLINE-BLOCK"));
+
   run([
     "claim", "--agent", "luna", "--scope", "star-trek", "--limit", "1",
     "--out", ".luna/batch.json", "--prompt", ".luna/PROMPT.md", "--now", "2026-07-22T02:00:00Z",
@@ -187,7 +208,7 @@ console.log("PASS — synthetic census refresh");
   assert.ok(journal.some((row) => row.op === "scope.certified"));
   assert.ok(journal.some((row) => row.op === "scope.refreshed"));
 
-  console.log("PASS — CLI certification, due refresh, token rotation, stale-submit refusal, and durable draft receipts");
+  console.log("PASS — CLI certification, rolling-waterline refusal, due refresh, token rotation, stale-submit refusal, and durable draft receipts");
 } finally {
   await rm(root, { recursive: true, force: true });
 }

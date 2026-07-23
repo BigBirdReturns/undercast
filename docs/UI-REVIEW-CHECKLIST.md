@@ -37,7 +37,7 @@ second copy drifts. Confirm every **category** passes:
 
 - [ ] **Projections deterministic** — rebuild, refuse drift.
 - [ ] **Archive invariants** — the invariant gate.
-- [ ] **Autopilot, roadmap, preservation, and media audit** — control-plane contracts.
+- [ ] **Autopilot, roadmap, preservation, media audit, and rolling waterline** — control-plane contracts.
 - [ ] **Semantic corpus** — the corpus audit.
 - [ ] **Site seams** — navigation / recovery / accessibility.
 - [ ] **Permanent record routes** — generated.

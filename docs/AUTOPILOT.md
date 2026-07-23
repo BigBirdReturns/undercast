@@ -44,6 +44,18 @@ remain visible in the tracker until replaced, nulled, or resolved. See
 This gate blocks new roster leases only. It does not block media correction,
 independent review, source refresh, or completion of already merged work.
 
+## Rolling operating waterline
+
+The exact-subject baseline is a starting waterline, not a one-time unlock. Read
+`docs/WATERLINE.md`. Before `claim` or `next`, Autopilot also verifies that the
+requested batch is within capacity, no earlier cycle is active or unreceipted, no
+high/critical incident is open, preservation remains independently verified, and the
+current media baseline has zero debt. After a lease changes the wall, the next lease
+waits for media catch-up and a reviewed cycle receipt.
+
+Waterline receipts prepare evidence for `star-trek-gold-shard` and
+`operational-reliability`. They do not edit roadmap milestone state.
+
 ## Boundaries
 
 The queue does not decide eligibility and never writes directly to
@@ -82,6 +94,9 @@ and binds completion to the current corpus and source ledger.
   in task fingerprints and scope snapshot readiness.
 - `data/drafts.json`, `data/specimens.json`, `data/journal/rejections.jsonl`, and
   `data/SOURCES.json` — downstream facts reconciled back into task state.
+- `data/WATERLINE.json`, `data/WATERLINE-STATE.json`, and
+  `data/journal/waterline.jsonl` — one-cycle-at-a-time capacity, reviewed cycle,
+  drill, metric, accounting, and incident evidence.
 - `data/ROADMAP.json` and `data/ROADMAP-STATE.json` — strategic dependency,
   authority, demand-trigger, and completion-receipt contract governing when an
   Autopilot class of work may begin.
@@ -116,10 +131,11 @@ The producer and the worker are separate review lanes. The order is binding:
 
 6. **Merge the control plane.** Only then may an external Luna runner request a
    batch with `next`.
-7. **Operate bounded cycles.** Draft, merge, retrieve, validate, reconcile, and
-   visually close every batch before leasing another. The scheduled Autopilot
-   workflow refreshes at most one certified, due scope per run and refuses to
-   refresh while that scope has work in flight.
+7. **Operate bounded cycles.** The waterline authorizes one lease. Draft, merge,
+   retrieve, validate, reconcile, return the full scope to zero exact-subject debt,
+   and record a reviewed completed/aborted cycle receipt before another lease. The
+   scheduled Autopilot workflow refreshes at most one certified, due scope per run
+   and refuses to refresh while that scope has work in flight.
 8. **Promote the next show.** A new adapter repeats steps 1–5. Adding a registry
    row alone never authorizes work.
 
@@ -133,6 +149,9 @@ local: pause a scope without deleting its history.
 npm run roadmap -- validate
 npm run roadmap -- status
 npm run roadmap -- next --limit 1
+
+npm run waterline -- validate
+npm run waterline -- status --scope star-trek
 
 npm run autopilot -- readiness
 npm run autopilot -- readiness --scope star-trek --require-active
@@ -167,12 +186,12 @@ deterministic projections; runs the archive gate; re-checks the resulting snapsh
 and atomically reconciles queue plus refresh receipts. `refresh --due` selects at
 most one active due scope by priority, keeping a single scheduled run bounded.
 
-`next` is the safe worker operation after the current roadmap playbook authorizes roster growth: it runs `scripts/validate.mjs`, re-checks
-scope certification and snapshot readiness, syncs all current evidence, and
-leases a batch only when that scope has no prior `leased`, `drafted`, or `merged`
-work. `claim` skips the archive gate but does **not** bypass certification. Both
-require one explicit `--scope`; one lease cannot span independently reviewed
-producers.
+`next` is the safe worker operation after the current roadmap playbook authorizes
+roster growth: it runs `scripts/validate.mjs`, re-checks scope certification and
+snapshot readiness, syncs all current evidence, and leases only when the rolling
+waterline is green. `claim` skips the archive gate but does **not** bypass
+certification, the media baseline, or the waterline. Both require one explicit
+`--scope`; one lease cannot span independently reviewed producers.
 
 Every emitted batch and persisted lease carries a readiness token over the scope,
 producer contract, scope-local coverage snapshot, and scope-local manifest
