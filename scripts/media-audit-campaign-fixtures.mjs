@@ -223,7 +223,7 @@ try {
     roots.push(root);
     await buildFixture(root, ({ sources }) => { sources[0].still.origin = "https://wrong.example.test/file"; });
     const failed = run(root, 1);
-    assert.match(failed.stderr, /differs between specimens and SOURCES|media-audit state is stale/);
+    assert.match(failed.stderr, /canonical media mismatch|differs between specimens and SOURCES|media-audit state is stale/);
   }
   console.log("PASS — exact media campaign authority, staleness, complete coverage, reversible nulling, consensus, and canonical mirror contracts");
 } finally {
