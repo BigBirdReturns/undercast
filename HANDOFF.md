@@ -1,34 +1,38 @@
-# UNDERCAST — handoff, 2026-07-22
+# UNDERCAST — handoff, 2026-07-23
 
 `main` is a public, preservation-backed static archive. The trusted foundation,
 certified Star Trek producer, bounded Luna Autopilot, five-year roadmap, exact
 source/original-media preservation, exact-subject media-audit control plane,
-shared site tokens, canonical cross-platform gate, and fail-closed DS9 owner
-decision authoring are merged.
+shared site tokens, canonical cross-platform gate, fail-closed DS9 owner decision
+authoring, and rolling gold waterline are merged.
 
-The active review lane is **PR #66 — rolling gold waterline**. It does not add a
-card, issue a Luna lease, close a roadmap milestone, or infer an owner decision.
-It defines the operating boundary after the current media baseline is complete.
+PR #66 merged as `37624053737483cd09768e5b37fd3d3bb9eee976`. Its exact
+qualified head was `e32a544f3cc24273fef3b5d0030d2ab0a90b29e3`; archive-contract
+run `29961856439` and preservation-export run `29961856458` both passed.
+No card was added, no Luna lease was issued, no roadmap milestone was closed,
+and no owner decision was inferred by that merge.
 
 ## Current truthful state
 
 - Canonical wall: **1,246 records**.
 - Reviewed Star Trek census: **2,295 performer-role observations**, **1,657
   performers**, **2,054 / 2,054** current source receipts.
-- Certified Star Trek Autopilot: **2,226 durable tasks**; foundation receipt
+- Certified Star Trek Autopilot: **2,226 durable tasks**; the foundation receipt
   recorded **1,904 queued / 322 resolved / zero in flight**.
 - Star Trek is the only active certified producer scope. Every other configured
-  scope remains paused pending its own adapter review and certification.
+  scope remains paused pending adapter review and certification.
 - Preservation snapshot `preservation-20260721-3bbec746c478` retains **15,210
   exact source revisions**, a restorable repository snapshot, and all **1,520
   pre-R1 originals**. Provider read-back is verified. Destructive history rewrite
   remains unauthorized.
 - Canonical repository gate: **`npm run gate`**. CI invokes the same command; do
   not maintain or report a second command list.
+- Roadmap state remains **1 / 12 complete**. The ready milestones are
+  `star-trek-gold-shard` and `operational-reliability`.
 
-## Exact-subject media waterline
+## Current operating phase: `baseline-review`
 
-The Star Trek baseline contains **744 facets across 372 records**:
+The Star Trek exact-subject baseline contains **744 facets across 372 records**:
 
 | State | Facets |
 |---|---:|
@@ -48,10 +52,9 @@ history, run `media:audit sync`, and finish with solid multi-reviewer consensus 
 an authorized obvious-negative ruling. Never convert uncertainty into a positive
 identity vote.
 
-## The rolling-gold sequence
+## Rolling gold waterline
 
-PR #66 adds `docs/WATERLINE.md`, `data/WATERLINE*.json`, and
-`npm run waterline`. The derived initial phase is `baseline-review`:
+The waterline is now canonical:
 
 ```bash
 npm run roadmap -- status
@@ -61,7 +64,7 @@ npm run waterline -- status --scope star-trek
 ```
 
 Completing the baseline authorizes **one bounded lease of at most eight tasks**,
-not unlimited queue draining. The cycle is:
+not unlimited queue draining:
 
 ```text
 zero current media debt
@@ -77,6 +80,10 @@ zero current media debt
 `--allow-inflight` does not bypass the waterline. A previous unreceipted lease,
 active work, open media debt, missing preservation, excessive requested batch, or
 an open high/critical incident blocks the next claim.
+
+The current `data/WATERLINE-STATE.json` is intentionally empty of operating
+receipts: **0 cycles, 0 drills, 0 accounting receipts, 0 metric receipts, and 0
+incidents**. The four operating metrics remain `null`, not zero.
 
 ## Evidence required for the two ready roadmap milestones
 
@@ -118,6 +125,3 @@ Do not start either before those roadmap receipts land.
 - A green schema is not semantic truth; a source URL is not subject identity.
 - Keep source snapshots, immutable media hashes, replacement/expunge history, and
   provider-read-back receipts intact.
-- Do not relax `data/quality-baseline.json` to create apparent progress.
-- Do not call Star Trek gold until the current media baseline, three cycles,
-  accounting, and reviewed roadmap receipt all exist.
