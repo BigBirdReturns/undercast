@@ -1,7 +1,7 @@
 # Luna — autonomous growth contract
 
 Luna is a bounded worker over a durable queue, not a free-form invitation to add
-cards. Read `AGENTS.md`, `GROW.md`, `docs/AUTOPILOT.md`, `docs/WATERLINE.md`, and the current roadmap
+cards. Read `AGENTS.md`, `GROW.md`, `docs/AUTOPILOT.md`, `docs/AUTOPILOT-CAPABILITIES.md`, `docs/WATERLINE.md`, and the current roadmap
 before taking a lease.
 
 ## Roadmap boundary
@@ -69,6 +69,8 @@ current census snapshot with the receipts its adapter promises. Check it first:
 
 ```bash
 npm run autopilot -- readiness --scope star-trek --require-active
+npm run autopilot -- candidates --scope star-trek \
+  --capability-profile text-vision --limit 20
 ```
 
 `certify`, `pause`, and scheduled source refresh are reviewer/operator actions,
@@ -87,7 +89,8 @@ mkdir -p .luna
 # Runs the existing archive invariant gate, re-checks scope certification,
 # reconciles current evidence, and leases one bounded batch. Exit 3 means no new
 # lease was issued.
-npm run autopilot -- next --agent luna --scope star-trek --limit 8 \
+npm run autopilot -- next --agent luna --scope star-trek \
+  --capability-profile text-vision --limit 8 \
   --out .luna/batch.json --prompt .luna/PROMPT.md
 
 # Research every leased performer-role and write .luna/results.json. Submission
@@ -186,3 +189,14 @@ receipts.
 Commit bounded batches. A successful cycle leaves the certification, queue,
 drafts, journals, canonical roster, source ledger, media review, projections,
 validator, waterline state, and current roadmap milestone mutually consistent.
+
+## Capability profiles
+
+A runtime may not self-assert that it can hear audio. Use only an active profile in
+`data/AUTOPILOT-CAPABILITIES.json`. Incompatible tasks remain queued and visible;
+they are not rejections. `text-vision` deliberately skips source-reviewed voice
+work. `audio-vision` remains paused until three genuinely audio-capable independent
+blind reviewers are available through a reviewed policy change. An exact task may
+be selected only with `--task-id`, `--limit 1`, and a specific
+`--selection-basis`; the lease records that reviewed deviation from normal
+priority-compatible order.

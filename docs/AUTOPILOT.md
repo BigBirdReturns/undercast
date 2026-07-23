@@ -155,6 +155,8 @@ npm run waterline -- status --scope star-trek
 
 npm run autopilot -- readiness
 npm run autopilot -- readiness --scope star-trek --require-active
+npm run autopilot -- candidates --scope star-trek \
+  --capability-profile text-vision --limit 20
 npm run autopilot -- certify --scope star-trek \
   --reviewed-by second-desk --activate
 npm run autopilot -- pause --scope star-trek \
@@ -165,7 +167,8 @@ npm run autopilot -- refresh --due --refreshed-by undercast-bot
 
 npm run autopilot -- sync
 npm run autopilot -- status --scope star-trek
-npm run autopilot -- next --agent luna --scope star-trek --limit 8 \
+npm run autopilot -- next --agent luna --scope star-trek \
+  --capability-profile text-vision --limit 8 \
   --out .luna/batch.json --prompt .luna/PROMPT.md
 npm run autopilot -- submit --batch .luna/batch.json --input .luna/results.json
 npm run autopilot -- complete --input .luna/media-review.json
@@ -338,3 +341,13 @@ states prevent unsupported or ambiguous material from masquerading as complete.
   ]
 }
 ```
+
+## Capability-aware selection
+
+Read `docs/AUTOPILOT-CAPABILITIES.md`. Every lease requires an active, reviewed
+capability profile. The selector filters incompatible queued tasks before applying
+the existing deterministic priority order; skipped work remains queued with its
+priority and attempt count unchanged. The capability policy SHA-256, profile,
+requirements, and selection basis are persisted in both the lease state and batch.
+A stale exact-task override is fail-closed until reviewed again. Capability is an
+operating constraint, never an eligibility disposition.

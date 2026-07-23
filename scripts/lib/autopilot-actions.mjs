@@ -9,12 +9,26 @@ import {
   validateState,
 } from "./autopilot-model.mjs";
 import { expireLeases } from "./autopilot-sync.mjs";
+import { rankCapabilityCandidates } from "./autopilot-capabilities.mjs";
 
 function makeLeaseId(agent, now) {
   return `lease_${sha256(`${agent}|${now}|${randomBytes(16).toString("hex")}`).slice(0, 24)}`;
 }
 
-export function claimTasks({ state, agent, scope, readiness, limit = 8, leaseMinutes = 120, allowInflight = false, now = new Date().toISOString() }) {
+export function claimTasks({
+  state,
+  agent,
+  scope,
+  readiness,
+  capabilityPolicy,
+  capabilityProfileId,
+  taskId = null,
+  selectionBasis = null,
+  limit = 8,
+  leaseMinutes = 120,
+  allowInflight = false,
+  now = new Date().toISOString(),
+}) {
   if (!agent || !/^[a-zA-Z0-9._-]{2,64}$/.test(agent)) throw new Error("--agent must be 2-64 safe characters");
   if (!scope) throw new Error("claim requires one explicit certified scope");
   if (!readiness || readiness.scope_id !== scope || !/^[0-9a-f]{64}$/i.test(readiness.lease_token || "")) {
@@ -27,26 +41,94 @@ export function claimTasks({ state, agent, scope, readiness, limit = 8, leaseMin
   const boundedMinutes = Number(leaseMinutes);
   if (!Number.isInteger(boundedLimit) || boundedLimit < 1 || boundedLimit > 50) throw new Error("claim limit must be an integer from 1 to 50");
   if (!Number.isFinite(boundedMinutes) || boundedMinutes < 5 || boundedMinutes > 24 * 60) throw new Error("lease minutes must be from 5 to 1440");
+  if (taskId && boundedLimit !== 1) throw new Error("an exact --task-id selection requires --limit 1");
+
   const next = copyJson(state);
   const events = expireLeases(next, now);
   const inFlight = next.jobs.filter((job) => ["leased", "drafted", "merged"].includes(job.status) && (!scope || job.scope === scope));
   if (!allowInflight && inFlight.length) {
     return { state: next, batch: null, reason: "inflight", in_flight: inFlight.map((job) => job.id), events, changed: events.length > 0 };
   }
-  const claimable = next.jobs
-    .filter((job) => job.status === "queued" && (!scope || job.scope === scope))
-    .sort((a, b) => b.priority - a.priority || a.scope.localeCompare(b.scope) || a.performer.localeCompare(b.performer) || a.character.localeCompare(b.character));
-  const selected = claimable.slice(0, boundedLimit);
-  if (!selected.length) return { state: next, batch: null, reason: "empty", in_flight: [], events, changed: events.length > 0 };
+
+  const ranked = rankCapabilityCandidates({ state: next, scope, policy: capabilityPolicy, profileId: capabilityProfileId });
+  let selectedRows;
+  let strategy;
+  let basis;
+  if (taskId) {
+    const exact = [...ranked.compatible, ...ranked.incompatible].find((row) => row.task.id === taskId);
+    if (!exact) throw new Error(`task ${taskId} is not currently queued in scope ${scope}`);
+    if (!exact.compatible) {
+      if (exact.attention) throw new Error(`task ${taskId} capability review is stale: ${exact.attention.note}`);
+      throw new Error(`task ${taskId} is incompatible with capability profile ${ranked.profile.id}; missing capability ${exact.missing_capabilities.join(", ") || "review"}`);
+    }
+    basis = String(selectionBasis || "").trim();
+    if (basis.length < 12) throw new Error("an exact --task-id selection requires --selection-basis with at least 12 characters");
+    selectedRows = [exact];
+    strategy = "reviewed-task";
+  } else {
+    selectedRows = ranked.compatible.slice(0, boundedLimit);
+    strategy = "priority-compatible";
+    basis = "Highest-priority queued tasks compatible with the reviewed capability profile.";
+  }
+
+  if (!selectedRows.length) {
+    return {
+      state: next,
+      batch: null,
+      reason: ranked.incompatible.length ? "capability" : "empty",
+      in_flight: [],
+      capability_skips: ranked.incompatible.slice(0, 20).map((row) => ({
+        task_id: row.task.id,
+        performer: row.task.performer,
+        character: row.task.character,
+        missing_capabilities: row.missing_capabilities,
+        attention: row.attention,
+      })),
+      events,
+      changed: events.length > 0,
+    };
+  }
+
+  const selection = {
+    strategy,
+    profile_id: ranked.profile.id,
+    policy_sha256: ranked.policy_sha256,
+    profile_capabilities: [...ranked.profile.capabilities],
+    requested_task_id: taskId || null,
+    basis,
+  };
+  const selected = selectedRows.map((row) => row.task);
+  const selectedById = new Map(selectedRows.map((row) => [row.task.id, row]));
   const leaseId = makeLeaseId(agent, now);
   const expiresAt = new Date(Date.parse(now) + boundedMinutes * 60_000).toISOString();
   const ids = new Set(selected.map((job) => job.id));
   for (const job of next.jobs) {
     if (!ids.has(job.id)) continue;
+    const capability = selectedById.get(job.id);
+    const leaseSelection = {
+      profile_id: selection.profile_id,
+      policy_sha256: selection.policy_sha256,
+      profile_capabilities: [...selection.profile_capabilities],
+      required_capabilities: [...capability.required_capabilities],
+      requirement_reasons: copyJson(capability.reasons),
+      strategy: selection.strategy,
+      requested_task_id: selection.requested_task_id,
+      basis: selection.basis,
+    };
     job.status = "leased";
     job.attempts = (job.attempts || 0) + 1;
-    job.lease = { id: leaseId, agent, claimed_at: now, expires_at: expiresAt, readiness_token: readiness.lease_token };
-    events.push(event("lease.claimed", job, now, { lease_id: leaseId, agent, expires_at: expiresAt, readiness_token: readiness.lease_token }));
+    job.lease = { id: leaseId, agent, claimed_at: now, expires_at: expiresAt, readiness_token: readiness.lease_token, selection: leaseSelection };
+    events.push(event("lease.claimed", job, now, {
+      lease_id: leaseId,
+      agent,
+      expires_at: expiresAt,
+      readiness_token: readiness.lease_token,
+      capability_profile: selection.profile_id,
+      capability_policy_sha256: selection.policy_sha256,
+      required_capabilities: leaseSelection.required_capabilities,
+      selection_strategy: selection.strategy,
+      selection_basis: selection.basis,
+    }));
   }
   next.updated_at = now;
   validateState(next);
@@ -57,23 +139,41 @@ export function claimTasks({ state, agent, scope, readiness, limit = 8, leaseMin
     claimed_at: now,
     expires_at: expiresAt,
     readiness: copyJson(readiness),
-    tasks: selected.map((job) => ({
-      id: job.id,
-      scope: job.scope,
-      franchise: job.franchise,
-      category: job.categories,
-      character: job.character,
-      performer: job.performer,
-      performance_modes: job.performance_modes,
-      sources: job.sources,
-      source_receipts: job.source_receipts || [],
-      source_fingerprint: job.source_fingerprint,
-      performer_on_wall: job.performer_on_wall,
-      priority: job.priority,
-      attempt: job.attempts || 1,
+    selection,
+    tasks: selected.map((job) => {
+      const capability = selectedById.get(job.id);
+      return {
+        id: job.id,
+        scope: job.scope,
+        franchise: job.franchise,
+        category: job.categories,
+        character: job.character,
+        performer: job.performer,
+        performance_modes: job.performance_modes,
+        required_capabilities: [...capability.required_capabilities],
+        capability_reasons: copyJson(capability.reasons),
+        sources: job.sources,
+        source_receipts: job.source_receipts || [],
+        source_fingerprint: job.source_fingerprint,
+        performer_on_wall: job.performer_on_wall,
+        priority: job.priority,
+        attempt: job.attempts || 1,
+      };
+    }),
+  };
+  return {
+    state: next,
+    batch,
+    events,
+    changed: true,
+    capability_skips: ranked.incompatible.slice(0, 20).map((row) => ({
+      task_id: row.task.id,
+      performer: row.task.performer,
+      character: row.task.character,
+      missing_capabilities: row.missing_capabilities,
+      attention: row.attention,
     })),
   };
-  return { state: next, batch, events, changed: true };
 }
 
 function httpsUrl(value) {
@@ -157,6 +257,20 @@ export function submitResults({ state, batch, resultsDoc, drafts = [], now = new
     }
     if (job.lease.readiness_token !== batch.readiness.lease_token) {
       throw new Error(`task ${result.task_id} lease readiness token does not match its batch`);
+    }
+    const leaseSelection = job.lease.selection;
+    const batchSelection = batch.selection;
+    const task = batchTasks.get(result.task_id);
+    if (!leaseSelection || !batchSelection
+      || leaseSelection.profile_id !== batchSelection.profile_id
+      || leaseSelection.policy_sha256 !== batchSelection.policy_sha256
+      || leaseSelection.strategy !== batchSelection.strategy
+      || leaseSelection.requested_task_id !== batchSelection.requested_task_id
+      || leaseSelection.basis !== batchSelection.basis
+      || JSON.stringify(leaseSelection.profile_capabilities) !== JSON.stringify(batchSelection.profile_capabilities)
+      || JSON.stringify(leaseSelection.required_capabilities) !== JSON.stringify(task?.required_capabilities || [])
+      || JSON.stringify(leaseSelection.requirement_reasons) !== JSON.stringify(task?.capability_reasons || [])) {
+      throw new Error(`task ${result.task_id} capability selection does not match its persisted lease`);
     }
     const decision = result.decision;
     if (decision === "draft") {

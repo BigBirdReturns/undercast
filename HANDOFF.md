@@ -125,3 +125,13 @@ Do not start either before those roadmap receipts land.
 - A green schema is not semantic truth; a source URL is not subject identity.
 - Keep source snapshots, immutable media hashes, replacement/expunge history, and
   provider-read-back receipts intact.
+
+## Capability-aware next cycle
+
+PR #69 truthfully receipted two audio-capability aborts. Before another claim, run
+`npm run autopilot -- candidates --scope star-trek --capability-profile text-vision
+--limit 20`. The text-vision profile may skip audio-required work without changing
+its queue state. A reviewed proof task may be selected with `--task-id`, `--limit
+1`, and `--selection-basis`; otherwise the highest-priority compatible task is
+leased. Do not activate `audio-vision` until three genuinely audio-capable blind
+reviewers exist and the policy change is reviewed.

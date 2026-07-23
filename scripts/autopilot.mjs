@@ -10,6 +10,7 @@ import {
   completeReviews,
   emptyCertifications,
   emptyState,
+  rankCapabilityCandidates,
   requeueTask,
   resolveScopeReadiness,
   runRefreshSteps,
@@ -17,6 +18,7 @@ import {
   statusSummary,
   submitResults,
   syncState,
+  validateCapabilityPolicy,
   validateCertifications,
   validateState,
 } from "./lib/autopilot.mjs";
@@ -24,6 +26,7 @@ import {
 const DEFAULT_STATE = "data/AUTOPILOT.json";
 const DEFAULT_SCOPES = "data/AUTOPILOT-SCOPES.json";
 const DEFAULT_CERTIFICATIONS = "data/AUTOPILOT-CERTIFICATIONS.json";
+const DEFAULT_CAPABILITIES = "data/AUTOPILOT-CAPABILITIES.json";
 const DEFAULT_COVERAGE = "data/CENSUS-COVERAGE.json";
 const DEFAULT_MANIFEST = "data/CENSUS-MANIFEST.json";
 const DEFAULT_PRESERVATION = "preservation/SNAPSHOTS.json";
@@ -198,6 +201,7 @@ function queuePaths() {
     state: option("state", DEFAULT_STATE),
     scopes: option("scopes", DEFAULT_SCOPES),
     certifications: option("certifications", DEFAULT_CERTIFICATIONS),
+    capabilities: option("capabilities", DEFAULT_CAPABILITIES),
     coverage: option("coverage", DEFAULT_COVERAGE),
     manifest: option("manifest", DEFAULT_MANIFEST),
     preservation: option("preservation", DEFAULT_PRESERVATION),
@@ -210,14 +214,16 @@ function queuePaths() {
 
 async function loadQueueInputs({ downstream = true } = {}) {
   const paths = queuePaths();
-  const [coverageDoc, manifestDoc, scopes, certifications, preservation] = await Promise.all([
+  const [coverageDoc, manifestDoc, scopes, certifications, preservation, capabilityPolicy] = await Promise.all([
     readJsonBytes(paths.coverage),
     readJsonBytes(paths.manifest, { observations: [] }),
     readJson(paths.scopes),
     readJson(paths.certifications, emptyCertifications()),
     readJson(paths.preservation, { version: 1, updated_at: "", history_guard: { baseline_manifest_sha256: "0".repeat(64), status: "unconfigured", precondition_met: false, destructive_rewrite_authorized: false }, snapshots: [] }),
+    readJson(paths.capabilities),
   ]);
   validateCertifications(certifications);
+  validateCapabilityPolicy(capabilityPolicy);
   const readiness = await resolveScopeReadiness({
     scopesDoc: scopes,
     certificationsDoc: certifications,
@@ -238,6 +244,7 @@ async function loadQueueInputs({ downstream = true } = {}) {
     scopes,
     certifications,
     preservation,
+    capabilityPolicy,
     effectiveScopes: readiness.effectiveScopes,
     readiness: readiness.readiness,
   };
@@ -262,8 +269,8 @@ function readyScope(inputs, scopeId, { requireActive = true } = {}) {
 }
 
 function renderPrompt(batch) {
-  const taskBlocks = batch.tasks.map((task, index) => `### ${index + 1}. ${task.performer} — ${task.character}\n- Task: \`${task.id}\`\n- Scope: ${task.scope} / ${task.franchise}\n- Categories: ${task.category.join(", ") || "unclassified"}\n- Mode hints: ${task.performance_modes.join(", ") || "unresolved"}\n- Performer already represented: ${task.performer_on_wall ? "yes" : "no"}\n- Sources:\n${task.sources.map((source) => `  - ${source}`).join("\n")}`).join("\n\n");
-  return `# UNDERCAST Luna batch\n\nLease \`${batch.lease_id}\` expires ${batch.expires_at}. Read \`AGENTS.md\`, \`GROW.md\`, \`LUNA.md\`, and \`docs/AUTOPILOT.md\` before acting. This packet is bound to readiness token \`${batch.readiness.lease_token}\`; a producer or census change invalidates it.\n\nFor every task return exactly one evidence-backed decision: \`draft\`, \`reject\`, or \`blocked\`. Do not infer missing facts and do not substitute a different performer or role. The result file must cover every task exactly once. Drafted tasks are not complete until canonical merge, retrieval, the archive gate, and a separate media review verify the exact still and portrait subjects or explicit absence.\n\n${taskBlocks}\n`;
+  const taskBlocks = batch.tasks.map((task, index) => `### ${index + 1}. ${task.performer} — ${task.character}\n- Task: \`${task.id}\`\n- Scope: ${task.scope} / ${task.franchise}\n- Categories: ${task.category.join(", ") || "unclassified"}\n- Mode hints: ${task.performance_modes.join(", ") || "unresolved"}\n- Required capabilities: ${task.required_capabilities.join(", ") || "none beyond the baseline text/image contract"}\n- Performer already represented: ${task.performer_on_wall ? "yes" : "no"}\n- Sources:\n${task.sources.map((source) => `  - ${source}`).join("\n")}`).join("\n\n");
+  return `# UNDERCAST Luna batch\n\nLease \`${batch.lease_id}\` expires ${batch.expires_at}. Read \`AGENTS.md\`, \`GROW.md\`, \`LUNA.md\`, \`docs/AUTOPILOT.md\`, and \`docs/AUTOPILOT-CAPABILITIES.md\` before acting. This packet is bound to readiness token \`${batch.readiness.lease_token}\` and capability policy \`${batch.selection.policy_sha256}\`.\n\nCapability profile: \`${batch.selection.profile_id}\` (${batch.selection.profile_capabilities.join(", ") || "no optional capabilities"}). Selection strategy: \`${batch.selection.strategy}\`. Basis: ${batch.selection.basis}\n\nFor every task return exactly one evidence-backed decision: \`draft\`, \`reject\`, or \`blocked\`. Do not infer missing facts and do not substitute a different performer or role. The result file must cover every task exactly once. Drafted tasks are not complete until canonical merge, retrieval, the archive gate, and a separate media review verify the exact still and portrait subjects or explicit absence. A missing runtime capability is not an eligibility rejection; incompatible work should never have entered this packet.\n\n${taskBlocks}\n`;
 }
 
 function printStatus(summary) {
@@ -332,10 +339,54 @@ async function syncCommand() {
   });
 }
 
+async function candidatesCommand() {
+  const scopeId = option("scope");
+  const profileId = option("capability-profile");
+  if (!scopeId) throw new Error("candidates requires --scope");
+  if (!profileId) throw new Error("candidates requires --capability-profile");
+  const limit = Number(option("limit", "20"));
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error("candidates limit must be an integer from 1 to 200");
+  const [inputs, state] = await Promise.all([loadQueueInputs({ downstream: false }), loadState()]);
+  readyScope(inputs, scopeId, { requireActive: false });
+  const ranked = rankCapabilityCandidates({ state, scope: scopeId, policy: inputs.capabilityPolicy, profileId });
+  const row = (entry) => ({
+    task_id: entry.task.id,
+    performer: entry.task.performer,
+    character: entry.task.character,
+    priority: entry.task.priority,
+    performance_modes: entry.task.performance_modes,
+    required_capabilities: entry.required_capabilities,
+    missing_capabilities: entry.missing_capabilities,
+    attention: entry.attention,
+    reasons: entry.reasons,
+    sources: entry.task.sources,
+    source_fingerprint: entry.task.source_fingerprint,
+  });
+  const report = {
+    version: AUTOPILOT_VERSION,
+    scope_id: scopeId,
+    profile: ranked.profile,
+    policy_sha256: ranked.policy_sha256,
+    counts: { compatible: ranked.compatible.length, incompatible: ranked.incompatible.length },
+    compatible: ranked.compatible.slice(0, limit).map(row),
+    incompatible: ranked.incompatible.slice(0, limit).map(row),
+  };
+  if (flag("json")) {
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
+  console.log(`autopilot candidates: profile=${ranked.profile.id} compatible=${ranked.compatible.length} incompatible=${ranked.incompatible.length}`);
+  for (const item of report.compatible) console.log(`  ready ${item.task_id} ${item.performer} — ${item.character}; priority=${item.priority}; requires=${item.required_capabilities.join(",") || "none"}`);
+  for (const item of report.incompatible) console.log(`  wait  ${item.task_id} ${item.performer} — ${item.character}; missing=${item.missing_capabilities.join(",") || item.attention?.code || "review"}`);
+}
+
 async function claimCommand({ syncFirst = false } = {}) {
   return withLock(async () => {
     const scopeId = option("scope");
-    const requestedLimit = Number(option("limit", "8"));
+    const capabilityProfileId = option("capability-profile");
+    const taskId = option("task-id");
+    const requestedLimit = Number(option("limit", taskId ? "1" : "8"));
+    if (!capabilityProfileId) throw new Error("claim requires --capability-profile; a runtime may not infer or self-assert optional capabilities");
     const inputs = await loadQueueInputs();
     const readiness = readyScope(inputs, scopeId);
     await waterlinePreflight(scopeId, requestedLimit);
@@ -362,6 +413,10 @@ async function claimCommand({ syncFirst = false } = {}) {
       agent: option("agent"),
       scope: scopeId,
       readiness: leaseReadiness,
+      capabilityPolicy: inputs.capabilityPolicy,
+      capabilityProfileId,
+      taskId,
+      selectionBasis: option("selection-basis"),
       limit: requestedLimit,
       leaseMinutes: Number(option("lease-minutes", "120")),
       allowInflight: flag("allow-inflight"),
@@ -372,9 +427,9 @@ async function claimCommand({ syncFirst = false } = {}) {
       await appendJournal(inputs.paths.journal, [...syncEvents, ...result.events]);
     }
     if (!result.batch) {
-      console.log(result.reason === "inflight"
-        ? `no lease issued: ${result.in_flight.length} task(s) are already leased, drafted, or awaiting media review in this scope`
-        : "no claimable tasks");
+      if (result.reason === "inflight") console.log(`no lease issued: ${result.in_flight.length} task(s) are already leased, drafted, or awaiting media review in this scope`);
+      else if (result.reason === "capability") console.log(`no lease issued: ${result.capability_skips.length} shown queued task(s) require capabilities absent from profile ${capabilityProfileId}; run autopilot candidates for the full report`);
+      else console.log("no claimable tasks");
       process.exitCode = 3;
       return;
     }
@@ -699,6 +754,7 @@ function archivePreflight(action, cwd = option("root", ".")) {
 
 async function main() {
   if (command === "sync") return syncCommand();
+  if (command === "candidates") return candidatesCommand();
   if (command === "claim") return claimCommand();
   if (command === "next") { archivePreflight("lease more work"); return claimCommand({ syncFirst: true }); }
   if (command === "submit") return submitCommand();
@@ -710,7 +766,7 @@ async function main() {
   if (command === "status") return statusCommand();
   if (command === "requeue") return requeueCommand();
   if (command === "validate") return validateCommand();
-  throw new Error(`unknown command ${command}. Use sync, readiness, certify, pause, refresh, next, claim, submit, complete, status, requeue, or validate.`);
+  throw new Error(`unknown command ${command}. Use sync, readiness, certify, pause, refresh, candidates, next, claim, submit, complete, status, requeue, or validate.`);
 }
 
 main().catch((error) => {

@@ -8,8 +8,9 @@ Actions; keyless crawlers fill images and harvest leads. No servers, no keys.
 
 **To grow the roster, read [GROW.md](GROW.md).** A Luna/autonomous worker must
 also read [LUNA.md](LUNA.md), [docs/AUTOPILOT.md](docs/AUTOPILOT.md), and
-[docs/WATERLINE.md](docs/WATERLINE.md), then claim a bounded lease instead of
-choosing free-form work. A scope must pass `autopilot readiness`; Luna never
+[docs/AUTOPILOT-CAPABILITIES.md](docs/AUTOPILOT-CAPABILITIES.md), and
+[docs/WATERLINE.md](docs/WATERLINE.md), then claim a bounded lease under an
+explicit reviewed capability profile instead of choosing free-form work. A scope must pass `autopilot readiness`; Luna never
 certifies or activates its own producer. Star Trek also runs the exact-subject
 baseline in `docs/MEDIA-AUDIT.md` and the rolling operating waterline: completing
 one baseline authorizes one bounded cycle, not unlimited growth. Unreviewed or
