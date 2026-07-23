@@ -1,0 +1,189 @@
+name: harvest-trek-wikimedia-metadata
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harvest-trek-wikimedia-metadata
+  cancel-in-progress: true
+
+jobs:
+  harvest:
+    if: github.head_ref == 'agent/trek-media-baseline-closure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/trek-media-baseline-closure
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Harvest revision-bound Wikimedia metadata
+        run: |
+          python - <<'PY'
+          import hashlib
+          import html
+          import json
+          import re
+          import time
+          import urllib.parse
+          import urllib.request
+          from collections import defaultdict
+          from pathlib import Path
+
+          UA = 'UNDERCAST exact-subject source audit/1.0 (https://github.com/BigBirdReturns/undercast)'
+          state = json.loads(Path('data/MEDIA-AUDIT.json').read_text())
+          specimens = {row['id']: row for row in json.loads(Path('data/specimens.json').read_text())}
+          items = [row for row in state['items'] if row.get('scope') == 'star-trek' and row.get('asset') and row.get('status') not in ('verified','absent')]
+
+          def fetch(base, params, attempts=5):
+              url = base + '?' + urllib.parse.urlencode(params)
+              last = None
+              for attempt in range(attempts):
+                  try:
+                      req = urllib.request.Request(url, headers={'User-Agent': UA, 'Accept': 'application/json'})
+                      with urllib.request.urlopen(req, timeout=60) as response:
+                          return json.load(response)
+                  except Exception as exc:
+                      last = exc
+                      time.sleep(min(16, 2 ** attempt))
+              raise RuntimeError(f'{url}: {last}')
+
+          def batches(values, size=35):
+              values = list(values)
+              for i in range(0, len(values), size):
+                  yield values[i:i+size]
+
+          def clean(value):
+              value = html.unescape(str(value or ''))
+              value = re.sub(r'<[^>]+>', ' ', value)
+              value = re.sub(r'\s+', ' ', value)
+              return value.strip()
+
+          origins = defaultdict(set)
+          actor_titles = set()
+          rows = []
+          for item in items:
+              origin = item['asset'].get('origin') or ''
+              parsed = urllib.parse.urlparse(origin)
+              host = parsed.hostname or ''
+              title = urllib.parse.unquote(parsed.path.split('/wiki/', 1)[-1]).replace('_',' ') if '/wiki/' in parsed.path else ''
+              if host in ('commons.wikimedia.org','en.wikipedia.org'):
+                  origins[host].add(title)
+              link = specimens[item['wall_id']].get('link') or ''
+              lp = urllib.parse.urlparse(link)
+              article = urllib.parse.unquote(lp.path.split('/wiki/',1)[-1]).replace('_',' ') if item['side'] == 'portrait' and lp.hostname == 'en.wikipedia.org' and '/wiki/' in lp.path else None
+              if article:
+                  actor_titles.add(article)
+              rows.append({
+                  'item_id': item['id'], 'wall_id': item['wall_id'], 'side': item['side'],
+                  'expected_subject': item['expected_subject'], 'asset_sha256': item['asset']['sha256'],
+                  'origin': origin, 'origin_host': host, 'origin_title': title,
+                  'expected_article_title': article,
+              })
+
+          expected = {}
+          for batch in batches(sorted(actor_titles)):
+              doc = fetch('https://en.wikipedia.org/w/api.php', {
+                  'action':'query','format':'json','formatversion':2,'redirects':1,
+                  'prop':'pageprops|revisions','rvprop':'ids|timestamp|sha1','titles':'|'.join(batch),
+              })
+              norm = {row['from']:row['to'] for row in doc.get('query',{}).get('normalized',[])}
+              redirects = {row['from']:row['to'] for row in doc.get('query',{}).get('redirects',[])}
+              pages = {page.get('title'):page for page in doc.get('query',{}).get('pages',[])}
+              for original in batch:
+                  target = redirects.get(norm.get(original,original),norm.get(original,original))
+                  page = pages.get(target) or pages.get(original) or {'title':target,'missing':True}
+                  rev = (page.get('revisions') or [{}])[0]
+                  expected[original] = {
+                      'title':page.get('title'),'pageid':page.get('pageid'),
+                      'wikibase_item':(page.get('pageprops') or {}).get('wikibase_item'),
+                      'revision':rev.get('revid'),'timestamp':rev.get('timestamp'),'sha1':rev.get('sha1'),
+                      'missing':bool(page.get('missing')),
+                  }
+              time.sleep(0.25)
+
+          metadata = {}
+          for host, titles in origins.items():
+              api = f'https://{host}/w/api.php'
+              for batch in batches(sorted(titles), 25):
+                  doc = fetch(api, {
+                      'action':'query','format':'json','formatversion':2,'redirects':1,
+                      'prop':'pageprops|categories|links|imageinfo|globalusage|revisions',
+                      'cllimit':'max','pllimit':'max','gulimit':'max',
+                      'iiprop':'extmetadata|url|mime|size','rvprop':'ids|timestamp|sha1',
+                      'titles':'|'.join(batch),
+                  })
+                  norm = {row['from']:row['to'] for row in doc.get('query',{}).get('normalized',[])}
+                  redirects = {row['from']:row['to'] for row in doc.get('query',{}).get('redirects',[])}
+                  pages = {page.get('title'):page for page in doc.get('query',{}).get('pages',[])}
+                  for original in batch:
+                      target = redirects.get(norm.get(original,original),norm.get(original,original))
+                      page = pages.get(target) or pages.get(original) or {'title':target,'missing':True}
+                      ii = (page.get('imageinfo') or [{}])[0]
+                      rev = (page.get('revisions') or [{}])[0]
+                      ext = {key:clean(value.get('value') if isinstance(value,dict) else value) for key,value in (ii.get('extmetadata') or {}).items()}
+                      body = {
+                          'title':page.get('title'),'pageid':page.get('pageid'),
+                          'revision':rev.get('revid'),'timestamp':rev.get('timestamp'),'sha1':rev.get('sha1'),
+                          'wikibase_item':(page.get('pageprops') or {}).get('wikibase_item'),
+                          'categories':[row.get('title') for row in page.get('categories',[])],
+                          'links':[row.get('title') for row in page.get('links',[])],
+                          'globalusage':[row.get('title') for row in page.get('globalusage',[])],
+                          'image_url':ii.get('url'),'mime':ii.get('mime'),'width':ii.get('width'),'height':ii.get('height'),
+                          'extmetadata':ext,'missing':bool(page.get('missing')),
+                      }
+                      body['metadata_sha256'] = hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+                      metadata[f'{host}|{original}'] = body
+                  time.sleep(0.3)
+
+          commons_files = sorted(title for title in origins.get('commons.wikimedia.org',set()) if title.lower().startswith('file:'))
+          for batch in batches(commons_files,25):
+              try:
+                  doc = fetch('https://commons.wikimedia.org/w/api.php', {
+                      'action':'wbgetentities','format':'json','sites':'commonswiki','titles':'|'.join(batch),'props':'claims|sitelinks'
+                  })
+              except Exception:
+                  continue
+              for entity in doc.get('entities',{}).values():
+                  title = ((entity.get('sitelinks') or {}).get('commonswiki') or {}).get('title')
+                  if not title:
+                      continue
+                  depicts = []
+                  for claim in (entity.get('claims') or {}).get('P180',[]):
+                      value = (((claim.get('mainsnak') or {}).get('datavalue') or {}).get('value') or {})
+                      if isinstance(value,dict) and value.get('id'):
+                          depicts.append(value['id'])
+                  key = f'commons.wikimedia.org|{title}'
+                  if key in metadata:
+                      metadata[key]['depicts_qids'] = sorted(set(depicts))
+              time.sleep(0.25)
+
+          for row in rows:
+              row['expected_article'] = expected.get(row.get('expected_article_title'))
+              row['origin_metadata'] = metadata.get(f'{row["origin_host"]}|{row["origin_title"]}')
+
+          output = {
+              'version':2,'generated_at':'2026-07-23T00:00:00.000Z',
+              'item_set_sha256':state['source']['item_set_sha256'],
+              'count':len(rows),'rows':rows,
+          }
+          Path('wikimedia-metadata').mkdir(exist_ok=True)
+          Path('wikimedia-metadata/metadata.json').write_text(json.dumps(output,indent=2)+'\n')
+          unresolved = [row for row in rows if row['origin_host'] in ('commons.wikimedia.org','en.wikipedia.org') and not row.get('origin_metadata')]
+          if unresolved:
+              raise SystemExit(f'{len(unresolved)} Wikimedia rows lack metadata')
+          print(f'harvested revision-bound Wikimedia metadata for {len(metadata)} unique origins')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trek-wikimedia-source-metadata
+          path: wikimedia-metadata
+          if-no-files-found: error
+          retention-days: 14
