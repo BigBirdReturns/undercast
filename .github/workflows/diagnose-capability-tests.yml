@@ -1,0 +1,75 @@
+name: diagnose-capability-tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnose-capability-tests
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: github.event.pull_request.number == 70 && github.head_ref == 'agent/capability-aware-autopilot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/capability-aware-autopilot
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Reconstruct integrated candidate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import base64, gzip, re
+          workflow = Path('.github/workflows/apply-capability-aware-autopilot.yml').read_text()
+          match = re.search(r'^          PAYLOAD: (\S+)$', workflow, re.M)
+          source = gzip.decompress(base64.b64decode(match.group(1))).decode()
+          old = '''    ''' + "'''also read [LUNA.md](LUNA.md) and [docs/AUTOPILOT.md](docs/AUTOPILOT.md), then\nclaim a bounded lease instead of choosing free-form work. A scope must pass\n'''"
+          original_replacement = '''    ''' + "'''also read [LUNA.md](LUNA.md), [docs/AUTOPILOT.md](docs/AUTOPILOT.md), and\n[docs/AUTOPILOT-CAPABILITIES.md](docs/AUTOPILOT-CAPABILITIES.md), then claim a\nbounded lease under an explicit reviewed capability profile instead of choosing\nfree-form work. A scope must pass\n'''"
+          target = "replace_once(\n    'AGENTS.md',\n" + old + ",\n" + original_replacement + ",\n)"
+          robust = '''agents = read('AGENTS.md')
+          if 'docs/AUTOPILOT-CAPABILITIES.md' not in agents:
+              needle = '[docs/WATERLINE.md](docs/WATERLINE.md), then claim a bounded lease instead of\\nchoosing free-form work.'
+              replacement = '[docs/AUTOPILOT-CAPABILITIES.md](docs/AUTOPILOT-CAPABILITIES.md), and\\n[docs/WATERLINE.md](docs/WATERLINE.md), then claim a bounded lease under an\\nexplicit reviewed capability profile instead of choosing free-form work.'
+              if agents.count(needle) != 1:
+                  raise SystemExit(f'AGENTS.md capability insertion point count {agents.count(needle)}')
+              write('AGENTS.md', agents.replace(needle, replacement, 1))'''
+          if source.count(target) != 1:
+              raise SystemExit('installer target missing')
+          Path('/tmp/apply.py').write_text(source.replace(target, robust))
+          PY
+          python /tmp/apply.py
+          npm ci
+
+      - name: Run focused tests and retain full output
+        run: |
+          mkdir -p capability-test-diagnostics
+          set +e
+          npm run autopilot:fixtures > capability-test-diagnostics/autopilot-fixtures.log 2>&1
+          echo "$?" > capability-test-diagnostics/autopilot-fixtures.exit
+          npm run waterline:fixtures > capability-test-diagnostics/waterline-fixtures.log 2>&1
+          echo "$?" > capability-test-diagnostics/waterline-fixtures.exit
+          npm run autopilot -- validate > capability-test-diagnostics/autopilot-validate.log 2>&1
+          echo "$?" > capability-test-diagnostics/autopilot-validate.exit
+          set -e
+          tail -n 100 capability-test-diagnostics/autopilot-fixtures.log
+          tail -n 50 capability-test-diagnostics/waterline-fixtures.log
+          tail -n 50 capability-test-diagnostics/autopilot-validate.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capability-test-diagnostics
+          path: capability-test-diagnostics
+          if-no-files-found: error
+          retention-days: 7
