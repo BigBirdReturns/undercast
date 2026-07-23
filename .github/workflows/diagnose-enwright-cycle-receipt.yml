@@ -1,0 +1,98 @@
+name: diagnose-enwright-cycle-receipt
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: diagnose-enwright-cycle-receipt
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: github.head_ref == 'agent/trek-cycle-001'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/trek-cycle-001
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Restore lease and replay blocked submission
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .luna/first .waterline diagnostics
+          gh run download 30026565956 -n trek-cycle-001-lease -D .luna/first
+          cp .luna/first/batch.json .luna/first-batch.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const batch = JSON.parse(fs.readFileSync('.luna/first-batch.json','utf8'));
+          const task = batch.tasks[0];
+          fs.writeFileSync('.luna/results.json', JSON.stringify({
+            version: 1, lease_id: batch.lease_id, agent: batch.agent,
+            results: [{
+              task_id: task.id,
+              decision: 'blocked',
+              reason: 'The preserved source proves Enwright is an unseen James Doohan voice, but the governing voice rubric requires a listening sample and three independent blind scores before a transform value may be filed. No reproducible listener-grade receipt is present, so drafting would invent a required fact.',
+              evidence: [
+                { label: 'Exact Enwright performance credit and unseen-voice context', source: task.sources[0] },
+                { label: 'The Ultimate Computer episode production context', source: 'https://memory-alpha.fandom.com/wiki/The_Ultimate_Computer_(episode)' },
+                { label: 'Immutable UnderCast voice-scoring law', source: 'https://github.com/BigBirdReturns/undercast/blob/899720967c6f3b0da8862734c5445e0e7b6f681d/docs/TRANSFORM-RUBRIC.md' }
+              ],
+              retry_after: '2026-08-01T00:00:00.000Z'
+            }]
+          },null,2)+'\n');
+          NODE
+          npm run autopilot -- submit --batch .luna/first-batch.json --input .luna/results.json --now 2026-07-23T18:30:00.000Z
+
+      - name: Capture exact cycle-receipt validator output
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const batch = JSON.parse(fs.readFileSync('.luna/first-batch.json','utf8'));
+          const task = batch.tasks[0];
+          const source = task.source_receipts[0];
+          fs.writeFileSync('.waterline/input.json', JSON.stringify({
+            version: 1,
+            scope_id: task.scope,
+            lease_id: batch.lease_id,
+            outcome: 'aborted',
+            reviewed_by: 'chatgpt-second-desk',
+            reviewed_role: 'second-desk',
+            reviewed_at: '2026-07-23T18:35:00.000Z',
+            note: 'The durable lease resumed successfully. Research proved the census mode hint wrong and the exact role voice-only, but no reproducible three-pass listener receipt existed for the required voice-distance grade. The task was blocked rather than fabricating transform, and the unchanged 744-facet media baseline remained complete.',
+            evidence: [
+              { type: 'incident', value: 'Enwright voice-grade evidence unavailable; task blocked without inventing transform' },
+              { type: 'source-revision', value: `Memory Alpha Enwright page ${source.pageid} revision ${source.revision} content ${source.content_sha256}` },
+              { type: 'rubric', value: 'docs/TRANSFORM-RUBRIC.md@899720967c6f3b0da8862734c5445e0e7b6f681d' },
+              { type: 'restart-proof', value: 'Lease packet restored from workflow artifact 8571525315 after the claiming process ended' }
+            ]
+          },null,2)+'\n');
+          NODE
+          set +e
+          npm run waterline -- record-cycle --input .waterline/input.json > diagnostics/record-cycle.log 2>&1
+          code=$?
+          set -e
+          printf '%s\n' "$code" > diagnostics/exit-code.txt
+          cat diagnostics/record-cycle.log
+          exit 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: enwright-cycle-receipt-diagnostics
+          path: diagnostics
+          if-no-files-found: error
+          retention-days: 7
