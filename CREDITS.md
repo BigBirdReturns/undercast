@@ -164,12 +164,10 @@ derivative work: RanZag (talk), CC BY 2.0 — [source](https://commons.wikimedia
 - **Doug Jones** (UC-1083) — Judson University, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Doug_Jones_2015.jpg)
 - **Jonathan Banks** (UC-1084) — Netta_Bank_and_Jonathan_Banks.jpg: Netta Bank
 derivative work: RanZag (talk), CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Jonathan_Banks_1995.jpg)
-- **Majel Barrett** (UC-1086) — Beth Madison, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Rod_and_Majel_Roddenberry_Star_Trek_Convention_Las_Vegas_20080814.jpg)
 - **Marc Alaimo** (UC-1087) — Alaimo,_Shimerman_and_Meany.jpg: Beth Madison
 derivative work: Gyrobo (talk), CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Marc_Alaimo.jpg)
 - **Rick Worthy** (UC-1091) — vagueonthehow from Tadcaster, York, England, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Rick_Worthy_2013_(cropped).jpg)
 - **Gregory Itzin** (UC-1093) — CelebHeights.com, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Gregory-itzin.jpg)
-- **Brian Thompson** (UC-1095) — FBI, Public domain — [source](https://commons.wikimedia.org/wiki/File:Killing_of_Brian_Thompson_suspect_FBI_seeking_information_poster.png)
 - **Brian Thompson** (UC-1096) — Thane of Ross, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Brian_Thompson_Interview_Photo.jpg)
 - **Josh Pais** (UC-110) — Bryan Berlin, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Josh_Pais_at_the_2024_New_York_Film_Festival_(cropped).jpg)
 - **Suzie Plakson** (UC-1101) — Eva Rinaldi, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Suzie_Plakson_in_2012.jpg)
@@ -181,7 +179,6 @@ derivative work: Gyrobo (talk), CC BY 2.0 — [source](https://commons.wikimedia
 - **Nana Visitor** (UC-1113) — Salvatore Capalbi (Sheldon Pax) from Italy, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Nana_Visitor_STICCon_2004_crop.jpg)
 - **Armin Shimerman** (UC-1117) — John Manard, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Armin_Shimerman_GalaxyCon_Nashville_052026-12.jpg)
 - **Michael Dorn** (UC-1118) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Michael_Dorn_Photo_Op_GalaxyCon_San_Jose_2024_(cropped).jpg)
-- **Ted Cassidy** (UC-1119) — NBC Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Ted_Cassidy_Cheeta_Storybook_Squares_1969(cropped_Cassidy).jpg)
 - **Alan Cumming** (UC-112) — gdcgraphics, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:AlanCummingSept2013TIFF.jpg)
 - **Terry Farrell** (UC-1120) — ABC Visual Communication, Public domain — [source](https://commons.wikimedia.org/wiki/File:Terry_Farrell_%22Paper_Dolls%22_(1984_ABC_press_photo)_03.jpg)
 - **Jonathan Frakes** (UC-1121) — John Manard, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Jonathan_Frakes_at_Galaxy_Con_Columbus.jpg)
@@ -214,7 +211,6 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **Ed Speleers** (UC-1179) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Ed_Speleers_Photo_Op_GalaxyCon_San_Jose_2024.jpg)
 - **Frank Oz** (UC-118) — Baltimore Sun, Public domain — [source](https://commons.wikimedia.org/wiki/File:Frank_Oz_-_1984.jpg)
 - **Michelle Forbes** (UC-1181) — sookiebontemps, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Michelle_Forbes_2009a_Comic-Con.jpg)
-- **Christopher Collins** (UC-1185) — Procolotor, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:EC1835_C_cut.jpg)
 - **Sherman Howard** (UC-1189) — Howsherm, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Mr._Sherman_Howard.jpg)
 - **Peter Cullen** (UC-119) — Ryan Crierie, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Peter_Cullen_2011.2.jpg)
 - **Gary Graham** (UC-1192) — Keith McDuffee from Northborough, MA, USA, CC BY-SA 2.5 — [source](https://commons.wikimedia.org/wiki/File:Gary_Graham_cropped.jpg)
@@ -224,7 +220,6 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **John Billingsley** (UC-1202) — Nightscream, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:10.17.09JohnBillingsleyByLuigiNovi.jpg)
 - **Eric Pierpoint** (UC-1204) — TrixieVanS, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Eric_Pierpoint_at_Star_Trek_Las_Vegas_2007.jpg)
 - **Hank Azaria** (UC-121) — Greg2600, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Hank_Azaria_(25729757142)_(cropped).jpg)
-- **Marc Lawrence** (UC-1210) — trailer screenshot (King Brothers Productions - Monogram Pictures), Public domain — [source](https://commons.wikimedia.org/wiki/File:Marc_Lawrence_-_Dillinger_trailer_(1945).jpg)
 - **Robert Pine** (UC-1211) — ABC Network, Public domain — [source](https://commons.wikimedia.org/wiki/File:Robert_Pine_1976.jpg)
 - **Clint Howard** (UC-1216) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Clint_Howard_Photo_Op_GalaxyCon_Richmond_2022.jpg)
 - **Mark Hamill** (UC-122) — Alan Light, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Mark_Hamill_(1978).jpg)
@@ -250,7 +245,6 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **Haruo Nakajima** (UC-127) — Michael Koschinski, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Haruo_Nakajima_2013_(cropped).jpg)
 - **Leigh J. McCloskey** (UC-1270) — Rainbowblast77, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:LeighBYalinekras.jpg)
 - **Ryan Spahn** (UC-1273) — Ryanchristoper, CC0 — [source](https://commons.wikimedia.org/wiki/File:0922_Red_Bull_Theater_Richard_II_Meet_and_Greet_RebeccaJMichelson-23.jpg)
-- **Danny Goldring** (UC-1276) — Tiger Aspect Productions Limited, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Danny_Goldring_in_Bean.png)
 - **Bin Furuya** (UC-128) — Super Festivals, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Bin_Furuya_Photo_Op_GalaxyCon_Louisville_2019.jpg)
 - **Tsutomu Kitagawa** (UC-130) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Tsutomu_Kitagawa_(48602342676).jpg)
 - **Peter Weller** (UC-132) — Florida Supercon, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Peter_Weller_2016.jpg)
@@ -258,8 +252,6 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **Vaughn Armstrong** (UC-140) — AFroese, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Vaughn_Armstrong.JPG)
 - **Suzie Plakson** (UC-141) — Eva Rinaldi, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Suzie_Plakson_in_2012.jpg)
 - **Carel Struycken** (UC-142) — Miguel Discart, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Carel_Struycken_March_2016.jpg)
-- **Mark Lenard** (UC-143) — NBC Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Spock_and_parents_1968.jpg)
-- **Michael Ansara** (UC-144) — There is a very faint NBC Photo stamp on back but am not able to make out who the NBC photographer was., Public domain — [source](https://commons.wikimedia.org/wiki/File:Michael_Ansara_Law_of_the_Plainsman_1959.JPG)
 - **Tony Todd** (UC-145) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Tony_Todd_(36141902441).jpg)
 - **Tim Rose** (UC-146) — Edward Hands, CC BY 2.5 — [source](https://commons.wikimedia.org/wiki/File:TimRoseBrompton.jpg)
 - **Alan Tudyk** (UC-148) — PhilipRomanoPhoto, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:AlanTudyk-byPhilipRomano.jpg)
@@ -385,12 +377,10 @@ derivative work: Masem (talk), CC BY 2.0 — [source](https://commons.wikimedia.
 - **Lee Arenberg** (UC-298) — Diane Rooney at https://www.flickr.com/photos/dianesf/, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:LeeArenbergMay07.jpg)
 - **Mary Chieffo** (UC-299) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Mary_Chieffo_by_Gage_Skidmore.jpg)
 - **Shazad Latif** (UC-302) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Shazad_Latif_by_Gage_Skidmore.jpg)
-- **William Campbell** (UC-305) — Unknown authorUnknown author, Public domain — [source](https://commons.wikimedia.org/wiki/File:William_Campbell_-_Dementia13.jpg)
 - **Rick Worthy** (UC-306) — vagueonthehow from Tadcaster, York, England, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Rick_Worthy_2013_(cropped).jpg)
 - **Anthony De Longis** (UC-307) — Dawna Lee Heising, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Anthony_DeLongis_by_Dawna_Lee_Heising.jpg)
 - **Lawrence Pressman** (UC-311) — CBS Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Lawrence_Pressman_%22Ladies%27_Man%22_(1980_CBS_press_photo).jpg)
 - **Spice Williams-Crosby** (UC-313) — Raven Underwood, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Spice_Williams.jpg)
-- **James Horan** (UC-314) — marcen27 from Glasgow, UK, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Niall_Horan_1_(27137634098).jpg)
 - **Barnaby Edwards** (UC-319) — Steve, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Barnaby_Edwards.jpg)
 - **David Graham** (UC-321) — Valder Beebe Show, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:David_Graham_(actor)_in_2016.png)
 - **John Leeson** (UC-323) — Mark Garland, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:John_Leeson,_Gallifrey_One,_2011.jpg)
@@ -625,7 +615,6 @@ derivative work: Hic et nunc, CC BY-SA 3.0 — [source](https://commons.wikimedi
 - **Jason Marsden** (UC-678) — https://www.flickr.com/photos/greg2600, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Jason_Marsden_(43904363590).jpg)
 - **Jim Martin** (UC-681) — Nightscream, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:10.9.10JimMartinByLuigiNovi1.jpg)
 - **Brian Henson** (UC-683) — Billbarretta19, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:BillBarrettaBrianHenson1982_(cropped).jpg)
-- **James Doohan** (UC-684) — NBC Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:James_Doohan_Scotty_Star_Trek.JPG)
 - **James Sloyan** (UC-685) — ABC Television
 
 Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.wikimedia.org/wiki/File:James_Sloyan.jpg)
@@ -638,8 +627,6 @@ Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.
 - **Daisuke Sakaguchi** (UC-723) — Kashiwazaki, Japan, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:FanimeCon_2016_(Daisuke_Sakaguchi).jpg)
 - **George Takei** (UC-725) — Luigi Novi, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:6.11.25GeorgeTakeiByLuigiNovi11.jpg)
 - **Tim Russ** (UC-728) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Tim_Russ_(32382294283).jpg)
-- **Harris Yulin** (UC-729) — NBC Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Harris_Yulin_%22Dynasty%22_(1976_NBC_press_photo)_(cropped).jpg)
-- **Leonard Nimoy** (UC-730) — NBC Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Leonard_Nimoy_1967.jpg)
 - **Alan Scarfe** (UC-732) — Jeff Hitchcock from Vancouver, BC, Canada, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Alan_Scarfe.jpg)
 - **Paul F. Tompkins** (UC-734) — Joel Mandelkorn, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Paul_F._Tompkins_(cropped).jpg)
 - **Chase Masterson** (UC-735) — Permission from Chase Masterson Official Management, CC0 — [source](https://commons.wikimedia.org/wiki/File:Chase_Masterson.jpg)
@@ -660,7 +647,6 @@ Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.
 - **Orla Brady** (UC-764) — Virgin Media Dublin International Film Festival, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Orla_Brady_2020_1_cropped.jpg)
 - **Tamlyn Tomita** (UC-765) — Andres Useche, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Tamlyn_Tomita_2010_(cropped).jpg)
 - **Colton Dunn** (UC-766) — Count3D from Vancouver, Canada, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:SDCC_2015_-_Colton_Dunn_(cropped).jpg)
-- **Nichelle Nichols** (UC-767) — Photo by Desilu Productions-release sent by Cooper &amp; Colin, Chicago--apparently a publicity agency for Ebony magazine., Public domain — [source](https://commons.wikimedia.org/wiki/File:Nichelle_Nichols_Star_Trek_1967_(cropped).JPG)
 - **Eric Bauza** (UC-768) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Eric_Bauza_by_Gage_Skidmore_2.jpg)
 - **Rick Baker** (UC-769) — RedCarpetReport, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Rick_Baker_February_2015_(cropped).jpg)
 - **Vanessa Marshall** (UC-770) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Vanessa_Marshall_Photo_Op_GalaxyCon_Raleigh_2024.jpg)
@@ -681,21 +667,16 @@ Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.
 - **Stephen Root** (UC-831) — Fuzheado, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:Stephen_Root_2024.jpg)
 - **James Avery** (UC-832) — John Mathew Smith, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:James_Avery_no_cig.jpg)
 - **Richard Herd** (UC-834) — Uja3000 at English Wikipedia, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Richard_Herd_2005_(cropped).png)
-- **Robert Bauer** (UC-835) — Pete Souza, Public domain — [source](https://commons.wikimedia.org/wiki/File:BobBauer2.jpg)
 - **John Larroquette** (UC-836) — Nick Step, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:John_Larroquette_at_B-Barks.jpg)
-- **Mary Crosby** (UC-843) — Bell System-the program's sponsor, Public domain — [source](https://commons.wikimedia.org/wiki/File:Bing_Crosby_and_family_1974_Christmas_special.JPG)
 - **Linda Thorson** (UC-845) — Frantogian, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Linda_Thorson_-_Monte-Carlo_Television_Festival_(2).jpg)
 - **Andrew Prine** (UC-846) — Toglenn, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Andrew_Prine_2010.jpg)
 - **Frank Collison** (UC-848) — Daniel N. Butler, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Frank_Collison_(cropped).jpg)
-- **Marco Rodríguez** (UC-851) — Hefebreo, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Marco_Antonio_Rodriguez.jpg)
 - **Billy Burke** (UC-852) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Billy_Burke_by_Gage_Skidmore.jpg)
 - **Gina Yashere** (UC-857) — Rhododendrites, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Gina_Yashere_(82006).jpg)
 - **Tawny Newsome** (UC-862) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Tawny_Newsome_by_Gage_Skidmore.jpg)
 - **Michaela Dietz** (UC-863) — steve cranston, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Michaela_Dietz_at_the_Florida_Supercon_2016_(4)_(cropped).jpg)
 - **Robert Foxworth** (UC-864) — CBS Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:Robert_Foxworth_1975.JPG)
-- **Tom Wright** (UC-865) — Gareth Saunders, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:NTWright071220.jpg)
 - **Dina Meyer** (UC-867) — Dreifachaxel, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Dina_Meyer.jpg)
-- **Nicholas Kepros** (UC-868) — Unknown authorUnknown author, Public domain — [source](https://commons.wikimedia.org/wiki/File:Tony_Shalhoub_and_Nicholas_Kepros.jpg)
 - **Denise Crosby** (UC-869) — Salvatore Capalbi (Sheldon Pax) from Italy, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Denise_Crosby_STICCon_2003.jpg)
 - **Stephen McHattie** (UC-874) — gdcgraphics at https://www.flickr.com/photos/gdcgraphics/, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:StephenMcHattie08TIFF.jpg)
 - **Steven Weber** (UC-878) — Kevin Paul, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:Steven_Weber_-_Walk_of_Fame-02.jpg)
@@ -729,9 +710,7 @@ Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.
 derivative work: RanZag (talk), CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Cristine_Rose_2009_(crop).jpg)
 - **James Sie** (UC-955) — John Manard, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:James_Sie_Animate!_Columbus_062026-1.jpg)
 - **Toshiyuki Morikawa** (UC-956) — ( . Y . ), CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Toshiyuki_Morikawa_(cropped).jpg)
-- **Lawrence Dobkin** (UC-960) — Albert C. Gannaway, Public domain — [source](https://commons.wikimedia.org/wiki/File:Lawrence_Dobkin-RaidersofOldCalifornia.jpg)
 - **James Worthy** (UC-961) — Joe Kennedy, Los Angeles Times, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:James_Worthy_attempting_layup_vs_Houston_Rockets_1986-05-17.jpg)
-- **David Graf** (UC-962) — Towpilot, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:David_Graf_in_Stockholm_(cropped).jpg)
 - **Lisa LoCicero** (UC-964) — Mingle MediaTV, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Lisa_LoCicero.jpg)
 - **Gabrielle Union** (UC-965) — GabrielleUnionFeb09.jpg: Gina Hughes at http://www.techiediva.com/
 derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:GabrielleUnionFeb09_cropped.jpg)
@@ -753,8 +732,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **723**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **959**
+- Free-licensed portraits (attributed above): **702**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **950**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
 email and any specific asset comes down.
