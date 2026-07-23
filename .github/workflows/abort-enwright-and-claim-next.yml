@@ -1,0 +1,168 @@
+name: abort-enwright-and-claim-next
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: abort-enwright-and-claim-next
+  cancel-in-progress: true
+
+jobs:
+  cycle:
+    if: github.head_ref == 'agent/trek-cycle-001'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/trek-cycle-001
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install deterministic runtime
+        run: npm ci
+
+      - name: Restore the exact first lease packet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .luna/first cycle-export
+          gh run download 30026565956 -n trek-cycle-001-lease -D .luna/first
+          cp .luna/first/batch.json .luna/first-batch.json
+
+      - name: Close Enwright honestly as source-blocked
+        run: |
+          cat > .luna/first-results.json <<'JSON'
+          {
+            "version": 1,
+            "lease_id": "lease_fd2fe62085347b843683aec0",
+            "agent": "luna",
+            "results": [
+              {
+                "task_id": "ap_4bc300ec8c522bc8909dec64",
+                "decision": "blocked",
+                "reason": "The preserved source proves Enwright is an unseen James Doohan voice, but the governing voice rubric requires a listening sample and three independent blind scores before a transform value may be filed. No reproducible listener-grade receipt is present, so drafting would invent a required fact.",
+                "evidence": [
+                  {
+                    "label": "Exact Enwright performance credit and unseen-voice context",
+                    "source": "https://memory-alpha.fandom.com/wiki/Enwright"
+                  },
+                  {
+                    "label": "The Ultimate Computer episode production context",
+                    "source": "https://memory-alpha.fandom.com/wiki/The_Ultimate_Computer_(episode)"
+                  },
+                  {
+                    "label": "Immutable UnderCast voice-scoring law",
+                    "source": "https://github.com/BigBirdReturns/undercast/blob/899720967c6f3b0da8862734c5445e0e7b6f681d/docs/TRANSFORM-RUBRIC.md"
+                  }
+                ],
+                "retry_after": "2026-08-01T00:00:00.000Z"
+              }
+            ]
+          }
+          JSON
+          npm run autopilot -- submit \
+            --batch .luna/first-batch.json \
+            --input .luna/first-results.json \
+            --now 2026-07-23T18:30:00.000Z
+          npm run autopilot -- status --scope star-trek --json > cycle-export/after-enwright-block.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const job = state.jobs.find((row) => row.id === 'ap_4bc300ec8c522bc8909dec64');
+          if (job?.status !== 'blocked') throw new Error(`Enwright expected blocked, got ${job?.status}`);
+          if (job.outcome?.kind !== 'blocked') throw new Error('Enwright lacks blocked outcome receipt');
+          NODE
+
+      - name: Record the reviewed aborted-cycle receipt
+        run: |
+          mkdir -p .waterline
+          cat > .waterline/enwright-abort.json <<'JSON'
+          {
+            "version": 1,
+            "scope_id": "star-trek",
+            "lease_id": "lease_fd2fe62085347b843683aec0",
+            "outcome": "aborted",
+            "reviewed_by": "chatgpt-second-desk",
+            "reviewed_role": "second-desk",
+            "reviewed_at": "2026-07-23T18:35:00.000Z",
+            "note": "The durable lease resumed successfully. Research proved the census mode hint wrong and the exact role voice-only, but no reproducible three-pass listener receipt existed for the required voice-distance grade. The task was blocked rather than fabricating transform, and the unchanged 744-facet media baseline remained complete.",
+            "evidence": [
+              {
+                "type": "incident",
+                "value": "Enwright voice-grade evidence unavailable; task blocked without inventing transform"
+              },
+              {
+                "type": "source-revision",
+                "value": "Memory Alpha Enwright page 401783 revision 3622823 content de01691a0a2a421fae5dd46a79b83400a39023fc6953cff1ebd7a736f105bf1f"
+              },
+              {
+                "type": "rubric",
+                "value": "docs/TRANSFORM-RUBRIC.md@899720967c6f3b0da8862734c5445e0e7b6f681d"
+              },
+              {
+                "type": "restart-proof",
+                "value": "Lease packet restored from workflow artifact 8571525315 after the claiming process ended"
+              }
+            ]
+          }
+          JSON
+          npm run waterline -- record-cycle --input .waterline/enwright-abort.json
+          npm run waterline -- status --scope star-trek --json > cycle-export/after-abort-receipt.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const status = JSON.parse(fs.readFileSync('cycle-export/after-abort-receipt.json','utf8'));
+          if (!status.claim_allowed || status.phase !== 'ready-for-cycle') {
+            throw new Error(`waterline did not reopen: phase=${status.phase} reasons=${status.claim_reasons}`);
+          }
+          if (status.cycles.successful_receipts !== 0) throw new Error('aborted cycle incorrectly counted as successful');
+          NODE
+
+      - name: Claim the next single task only after the receipt
+        run: |
+          node - <<'NODE' > cycle-export/top-queued-before-next.json
+          const fs = require('fs');
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const rows = state.jobs.filter((row) => row.scope === 'star-trek' && row.status === 'queued')
+            .sort((a,b) => b.priority-a.priority || a.performer.localeCompare(b.performer) || a.character.localeCompare(b.character))
+            .slice(0,20)
+            .map(({id,performer,character,performance_modes,priority,sources}) => ({id,performer,character,performance_modes,priority,sources}));
+          process.stdout.write(JSON.stringify(rows,null,2)+'\n');
+          NODE
+          mkdir -p .luna/second
+          npm run autopilot -- next \
+            --agent luna \
+            --scope star-trek \
+            --limit 1 \
+            --lease-minutes 1440 \
+            --now 2026-07-23T18:40:00.000Z \
+            --out .luna/second/batch.json \
+            --prompt .luna/second/PROMPT.md
+          cp .luna/second/batch.json cycle-export/second-batch.json
+          cp .luna/second/PROMPT.md cycle-export/second-PROMPT.md
+          npm run autopilot -- status --scope star-trek --json > cycle-export/after-second-claim.json
+
+      - name: Commit aborted receipt and second durable lease
+        run: |
+          git config user.name 'undercast-cycle-bot'
+          git config user.email 'undercast-cycle-bot@users.noreply.github.com'
+          git add data/AUTOPILOT.json data/journal/autopilot.jsonl data/WATERLINE-STATE.json data/journal/waterline.jsonl
+          git diff --cached --check
+          git commit -m 'Cycle: receipt Enwright abort and lease next task'
+          git push origin HEAD:agent/trek-cycle-001
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trek-cycle-001-second-lease
+          path: cycle-export
+          if-no-files-found: error
+          retention-days: 14
