@@ -1,0 +1,283 @@
+name: process-trek-cycle-001-success
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: process-trek-cycle-001-success
+  cancel-in-progress: true
+
+jobs:
+  process:
+    if: github.head_ref == 'agent/trek-cycle-001-success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/trek-cycle-001-success
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deterministic runtime
+        run: npm ci
+
+      - name: Reconstruct the committed lease and submit the sourced draft
+        run: |
+          mkdir -p .luna cycle-review
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { readFile, writeFile } from 'node:fs/promises';
+          const state = JSON.parse(await readFile('data/AUTOPILOT.json', 'utf8'));
+          const job = state.jobs.find(row => row.id === 'ap_167ac35ec0c06c7005bcc32f');
+          if (!job || job.status !== 'leased' || !job.lease) throw new Error('Ishka lease is not durably resumable');
+          if (job.performer !== 'Andrea Martin' || job.character !== 'Ishka') throw new Error('leased identity drifted');
+          const readinessRows = JSON.parse(execFileSync(process.execPath, [
+            'scripts/autopilot.mjs', 'readiness', '--scope', 'star-trek', '--require-active', '--json'
+          ], { encoding: 'utf8' }));
+          const ready = readinessRows[0];
+          if (!ready || ready.lease_token !== job.lease.readiness_token) throw new Error('lease readiness token is no longer current');
+          const selection = {
+            strategy: job.lease.selection.strategy,
+            profile_id: job.lease.selection.profile_id,
+            policy_sha256: job.lease.selection.policy_sha256,
+            profile_capabilities: job.lease.selection.profile_capabilities,
+            requested_task_id: job.lease.selection.requested_task_id,
+            basis: job.lease.selection.basis,
+          };
+          const batch = {
+            version: 1,
+            lease_id: job.lease.id,
+            agent: job.lease.agent,
+            claimed_at: job.lease.claimed_at,
+            expires_at: job.lease.expires_at,
+            readiness: {
+              scope_id: 'star-trek',
+              lease_token: job.lease.readiness_token,
+              producer_sha256: ready.producer_sha256,
+              contract_sha256: ready.contract_sha256,
+              coverage_sha256: ready.snapshot_details.coverage_sha256,
+              manifest_sha256: ready.snapshot_details.manifest_sha256,
+            },
+            selection,
+            tasks: [{
+              id: job.id,
+              scope: job.scope,
+              franchise: job.franchise,
+              category: job.categories,
+              character: job.character,
+              performer: job.performer,
+              performance_modes: job.performance_modes,
+              required_capabilities: job.lease.selection.required_capabilities,
+              capability_reasons: job.lease.selection.requirement_reasons,
+              sources: job.sources,
+              source_receipts: job.source_receipts || [],
+              source_fingerprint: job.source_fingerprint,
+              performer_on_wall: job.performer_on_wall,
+              priority: job.priority,
+              attempt: job.attempts,
+            }],
+          };
+          const taskSource = job.sources.find(source => /memory-alpha\.fandom\.com\/wiki\/Ishka/i.test(source)) || job.sources[0];
+          if (!taskSource) throw new Error('leased task has no exact census source');
+          const results = {
+            version: 1,
+            lease_id: batch.lease_id,
+            agent: batch.agent,
+            results: [{
+              task_id: job.id,
+              decision: 'draft',
+              draft: {
+                character: 'Ishka',
+                actor: 'Andrea Martin',
+                production: 'Star Trek: Deep Space Nine',
+                universe: 'Star Trek',
+                years: '1995',
+                designer: 'Michael Westmore',
+                transform: 4,
+                kind: 'face',
+                knownFor: 'The original Moogie, a Ferengi matriarch who defies the ban on women wearing clothes or earning profit in “Family Business.”',
+                reveal: 'Andrea Martin originated Ishka beneath a wrinkled Ferengi headpiece and facial appliances that aged her into Quark and Rom’s mother. Makeup supervisor Michael Westmore adapted a stock Ferengi head with a new wrinkled face, aged hands, and additional body prosthetics for the episode.',
+                wiki: 'https://en.wikipedia.org/wiki/Andrea_Martin',
+                references: [
+                  { claim: 'performance', label: 'Ishka — played by Andrea Martin in “Family Business”', source: taskSource, publisher: 'Memory Alpha' },
+                  { claim: 'production', label: 'Family Business — Season 3, Episode 23, May 15, 1995', source: 'https://www.paramountplus.com/shows/video/eG0YrhGAkckHXDO_ekNcGrlSivSi62pf/', publisher: 'Paramount+' },
+                  { claim: 'design-build', label: 'Ishka headpiece, facial aging, hands, and body prosthetics', source: 'https://memory-alpha.fandom.com/wiki/Family_Business_(episode)', publisher: 'Memory Alpha' },
+                  { claim: 'biography', label: 'Andrea Martin — Broadway performer biography', source: 'https://www.ibdb.com/broadway-cast-staff/andrea-martin-51614', publisher: 'Internet Broadway Database' }
+                ]
+              }
+            }]
+          };
+          await writeFile('.luna/batch.json', JSON.stringify(batch, null, 2) + '\n');
+          await writeFile('.luna/results.json', JSON.stringify(results, null, 2) + '\n');
+          await writeFile('cycle-review/lease.json', JSON.stringify({
+            lease_id: batch.lease_id,
+            claimed_at: batch.claimed_at,
+            expires_at: batch.expires_at,
+            task: batch.tasks[0],
+            selection: batch.selection,
+            readiness: batch.readiness,
+          }, null, 2) + '\n');
+          NODE
+          npm run autopilot -- submit --batch .luna/batch.json --input .luna/results.json
+
+      - name: Merge the verified draft and retrieve only its media
+        run: |
+          node scripts/grow.mjs --drafts
+          WALL_ID=$(node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const rows = JSON.parse(await readFile('data/specimens.json', 'utf8'));
+          const matches = rows.filter(row => row.actor === 'Andrea Martin' && row.character === 'Ishka');
+          if (matches.length !== 1) throw new Error(`expected one Andrea Martin / Ishka card, found ${matches.length}`);
+          console.log(matches[0].id);
+          NODE
+          )
+          printf '%s\n' "$WALL_ID" > cycle-review/wall-id.txt
+          RETRIEVE_ONLY="$WALL_ID" IMAGE_MODE=loose node scripts/retrieve.mjs
+          node scripts/credits.mjs
+          node scripts/needs.mjs
+          node scripts/sync-sources.mjs
+          node scripts/shard.mjs
+          node scripts/build-contract.mjs
+          node scripts/validate.mjs
+          npm run autopilot -- sync
+          npm run media:audit -- sync
+          npm run media:audit -- validate
+          npm run waterline -- status --scope star-trek
+
+      - name: Export exact new media and source context
+        run: |
+          python - <<'PY'
+          import html
+          import json
+          import re
+          import shutil
+          import time
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          wall_id = Path('cycle-review/wall-id.txt').read_text().strip()
+          specimens = {row['id']: row for row in json.loads(Path('data/specimens.json').read_text())}
+          sources = {row['id']: row for row in json.loads(Path('data/SOURCES.json').read_text())}
+          audit = json.loads(Path('data/MEDIA-AUDIT.json').read_text())
+          autopilot = json.loads(Path('data/AUTOPILOT.json').read_text())
+          specimen = specimens[wall_id]
+          ledger = sources[wall_id]
+          items = [row for row in audit['items'] if row['wall_id'] == wall_id]
+          if len(items) != 2:
+              raise SystemExit(f'expected two media facets for {wall_id}, found {len(items)}')
+          job = next(row for row in autopilot['jobs'] if row['id'] == 'ap_167ac35ec0c06c7005bcc32f')
+          if job['status'] != 'merged' or wall_id not in job.get('wall_ids', []):
+              raise SystemExit(f'autopilot task did not reach merged state: {job["status"]}')
+
+          images = Path('cycle-review/images')
+          images.mkdir(parents=True, exist_ok=True)
+          metadata = {}
+          ua = 'UNDERCAST cycle exact-subject audit/1.0'
+
+          def clean(value):
+              value = html.unescape(str(value or ''))
+              value = re.sub(r'<[^>]+>', ' ', value)
+              return re.sub(r'\s+', ' ', value).strip()
+
+          def request_json(url):
+              last = None
+              for attempt in range(4):
+                  try:
+                      req = urllib.request.Request(url, headers={'User-Agent': ua, 'Accept': 'application/json'})
+                      with urllib.request.urlopen(req, timeout=45) as response:
+                          return json.load(response)
+                  except Exception as exc:
+                      last = exc
+                      time.sleep(2 ** attempt)
+              return {'error': str(last)}
+
+          for item in items:
+              asset = item.get('asset')
+              if not asset:
+                  metadata[item['side']] = {'asset': None, 'source_fetched_at': item.get('source_fetched_at')}
+                  continue
+              src = Path(asset['src'])
+              target = images / f'{wall_id}-{item["side"]}{src.suffix or ".jpg"}'
+              shutil.copy2(src, target)
+              origin = asset.get('origin') or ''
+              parsed = urllib.parse.urlparse(origin)
+              title = urllib.parse.unquote(parsed.path.split('/wiki/', 1)[-1]).replace('_', ' ') if '/wiki/' in parsed.path else ''
+              source_meta = {'origin': origin, 'host': parsed.hostname, 'title': title}
+              if parsed.hostname and title:
+                  params = {
+                      'action': 'query', 'format': 'json', 'formatversion': 2,
+                      'redirects': 1, 'prop': 'info|revisions|pageprops|categories|links|imageinfo',
+                      'rvprop': 'ids|timestamp|sha1', 'cllimit': 'max', 'pllimit': 'max',
+                      'iiprop': 'extmetadata|url|mime|size|sha1', 'titles': title,
+                  }
+                  url = f'https://{parsed.hostname}/api.php?' + urllib.parse.urlencode(params)
+                  doc = request_json(url)
+                  pages = (doc.get('query') or {}).get('pages') or []
+                  page = pages[0] if pages else {}
+                  ii = (page.get('imageinfo') or [{}])[0]
+                  source_meta['page'] = {
+                      'title': page.get('title'), 'pageid': page.get('pageid'),
+                      'revision': (page.get('revisions') or [{}])[0],
+                      'categories': [row.get('title') for row in page.get('categories', [])],
+                      'links': [row.get('title') for row in page.get('links', [])],
+                      'imageinfo': {
+                          'url': ii.get('url'), 'mime': ii.get('mime'), 'width': ii.get('width'),
+                          'height': ii.get('height'), 'sha1': ii.get('sha1'),
+                          'extmetadata': {key: clean(value.get('value')) for key, value in (ii.get('extmetadata') or {}).items()},
+                      },
+                  }
+                  if doc.get('error') or doc.get('error') is not None:
+                      source_meta['api_error'] = doc.get('error')
+              metadata[item['side']] = {'asset': asset, 'exported_image': str(target), 'source': source_meta}
+
+          context = {
+              'version': 1,
+              'wall_id': wall_id,
+              'task_id': job['id'],
+              'task_status': job['status'],
+              'lease_id': job.get('outcome', {}).get('lease_id'),
+              'specimen': specimen,
+              'source_ledger': ledger,
+              'media_items': items,
+              'source_metadata': metadata,
+              'media_item_set_sha256': audit['source']['item_set_sha256'],
+          }
+          Path('cycle-review/context.json').write_text(json.dumps(context, ensure_ascii=False, indent=2) + '\n')
+          print(json.dumps({
+              'wall_id': wall_id,
+              'task_status': job['status'],
+              'facets': {item['side']: item['status'] for item in items},
+              'assets': {side: bool(row.get('asset')) for side, row in metadata.items()},
+          }, indent=2))
+          PY
+
+      - name: Commit the merged card and media catch-up state
+        run: |
+          rm -f .github/workflows/process-trek-cycle-001-success.yml
+          git config user.name 'undercast-autopilot'
+          git config user.email 'undercast-autopilot@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Cycle: merge and retrieve Andrea Martin as Ishka'
+          git push origin HEAD:agent/trek-cycle-001-success
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trek-cycle-001-success-media-review
+          path: cycle-review
+          if-no-files-found: error
+          retention-days: 14
