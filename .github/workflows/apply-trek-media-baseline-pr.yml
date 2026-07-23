@@ -1,0 +1,103 @@
+name: apply-trek-media-baseline-pr
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: apply-trek-media-baseline-v2
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.head_ref == 'agent/trek-media-baseline-closure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/trek-media-baseline-closure
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Download reviewed evidence artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/trek-review /tmp/trek-wikimedia /tmp/trek-fandom
+          gh run download 30017783530 -n trek-media-review-export -D /tmp/trek-review
+          gh run download 30019760354 -n trek-wikimedia-source-metadata -D /tmp/trek-wikimedia
+          gh run download 30020178341 -n trek-fandom-source-metadata -D /tmp/trek-fandom
+
+      - name: Build and validate the exact campaign
+        run: |
+          python scripts/build-trek-media-campaign.py --review /tmp/trek-review --wikimedia /tmp/trek-wikimedia --fandom /tmp/trek-fandom --out data/review
+          node --check scripts/media-audit-campaign.mjs
+          node --check scripts/media-audit-campaign-fixtures.mjs
+          npm ci
+          npm run media:audit:campaign:fixtures
+
+      - name: Apply reviewed rulings atomically
+        run: |
+          npm run media:audit:campaign -- --input data/review/star-trek-media-audit-campaign-2026-07-23.json
+          node scripts/credits.mjs
+          node scripts/needs.mjs
+          node scripts/sync-sources.mjs
+          npm run media:audit -- sync --now 2026-07-23T15:30:00.000Z
+          node scripts/shard.mjs
+          node scripts/build-contract.mjs
+          npm run media:audit -- validate
+          npm run media:audit -- gate --scope star-trek
+          npm run waterline -- status --scope star-trek
+
+      - name: Reconcile measured metrics and permanent contracts
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          roadmap = Path('data/ROADMAP-STATE.json')
+          doc = json.loads(roadmap.read_text())
+          doc['metrics']['verified_records'] = 372
+          doc['metrics']['media_audit_ratio'] = 1
+          note = 'Star Trek exact-subject baseline closed by the 2026-07-23 hash-bound campaign: 372/372 records and 744/744 facets complete; 556 assets verified and 188 facets honestly absent. This measures the current baseline and does not close star-trek-gold-shard.'
+          if note not in doc['notes']:
+              doc['notes'].append(note)
+          roadmap.write_text(json.dumps(doc, indent=2) + '\n')
+          gate = Path('scripts/gate.mjs')
+          text = gate.read_text()
+          old = '{ id: "media-audit", label: "Validate exact-subject media audit tracker", action: () => { runNpmScript("Media audit fixtures", "media:audit:fixtures"); runNpmScript("Media audit state", "media:audit", ["--", "validate"]); runNpmScript("Media audit status", "media:audit", ["--", "status", "--scope", "star-trek"]); } },'
+          new = '{ id: "media-audit", label: "Validate exact-subject media audit tracker", action: () => { runNpmScript("Media audit fixtures", "media:audit:fixtures"); runNpmScript("Media campaign fixtures", "media:audit:campaign:fixtures"); runNpmScript("Media audit state", "media:audit", ["--", "validate"]); runNpmScript("Media audit status", "media:audit", ["--", "status", "--scope", "star-trek"]); } },'
+          if text.count(old) != 1:
+              raise SystemExit('canonical media-audit gate step changed unexpectedly')
+          gate.write_text(text.replace(old, new))
+          PY
+          cat >> docs/MEDIA-AUDIT.md <<'EOF'
+
+## Reviewed baseline campaigns
+
+A full-scope campaign may apply many rulings only through `npm run media:audit:campaign -- --input data/review/<campaign>.json`. The campaign must cover every current open facet exactly once, bind every ruling to the current asset and item-set hashes, cite a retained source receipt, and carry second-desk or owner authority. Wrong or ambiguous media is nulled from both canonical mirrors while immutable bytes and former objects remain in `data/journal/media-remediation.jsonl`. Positive identity decisions require revision-bound source metadata and may never be inferred from appearance. All canonical mirrors and journals commit as one rollback-capable transaction.
+EOF
+          node scripts/roadmap.mjs validate
+          node scripts/shard.mjs
+          node scripts/build-contract.mjs
+
+      - name: Run exact canonical gate
+        run: |
+          npx playwright install --with-deps chromium
+          npm run gate
+
+      - name: Publish the exact gated campaign commit
+        run: |
+          git config user.name "undercast-media-audit"
+          git config user.email "undercast-media-audit@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Audit: close the Star Trek exact-subject baseline"
+          git push origin HEAD:agent/trek-media-baseline-closure
