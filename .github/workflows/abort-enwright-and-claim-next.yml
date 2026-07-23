@@ -31,45 +31,48 @@ jobs:
       - name: Install deterministic runtime
         run: npm ci
 
-      - name: Restore the exact first lease packet
+      - name: Restore and verify the exact first lease packet
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p .luna/first cycle-export
+          mkdir -p .luna/first cycle-export .waterline
           gh run download 30026565956 -n trek-cycle-001-lease -D .luna/first
           cp .luna/first/batch.json .luna/first-batch.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const batch = JSON.parse(fs.readFileSync('.luna/first-batch.json','utf8'));
+          if (batch.version !== 1 || batch.agent !== 'luna' || batch.tasks?.length !== 1) throw new Error('unexpected first lease shape');
+          const task = batch.tasks[0];
+          if (task.character !== 'Enwright' || task.performer !== 'James Doohan') throw new Error(`unexpected first task ${task.performer} as ${task.character}`);
+          if (!/^lease_[0-9a-f]{24}$/.test(batch.lease_id) || !/^ap_[0-9a-f]{24}$/.test(task.id)) throw new Error('invalid durable lease/task identity');
+          if (!task.source_receipts?.[0]?.revision || !task.source_receipts?.[0]?.content_sha256) throw new Error('Enwright lease lacks exact source receipt');
+          console.log(`restored ${batch.lease_id}: ${task.id} ${task.performer} as ${task.character}`);
+          NODE
 
       - name: Close Enwright honestly as source-blocked
         run: |
-          cat > .luna/first-results.json <<'JSON'
-          {
-            "version": 1,
-            "lease_id": "lease_fd2fe62085347b843683aec0",
-            "agent": "luna",
-            "results": [
-              {
-                "task_id": "ap_4bc300ec8c522bc8909dec64",
-                "decision": "blocked",
-                "reason": "The preserved source proves Enwright is an unseen James Doohan voice, but the governing voice rubric requires a listening sample and three independent blind scores before a transform value may be filed. No reproducible listener-grade receipt is present, so drafting would invent a required fact.",
-                "evidence": [
-                  {
-                    "label": "Exact Enwright performance credit and unseen-voice context",
-                    "source": "https://memory-alpha.fandom.com/wiki/Enwright"
-                  },
-                  {
-                    "label": "The Ultimate Computer episode production context",
-                    "source": "https://memory-alpha.fandom.com/wiki/The_Ultimate_Computer_(episode)"
-                  },
-                  {
-                    "label": "Immutable UnderCast voice-scoring law",
-                    "source": "https://github.com/BigBirdReturns/undercast/blob/899720967c6f3b0da8862734c5445e0e7b6f681d/docs/TRANSFORM-RUBRIC.md"
-                  }
-                ],
-                "retry_after": "2026-08-01T00:00:00.000Z"
-              }
-            ]
-          }
-          JSON
+          node - <<'NODE'
+          const fs = require('fs');
+          const batch = JSON.parse(fs.readFileSync('.luna/first-batch.json','utf8'));
+          const task = batch.tasks[0];
+          const result = {
+            version: 1,
+            lease_id: batch.lease_id,
+            agent: batch.agent,
+            results: [{
+              task_id: task.id,
+              decision: 'blocked',
+              reason: 'The preserved source proves Enwright is an unseen James Doohan voice, but the governing voice rubric requires a listening sample and three independent blind scores before a transform value may be filed. No reproducible listener-grade receipt is present, so drafting would invent a required fact.',
+              evidence: [
+                { label: 'Exact Enwright performance credit and unseen-voice context', source: task.sources[0] },
+                { label: 'The Ultimate Computer episode production context', source: 'https://memory-alpha.fandom.com/wiki/The_Ultimate_Computer_(episode)' },
+                { label: 'Immutable UnderCast voice-scoring law', source: 'https://github.com/BigBirdReturns/undercast/blob/899720967c6f3b0da8862734c5445e0e7b6f681d/docs/TRANSFORM-RUBRIC.md' }
+              ],
+              retry_after: '2026-08-01T00:00:00.000Z'
+            }]
+          };
+          fs.writeFileSync('.luna/first-results.json', JSON.stringify(result,null,2)+'\n');
+          NODE
           npm run autopilot -- submit \
             --batch .luna/first-batch.json \
             --input .luna/first-results.json \
@@ -77,45 +80,39 @@ jobs:
           npm run autopilot -- status --scope star-trek --json > cycle-export/after-enwright-block.json
           node - <<'NODE'
           const fs = require('fs');
+          const batch = JSON.parse(fs.readFileSync('.luna/first-batch.json','utf8'));
           const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
-          const job = state.jobs.find((row) => row.id === 'ap_4bc300ec8c522bc8909dec64');
+          const job = state.jobs.find((row) => row.id === batch.tasks[0].id);
           if (job?.status !== 'blocked') throw new Error(`Enwright expected blocked, got ${job?.status}`);
           if (job.outcome?.kind !== 'blocked') throw new Error('Enwright lacks blocked outcome receipt');
+          if (job.outcome.source_fingerprint !== batch.tasks[0].source_fingerprint) throw new Error('blocked receipt lost source fingerprint');
           NODE
 
       - name: Record the reviewed aborted-cycle receipt
         run: |
-          mkdir -p .waterline
-          cat > .waterline/enwright-abort.json <<'JSON'
-          {
-            "version": 1,
-            "scope_id": "star-trek",
-            "lease_id": "lease_fd2fe62085347b843683aec0",
-            "outcome": "aborted",
-            "reviewed_by": "chatgpt-second-desk",
-            "reviewed_role": "second-desk",
-            "reviewed_at": "2026-07-23T18:35:00.000Z",
-            "note": "The durable lease resumed successfully. Research proved the census mode hint wrong and the exact role voice-only, but no reproducible three-pass listener receipt existed for the required voice-distance grade. The task was blocked rather than fabricating transform, and the unchanged 744-facet media baseline remained complete.",
-            "evidence": [
-              {
-                "type": "incident",
-                "value": "Enwright voice-grade evidence unavailable; task blocked without inventing transform"
-              },
-              {
-                "type": "source-revision",
-                "value": "Memory Alpha Enwright page 401783 revision 3622823 content de01691a0a2a421fae5dd46a79b83400a39023fc6953cff1ebd7a736f105bf1f"
-              },
-              {
-                "type": "rubric",
-                "value": "docs/TRANSFORM-RUBRIC.md@899720967c6f3b0da8862734c5445e0e7b6f681d"
-              },
-              {
-                "type": "restart-proof",
-                "value": "Lease packet restored from workflow artifact 8571525315 after the claiming process ended"
-              }
+          node - <<'NODE'
+          const fs = require('fs');
+          const batch = JSON.parse(fs.readFileSync('.luna/first-batch.json','utf8'));
+          const task = batch.tasks[0];
+          const receipt = task.source_receipts[0];
+          const input = {
+            version: 1,
+            scope_id: task.scope,
+            lease_id: batch.lease_id,
+            outcome: 'aborted',
+            reviewed_by: 'chatgpt-second-desk',
+            reviewed_role: 'second-desk',
+            reviewed_at: '2026-07-23T18:35:00.000Z',
+            note: 'The durable lease resumed successfully. Research proved the census mode hint wrong and the exact role voice-only, but no reproducible three-pass listener receipt existed for the required voice-distance grade. The task was blocked rather than fabricating transform, and the unchanged 744-facet media baseline remained complete.',
+            evidence: [
+              { type: 'incident', value: 'Enwright voice-grade evidence unavailable; task blocked without inventing transform' },
+              { type: 'source-revision', value: `Memory Alpha Enwright page ${receipt.pageid} revision ${receipt.revision} content ${receipt.content_sha256}` },
+              { type: 'rubric', value: 'docs/TRANSFORM-RUBRIC.md@899720967c6f3b0da8862734c5445e0e7b6f681d' },
+              { type: 'restart-proof', value: 'Lease packet restored from workflow artifact 8571525315 after the claiming process ended' }
             ]
-          }
-          JSON
+          };
+          fs.writeFileSync('.waterline/enwright-abort.json', JSON.stringify(input,null,2)+'\n');
+          NODE
           npm run waterline -- record-cycle --input .waterline/enwright-abort.json
           npm run waterline -- status --scope star-trek --json > cycle-export/after-abort-receipt.json
           node - <<'NODE'
@@ -125,6 +122,7 @@ jobs:
             throw new Error(`waterline did not reopen: phase=${status.phase} reasons=${status.claim_reasons}`);
           }
           if (status.cycles.successful_receipts !== 0) throw new Error('aborted cycle incorrectly counted as successful');
+          if (status.cycles.total_receipts !== 1 || status.cycles.aborted_receipts !== 1) throw new Error('aborted receipt was not durably counted');
           NODE
 
       - name: Claim the next single task only after the receipt
