@@ -108,15 +108,22 @@ jobs:
           for batch in chunks(sorted(actor_articles)):
               doc = request_json('https://en.wikipedia.org/w/api.php', {
                   'action': 'query', 'format': 'json', 'formatversion': 2,
-                  'redirects': 1, 'prop': 'pageprops', 'titles': '|'.join(batch),
+                  'redirects': 1, 'prop': 'pageprops|revisions',
+                  'rvprop': 'ids|timestamp|sha1', 'rvlimit': 1,
+                  'titles': '|'.join(batch),
               })
               normalized = {row['from']: row['to'] for row in doc.get('query', {}).get('normalized', [])}
               redirects = {row['from']: row['to'] for row in doc.get('query', {}).get('redirects', [])}
               for page in doc.get('query', {}).get('pages', []):
+                  revision = (page.get('revisions') or [{}])[0]
                   expected_articles[page.get('title')] = {
                       'title': page.get('title'),
                       'pageid': page.get('pageid'),
                       'wikibase_item': (page.get('pageprops') or {}).get('wikibase_item'),
+                      'revision_id': revision.get('revid'),
+                      'revision_parentid': revision.get('parentid'),
+                      'revision_timestamp': revision.get('timestamp'),
+                      'revision_sha1': revision.get('sha1'),
                   }
               for original in batch:
                   target = redirects.get(normalized.get(original, original), normalized.get(original, original))
@@ -129,12 +136,14 @@ jobs:
               titles = [title for title in sorted(titles) if title]
               if not titles:
                   continue
-              api = f'https://{host}/api.php'
+              api = f'https://{host}/w/api.php' if host in {'commons.wikimedia.org', 'en.wikipedia.org'} else f'https://{host}/api.php'
               for batch in chunks(titles):
                   params = {
                       'action': 'query', 'format': 'json', 'formatversion': 2,
-                      'redirects': 1, 'prop': 'pageprops|categories|links',
-                      'cllimit': 'max', 'pllimit': 'max', 'titles': '|'.join(batch),
+                      'redirects': 1, 'prop': 'pageprops|categories|links|revisions',
+                      'cllimit': 'max', 'pllimit': 'max',
+                      'rvprop': 'ids|timestamp|sha1', 'rvlimit': 1,
+                      'titles': '|'.join(batch),
                   }
                   if any(title.lower().startswith('file:') for title in batch):
                       params['prop'] += '|imageinfo|globalusage'
@@ -153,6 +162,7 @@ jobs:
                       target = redirects.get(normalized.get(original, original), normalized.get(original, original))
                       page = pages.get(target) or pages.get(original) or {'title': target, 'missing': True}
                       ii = (page.get('imageinfo') or [{}])[0]
+                      revision = (page.get('revisions') or [{}])[0]
                       ext = {}
                       for key, value in (ii.get('extmetadata') or {}).items():
                           ext[key] = clean_markup(value.get('value')) if isinstance(value, dict) else clean_markup(value)
@@ -160,6 +170,10 @@ jobs:
                           'title': page.get('title'),
                           'pageid': page.get('pageid'),
                           'wikibase_item': (page.get('pageprops') or {}).get('wikibase_item'),
+                          'revision_id': revision.get('revid'),
+                          'revision_parentid': revision.get('parentid'),
+                          'revision_timestamp': revision.get('timestamp'),
+                          'revision_sha1': revision.get('sha1'),
                           'categories': [row.get('title') for row in page.get('categories', [])],
                           'links': [row.get('title') for row in page.get('links', [])],
                           'globalusage': [row.get('title') for row in page.get('globalusage', [])],
@@ -178,22 +192,24 @@ jobs:
               try:
                   doc = request_json('https://commons.wikimedia.org/w/api.php', {
                       'action': 'wbgetentities', 'format': 'json', 'sites': 'commonswiki',
-                      'titles': '|'.join(batch), 'props': 'claims',
+                      'titles': '|'.join(batch), 'props': 'claims|info',
                   })
               except Exception:
                   continue
               for entity in doc.get('entities', {}).values():
-                  sitelink = (entity.get('sitelinks') or {}).get('commonswiki', {}).get('title')
-                  if not sitelink:
+                  title = entity.get('title') or (entity.get('sitelinks') or {}).get('commonswiki', {}).get('title')
+                  if not title:
                       continue
                   depicts = []
                   for claim in (entity.get('claims') or {}).get('P180', []):
                       value = (((claim.get('mainsnak') or {}).get('datavalue') or {}).get('value') or {})
                       if isinstance(value, dict) and value.get('id'):
                           depicts.append(value['id'])
-                  key = f'commons.wikimedia.org|{sitelink}'
+                  key = f'commons.wikimedia.org|{title}'
                   if key in origin_metadata:
                       origin_metadata[key]['depicts_qids'] = sorted(set(depicts))
+                      origin_metadata[key]['mediainfo_id'] = entity.get('id')
+                      origin_metadata[key]['mediainfo_lastrevid'] = entity.get('lastrevid')
               time.sleep(0.2)
 
           for row in rows:
@@ -201,7 +217,7 @@ jobs:
               row['origin_metadata'] = origin_metadata.get(f'{row["origin_host"]}|{row["origin_title"]}', {})
 
           output = {
-              'version': 1,
+              'version': 2,
               'generated_at': '2026-07-23T00:00:00.000Z',
               'item_set_sha256': state['source']['item_set_sha256'],
               'count': len(rows),
