@@ -239,6 +239,19 @@ export function validateState(state) {
     if (job.status === "leased") {
       if (!job.lease?.id || !job.lease?.agent || !Number.isFinite(Date.parse(job.lease.expires_at))) throw new Error(`task ${job.id} has an invalid lease`);
       if (!/^[0-9a-f]{64}$/i.test(job.lease.readiness_token || "")) throw new Error(`task ${job.id} has an invalid lease readiness token`);
+      const selection = job.lease.selection;
+      if (!selection || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(selection.profile_id || "")) throw new Error(`task ${job.id} lease lacks a valid capability profile`);
+      if (!/^[0-9a-f]{64}$/i.test(selection.policy_sha256 || "")) throw new Error(`task ${job.id} lease lacks a valid capability-policy receipt`);
+      if (!["priority-compatible", "reviewed-task"].includes(selection.strategy)) throw new Error(`task ${job.id} lease has an invalid capability selection strategy`);
+      if (selection.strategy === "reviewed-task" && selection.requested_task_id !== job.id) throw new Error(`task ${job.id} reviewed selection does not bind its exact task id`);
+      if (selection.strategy === "priority-compatible" && selection.requested_task_id != null) throw new Error(`task ${job.id} priority selection unexpectedly names an exact task`);
+      if (!String(selection.basis || "").trim() || String(selection.basis).trim().length < 12) throw new Error(`task ${job.id} lease lacks a specific capability selection basis`);
+      for (const key of ["profile_capabilities", "required_capabilities"]) {
+        if (!Array.isArray(selection[key]) || new Set(selection[key]).size !== selection[key].length || selection[key].some((value) => !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value))) {
+          throw new Error(`task ${job.id} lease has invalid ${key}`);
+        }
+      }
+      if (!Array.isArray(selection.requirement_reasons)) throw new Error(`task ${job.id} lease lacks capability requirement reasons`);
     } else if (job.lease) {
       throw new Error(`task ${job.id} carries a lease outside leased status`);
     }

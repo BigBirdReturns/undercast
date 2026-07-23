@@ -82,6 +82,16 @@ console.log("PASS — synthetic rolling waterline");
     }],
   });
   await put("data/AUTOPILOT-CERTIFICATIONS.json", { version: 1, certifications: [] });
+  await put("data/AUTOPILOT-CAPABILITIES.json", {
+    version: 1,
+    capabilities: [{ id: "audio-listening", description: "Synthetic audio capability." }],
+    profiles: [{
+      id: "text-vision", label: "Text and vision", status: "active", capabilities: [],
+      note: "Synthetic reviewed text and image profile.", reviewed_by: "second-desk", reviewed_role: "second-desk", reviewed_at: "2026-07-21T00:00:00Z",
+    }],
+    rules: [],
+    task_overrides: [],
+  });
   await put("preservation/SNAPSHOTS.json", {
     version: 1,
     updated_at: "",
@@ -153,14 +163,24 @@ console.log("PASS — synthetic rolling waterline");
 
   await put("data/WATERLINE-BLOCK", "blocked\n");
   const waterlineBlocked = run([
-    "claim", "--agent", "luna", "--scope", "star-trek", "--limit", "1",
+    "claim", "--agent", "luna", "--scope", "star-trek", "--capability-profile", "text-vision", "--limit", "1",
     "--now", "2026-07-22T01:30:00Z",
   ], { expect: 1 });
   assert.match(waterlineBlocked.stderr, /rolling gold waterline/);
   await rm(join(root, "data/WATERLINE-BLOCK"));
 
-  run([
+  const missingProfile = run([
     "claim", "--agent", "luna", "--scope", "star-trek", "--limit", "1",
+    "--now", "2026-07-22T01:45:00Z",
+  ], { expect: 1 });
+  assert.match(missingProfile.stderr, /capability-profile/);
+  const candidates = JSON.parse(run([
+    "candidates", "--scope", "star-trek", "--capability-profile", "text-vision", "--json",
+  ]).stdout);
+  assert.equal(candidates.compatible[0].character, "Brunt");
+
+  run([
+    "claim", "--agent", "luna", "--scope", "star-trek", "--capability-profile", "text-vision", "--limit", "1",
     "--out", ".luna/batch.json", "--prompt", ".luna/PROMPT.md", "--now", "2026-07-22T02:00:00Z",
   ]);
   const batch = JSON.parse(await readFile(join(root, ".luna/batch.json"), "utf8"));
@@ -208,7 +228,7 @@ console.log("PASS — synthetic rolling waterline");
   assert.ok(journal.some((row) => row.op === "scope.certified"));
   assert.ok(journal.some((row) => row.op === "scope.refreshed"));
 
-  console.log("PASS — CLI certification, rolling-waterline refusal, due refresh, token rotation, stale-submit refusal, and durable draft receipts");
+  console.log("PASS — CLI certification, capability-profile refusal and candidates, rolling-waterline refusal, due refresh, token rotation, stale-submit refusal, and durable draft receipts");
 } finally {
   await rm(root, { recursive: true, force: true });
 }

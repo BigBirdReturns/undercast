@@ -32,6 +32,19 @@ const readiness = (scope, token = "f") => ({
   manifest_sha256: "d".repeat(64),
 });
 
+const fixtureCapabilityPolicy = {
+  version: 1,
+  capabilities: [],
+  profiles: [{
+    id: "fixture-unrestricted", label: "Fixture unrestricted", status: "active", capabilities: [],
+    note: "Synthetic fixture profile with no optional modality requirements.",
+    reviewed_by: "fixture-desk", reviewed_role: "second-desk", reviewed_at: T0,
+  }],
+  rules: [],
+  task_overrides: [],
+};
+const fixtureCapabilityArgs = { capabilityPolicy: fixtureCapabilityPolicy, capabilityProfileId: "fixture-unrestricted" };
+
 const manifestV1 = {
   observations: [{
     franchise: "Star Trek", category: "Ferengi", title: "Brunt",
@@ -73,7 +86,7 @@ const stable = syncState({ coverage, scopes, state: first.state, coverageSha256:
 assert.equal(stable.changed, false, "unchanged coverage produces byte-stable state");
 assert.equal(stable.state.updated_at, T0, "no-op sync does not churn updated_at");
 
-const claimed = claimTasks({ state: first.state, agent: "luna", scope: "star-trek", readiness: readiness("star-trek"), limit: 2, leaseMinutes: 60, now: T1 });
+const claimed = claimTasks({ ...fixtureCapabilityArgs, state: first.state, agent: "luna", scope: "star-trek", readiness: readiness("star-trek"), limit: 2, leaseMinutes: 60, now: T1 });
 assert.ok(claimed.batch);
 assert.equal(claimed.batch.tasks.length, 2);
 assert.ok(claimed.batch.tasks.every((task) => task.attempt === 1), "batch reports the persisted attempt number");
@@ -82,7 +95,7 @@ assert.ok(claimed.batch.tasks.every((task) => /^[0-9a-f]{64}$/.test(task.source_
 assert.equal(new Set(claimed.batch.tasks.map((task) => task.id)).size, 2);
 assert.equal(claimed.batch.readiness.lease_token, readiness("star-trek").lease_token, "batch pins its certified snapshot");
 assert.ok(claimed.state.jobs.filter((job) => job.status === "leased").every((job) => job.lease.readiness_token === claimed.batch.readiness.lease_token), "state leases pin the same readiness token");
-const claimedAgain = claimTasks({ state: claimed.state, agent: "luna-2", scope: "star-trek", readiness: readiness("star-trek"), limit: 10, leaseMinutes: 60, now: T1 });
+const claimedAgain = claimTasks({ ...fixtureCapabilityArgs, state: claimed.state, agent: "luna-2", scope: "star-trek", readiness: readiness("star-trek"), limit: 10, leaseMinutes: 60, now: T1 });
 assert.equal(claimedAgain.batch, null, "leased tasks cannot be claimed twice");
 assert.equal(claimedAgain.reason, "inflight");
 
@@ -152,7 +165,7 @@ assert.equal(submitted.state.jobs.find((job) => job.id === clownTask.id).status,
 assert.equal(submitted.drafts.length, 1);
 assert.equal(submitted.drafts[0]._autopilot.task_id, bruntTask.id);
 validateState(submitted.state);
-const blockedByPendingDraft = claimTasks({ state: submitted.state, agent: "luna-2", scope: "star-trek", readiness: readiness("star-trek"), limit: 1, now: T3 });
+const blockedByPendingDraft = claimTasks({ ...fixtureCapabilityArgs, state: submitted.state, agent: "luna-2", scope: "star-trek", readiness: readiness("star-trek"), limit: 1, now: T3 });
 assert.equal(blockedByPendingDraft.reason, "inflight", "a pending draft applies backpressure before another batch");
 
 const pendingDraft = syncState({
@@ -234,7 +247,7 @@ const wrongRole = structuredClone(validResults);
 wrongRole.results[0].draft.character = "Weyoun";
 assert.throws(() => submitResults({ state: claimed.state, batch: claimed.batch, resultsDoc: wrongRole, drafts: [], now: T2 }), /must match leased role/);
 
-const expired = claimTasks({ state: claimed.state, agent: "luna-3", scope: "doctor-who", readiness: readiness("doctor-who", "e"), limit: 1, leaseMinutes: 5, now: T1 });
+const expired = claimTasks({ ...fixtureCapabilityArgs, state: claimed.state, agent: "luna-3", scope: "doctor-who", readiness: readiness("doctor-who", "e"), limit: 1, leaseMinutes: 5, now: T1 });
 assert.equal(expired.batch, null, "attention rows remain non-claimable");
 
 const receiptState = syncState({ coverage, scopes, manifest: manifestV1, state: emptyState(), coverageSha256: "d".repeat(64), now: T0 });
