@@ -1,0 +1,217 @@
+name: export-trek-media-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: export-trek-media-review
+  cancel-in-progress: true
+
+jobs:
+  export:
+    if: github.head_ref == 'agent/trek-media-baseline-closure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/trek-media-baseline-closure
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install contact-sheet runtime
+        run: python -m pip install --disable-pip-version-check pillow
+
+      - name: Export unresolved Star Trek facets
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import os
+          import shutil
+          import textwrap
+          from pathlib import Path
+          from urllib.parse import urlparse, unquote
+          from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+          root = Path('.')
+          out = Path('.review-export')
+          images_out = out / 'images'
+          sheets_out = out / 'sheets'
+          images_out.mkdir(parents=True, exist_ok=True)
+          sheets_out.mkdir(parents=True, exist_ok=True)
+
+          state = json.loads((root / 'data/MEDIA-AUDIT.json').read_text())
+          rows = [
+              item for item in state['items']
+              if item.get('scope') == 'star-trek'
+              and item.get('asset')
+              and item.get('status') not in ('verified', 'absent')
+          ]
+          rows.sort(key=lambda item: (
+              0 if item.get('status') == 'attention' else 1,
+              0 if item.get('side') == 'portrait' else 1,
+              item.get('wall_id', ''),
+              item.get('side', ''),
+          ))
+
+          try:
+              font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 16)
+              small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 13)
+              tiny = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 11)
+          except OSError:
+              font = small = tiny = ImageFont.load_default()
+
+          manifest = {
+              'version': 1,
+              'source_item_set_sha256': state['source']['item_set_sha256'],
+              'source_specimens_sha256': state['source']['specimens_sha256'],
+              'source_sources_sha256': state['source']['sources_sha256'],
+              'source_media_manifest_sha256': state['source']['media_manifest_sha256'],
+              'count': len(rows),
+              'items': [],
+              'errors': [],
+          }
+
+          csv_rows = []
+          prepared = []
+          for index, item in enumerate(rows, start=1):
+              asset = item['asset']
+              src = Path(asset['src'])
+              ext = src.suffix.lower() or '.jpg'
+              exported_name = f'{index:04d}-{item["wall_id"]}-{item["side"]}{ext}'
+              exported_path = images_out / exported_name
+              try:
+                  shutil.copy2(root / src, exported_path)
+                  with Image.open(exported_path) as im:
+                      im.verify()
+              except Exception as exc:
+                  manifest['errors'].append({'index': index, 'item_id': item['id'], 'path': str(src), 'error': str(exc)})
+
+              origin_path = unquote(urlparse(asset.get('origin') or '').path)
+              origin_name = Path(origin_path).name or '(no origin filename)'
+              row = {
+                  'index': index,
+                  'item_id': item['id'],
+                  'wall_id': item['wall_id'],
+                  'side': item['side'],
+                  'status': item['status'],
+                  'expected_subject': item['expected_subject'],
+                  'actor': item['actor'],
+                  'character': item['character'],
+                  'asset_src': asset['src'],
+                  'asset_sha256': asset['sha256'],
+                  'asset_bytes': asset['bytes'],
+                  'asset_origin': asset.get('origin'),
+                  'origin_filename': origin_name,
+                  'asset_kind': asset.get('kind'),
+                  'risk_codes': item.get('risk_codes', []),
+                  'claims': item.get('claims'),
+                  'votes': item.get('votes', []),
+                  'exported_image': f'images/{exported_name}',
+              }
+              manifest['items'].append(row)
+              prepared.append((item, row, exported_path))
+              csv_rows.append({
+                  'index': index,
+                  'item_id': item['id'],
+                  'wall_id': item['wall_id'],
+                  'side': item['side'],
+                  'status': item['status'],
+                  'expected_subject': item['expected_subject'],
+                  'actor': item['actor'],
+                  'character': item['character'],
+                  'asset_src': asset['src'],
+                  'asset_sha256': asset['sha256'],
+                  'asset_origin': asset.get('origin') or '',
+                  'origin_filename': origin_name,
+                  'asset_kind': asset.get('kind') or '',
+                  'risk_codes': ','.join(item.get('risk_codes', [])),
+              })
+
+          (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          with (out / 'manifest.csv').open('w', newline='') as handle:
+              writer = csv.DictWriter(handle, fieldnames=list(csv_rows[0].keys()) if csv_rows else [])
+              if csv_rows:
+                  writer.writeheader()
+                  writer.writerows(csv_rows)
+
+          cols, rows_per_sheet = 4, 5
+          cell_w, cell_h = 360, 390
+          image_box = (330, 260)
+          per_sheet = cols * rows_per_sheet
+
+          def fit_line(text, width=40):
+              return textwrap.shorten(str(text or ''), width=width, placeholder='…')
+
+          sheet_index = []
+          for offset in range(0, len(prepared), per_sheet):
+              subset = prepared[offset:offset + per_sheet]
+              sheet_number = offset // per_sheet + 1
+              canvas = Image.new('RGB', (cols * cell_w, rows_per_sheet * cell_h), 'white')
+              draw = ImageDraw.Draw(canvas)
+              entries = []
+              for slot, (item, row, exported_path) in enumerate(subset):
+                  col = slot % cols
+                  r = slot // cols
+                  x, y = col * cell_w, r * cell_h
+                  draw.rectangle((x, y, x + cell_w - 1, y + cell_h - 1), outline='black', width=1)
+                  try:
+                      with Image.open(exported_path) as im:
+                          im = ImageOps.exif_transpose(im).convert('RGB')
+                          fitted = ImageOps.contain(im, image_box)
+                          ix = x + (cell_w - fitted.width) // 2
+                          iy = y + 8 + (image_box[1] - fitted.height) // 2
+                          canvas.paste(fitted, (ix, iy))
+                  except Exception as exc:
+                      draw.rectangle((x + 15, y + 15, x + cell_w - 15, y + image_box[1]), fill='#dddddd')
+                      draw.text((x + 25, y + 100), 'IMAGE ERROR', font=font, fill='black')
+
+                  label_y = y + 278
+                  status = item.get('status', '')
+                  risk = ','.join(item.get('risk_codes', [])) or '-'
+                  lines = [
+                      f'#{row["index"]:04d}  {item["wall_id"]}  {item["side"]}  [{status}]',
+                      f'Expected: {fit_line(item["expected_subject"], 37)}',
+                      f'Actor: {fit_line(item["actor"], 41)}',
+                      f'Character: {fit_line(item["character"], 37)}',
+                      f'Origin: {fit_line(row["origin_filename"], 40)}',
+                      f'Risk: {fit_line(risk, 44)}',
+                  ]
+                  for line_no, line in enumerate(lines):
+                      draw.text((x + 8, label_y + line_no * 17), line, font=small if line_no < 4 else tiny, fill='black')
+                  entries.append({'index': row['index'], 'item_id': item['id'], 'wall_id': item['wall_id'], 'side': item['side']})
+
+              name = f'sheet-{sheet_number:03d}.jpg'
+              canvas.save(sheets_out / name, quality=90, optimize=True)
+              sheet_index.append({'sheet': f'sheets/{name}', 'items': entries})
+
+          (out / 'sheets.json').write_text(json.dumps(sheet_index, indent=2) + '\n')
+          (out / 'README.txt').write_text(
+              f'Star Trek media review export\n'
+              f'Open facets: {len(rows)}\n'
+              f'Contact sheets: {len(sheet_index)}\n'
+              f'Item-set SHA-256: {state["source"]["item_set_sha256"]}\n'
+              'Identity must be established from source evidence, not facial recognition.\n'
+              'Presentation may be visually classified. Ambiguity must remain visible.\n'
+          )
+
+          if manifest['errors']:
+              raise SystemExit(f'{len(manifest["errors"])} image export error(s); see manifest.json')
+          print(f'Exported {len(rows)} facets into {len(sheet_index)} sheets')
+          PY
+
+      - name: Upload hash-bound review export
+        uses: actions/upload-artifact@v4
+        with:
+          name: trek-media-review-export
+          path: .review-export
+          if-no-files-found: error
+          retention-days: 14
