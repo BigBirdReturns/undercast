@@ -1,100 +1,144 @@
-# UNDERCAST — handoff, 2026-07-23
+# UNDERCAST — handoff after the first successful Star Trek cycle, 2026-07-23
 
-`main` is a public, preservation-backed static archive. The trusted foundation,
-certified Star Trek producer, bounded Luna Autopilot, five-year roadmap, exact
-source/original-media preservation, exact-subject media-audit control plane,
-shared site tokens, canonical cross-platform gate, fail-closed DS9 owner decision
-authoring, and rolling gold waterline are merged.
-
-PR #66 merged as `37624053737483cd09768e5b37fd3d3bb9eee976`. Its exact
-qualified head was `e32a544f3cc24273fef3b5d0030d2ab0a90b29e3`; archive-contract
-run `29961856439` and preservation-export run `29961856458` both passed.
-No card was added, no Luna lease was issued, no roadmap milestone was closed,
-and no owner decision was inferred by that merge.
+UNDERCAST is a public, preservation-backed static archive. The trusted foundation,
+certified Star Trek producer, bounded Luna Autopilot, capability-aware leasing,
+five-year roadmap, exact source/original-media preservation, exact-subject media
+audit, canonical cross-platform gate, DS9 owner-decision tooling, and rolling gold
+waterline are canonical.
 
 ## Current truthful state
 
-- Canonical wall: **1,246 records**.
+- Canonical wall: **1,247 records**.
 - Reviewed Star Trek census: **2,295 performer-role observations**, **1,657
-  performers**, **2,054 / 2,054** current source receipts.
-- Certified Star Trek Autopilot: **2,226 durable tasks**; the foundation receipt
-  recorded **1,904 queued / 322 resolved / zero in flight**.
+  performers**, and **2,054 / 2,054** current source receipts.
+- Star Trek Autopilot: **2,226 durable tasks** — **1,901 queued**, **2 blocked**,
+  **323 resolved**, and **zero in flight**.
 - Star Trek is the only active certified producer scope. Every other configured
   scope remains paused pending adapter review and certification.
 - Preservation snapshot `preservation-20260721-3bbec746c478` retains **15,210
   exact source revisions**, a restorable repository snapshot, and all **1,520
   pre-R1 originals**. Provider read-back is verified. Destructive history rewrite
   remains unauthorized.
-- Canonical repository gate: **`npm run gate`**. CI invokes the same command; do
-  not maintain or report a second command list.
-- Roadmap state remains **1 / 12 complete**. The ready milestones are
+- Canonical repository gate: **`npm run gate`**. CI invokes the same command.
+- Roadmap state remains **1 / 12 complete**. The ready milestones remain
   `star-trek-gold-shard` and `operational-reliability`.
 
-## Current operating phase: `baseline-review`
+## Exact-subject media waterline
 
-The Star Trek exact-subject baseline contains **744 facets across 372 records**:
+The current Star Trek wall contains **746 facets across 373 records**:
 
 | State | Facets |
 |---|---:|
-| verified exact identity + presentation | **0** |
-| receipted absent | **96** |
-| available, awaiting independent identity review | **564** |
-| presentation defect or unresolved ambiguity | **84** |
+| verified exact identity + presentation | **558** |
+| honestly absent with receipts | **188** |
+| review | **0** |
+| attention | **0** |
 
-Therefore **648 available facets remain open**. The current baseline is not gold,
-`verified_records` and `media_audit_ratio` remain unknown, and new Star Trek
-roster leases are intentionally blocked. Provenance and a byte hash prove source
-and file identity; they do not prove the pictured subject.
+The baseline is therefore **746 / 746 complete with zero media debt**. Positive
+identity is grounded in revision-bound source evidence and exact-byte/source-image
+receipts, never appearance inference. Wrong or ambiguous assets are nulled from
+canonical slots while immutable bytes and former objects remain in history.
 
-Read `docs/MEDIA-AUDIT.md`. Review identity and presentation independently. One
-machine vote cannot close a facet. Replace or null wrong assets, retain immutable
-history, run `media:audit sync`, and finish with solid multi-reviewer consensus or
-an authorized obvious-negative ruling. Never convert uncertainty into a positive
-identity vote.
+Andrea Martin as Ishka is the first card completed through the full capability-aware
+rolling loop. It is filed as `UC-1278`; both its character still and performer
+portrait are exact-subject verified. The durable task
+`ap_167ac35ec0c06c7005bcc32f` is resolved.
 
 ## Rolling gold waterline
 
-The waterline is now canonical:
+Current Star Trek phase:
+
+```text
+ready-for-cycle
+```
+
+Current cycle ledger:
+
+| Cycle | Outcome |
+|---|---|
+| James Doohan — Enwright | aborted honestly; required listener-grade voice evidence unavailable |
+| James Doohan — M-5 | aborted honestly; sample recovered, but all three reviewer runtimes lacked audio |
+| Andrea Martin — Ishka | **completed successfully** through merge, retrieval, exact-subject closure, gate, and reviewed receipt |
+
+The reviewed successful receipt is
+`cycle_7d0b3cdd2045c1d3147390ed`. Its durable evidence includes the committed
+lease, restart-safe processing run `30038612247`, exact media-evidence run
+`30039035550`, resolved candidate commit
+`8b0c1e0e53e375864e00e248439bed886691dc8f`, and closure/gate run
+`30041337360`.
+
+Current waterline accounting:
+
+```text
+successful cycles: 1 / 3 required
+aborted cycles:    2
+unreceipted leases: 0
+work in flight:     0
+media debt:         0
+claim allowed:      yes
+```
+
+One successful cycle does **not** complete `star-trek-gold-shard`. Two more
+reviewed restart-safe successful cycles and a current five-way task-accounting
+receipt are still required.
+
+## Capability-aware leasing
+
+The active reviewed profile is `text-vision`: source research and exact-image
+review are available; audio listening is not. The `audio-vision` profile remains
+paused until at least three genuinely audio-capable blind reviewers are available
+and a reviewed policy change activates it.
+
+Audio-required tasks remain visible and queued. They are skipped without changing
+priority, attempts, eligibility, or terminal state. Sargon is bound by an exact
+source-fingerprint override to `audio-listening`, despite its misleading historical
+mode hint.
+
+Before the next lease:
 
 ```bash
 npm run roadmap -- status
-npm run media:audit -- status --scope star-trek
-npm run waterline -- validate
+npm run autopilot -- readiness --scope star-trek --require-active
+npm run media:audit -- gate --scope star-trek
 npm run waterline -- status --scope star-trek
+npm run autopilot -- candidates \
+  --scope star-trek \
+  --capability-profile text-vision \
+  --limit 20
 ```
 
-Completing the baseline authorizes **one bounded lease of at most eight tasks**,
-not unlimited queue draining:
+Then claim **one bounded cycle only**. Normal operation selects the
+highest-priority compatible task. An exact proof task requires `--task-id`,
+`--limit 1`, and a specific reviewed `--selection-basis`.
+
+The complete loop remains:
 
 ```text
-zero current media debt
-→ one bounded Luna lease
-→ research / draft / canonical merge
-→ retrieval and independent exact-subject review
-→ zero media debt again
+ready-for-cycle
+→ one bounded capability-compatible lease
+→ evidence-backed draft or honest terminal decision
+→ canonical merge
+→ targeted retrieval
+→ exact identity and presentation review
+→ zero media debt
 → terminal task state
 → second-desk/owner-reviewed cycle receipt
-→ only then may another lease begin
+→ ready-for-cycle
 ```
 
-`--allow-inflight` does not bypass the waterline. A previous unreceipted lease,
-active work, open media debt, missing preservation, excessive requested batch, or
-an open high/critical incident blocks the next claim.
+No second lease is authorized before the first returns to zero debt and receives a
+reviewed receipt.
 
-The current `data/WATERLINE-STATE.json` is intentionally empty of operating
-receipts: **0 cycles, 0 drills, 0 accounting receipts, 0 metric receipts, and 0
-incidents**. The four operating metrics remain `null`, not zero.
-
-## Evidence required for the two ready roadmap milestones
+## Remaining evidence for the ready roadmap milestones
 
 ### `star-trek-gold-shard`
 
-- current exact-subject baseline at zero debt;
-- **three** reviewed, restart-safe successful Luna cycle receipts;
-- each successful cycle resolves at least one task through the complete lifecycle;
+- two additional reviewed successful Luna cycles;
+- at least one resolved task in each successful cycle;
+- zero media debt and zero unreceipted work after every cycle;
 - current five-way accounting over every durable task:
   `eligible / filed / blocked / excluded / unresolved`;
-- accounting denominator exactly matches the current task set.
+- accounting denominator exactly matching the current task set.
 
 ### `operational-reliability`
 
@@ -103,35 +147,22 @@ incidents**. The four operating metrics remain `null`, not zero.
 - measured `build_minutes_p95`, `cost_per_verified_record_usd`,
   `source_freshness_p95_days`, and `rights_response_sla_days`;
 - build p95 ≤20 minutes, source freshness p95 ≤14 days, rights response ≤14 days;
-- no invented cost target: cost must be measured before review;
+- no invented cost target; cost must be measured before review;
 - high/critical incident stop and reviewed close/downgrade authority remain green.
 
-The waterline prepares evidence only. Completion still lands through reviewed
-`data/ROADMAP-STATE.json` receipts. If both milestones are reviewed complete, the
-next dependency frontier becomes exactly:
+Only reviewed roadmap completion receipts for both milestones unlock:
 
 ```text
 adapter-sdk-and-second-gold-shard
 public-trust-and-corrections
 ```
 
-Do not start either before those roadmap receipts land.
-
 ## Standing discipline
 
 - Machines prepare; second desk and owner exercise their named authority.
-- Never invent a fact, identity, metric, owner ruling, or completion state.
+- Never invent a fact, identity, metric, capability, owner ruling, or completion.
 - Unknown is `null`, not zero. Ambiguous is visible debt, not verification.
 - A green schema is not semantic truth; a source URL is not subject identity.
-- Keep source snapshots, immutable media hashes, replacement/expunge history, and
-  provider-read-back receipts intact.
-
-## Capability-aware next cycle
-
-PR #69 truthfully receipted two audio-capability aborts. Before another claim, run
-`npm run autopilot -- candidates --scope star-trek --capability-profile text-vision
---limit 20`. The text-vision profile may skip audio-required work without changing
-its queue state. A reviewed proof task may be selected with `--task-id`, `--limit
-1`, and `--selection-basis`; otherwise the highest-priority compatible task is
-leased. Do not activate `audio-vision` until three genuinely audio-capable blind
-reviewers exist and the policy change is reviewed.
+- A missing runtime capability is not an eligibility rejection.
+- Preserve source snapshots, immutable media hashes, replacement/expunge history,
+  capability receipts, cycle receipts, and provider read-back evidence.

@@ -245,6 +245,7 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **Haruo Nakajima** (UC-127) — Michael Koschinski, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Haruo_Nakajima_2013_(cropped).jpg)
 - **Leigh J. McCloskey** (UC-1270) — Rainbowblast77, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:LeighBYalinekras.jpg)
 - **Ryan Spahn** (UC-1273) — Ryanchristoper, CC0 — [source](https://commons.wikimedia.org/wiki/File:0922_Red_Bull_Theater_Richard_II_Meet_and_Greet_RebeccaJMichelson-23.jpg)
+- **Andrea Martin** (UC-1278) — PhilipRomanoPhoto, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:AndreaMartin-byPhilipRomano.jpg)
 - **Bin Furuya** (UC-128) — Super Festivals, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Bin_Furuya_Photo_Op_GalaxyCon_Louisville_2019.jpg)
 - **Tsutomu Kitagawa** (UC-130) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Tsutomu_Kitagawa_(48602342676).jpg)
 - **Peter Weller** (UC-132) — Florida Supercon, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Peter_Weller_2016.jpg)
@@ -732,8 +733,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **702**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **950**
+- Free-licensed portraits (attributed above): **703**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **951**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
 email and any specific asset comes down.
