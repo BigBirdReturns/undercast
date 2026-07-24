@@ -541,16 +541,41 @@ if (existsSync("data/species.json") && existsSync("data/CENSUS-COVERAGE.json") &
     const filedIds = new Set((taxon.records || []).map((row) => row.id));
     if (expectedIds.size !== filedIds.size || [...expectedIds].some((id) => !filedIds.has(id)))
       fail("species.navigation_integrity", `${taxon.label} filed record set is not the exact census join`);
+    const wallRecords = taxon.wall_records || [];
+    const wallIds = new Set(wallRecords.map((row) => row.id));
+    if (taxon.counts?.filed_records !== filedIds.size || taxon.counts?.primary_card_records !== wallIds.size)
+      fail("species.navigation_integrity", `${taxon.label} filed/primary record counts drifted`);
+    for (const id of wallIds) {
+      if (!filedIds.has(id)) fail("species.navigation_integrity", `${taxon.label} wall facet points outside its exact filed join: ${id}`);
+      if (!Array.isArray(indexById.get(id)?.sp) || !indexById.get(id).sp.includes(taxon.label))
+        fail("species.navigation_integrity", `${id} is missing ${taxon.label} from the lean index`);
+    }
+    for (const id of filedIds) if (!wallIds.has(id) && indexById.get(id)?.sp?.includes(taxon.label))
+      fail("species.navigation_integrity", `${id} inherits ${taxon.label} from an additional performance instead of its displayed role`);
+    const dispositionKey = (row) => [row.character, row.performer, row.source].map(normalizeCensusKey).join("|");
+    const primaryKeys = new Set(wallRecords.flatMap((record) => (record.credits || []).map(dispositionKey)));
+    const ledger = taxon.credits || [];
+    if (ledger.length !== credits.length) fail("species.navigation_integrity", `${taxon.label} complete credit ledger count drifted`);
+    const dispositionCounts = { "primary-card": 0, "additional-performance": 0, unfiled: 0 };
+    for (const row of ledger) {
+      const exact = credits.find((credit) => credit.character === row.character && credit.performer === row.performer && credit.performance_mode === row.performance_mode && credit.source === row.source);
+      if (!exact) { fail("species.navigation_integrity", `${taxon.label} ledger carries a non-source credit ${row.character} / ${row.performer}`); continue; }
+      const expectedStatus = !exact.role_on_wall ? "unfiled" : primaryKeys.has(dispositionKey(row)) ? "primary-card" : "additional-performance";
+      if (row.status !== expectedStatus) fail("species.navigation_integrity", `${taxon.label} ${row.character} / ${row.performer} is ${row.status}; expected ${expectedStatus}`);
+      const expectedWallIds = [...(exact.wall_ids || [])].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      if (JSON.stringify(row.wall_ids || []) !== JSON.stringify(expectedWallIds)) fail("species.navigation_integrity", `${taxon.label} ${row.character} / ${row.performer} wall binding drifted`);
+      if (row.status in dispositionCounts) dispositionCounts[row.status]++;
+    }
+    if (taxon.counts?.primary_card_credits !== dispositionCounts["primary-card"] || taxon.counts?.additional_performance_credits !== dispositionCounts["additional-performance"] || taxon.counts?.unfiled_named_credits !== dispositionCounts.unfiled)
+      fail("species.navigation_integrity", `${taxon.label} role disposition counts drifted`);
     for (const record of taxon.records || []) {
       if (!specIds.has(record.id)) fail("species.navigation_integrity", `${taxon.label} points at missing ${record.id}`);
-      if (!Array.isArray(indexById.get(record.id)?.sp) || !indexById.get(record.id).sp.includes(taxon.label))
-        fail("species.navigation_integrity", `${record.id} is missing ${taxon.label} from the lean index`);
       for (const credit of record.credits || []) {
         const exact = credits.find((row) => row.character === credit.character && row.performer === credit.performer && row.performance_mode === credit.performance_mode && row.source === credit.source && row.wall_ids?.includes(record.id));
         if (!exact) fail("species.navigation_integrity", `${taxon.label} ${record.id} carries a non-exact credit ${credit.character} / ${credit.performer}`);
         const specimen = specimens.find((row) => row.id === record.id);
         const exactPerformer = [specimen?.actor, ...(specimen?.aliases || [])].some((name) => normalizeCensusKey(name) === normalizeCensusKey(credit.performer));
-        const exactRole = [specimen?.character, ...(specimen?.performances || []).map((performance) => performance.character)].some((role) => normalizeCensusKey(role) === normalizeCensusKey(credit.character));
+        const exactRole = [specimen?.character, ...(specimen?.roleAliases || []).map((alias) => alias.character), ...(specimen?.performances || []).map((performance) => performance.character)].some((role) => normalizeCensusKey(role) === normalizeCensusKey(credit.character));
         if (!exactPerformer || !exactRole) fail("species.navigation_integrity", `${taxon.label} ${record.id} is not an exact canonical performer-role join for ${credit.character} / ${credit.performer}`);
       }
     }

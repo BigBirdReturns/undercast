@@ -561,3 +561,20 @@ test("all canonical sitemap routes resolve and merged aliases stay out",async({r
   expect(alias.ok()).toBeTruthy();
   expect(await alias.text()).toContain("recognition.html#UC-959");
 });
+
+test("Ferengi URL preserves the makers anchor and shows only exact displayed roles plus the complete source ledger",async({page})=>{
+  await open(page,"index.html?shelf=Star+Trek&species=Ferengi#makers");
+  await waitForWall(page);
+  await expect(page).toHaveURL(/shelf=Star\+Trek&species=Ferengi#makers$/);
+  await expect(page.getByRole("button",{name:"Star Trek",exact:true})).toHaveAttribute("aria-pressed","true");
+  await expect(page.getByRole("button",{name:"Ferengi",exact:true})).toHaveAttribute("aria-pressed","true");
+  await expect(page.locator("#result-status")).toHaveText("14 specimens match; 14 shown.");
+  const names=await page.locator(".charname").allTextContents();
+  expect(names).toEqual(["Quark","Rom","Nog","Quark (mirror)","Brunt (mirror)","Nog (mirror)","Ishka","Bok / Gral / Prak","Krax","DaiMon Lurin","Grimp","Leck","Pel","Berik"]);
+  expect(names).not.toContain("Weyoun");
+  expect(names).not.toContain("Neelix");
+  await expect(page.locator("#speciesContext")).toContainText("70 captured named credits");
+  await expect(page.locator("#speciesContext")).toContainText("16 additional performances on file");
+  await expect(page.locator("#speciesLedger > li")).toHaveCount(70);
+  await expect(page.locator("#makers")).toBeInViewport();
+});

@@ -11,8 +11,8 @@ waterline are canonical.
 - Canonical wall: **1,247 records**.
 - Reviewed Star Trek census: **2,295 performer-role observations**, **1,657
   performers**, and **2,054 / 2,054** current source receipts.
-- Star Trek Autopilot: **2,226 durable tasks** — **1,901 queued**, **2 blocked**,
-  **323 resolved**, and **zero in flight**.
+- Star Trek Autopilot: **2,226 durable tasks** — **1,900 queued**, **2 blocked**,
+  **324 resolved**, and **zero in flight**.
 - Star Trek is the only active certified producer scope. Every other configured
   scope remains paused pending adapter review and certification.
 - Preservation snapshot `preservation-20260721-3bbec746c478` retains **15,210
@@ -25,16 +25,16 @@ waterline are canonical.
 
 ## Exact-subject media waterline
 
-The current Star Trek wall contains **746 facets across 373 records**:
+The current Star Trek wall contains **750 facets across 375 records**:
 
 | State | Facets |
 |---|---:|
-| verified exact identity + presentation | **558** |
+| verified exact identity + presentation | **562** |
 | honestly absent with receipts | **188** |
 | review | **0** |
 | attention | **0** |
 
-The baseline is therefore **746 / 746 complete with zero media debt**. Positive
+The baseline is therefore **750 / 750 complete with zero media debt**. Positive
 identity is grounded in revision-bound source evidence and exact-byte/source-image
 receipts, never appearance inference. Wrong or ambiguous assets are nulled from
 canonical slots while immutable bytes and former objects remain in history.
@@ -43,6 +43,22 @@ Andrea Martin as Ishka is the first card completed through the full capability-a
 rolling loop. It is filed as `UC-1278`; both its character still and performer
 portrait are exact-subject verified. The durable task
 `ap_167ac35ec0c06c7005bcc32f` is resolved.
+
+## Exact species-role navigation
+
+Species filters classify the **displayed primary card role**, never the performer as
+a whole. `data/species.json` separately retains every captured named credit as a
+primary card, an additional performance on file, or an unfiled role. Normal named
+anchors such as `#makers` must preserve URL filters; only `#UC-…` hashes may invoke
+card focus and clear an incompatible view.
+
+The retained Ferengi scope currently contains 70 named credits: 16 primary-card
+credits across 14 illustrated cards, 16 additional performances on file, and 38
+unfiled named credits, plus eight source pages without a named performer.
+
+The exact role-aware taxonomy candidate passed workflow run `30062093909`, including
+producer recertification, the 750-facet media gate, deterministic projections, all
+archive invariants, and all 20 rendered-browser tests before publication.
 
 ## Rolling gold waterline
 

@@ -208,11 +208,14 @@ already been identified.
 
 `data/vocabularies/species.json` maps an exact census category to its singular
 display label; `scripts/build-species.mjs` joins those source rows to exact filed
-performer-role records and publishes `data/species.json`. The wall's species
-filter, card links, focused-record rail and permanent pages all consume that
-projection. They never classify a role because “Klingon” or “Ferengi” happened
-to appear in reveal prose. The first durable taxa are Klingon and Ferengi; a new
-taxon is added only when its source category has been captured and retained.
+performer-role records and publishes `data/species.json`. The wall facet uses only
+`wall_records`: cards whose **displayed primary role** belongs to the taxon. A
+performer's additional roles remain visible in the complete source-backed credit
+ledger but cannot relabel an unrelated primary card. Source-backed `roleAliases`
+handle equivalent primary labels such as `DaiMon Lurin` / `Lurin`; all-component
+composite cards are accepted only when every displayed role resolves exactly. The
+first durable taxa are Klingon and Ferengi; a new taxon is added only when its
+source category has been captured and retained.
 
 ## Constellations beyond the wall
 

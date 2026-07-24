@@ -87,6 +87,7 @@ const stepDefinitions = [
   { id: "lockfile", label: "Verify package-lock consistency", action: () => runCommand("Lockfile consistency", npmCommand, ["ci", "--dry-run"], { cwd: ROOT }) },
   { id: "projections", label: "Rebuild projection and refuse drift", action: runProjectedSteps },
   { id: "archive", label: "Validate archive invariants", action: () => runNodeScript("Archive invariants", "scripts/validate.mjs") },
+  { id: "species-fixtures", label: "Validate exact species wall and role-ledger semantics", action: () => runNpmScript("Species fixtures", "species:fixtures") },
   { id: "autopilot", label: "Validate Autopilot queue and fixtures", action: () => { runNodeScript("Autopilot state", "scripts/autopilot.mjs", ["validate"]); runNpmScript("Autopilot fixtures", "autopilot:fixtures"); } },
   { id: "roadmap", label: "Validate roadmap and next-work contract", action: () => { runNpmScript("Roadmap validate", "roadmap", ["--", "validate"]); runNpmScript("Roadmap fixtures", "roadmap:fixtures"); runNpmScript("Roadmap next", "roadmap", ["--", "next", "--limit", "1", "--json"]); } },
   { id: "preservation", label: "Validate preservation machinery and durability", action: () => { runNpmScript("Preservation fixtures", "preserve:fixtures"); runNpmScript("Preservation status", "preserve:status", ["--", "--json"]); } },
