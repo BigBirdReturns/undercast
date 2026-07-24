@@ -1,55 +1,102 @@
-name: retrieve-images
-
-# Keyless. Crawls wikis for stills + portraits, caches them into the repo,
-# updates the provenance ledger, rebuilds CREDITS.md. No ANTHROPIC_API_KEY needed.
+name: rolling-media-search
 
 on:
   schedule:
-    - cron: "23 7 * * *"     # nightly, offset from any other job
-  workflow_dispatch: {}
+    - cron: '43 4 * * *'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Maximum media facets to re-search'
+        required: false
+        default: '40'
 
 permissions:
   contents: write
 
 concurrency:
-  group: retrieve
+  group: rolling-media-search
   cancel-in-progress: false
 
 jobs:
-  retrieve:
+  search:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: '24'
 
-      - name: Retrieve images + provenance
+      - name: Build the due search plan
+        id: plan
         env:
-          RETRIEVE_MAX: "40"          # chip away 40 cards per night
-          CRAWL_DELAY_MS: "1500"      # be gentle with the wikis
-          IMAGE_MODE: "loose"         # also pull Fandom performer photos (denser)
-          CONTACT: "bigbirdreturns@proton.me"  # goes in the crawler's User-Agent
-        run: node scripts/retrieve.mjs
-
-      - name: Rebuild credits
-        run: node scripts/credits.mjs
-
-      - name: Rebuild serving projections (index + shards from the canonical data)
-        run: node scripts/shard.mjs
-
-      - name: Validate invariants (gate — refuse to commit a corrupt state)
-        run: node scripts/validate.mjs
-
-      - name: Commit
+          LIMIT: ${{ inputs.limit || '40' }}
         run: |
-          git config user.name  "undercast-bot"
-          git config user.email "undercast-bot@users.noreply.github.com"
-          git add data/specimens.json data/SOURCES.json data/GAPS.json CREDITS.md images
-          git add data/index.json data/shard-manifest.json data/shards   # generated serving projections
-          git add data/archive.json data/entities.json data/dataset.jsonld data/search sitemap.xml
-          git add data/media-live.json 2>/dev/null || true               # lean release-url map (if any)
-          git diff --cached --quiet && exit 0
-          git commit -m "retrieve: images + provenance ($(date -u +%F))"
-          for i in 1 2 3; do git pull --rebase --autostash origin main && git push && exit 0 || sleep $((i*3)); done
-          echo "push failed after retries"; exit 1
+          mkdir -p "$RUNNER_TEMP/media-search"
+          node scripts/media-search-plan.mjs \
+            --limit "$LIMIT" \
+            --out "$RUNNER_TEMP/media-search/plan.json" \
+            > "$RUNNER_TEMP/media-search/plan.stdout.json"
+          count=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));console.log(p.candidates.length)" "$RUNNER_TEMP/media-search/plan.json")
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Search in a detached candidate worktree
+        env:
+          RETRIEVE_MAX: ${{ steps.plan.outputs.count }}
+          CRAWL_DELAY_MS: '1500'
+          CONTACT: 'bigbirdreturns@proton.me'
+        run: |
+          work="$RUNNER_TEMP/media-search/worktree"
+          git worktree add --detach "$work" HEAD
+          cp "$RUNNER_TEMP/media-search/plan.json" "$work/media-search-plan.json"
+          cd "$work"
+          node scripts/media-search-prepare.mjs \
+            --plan media-search-plan.json \
+            --ids-out media-search-ids.txt
+          ids=$(cat media-search-ids.txt)
+          if [ -n "$ids" ]; then
+            RETRIEVE_ONLY="$ids" \
+            RETRIEVE_MAX="$RETRIEVE_MAX" \
+            IMAGE_MODE=loose \
+            node scripts/retrieve.mjs
+          fi
+          cd "$GITHUB_WORKSPACE"
+          node scripts/media-search-report.mjs \
+            --baseline "$GITHUB_WORKSPACE" \
+            --candidate "$work" \
+            --plan "$RUNNER_TEMP/media-search/plan.json" \
+            --out "$GITHUB_WORKSPACE/media-search-candidates" \
+            --journal "$GITHUB_WORKSPACE/data/journal/media-search.jsonl" \
+            --latest "$GITHUB_WORKSPACE/data/MEDIA-SEARCH-LATEST.json" \
+            --run-id "$GITHUB_RUN_ID"
+          git worktree remove --force "$work"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: media-search-candidates-${{ github.run_id }}
+          path: |
+            media-search-candidates
+            ${{ runner.temp }}/media-search/plan.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Commit attempt receipts only
+        run: |
+          git config user.name 'undercast-media-search'
+          git config user.email 'undercast-media-search@users.noreply.github.com'
+          git add data/MEDIA-SEARCH-LATEST.json
+          if [ -f data/journal/media-search.jsonl ]; then
+            git add data/journal/media-search.jsonl
+          fi
+          git diff --cached --check
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Media search: record rolling candidate attempt ($(date -u +%F))"
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin main && git push origin HEAD:main && exit 0
+            sleep $((attempt * 3))
+          done
+          echo 'media-search receipt push failed after retries'
+          exit 1
