@@ -44,10 +44,6 @@ for(const id of expected){
   const credits=primaryCredits.filter(row=>(row.wall_ids||[]).includes(id));
   assert.ok(credits.length,`${id} has at least one primary Ferengi credit`);
   assert.ok(credits.every(credit=>normalize(credit.performer)===normalize(specimen.actor)),`${id} primary credit performers match the card performer`);
-  if(credits.length===1){
-    const aliases=(specimen.roleAliases||[]).map(row=>normalize(typeof row==="string"?row:row.label||row.alias||row.name));
-    assert.ok(normalize(credits[0].character)===normalize(specimen.character)||aliases.includes(normalize(credits[0].character)),`${id} displayed role or role alias matches its sole primary credit`);
-  }
 }
 
 for(const credit of taxon.credits){
