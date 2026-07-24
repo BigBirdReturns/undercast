@@ -207,6 +207,19 @@
   .mchip[aria-pressed="true"]{background:var(--seam);color:var(--plaster);border-color:var(--seam);}
   .mchip[aria-pressed="true"] .mn{background:rgba(255,255,255,.25);color:var(--plaster);}
   .mchip:focus-visible{outline:2px solid var(--grease);outline-offset:1px;}
+  .species-context{border:1px solid var(--seam);background:var(--relief-hi);padding:14px 16px;margin-bottom:20px;font-size:11px;line-height:1.6;color:var(--ink-soft);}
+  .species-context h3{font-family:"Fraunces",serif;font-size:22px;line-height:1;margin:0;color:var(--ink);}
+  .species-summary{display:flex;gap:10px 18px;flex-wrap:wrap;margin-top:8px;}
+  .species-summary b{color:var(--ink);}
+  .species-context .scope-note{margin:8px 0 0;max-width:90ch;}
+  .species-context details{margin-top:10px;border-top:1px dotted var(--line);padding-top:8px;}
+  .species-context summary{cursor:pointer;color:var(--grease);font-weight:700;}
+  .species-ledger{columns:2;column-gap:26px;margin:10px 0 0;padding-left:22px;}
+  .species-ledger li{break-inside:avoid;margin:0 0 7px;padding-right:8px;}
+  .species-ledger .role{color:var(--ink);font-weight:700;}
+  .species-ledger .status{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);}
+  .species-ledger a{color:var(--grease);}
+  @media(max-width:720px){.species-ledger{columns:1;}}
   .maker-active{
     display:flex;align-items:center;gap:12px;flex-wrap:wrap;
     border:1px solid var(--seam);background:var(--relief-hi);padding:9px 13px;margin-bottom:20px;
@@ -514,6 +527,7 @@
     <div class="fgroup"><span class="flabel">Species</span><div class="chips" id="speciesChips" role="group" aria-label="Filter by sourced species role"></div></div>
   </div>
 
+  <section class="species-context" id="speciesContext" aria-live="polite" hidden></section>
   <div class="maker-active" id="makerActive" hidden></div>
 
   <div id="result-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -563,6 +577,7 @@
 let INDEX = [];               // lean entries: {id,sh,u,y,d,a,c,p,tf,k?,kw?,_hay}
 let MANIFEST = null;          // data/shard-manifest.json — the shard load map
 let MEDIA = {};               // localSrc -> {url,location}: images living on GitHub Releases
+let SPECIES_PROJECTION = {taxa:[]}; // complete source-backed role ledger + exact wall-role facets
 const RECORDS = new Map();    // id -> full record (populated lazily from shards)
 const SHARDS = new Map();     // shard# -> in-flight/settled load promise (dedupe)
 let renderSeq = 0;            // guards against a stale async render clobbering a newer one
@@ -685,6 +700,7 @@ const sortEl=document.getElementById("sort");
 const chipsEl=document.getElementById("chips");
 const decadesEl=document.getElementById("decades");
 const speciesChipsEl=document.getElementById("speciesChips");
+const speciesContextEl=document.getElementById("speciesContext");
 const makerChipsEl=document.getElementById("makerChips");
 const makerActiveEl=document.getElementById("makerActive");
 const loadmoreEl=document.getElementById("loadmore");
@@ -790,6 +806,23 @@ function speciesClick(event,el){
   event.preventDefault();event.stopPropagation();setSpecies(el.dataset.species||"All");
   (document.getElementById("grid")||document.body).scrollIntoView({behavior:reducedMotion()?"auto":"smooth",block:"start"});
   return false;
+}
+function activeTaxon(){ return (SPECIES_PROJECTION.taxa||[]).find(taxon=>taxon.label===speciesFilter)||null; }
+function renderSpeciesContext(rows){
+  const taxon=activeTaxon();
+  if(!taxon){ speciesContextEl.hidden=true;speciesContextEl.innerHTML="";return; }
+  const c=taxon.counts||{};
+  const statusLabel={"primary-card":"illustrated primary role","additional-performance":"additional performance on file",unfiled:"not yet a dedicated card"};
+  const ledger=(taxon.credits||[]).map(credit=>{
+    const ids=Array.isArray(credit.wall_ids)?credit.wall_ids:[];
+    let destination="";
+    if(credit.status==="primary-card"&&ids[0]) destination=` · <a href="#${safeId(ids[0])}">card ${esc(ids[0])}</a>`;
+    else if(credit.status==="additional-performance"&&ids[0]) destination=` · <a href="./recognition.html#${safeId(ids[0])}">filed under ${esc(ids[0])}</a>`;
+    else destination=` · <a href="${safeUrl(credit.source)}" target="_blank" rel="noopener">source</a>`;
+    return `<li><span class="role">${esc(credit.character)}</span> — ${esc(credit.performer)}<br><span class="status">${esc(statusLabel[credit.status]||credit.status)}</span>${destination}</li>`;
+  }).join("");
+  speciesContextEl.hidden=false;
+  speciesContextEl.innerHTML=`<h3>${esc(taxon.label)} roles</h3><div class="species-summary"><span><b>${rows.length}</b> illustrated card${rows.length===1?"":"s"} in this view</span><span><b>${esc(c.named_credits)}</b> captured named credits</span><span><b>${esc(c.primary_card_credits)}</b> primary-card credits across ${esc(c.primary_card_records)} cards</span><span><b>${esc(c.additional_performance_credits)}</b> additional performances on file</span><span><b>${esc(c.unfiled_named_credits)}</b> unfiled named credits</span><span><b>${esc(c.unresolved_characters)}</b> source pages without a named performer</span></div><p class="scope-note">The wall below includes only cards whose displayed role is sourced as ${esc(taxon.label)}. The ledger keeps every captured exact performer-role credit visible, including additional roles and work not yet given its own card. This is the retained community-wiki scope, not a claim that every licensed appearance is already captured. <a href="${escAttr(taxon.coverage_route)}">Open coverage view →</a></p><details><summary>Show all ${esc(c.named_credits)} captured named credits</summary><ol class="species-ledger" id="speciesLedger">${ledger}</ol></details>`;
 }
 
 /* the makers strip: every hand that built >=2 faces, ranked, click to filter */
@@ -1035,6 +1068,7 @@ async function render(reset=true){
   } else {
     loadmoreEl.hidden=true; loadmoreEl.innerHTML="";
   }
+  renderSpeciesContext(rows);
   // active-maker banner (also works when the makers strip is scrolled off screen)
   if(makerFilter){
     makerActiveEl.hidden=false;
@@ -1113,7 +1147,15 @@ function applyURLState(){
 
 /* ---------- deep link: #UC-042 opens, scrolls to, and rings a specimen ---------- */
 function reducedMotion(){ return matchMedia("(prefers-reduced-motion: reduce)").matches; }
+function decodedHash(){ try{return decodeURIComponent(location.hash.replace(/^#/,""));}catch(_){return "";} }
+function specimenHashId(){ const value=decodedHash();return /^UC-G?\d+$/.test(value)?resolveId(value):""; }
+function scrollToNamedHash(){
+  const target=decodedHash();if(!target||specimenHashId())return;
+  const el=document.getElementById(target);
+  if(el) requestAnimationFrame(()=>requestAnimationFrame(()=>el.scrollIntoView({behavior:"auto",block:"start"})));
+}
 async function focusSpecimen(id){
+  if(!/^UC-G?\d+$/.test(String(id||""))) return;
   id=resolveId(id);
   if(!id) return;
   const sel='[data-uid="'+(window.CSS&&CSS.escape?CSS.escape(id):id)+'"]';
@@ -1156,7 +1198,7 @@ document.getElementById("random").addEventListener("click",function(){
   else location.hash=e.id;                          // new id: hashchange -> focusSpecimen
 });
 let handlingPopstate=false;
-window.addEventListener("hashchange",function(){ if(!handlingPopstate) focusSpecimen(location.hash.replace(/^#/,"")); });
+window.addEventListener("hashchange",function(){ if(handlingPopstate)return;const id=specimenHashId();if(id)focusSpecimen(id);else scrollToNamedHash(); });
 window.addEventListener("popstate",async function(){
   handlingPopstate=true;
   try{
@@ -1164,8 +1206,9 @@ window.addEventListener("popstate",async function(){
     restoreWallPosition();
     buildFilters();reflectMakerChips();reflectLenses();
     await render(false);
-    if(location.hash) await focusSpecimen(location.hash.replace(/^#/,""));
-    else applyRestoredWallPosition();
+    const specimenId=specimenHashId();
+    if(specimenId) await focusSpecimen(specimenId);
+    else { applyRestoredWallPosition();scrollToNamedHash(); }
   } finally { handlingPopstate=false; }
 });
 
@@ -1223,12 +1266,16 @@ async function boot(){
   // canonical fallback; never infer a species from character or reveal prose.
   try{
     const projection=await fetch("./data/species.json",{cache:"no-store"}).then(function(r){return r.ok?r.json():null;});
+    if(projection&&Array.isArray(projection.taxa)) SPECIES_PROJECTION=projection;
     const byId=new Map(INDEX.map(function(entry){return [entry.id,entry];}));
-    for(const taxon of projection?.taxa||[]) for(const record of taxon.records||[]){
-      const entry=byId.get(record.id);if(!entry) continue;
-      entry.sp=[...new Set([...(entry.sp||[]),taxon.label])].sort();hydrate(entry);
+    for(const taxon of SPECIES_PROJECTION.taxa||[]){
+      if(!Array.isArray(taxon.wall_records)) throw new Error("species projection lacks exact wall records");
+      for(const record of taxon.wall_records){
+        const entry=byId.get(record.id);if(!entry) continue;
+        entry.sp=[...new Set([...(entry.sp||[]),taxon.label])].sort();hydrate(entry);
+      }
     }
-  }catch(_){}
+  }catch(_){SPECIES_PROJECTION={taxa:[]};}
   // lean media map: only images actually on a Release (src -> url). The full durability
   // manifest (data/media-manifest.json) is a CI artifact and is deliberately NOT fetched.
   try{
@@ -1241,8 +1288,9 @@ async function boot(){
   reflectLensCounts();
   reflectLenses();
   await render();
-  if(location.hash) await focusSpecimen(location.hash.replace(/^#/,""));
-  else applyRestoredWallPosition();
+  const specimenId=specimenHashId();
+  if(specimenId) await focusSpecimen(specimenId);
+  else { applyRestoredWallPosition();scrollToNamedHash(); }
   // living pipeline: show how many harvested leads are queued for triage (optional file)
   fetch("./data/CANDIDATES.json").then(function(r){return r.ok?r.json():[];}).then(function(c){
     if(Array.isArray(c)&&c.length) document.getElementById("queue").textContent=" · "+c.length+" leads in the ingest queue";

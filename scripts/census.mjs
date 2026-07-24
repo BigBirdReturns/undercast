@@ -335,7 +335,7 @@ for (const row of rows) for (const performer of row.performers) {
     .some((name) => normalize(name) === normalize(performer)));
   const roleRecords = performerRecords.filter((record) => {
     const censusRole = normalize(row.character);
-    const filedRoles = [record.character, ...(record.performances || []).map((item) => item.character)].map(normalize);
+    const filedRoles = [record.character, ...(record.roleAliases || []).map((item) => item.character), ...(record.performances || []).map((item) => item.character)].map(normalize);
     return !censusRole || censusRole === "—" || filedRoles.includes(censusRole);
   });
   coverage.push({ franchise: row.franchise, category: row.category, character: row.character,

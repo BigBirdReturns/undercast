@@ -54,10 +54,13 @@ const tokens = (t) => [...new Set(String(t || "").toLowerCase().match(/[a-z0-9]{
 const specimens = JSON.parse(await readFile("data/specimens.json", "utf8"));
 const speciesProjectionData = JSON.parse(await readFile("data/species.json", "utf8"));
 const speciesByRecord = new Map();
-for (const taxon of speciesProjectionData.taxa || []) for (const record of taxon.records || []) {
+for (const taxon of speciesProjectionData.taxa || []) {
+  if (!Array.isArray(taxon.wall_records)) throw new Error(`species taxon ${taxon.key || taxon.label || "<unknown>"} lacks exact wall_records`);
+  for (const record of taxon.wall_records) {
   const labels = speciesByRecord.get(record.id) || [];
   labels.push(taxon.label);
-  speciesByRecord.set(record.id, labels);
+    speciesByRecord.set(record.id, labels);
+  }
 }
 const tombstones = JSON.parse(await readFile("data/tombstones.json", "utf8").catch(() => '{"records":[]}'));
 // stable, human-legible shard order: by catalog number
