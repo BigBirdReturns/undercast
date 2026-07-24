@@ -8,9 +8,72 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: close-tosk-cycle
+  cancel-in-progress: false
+
 jobs:
   close:
-    if: false
+    if: github.event_name != 'pull_request' || github.event.pull_request.number == 78
     runs-on: ubuntu-latest
+    timeout-minutes: 240
     steps:
-      - run: echo 'Closure lane temporarily quiesced while one-shot workflows are removed.'
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-gold-completion
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Patch the local runner to gate a committed candidate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('scripts/close-tosk-cycle-v2.mjs')
+          text=path.read_text()
+          needle='runNpm("gate");'
+          replacement='''run("git", ["config", "user.name", "undercast-cycle-operator"]);
+run("git", ["config", "user.email", "undercast-cycle-operator@users.noreply.github.com"]);
+run("git", ["add", "-A", "--", ".", ":(exclude).luna/**", ":(exclude)cycle-closure/**", ":(exclude)scripts/close-tosk-cycle-v2.mjs"]);
+run("git", ["diff", "--cached", "--check"]);
+run("git", ["commit", "-m", "Cycle 2: close Tosk candidate"]);
+run("git", ["checkout", "--", "scripts/close-tosk-cycle-v2.mjs"]);
+runNpm("gate");'''
+          if text.count(needle)!=1:
+              raise SystemExit(f'gate insertion count {text.count(needle)}')
+          path.write_text(text.replace(needle,replacement,1))
+          PY
+      - name: Apply, resolve, rebuild and gate Tosk
+        run: |
+          mkdir -p cycle-closure
+          set +e
+          node scripts/close-tosk-cycle-v2.mjs > cycle-closure/closure.log 2>&1
+          code=$?
+          set -e
+          cat cycle-closure/closure.log
+          exit "$code"
+      - name: Retain exact closure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trek-cycle-002-tosk-closure-final
+          path: cycle-closure
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish resolved restart-safe candidate
+        run: |
+          set -euo pipefail
+          rm -rf .luna cycle-closure
+          rm -f \
+            .github/tosk-v2-trigger.txt \
+            scripts/close-tosk-cycle-v2.mjs \
+            .github/workflows/close-tosk-cycle.yml
+          git config user.name 'undercast-cycle-operator'
+          git config user.email 'undercast-cycle-operator@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Cycle 2: publish Tosk closure evidence'
+          git push origin HEAD:agent/star-trek-gold-completion
