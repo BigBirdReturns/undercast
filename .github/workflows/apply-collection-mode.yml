@@ -1,0 +1,102 @@
+name: apply-collection-only-operations
+
+on:
+  push:
+    branches: [agent/collection-only-operations]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-collection-only-operations
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event_name != 'pull_request' || (github.event.pull_request.number == 75 && github.head_ref == 'agent/collection-only-operations')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/collection-only-operations
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install deterministic and rendered-test runtime
+        run: npm ci
+
+      - name: Apply the collection-only operating contract
+        run: |
+          mkdir -p collection-mode-diagnostics
+          set -o pipefail
+          {
+            set -x
+            base64 -d .github/collection-mode/apply.py.xz.b64 | xz -d > /tmp/apply-collection-mode.py
+            python /tmp/apply-collection-mode.py
+            node --check scripts/corpus-ops.mjs
+            node --check scripts/corpus-ops-fixtures.mjs
+            node --check scripts/lib/corpus-ops.mjs
+            node --check scripts/media-search-plan.mjs
+            node --check scripts/media-search-prepare.mjs
+            node --check scripts/media-search-report.mjs
+            node --check scripts/media-search-fixtures.mjs
+            node --check scripts/lib/media-search.mjs
+          } 2>&1 | tee collection-mode-diagnostics/apply.log
+
+      - name: Prove steady-state corpus operations before publication
+        run: |
+          set -o pipefail
+          {
+            set -x
+            node scripts/corpus-ops-fixtures.mjs
+            node scripts/corpus-ops.mjs validate
+            node scripts/corpus-ops.mjs status --json
+            node scripts/corpus-ops.mjs next --json
+            node scripts/media-search-fixtures.mjs
+            node scripts/media-search-plan.mjs --limit 5 --out /tmp/media-search-plan.json
+            node scripts/roadmap.mjs validate
+            node scripts/shard.mjs
+            node scripts/build-record-pages.mjs
+            node scripts/build-contract.mjs
+            git diff --check
+          } 2>&1 | tee collection-mode-diagnostics/proof.log
+
+      - name: Remove one-shot transition machinery
+        run: |
+          rm -rf .github/collection-mode collection-mode-diagnostics
+          rm -f .github/workflows/apply-collection-mode.yml
+          git config user.name 'undercast-operations'
+          git config user.email 'undercast-operations@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Operations: enter collection-only corpus mode'
+
+      - name: Gate the exact permanent candidate
+        run: |
+          npx playwright install --with-deps chromium
+          npm run gate
+          npm run preserve:status -- --json
+
+      - name: Retain diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: collection-mode-diagnostics
+          path: |
+            collection-mode-diagnostics
+            test-results
+            playwright-report
+            .ci
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Publish the exact gated candidate
+        run: git push origin HEAD:agent/collection-only-operations
