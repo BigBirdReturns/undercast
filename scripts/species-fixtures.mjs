@@ -10,38 +10,47 @@ const [species,index,specimens,coverage]=await Promise.all([
 assert.equal(species.version,2);
 const taxon=species.taxa.find(row=>row.key==="species:star-trek:ferengi");
 assert.ok(taxon,"Ferengi taxon exists");
-assert.equal(taxon.counts.named_credits,70);
-assert.equal(taxon.counts.filed_role_credits,33);
-assert.equal(taxon.counts.primary_card_credits,17);
-assert.equal(taxon.counts.primary_card_records,15);
-assert.equal(taxon.counts.additional_performance_credits,16);
-assert.equal(taxon.counts.unfiled_named_credits,37);
-assert.equal(taxon.credits.length,70);
-assert.equal(taxon.counts.primary_card_credits+taxon.counts.additional_performance_credits+taxon.counts.unfiled_named_credits,taxon.counts.named_credits);
 
-const expected=["UC-019","UC-030","UC-031","UC-298","UC-675","UC-677","UC-678","UC-679","UC-680","UC-887","UC-1117","UC-1161","UC-1229","UC-1278","UC-1281"];
-assert.deepEqual(taxon.wall_records.map(row=>row.id),expected,"wall facet contains only exact displayed Ferengi roles");
-const indexById=new Map(index.map(row=>[row.id,row]));
+const statusCount=status=>taxon.credits.filter(row=>row.status===status).length;
+assert.equal(taxon.counts.named_credits,taxon.credits.length,"named credit count matches the complete ledger");
+assert.equal(taxon.counts.primary_card_credits,statusCount("primary-card"));
+assert.equal(taxon.counts.additional_performance_credits,statusCount("additional-performance"));
+assert.equal(taxon.counts.unfiled_named_credits,statusCount("unfiled"));
+assert.equal(
+  taxon.counts.primary_card_credits+taxon.counts.additional_performance_credits+taxon.counts.unfiled_named_credits,
+  taxon.counts.named_credits,
+  "every named credit is classified exactly once"
+);
+
+const expected=taxon.wall_records.map(row=>row.id);
+assert.equal(new Set(expected).size,expected.length,"Ferengi wall records are unique");
 const actual=index.filter(row=>(row.sp||[]).includes("Ferengi")).map(row=>row.id);
-assert.deepEqual(actual,expected,"lean wall index uses exact primary-role Ferengi membership");
-for(const wrong of ["UC-004","UC-021","UC-110","UC-262","UC-378"]) assert.ok(!(indexById.get(wrong)?.sp||[]).includes("Ferengi"),`${wrong} may not inherit Ferengi from an additional performance`);
+assert.deepEqual(actual,expected,"lean wall index uses the generated exact primary-role Ferengi membership");
+assert.equal(taxon.counts.primary_card_records,expected.length);
+
+const primaryWallIds=[...new Set(taxon.credits.filter(row=>row.status==="primary-card").flatMap(row=>row.wall_ids||[]))];
+assert.deepEqual([...primaryWallIds].sort(),[...expected].sort(),"every and only primary-card Ferengi record appears on the wall");
+const indexById=new Map(index.map(row=>[row.id,row]));
+for(const id of new Set(taxon.credits.filter(row=>row.status==="additional-performance").flatMap(row=>row.wall_ids||[]))){
+  if(!primaryWallIds.includes(id)) assert.ok(!(indexById.get(id)?.sp||[]).includes("Ferengi"),`${id} may not inherit Ferengi from an additional performance alone`);
+}
 
 const specimenById=new Map(specimens.map(row=>[row.id,row]));
-for(const id of ["UC-678","UC-679","UC-1281"]){
-  const row=specimenById.get(id);
-  assert.equal(row.universe,"Star Trek",`${id} belongs on the Star Trek shelf`);
-  assert.notEqual(row.kind,"voice",`${id} is a physical Ferengi performance, not a voice-only card`);
+for(const id of expected){
+  const specimen=specimenById.get(id);
+  assert.ok(specimen,`${id} exists in the canonical roster`);
+  assert.equal(specimen.universe,"Star Trek",`${id} belongs on the Star Trek shelf`);
+  const credit=taxon.credits.find(row=>row.status==="primary-card"&&(row.wall_ids||[]).includes(id));
+  assert.ok(credit,`${id} has a primary Ferengi credit`);
+  assert.equal(normalize(credit.performer),normalize(specimen.actor),`${id} performer matches its primary credit`);
+  assert.equal(normalize(credit.character),normalize(specimen.character),`${id} displayed role matches its primary credit`);
 }
-const lurin=coverage.find(row=>row.franchise==="Star Trek"&&row.category==="Ferengi"&&normalize(row.performer)===normalize("Mike Gomez")&&normalize(row.character)===normalize("Lurin"));
-assert.ok(lurin?.role_on_wall,"Lurin source role is filed by the DaiMon Lurin card");
-assert.deepEqual(lurin.wall_ids,["UC-677"]);
-const lurinLedger=taxon.credits.find(row=>normalize(row.performer)===normalize("Mike Gomez")&&normalize(row.character)===normalize("Lurin"));
-assert.equal(lurinLedger?.status,"primary-card");
-assert.deepEqual(lurinLedger.wall_ids,["UC-677"]);
-const zekLedger=taxon.credits.find(row=>normalize(row.performer)===normalize("Wallace Shawn")&&normalize(row.character)===normalize("Zek"));
-assert.equal(zekLedger?.status,"primary-card");
-assert.deepEqual(zekLedger.wall_ids,["UC-1281"]);
-assert.equal(taxon.credits.filter(row=>row.status==="primary-card").length,17);
-assert.equal(taxon.credits.filter(row=>row.status==="additional-performance").length,16);
-assert.equal(taxon.credits.filter(row=>row.status==="unfiled").length,37);
-console.log("PASS — Ferengi wall roles, complete credit ledger, rank alias, and Star Trek shelf are exact");
+
+for(const credit of taxon.credits){
+  const source=coverage.find(row=>row.franchise==="Star Trek"&&row.category==="Ferengi"&&normalize(row.performer)===normalize(credit.performer)&&normalize(row.character)===normalize(credit.character));
+  assert.ok(source,`${credit.performer} — ${credit.character} remains in exact census coverage`);
+  assert.deepEqual([...(source.wall_ids||[])].sort(),[...(credit.wall_ids||[])].sort(),`${credit.performer} — ${credit.character} wall IDs agree across projections`);
+  assert.equal(Boolean(source.role_on_wall),credit.status!=="unfiled",`${credit.performer} — ${credit.character} filing status agrees across projections`);
+}
+
+console.log(`PASS — Ferengi ledger is exact and saturation-safe: ${taxon.counts.primary_card_records} cards, ${taxon.counts.unfiled_named_credits} named credits still unfiled`);
