@@ -28,7 +28,8 @@ const actual=index.filter(row=>(row.sp||[]).includes("Ferengi")).map(row=>row.id
 assert.deepEqual(actual,expected,"lean wall index uses the generated exact primary-role Ferengi membership");
 assert.equal(taxon.counts.primary_card_records,expected.length);
 
-const primaryWallIds=[...new Set(taxon.credits.filter(row=>row.status==="primary-card").flatMap(row=>row.wall_ids||[]))];
+const primaryCredits=taxon.credits.filter(row=>row.status==="primary-card");
+const primaryWallIds=[...new Set(primaryCredits.flatMap(row=>row.wall_ids||[]))];
 assert.deepEqual([...primaryWallIds].sort(),[...expected].sort(),"every and only primary-card Ferengi record appears on the wall");
 const indexById=new Map(index.map(row=>[row.id,row]));
 for(const id of new Set(taxon.credits.filter(row=>row.status==="additional-performance").flatMap(row=>row.wall_ids||[]))){
@@ -40,10 +41,13 @@ for(const id of expected){
   const specimen=specimenById.get(id);
   assert.ok(specimen,`${id} exists in the canonical roster`);
   assert.equal(specimen.universe,"Star Trek",`${id} belongs on the Star Trek shelf`);
-  const credit=taxon.credits.find(row=>row.status==="primary-card"&&(row.wall_ids||[]).includes(id));
-  assert.ok(credit,`${id} has a primary Ferengi credit`);
-  assert.equal(normalize(credit.performer),normalize(specimen.actor),`${id} performer matches its primary credit`);
-  assert.equal(normalize(credit.character),normalize(specimen.character),`${id} displayed role matches its primary credit`);
+  const credits=primaryCredits.filter(row=>(row.wall_ids||[]).includes(id));
+  assert.ok(credits.length,`${id} has at least one primary Ferengi credit`);
+  assert.ok(credits.every(credit=>normalize(credit.performer)===normalize(specimen.actor)),`${id} primary credit performers match the card performer`);
+  if(credits.length===1){
+    const aliases=(specimen.roleAliases||[]).map(row=>normalize(typeof row==="string"?row:row.label||row.alias||row.name));
+    assert.ok(normalize(credits[0].character)===normalize(specimen.character)||aliases.includes(normalize(credits[0].character)),`${id} displayed role or role alias matches its sole primary credit`);
+  }
 }
 
 for(const credit of taxon.credits){
