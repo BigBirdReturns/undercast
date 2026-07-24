@@ -1,0 +1,83 @@
+name: star-trek-population-claim
+
+on:
+  push:
+    branches: [agent/star-trek-population-001]
+    paths:
+      - ".github/STAR-TREK-POPULATION-CLAIM.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-population-001-claim
+  cancel-in-progress: false
+
+jobs:
+  claim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-population-001
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Verify exact task compatibility and readiness
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/star-trek-population-claim
+          node scripts/corpus-ops.mjs status --json | tee /tmp/star-trek-population-claim/corpus-before.json
+          node scripts/waterline.mjs status --scope star-trek --json | tee /tmp/star-trek-population-claim/waterline-before.json
+          node scripts/autopilot.mjs candidates --scope star-trek --capability-profile text-vision --limit 200 --json > /tmp/star-trek-population-claim/candidates.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const report=JSON.parse(fs.readFileSync('/tmp/star-trek-population-claim/candidates.json','utf8'));
+          const id='ap_d3afc683a39f7fa108090790';
+          const row=(report.compatible||[]).find(item=>item.task_id===id);
+          if(!row) throw new Error(`selected task ${id} is not compatible with text-vision`);
+          if(row.performer!=='Wallace Shawn'||row.character!=='Zek') throw new Error('selected task identity drifted');
+          fs.writeFileSync('/tmp/star-trek-population-claim/selected.json',JSON.stringify(row,null,2)+'\n');
+          NODE
+      - name: Persist one exact restart-safe lease
+        run: |
+          set -euo pipefail
+          node scripts/autopilot.mjs claim \
+            --agent luna \
+            --scope star-trek \
+            --capability-profile text-vision \
+            --task-id ap_d3afc683a39f7fa108090790 \
+            --limit 1 \
+            --lease-minutes 360 \
+            --selection-basis "Owner-directed first visible population cycle: iconic exact-source physical Ferengi role, existing performer presence, and strong still/portrait feasibility." \
+            --out data/review/trek-population-001-zek-lease.json \
+            --prompt data/review/trek-population-001-zek-prompt.md \
+            | tee /tmp/star-trek-population-claim/claim.json
+          node scripts/autopilot.mjs validate
+          node scripts/waterline.mjs status --scope star-trek --json > /tmp/star-trek-population-claim/waterline-after.json
+      - name: Commit the durable lease before processing
+        run: |
+          set -euo pipefail
+          git config user.name "undercast-population"
+          git config user.email "undercast-population@users.noreply.github.com"
+          rm -f .github/STAR-TREK-POPULATION-CLAIM.json
+          rm -f .github/workflows/star-trek-population-plan.yml
+          rm -f .github/workflows/star-trek-population-claim.yml
+          git add data/AUTOPILOT.json data/journal/autopilot.jsonl \
+            data/review/trek-population-001-zek-lease.json \
+            data/review/trek-population-001-zek-prompt.md \
+            .github/STAR-TREK-POPULATION-CLAIM.json \
+            .github/workflows/star-trek-population-plan.yml \
+            .github/workflows/star-trek-population-claim.yml
+          git diff --cached --check
+          git commit -m "Population: lease Grand Nagus Zek"
+          git push origin HEAD:agent/star-trek-population-001
+      - name: Retain claim receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-population-claim-${{ github.run_id }}
+          path: /tmp/star-trek-population-claim
+          if-no-files-found: warn
+          retention-days: 30
