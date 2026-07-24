@@ -571,7 +571,7 @@ test("Ferengi URL preserves the makers anchor and shows only exact displayed rol
   await expect(page.getByRole("button",{name:"Ferengi",exact:true})).toHaveAttribute("aria-pressed","true");
   await expect(page.locator("#result-status")).toHaveText("15 specimens match; 15 shown.");
   const names=await page.locator(".charname").allTextContents();
-  expect(names).toEqual(["Quark","Rom","Nog","Quark (mirror)","Brunt (mirror)","Nog (mirror)","Ishka","Bok / Gral / Prak","Krax","DaiMon Lurin","Grimp","Leck","Pel","Berik","Zek"]);
+  expect(names).toEqual(["Quark","Rom","Nog","Quark (mirror)","Brunt (mirror)","Nog (mirror)","Ishka","Zek","Bok / Gral / Prak","Krax","DaiMon Lurin","Grimp","Leck","Pel","Berik"]);
   expect(names).not.toContain("Weyoun");
   expect(names).not.toContain("Neelix");
   await expect(page.locator("#speciesContext")).toContainText("70 captured named credits");
