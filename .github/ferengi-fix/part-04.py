@@ -16,7 +16,7 @@ test("Ferengi URL preserves the makers anchor and shows only exact displayed rol
 });
 '''
 if 'Ferengi URL preserves the makers anchor' not in test:
-    write(test_path,test.rstrip()+append+'\n')
+    write(test_path,test.rstrip()+append.rstrip()+'\n')
 
 # README taxonomy contract.
 replace_once(
