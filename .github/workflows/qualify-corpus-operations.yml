@@ -1,0 +1,75 @@
+name: qualify-corpus-operations
+
+on:
+  push:
+    branches: [agent/corpus-operations-mode]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: corpus-operations-final-qualification
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/corpus-operations-mode
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install runtime
+        run: npm ci
+
+      - name: Reconcile deterministic outputs
+        run: |
+          node scripts/shard.mjs
+          node scripts/build-record-pages.mjs
+          node scripts/build-contract.mjs
+
+      - name: Write the qualification receipt into the exact candidate
+        run: |
+          mkdir -p docs
+          cat > docs/CORPUS-OPERATIONS-QUALIFICATION.md <<EOF
+          # Corpus-operations exact-head qualification
+
+          This receipt is part of the candidate it qualifies.
+
+          - workflow run: \`${{ github.run_id }}\`
+          - workflow: \`qualify-corpus-operations\`
+          - source branch head at checkout: \`${{ github.sha }}\`
+          - operating mode: \`collection-only\`
+          - canonical gate: \`npm run gate\`
+          - preservation check: \`npm run preserve:status -- --json\`
+
+          The workflow pushes this receipt only after both checks pass. A present
+          receipt on the branch therefore identifies a candidate whose complete
+          permanent tree—not installer scaffolding—was qualified.
+          EOF
+          rm -f \
+            .github/workflows/reconcile-corpus-operations.yml \
+            .github/workflows/finalize-corpus-operations.yml \
+            .github/workflows/qualify-corpus-operations.yml
+          git config user.name "undercast-operations"
+          git config user.email "undercast-operations@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Docs: receipt collection-only exact-head qualification"
+
+      - name: Gate the exact permanent candidate
+        run: |
+          npx playwright install --with-deps chromium
+          npm run gate
+          npm run preserve:status -- --json
+
+      - name: Publish the qualified candidate
+        run: git push origin HEAD:agent/corpus-operations-mode
