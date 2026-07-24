@@ -549,7 +549,8 @@ test("all canonical sitemap routes resolve and merged aliases stay out",async({r
   expect(sitemapResponse.ok()).toBeTruthy();
   const xml=await sitemapResponse.text();
   const urls=[...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(match=>new URL(match[1]).pathname);
-  expect(urls).toHaveLength(1252); // 1247 record pages + 5 top-level pages
+  const canonicalRecordCount=JSON.parse(await readFile(new URL("../../data/specimens.json",import.meta.url),"utf8")).length;
+  expect(urls).toHaveLength(canonicalRecordCount+5);
   expect(urls.some(path=>path.includes("/records/UC-257/"))).toBeFalsy();
   for(let offset=0;offset<urls.length;offset+=40){
     const batch=urls.slice(offset,offset+40);
