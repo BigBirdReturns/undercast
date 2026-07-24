@@ -179,3 +179,27 @@ a documented return to collection mode.
 Legacy scheduled jobs may harvest leads or stage media candidates, but may not write
 new canonical records or promote media directly. Canonical growth remains bounded by
 Autopilot, exact-subject review, the rolling waterline and reviewed cycle receipts.
+
+---
+
+## DEC-0013 — Missing evidence and archive paths must be legible
+
+**Status:** Accepted; implementation pending (#80) · Ratified by owner direction, 2026-07-24
+
+The frozen v1 product receives this bounded owner-approved correction:
+
+- A missing character image or performer portrait must read as an intentional,
+  high-contrast archive state, not as a faded, transparent or disabled card. The
+  same information hierarchy applies in light and dark themes, and the copy must
+  continue to say that evidence is not on file rather than implying a failed reveal.
+- Light remains the deterministic first-load theme. A visitor-selected light or
+  dark theme persists across Browse, Coverage, Connections, permanent records and
+  recovery pages so the archive behaves as one product rather than isolated skins.
+- The homepage must explain the distinct visitor question answered by Recognition,
+  Coverage, Makers and Connections. Those destinations remain within the ownership
+  boundaries in DEC-0006; Connections remains contextual rather than permanent
+  top-navigation under DEC-0009.
+
+This decision changes presentation and wayfinding only. It adds no schema concept,
+reinterprets no unresolved credit as a finished card, and does not reopen general
+product development under DEC-0012.
