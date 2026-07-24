@@ -3,14 +3,37 @@
 UNDERCAST is a field index of performers who vanish under a designed face
 (prosthetics, masks, creature suits, motion capture, or an unseen voice). Every
 card flips: the character on the front, the human underneath on the back. It's a
-static site (index.html reads data/specimens.json) deployed to GitHub Pages by
-Actions; keyless crawlers fill images and harvest leads. No servers, no keys.
+static site deployed to GitHub Pages by Actions; keyless crawlers fill evidence
+queues and harvest leads. No production server or private runtime is required.
+
+## Default mode — collect, improve, and extend estates
+
+UNDERCAST v1 is in **collection-only operating mode**. Read
+[`docs/CORPUS-OPERATIONS.md`](docs/CORPUS-OPERATIONS.md), then run:
+
+```bash
+npm run corpus:ops -- validate
+npm run corpus:ops -- status
+npm run corpus:ops -- plan
+```
+
+Unless a reviewed exception or owner decision says otherwise, work must add,
+refresh, preserve, correct, or improve corpus evidence; close media debt; improve
+operations; or advance one IP estate through the reviewed adapter pipeline. Do not
+invent a new reader surface, primary-navigation destination, reveal mechanic,
+runtime service, canonical entity type, account system, or public write interface.
+
+`nightly.yml` harvests leads only. `retrieve.yml` searches for candidate media in
+an isolated workspace and cannot modify canonical assignments. Canonical growth
+runs only through a certified Autopilot lease and the rolling waterline. Candidate
+media becomes canonical only through hash-bound exact-subject review.
 
 **To grow the roster, read [GROW.md](GROW.md).** A Luna/autonomous worker must
-also read [LUNA.md](LUNA.md), [docs/AUTOPILOT.md](docs/AUTOPILOT.md), and
-[docs/AUTOPILOT-CAPABILITIES.md](docs/AUTOPILOT-CAPABILITIES.md), and
-[docs/WATERLINE.md](docs/WATERLINE.md), then claim a bounded lease under an
-explicit reviewed capability profile instead of choosing free-form work. A scope must pass `autopilot readiness`; Luna never
+also read [LUNA.md](LUNA.md), [docs/AUTOPILOT.md](docs/AUTOPILOT.md),
+[docs/AUTOPILOT-CAPABILITIES.md](docs/AUTOPILOT-CAPABILITIES.md),
+[docs/WATERLINE.md](docs/WATERLINE.md), and `docs/CORPUS-OPERATIONS.md`, then
+claim a bounded lease under an explicit reviewed capability profile instead of
+choosing free-form work. A scope must pass `autopilot readiness`; Luna never
 certifies or activates its own producer. Star Trek also runs the exact-subject
 baseline in `docs/MEDIA-AUDIT.md` and the rolling operating waterline: completing
 one baseline authorizes one bounded cycle, not unlimited growth. Unreviewed or
@@ -26,6 +49,8 @@ provenance is the point.
 Read `docs/FIVE-YEAR-PLAN.md` and run:
 
 ```bash
+npm run corpus:ops -- validate
+npm run corpus:ops -- plan
 npm run roadmap -- validate
 npm run roadmap -- status
 npm run roadmap -- next --limit 1
@@ -33,11 +58,11 @@ npm run waterline -- validate
 npm run waterline -- status --scope star-trek
 ```
 
-Work only on a milestone reported `ready`, then follow its exact section in
-`docs/ROADMAP-PLAYBOOKS.md`. Forecast dates do not authorize work; dependencies,
-measured triggers, owner decisions, and reviewed completion receipts do. A later
-or more interesting milestone is out of scope until the dependency graph unlocks
-it.
+Work only on the operation and milestone reported ready, then follow its exact
+section in `docs/ROADMAP-PLAYBOOKS.md`. Forecast dates do not authorize work;
+dependencies, measured triggers, owner decisions, and reviewed completion receipts
+do. A later or more interesting milestone is out of scope until the dependency
+graph unlocks it.
 
 Hotfixes for active correctness, rights, security, or publication incidents may
 interrupt the roadmap, but they must stay narrowly scoped, leave an incident or
@@ -64,21 +89,25 @@ existing code are *not* authority — these documents are:
 4. **[docs/UI-REVIEW-CHECKLIST.md](docs/UI-REVIEW-CHECKLIST.md)** — run this and put
    it in every UI PR.
 
-**The rules that would have prevented the last excursion:** the trading-card flip is
-the signature *character→performer* reveal (DEC-0001) — do not add a second one (no
-seams, sliders, dissolves, wipes) without superseding it in words first; unrelated
-interactions elsewhere are fine. The homepage's default opening must not be
-dominated by performer imagery (DEC-0005) — character or archive artwork first, the
-performer only after deliberate action. Every UI PR **cites the decision number(s)**
-it serves. And no one claims the gate is "green" without running all of
-`docs/UI-REVIEW-CHECKLIST.md` — the whole gate, not most of it. Never attribute a
-decision or a "ruling" to the owner they did not actually make.
+**The rules that would have prevented the last excursion:** the trading-card flip
+is the signature *character→performer* reveal (DEC-0001) — do not add a second one
+(no seams, sliders, dissolves, wipes) without superseding it in words first; the
+homepage's default opening must not be dominated by performer imagery (DEC-0005)
+— character or archive artwork first, the performer only after deliberate action.
+Every UI PR **cites the decision number(s)** it serves. And no one claims the gate
+is "green" without running all of `docs/UI-REVIEW-CHECKLIST.md` — the whole gate,
+not most of it. Never attribute a decision or a "ruling" to the owner they did not
+actually make.
 
-Key files: `GROW.md` (how to add cards), `LUNA.md` / `docs/AUTOPILOT.md`
-(certified, bounded autonomous growth), `docs/FIVE-YEAR-PLAN.md` /
-`docs/ROADMAP-PLAYBOOKS.md` / `data/ROADMAP*.json` (authorized strategic
-sequence), `CRAWLERS.md` (crawler/evidence contract), `README.md` (the whole
-system), `scripts/` (retrieve = images, ingest = lead harvest, grow = merge
-model drafts, autopilot = durable work leases, waterline = one-cycle-at-a-time
-gold/reliability evidence, roadmap = milestone dependency and authority gate,
+Key files: `GROW.md` (how to add cards), `LUNA.md` /
+`docs/AUTOPILOT.md` (certified, bounded autonomous growth),
+`docs/CORPUS-OPERATIONS.md` / `data/CORPUS-OPERATIONS.json` /
+`data/ESTATE-REGISTRY.json` (steady-state collection and estate induction),
+`docs/FIVE-YEAR-PLAN.md` / `docs/ROADMAP-PLAYBOOKS.md` /
+`data/ROADMAP*.json` (authorized strategic sequence), `CRAWLERS.md`
+(crawler/evidence contract), `README.md` (the whole system), `scripts/`
+(retrieve = manual image acquisition, media-search = noncanonical rolling search,
+ingest = lead harvest, grow = canonical merge, autopilot = durable work leases,
+waterline = one-cycle-at-a-time gold/reliability evidence, corpus-operations =
+collection-only planner, roadmap = milestone dependency and authority gate,
 credits/needs/adopt = helpers).
