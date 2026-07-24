@@ -1,0 +1,59 @@
+name: export-star-trek-gold
+
+on:
+  push:
+    branches: [agent/star-trek-gold-completion]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: export-star-trek-gold
+  cancel-in-progress: true
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-gold-completion
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Export exact operating frontier
+        run: |
+          set -euo pipefail
+          mkdir -p star-trek-gold
+          node scripts/corpus-ops.mjs validate --json > star-trek-gold/corpus-validate.json
+          node scripts/corpus-ops.mjs status --json > star-trek-gold/corpus-status.json
+          node scripts/corpus-ops.mjs next --json > star-trek-gold/corpus-next.json
+          node scripts/roadmap.mjs status --json > star-trek-gold/roadmap-status.json
+          node scripts/autopilot.mjs readiness --scope star-trek --require-active --json > star-trek-gold/readiness.json
+          node scripts/autopilot.mjs status --scope star-trek --json > star-trek-gold/autopilot-status.json
+          node scripts/autopilot.mjs candidates --scope star-trek --capability-profile text-vision --limit 80 --json > star-trek-gold/candidates.json
+          node scripts/media-audit.mjs status --scope star-trek --json > star-trek-gold/media-status.json
+          node scripts/waterline.mjs status --scope star-trek --json > star-trek-gold/waterline.json
+          node --input-type=module <<'NODE'
+          import {readFile,writeFile} from 'node:fs/promises';
+          const candidates=JSON.parse(await readFile('star-trek-gold/candidates.json','utf8'));
+          const coverage=JSON.parse(await readFile('data/CENSUS-COVERAGE.json','utf8'));
+          const rows=Array.isArray(candidates)?candidates:(candidates.candidates||candidates.tasks||[]);
+          const keys=new Set(rows.map(row=>row.task_id||row.id).filter(Boolean));
+          const jobs=JSON.parse(await readFile('data/AUTOPILOT.json','utf8')).jobs||[];
+          const selected=jobs.filter(job=>keys.has(job.id)||keys.has(job.task_id));
+          const enriched=selected.map(job=>({job,coverage:coverage.find(row=>row.franchise==='Star Trek'&&row.performer===job.performer&&row.character===job.character)||null}));
+          await writeFile('star-trek-gold/candidate-context.json',JSON.stringify(enriched,null,2)+'\n');
+          NODE
+          tar --exclude='.git' --exclude='node_modules' --exclude='images' --exclude='records' --exclude='star-trek-gold' -czf star-trek-gold/source.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-gold-frontier
+          path: star-trek-gold
+          if-no-files-found: error
+          retention-days: 7
