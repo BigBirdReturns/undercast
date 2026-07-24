@@ -47,7 +47,9 @@ jobs:
         id: apply
         run: |
           set +e
-          mkdir -p .homepage-ux-output
+          output=/tmp/homepage-ux-output
+          rm -rf "$output" .homepage-ux-output
+          mkdir -p "$output"
           python - <<'PY'
           from pathlib import Path
           path = Path('.github/homepage-ux/apply.mjs')
@@ -80,17 +82,24 @@ jobs:
           text = text[:marker_end] + extra + text[marker_end:]
           path.write_text(text)
           PY
-          cp .github/homepage-ux/apply.mjs .homepage-ux-output/apply-source.mjs
-          node --check .github/homepage-ux/apply.mjs 2>&1 | tee .homepage-ux-output/apply-check.log
+          cp .github/homepage-ux/apply.mjs "$output/apply-source.mjs"
+          node --check .github/homepage-ux/apply.mjs 2>&1 | tee "$output/apply-check.log"
           check_code=${PIPESTATUS[0]}
           if [ "$check_code" -ne 0 ]; then exit "$check_code"; fi
-          node .github/homepage-ux/apply.mjs 2>&1 | tee .homepage-ux-output/apply.log
-          code=${PIPESTATUS[0]}
-          git status --short > .homepage-ux-output/apply-status.txt
-          git diff --stat > .homepage-ux-output/apply-diff-stat.txt
-          if [ "$code" -ne 0 ]; then exit "$code"; fi
+          node .github/homepage-ux/apply.mjs 2>&1 | tee "$output/apply.log"
+          apply_code=${PIPESTATUS[0]}
+          if [ "$apply_code" -ne 0 ]; then
+            git status --short > "$output/apply-status.txt"
+            git diff --stat > "$output/apply-diff-stat.txt"
+            exit "$apply_code"
+          fi
+          node scripts/shard.mjs 2>&1 | tee "$output/projection.log"
+          projection_code=${PIPESTATUS[0]}
+          git status --short > "$output/apply-status.txt"
+          git diff --stat > "$output/apply-diff-stat.txt"
+          if [ "$projection_code" -ne 0 ]; then exit "$projection_code"; fi
           set -e
-          rm -rf .github/homepage-ux
+          rm -rf .github/homepage-ux .homepage-ux-output
           rm -f .github/HOMEPAGE-UX-COMMAND.json
           rm -f .github/workflows/homepage-ux-operator.yml
           git add -A
@@ -100,17 +109,18 @@ jobs:
         id: gate
         run: |
           set +e
-          npm run gate 2>&1 | tee .homepage-ux-output/gate.log
+          output=/tmp/homepage-ux-output
+          npm run gate 2>&1 | tee "$output/gate.log"
           code=${PIPESTATUS[0]}
-          git status --short > .homepage-ux-output/status.txt
-          git show --stat --oneline --decorate HEAD > .homepage-ux-output/commit.txt
+          git status --short > "$output/status.txt"
+          git show --stat --oneline --decorate HEAD > "$output/commit.txt"
           exit "$code"
       - name: Retain exact verification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: homepage-ux-gate-${{ github.run_id }}
-          path: .homepage-ux-output
+          path: /tmp/homepage-ux-output
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
