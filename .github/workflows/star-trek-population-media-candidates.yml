@@ -36,15 +36,17 @@ jobs:
           const out='/tmp/zek-media-candidates';
           const UA=`undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT})`;
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-          async function request(url,tries=0){
-            const response=await fetch(url,{headers:{'User-Agent':UA,Accept:'application/json,*/*'}});
-            if(([429,502,503,504].includes(response.status))&&tries<4){await sleep((tries+1)*2500);return request(url,tries+1);}
+          async function request(url,tries=0,accept='*/*'){
+            let response;
+            try{response=await fetch(url,{headers:{'User-Agent':UA,Accept:accept}});}
+            catch(error){if(tries<4){await sleep((tries+1)*2000);return request(url,tries+1,accept);}throw error;}
+            if(([403,429,502,503,504].includes(response.status))&&tries<4){await sleep((tries+1)*2500);return request(url,tries+1,accept);}
             if(!response.ok) throw new Error(`${url} -> ${response.status}`);
             return response;
           }
           async function mw(base,params){
             const url=base+'?'+new URLSearchParams({format:'json',origin:'*',formatversion:'2',...params});
-            return request(url).then(r=>r.json());
+            return request(url,0,'application/json').then(r=>r.json());
           }
           const safe=value=>String(value).replace(/^File:/,'').replace(/[^A-Za-z0-9._-]+/g,'_').slice(0,180);
           async function download(url,target){
@@ -52,80 +54,90 @@ jobs:
             fs.writeFileSync(target,bytes);
             return {bytes:bytes.length,sha256:crypto.createHash('sha256').update(bytes).digest('hex')};
           }
+          const errors=[];
           const fandom='https://memory-alpha.fandom.com/api.php';
           const page=await mw(fandom,{action:'query',prop:'pageimages|images|revisions',piprop:'name',imlimit:'max',rvprop:'ids|timestamp',titles:'Zek'});
           const zek=page.query?.pages?.[0];
           if(!zek||zek.missing) throw new Error('Memory Alpha Zek page missing');
-          const names=[...new Set([zek.pageimage,...(zek.images||[]).map(row=>row.title)].filter(Boolean).map(name=>name.startsWith('File:')?name:`File:${name}`))];
+          const known=['File:Zek.jpg','File:Zek 2369.jpg','File:Ishka and Zek.jpg','File:Zek in closet.jpg','File:Zek skull.jpg'];
+          const names=[...new Set([...known,zek.pageimage,...(zek.images||[]).map(row=>row.title)].filter(Boolean).map(name=>name.startsWith('File:')?name:`File:${name}`))];
           const stills=[];
           for(const title of names){
             if(!/\.(?:jpe?g|png|webp)$/i.test(title)) continue;
-            const infoDoc=await mw(fandom,{action:'query',prop:'imageinfo|revisions',iiprop:'url|size|sha1|mime|extmetadata',iiurlwidth:'1000',rvprop:'ids|timestamp',titles:title});
-            const filePage=infoDoc.query?.pages?.[0];
-            const info=filePage?.imageinfo?.[0];
-            if(!info?.thumburl) continue;
-            const filename=safe(title).replace(/\.(jpe?g|png|webp)$/i,'')+'.jpg';
-            const target=path.join(out,'stills',filename);
-            const receipt=await download(info.thumburl,target);
-            const metadata=info.extmetadata||{};
-            stills.push({
-              title,
-              pageid:filePage.pageid,
-              revision:filePage.revisions?.[0]?.revid||null,
-              revision_timestamp:filePage.revisions?.[0]?.timestamp||null,
-              description_url:info.descriptionurl||null,
-              original_url:info.url||null,
-              thumb_url:info.thumburl,
-              source_width:info.width||null,
-              source_height:info.height||null,
-              source_sha1:info.sha1||null,
-              mime:info.mime||null,
-              description:String(metadata.ImageDescription?.value||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim(),
-              categories:String(metadata.Categories?.value||''),
-              local_file:`stills/${filename}`,
-              ...receipt
-            });
-            await sleep(400);
+            try{
+              const infoDoc=await mw(fandom,{action:'query',prop:'imageinfo|revisions',iiprop:'url|size|sha1|mime|extmetadata',iiurlwidth:'1000',rvprop:'ids|timestamp',titles:title});
+              const filePage=infoDoc.query?.pages?.[0];
+              const info=filePage?.imageinfo?.[0];
+              if(!info?.thumburl){errors.push({title,error:'no thumbnail or missing file page'});continue;}
+              const filename=safe(title).replace(/\.(jpe?g|png|webp)$/i,'')+'.jpg';
+              const target=path.join(out,'stills',filename);
+              const receipt=await download(info.thumburl,target);
+              const metadata=info.extmetadata||{};
+              stills.push({
+                title,
+                pageid:filePage.pageid,
+                revision:filePage.revisions?.[0]?.revid||null,
+                revision_timestamp:filePage.revisions?.[0]?.timestamp||null,
+                description_url:info.descriptionurl||null,
+                original_url:info.url||null,
+                thumb_url:info.thumburl,
+                source_width:info.width||null,
+                source_height:info.height||null,
+                source_sha1:info.sha1||null,
+                mime:info.mime||null,
+                description:String(metadata.ImageDescription?.value||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim(),
+                categories:String(metadata.Categories?.value||''),
+                local_file:`stills/${filename}`,
+                ...receipt
+              });
+            }catch(error){errors.push({title,error:error.message});}
+            await sleep(350);
           }
-          const commons='https://commons.wikimedia.org/w/api.php';
-          const portraitTitle='File:Wallace Shawn 2014 (cropped).jpg';
-          const portraitDoc=await mw(commons,{action:'query',prop:'imageinfo|revisions',iiprop:'url|size|sha1|mime|extmetadata',iiurlwidth:'1000',rvprop:'ids|timestamp',titles:portraitTitle});
-          const portraitPage=portraitDoc.query?.pages?.[0];
-          const portraitInfo=portraitPage?.imageinfo?.[0];
-          if(!portraitInfo?.thumburl) throw new Error('Commons Wallace Shawn portrait unavailable');
-          const portraitTarget=path.join(out,'portrait','wallace-shawn-2014-cropped.jpg');
-          const portraitReceipt=await download(portraitInfo.thumburl,portraitTarget);
-          const pm=portraitInfo.extmetadata||{};
-          const portrait={
-            title:portraitTitle,
-            pageid:portraitPage.pageid,
-            revision:portraitPage.revisions?.[0]?.revid||null,
-            revision_timestamp:portraitPage.revisions?.[0]?.timestamp||null,
-            description_url:portraitInfo.descriptionurl,
-            original_url:portraitInfo.url,
-            thumb_url:portraitInfo.thumburl,
-            source_width:portraitInfo.width,
-            source_height:portraitInfo.height,
-            source_sha1:portraitInfo.sha1,
-            mime:portraitInfo.mime,
-            author:String(pm.Artist?.value||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim(),
-            license:String(pm.LicenseShortName?.value||pm.License?.value||'').trim(),
-            date:String(pm.DateTimeOriginal?.value||pm.DateTime?.value||'').replace(/<[^>]*>/g,' ').trim(),
-            local_file:'portrait/wallace-shawn-2014-cropped.jpg',
-            ...portraitReceipt
-          };
+          let portrait=null;
+          try{
+            const commons='https://commons.wikimedia.org/w/api.php';
+            const portraitTitle='File:Wallace Shawn 2014 (cropped).jpg';
+            const portraitDoc=await mw(commons,{action:'query',prop:'imageinfo|revisions',iiprop:'url|size|sha1|mime|extmetadata',iiurlwidth:'1000',rvprop:'ids|timestamp',titles:portraitTitle});
+            const portraitPage=portraitDoc.query?.pages?.[0];
+            const portraitInfo=portraitPage?.imageinfo?.[0];
+            if(!portraitInfo?.thumburl) throw new Error('Commons Wallace Shawn portrait unavailable');
+            const portraitTarget=path.join(out,'portrait','wallace-shawn-2014-cropped.jpg');
+            const portraitReceipt=await download(portraitInfo.thumburl,portraitTarget);
+            const pm=portraitInfo.extmetadata||{};
+            portrait={
+              title:portraitTitle,
+              pageid:portraitPage.pageid,
+              revision:portraitPage.revisions?.[0]?.revid||null,
+              revision_timestamp:portraitPage.revisions?.[0]?.timestamp||null,
+              description_url:portraitInfo.descriptionurl,
+              original_url:portraitInfo.url,
+              thumb_url:portraitInfo.thumburl,
+              source_width:portraitInfo.width,
+              source_height:portraitInfo.height,
+              source_sha1:portraitInfo.sha1,
+              mime:portraitInfo.mime,
+              author:String(pm.Artist?.value||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim(),
+              license:String(pm.LicenseShortName?.value||pm.License?.value||'').trim(),
+              date:String(pm.DateTimeOriginal?.value||pm.DateTime?.value||'').replace(/<[^>]*>/g,' ').trim(),
+              local_file:'portrait/wallace-shawn-2014-cropped.jpg',
+              ...portraitReceipt
+            };
+          }catch(error){errors.push({title:'File:Wallace Shawn 2014 (cropped).jpg',error:error.message});}
           const manifest={
             version:1,
             captured_at:new Date().toISOString(),
             character_page:{title:zek.title,pageid:zek.pageid,revision:zek.revisions?.[0]?.revid||null,revision_timestamp:zek.revisions?.[0]?.timestamp||null,pageimage:zek.pageimage||null},
             still_candidates:stills,
-            portrait_candidate:portrait
+            portrait_candidate:portrait,
+            errors
           };
           fs.writeFileSync(path.join(out,'manifest.json'),JSON.stringify(manifest,null,2)+'\n');
-          console.log(JSON.stringify({character_page:manifest.character_page,still_candidates:stills.map(row=>({title:row.title,description:row.description,bytes:row.bytes,sha256:row.sha256,local_file:row.local_file})),portrait},null,2));
+          console.log(JSON.stringify({character_page:manifest.character_page,still_candidates:stills.map(row=>({title:row.title,description:row.description,bytes:row.bytes,sha256:row.sha256,local_file:row.local_file})),portrait,errors},null,2));
+          if(!stills.length) process.exitCode=2;
           NODE
           (cd "$out" && find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
       - name: Upload exact source candidates
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: star-trek-population-zek-media-candidates-${{ github.run_id }}
