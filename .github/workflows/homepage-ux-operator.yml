@@ -1,0 +1,72 @@
+name: homepage-ux-operator
+
+on:
+  push:
+    branches: [agent/homepage-purpose-and-theme]
+    paths:
+      - ".github/HOMEPAGE-UX-COMMAND.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: homepage-ux-operator
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Prepare branch
+        run: |
+          set -euo pipefail
+          git checkout -B agent/homepage-purpose-and-theme
+          git config user.name 'undercast-ux-operator'
+          git config user.email 'undercast-ux-operator@users.noreply.github.com'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install runtime
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Apply the deterministic product pass
+        id: apply
+        run: |
+          set -euo pipefail
+          node --check .github/homepage-ux/apply.mjs
+          node .github/homepage-ux/apply.mjs
+          rm -rf .github/homepage-ux
+          rm -f .github/HOMEPAGE-UX-COMMAND.json
+          rm -f .github/workflows/homepage-ux-operator.yml
+          git add -A
+          git diff --cached --check
+          git commit -m 'UX: make the archive routes and themes legible'
+      - name: Run the complete canonical gate
+        id: gate
+        run: |
+          set +e
+          mkdir -p .homepage-ux-output
+          npm run gate 2>&1 | tee .homepage-ux-output/gate.log
+          code=${PIPESTATUS[0]}
+          git status --short > .homepage-ux-output/status.txt
+          git show --stat --oneline --decorate HEAD > .homepage-ux-output/commit.txt
+          exit "$code"
+      - name: Retain exact verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: homepage-ux-gate-${{ github.run_id }}
+          path: .homepage-ux-output
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Publish the gated candidate
+        if: steps.apply.outcome == 'success' && steps.gate.outcome == 'success'
+        run: git push origin HEAD:agent/homepage-purpose-and-theme
