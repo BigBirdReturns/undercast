@@ -1,0 +1,112 @@
+name: apply-ferengi-role-filter
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-ferengi-role-filter
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.number == 72 && github.head_ref == 'agent/fix-ferengi-role-filter'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-ferengi-role-filter
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install deterministic runtime
+        run: npm ci
+
+      - name: Apply the reviewed role-aware taxonomy fix
+        run: |
+          cat .github/ferengi-fix/part-*.py > /tmp/apply-ferengi-fix.py
+          python /tmp/apply-ferengi-fix.py
+          node --check scripts/build-species.mjs
+          node --check scripts/species-fixtures.mjs
+          node --check scripts/census.mjs
+          node --check scripts/shard.mjs
+          node --check scripts/gate.mjs
+          node --check tests/rendered/site.spec.mjs
+
+      - name: Rebuild exact coverage and serving projections
+        run: |
+          node scripts/shard.mjs
+          npm run species:fixtures
+
+      - name: Re-certify the changed producer and reconcile governed state
+        run: |
+          npm run autopilot -- certify \
+            --scope star-trek \
+            --reviewed-by chatgpt-second-desk \
+            --activate \
+            --now 2026-07-24T02:00:00.000Z
+          npm run autopilot -- sync --now 2026-07-24T02:01:00.000Z
+          npm run autopilot -- validate
+          npm run media:audit -- sync --now 2026-07-24T02:02:00.000Z
+          npm run media:audit -- validate
+          npm run media:audit -- gate --scope star-trek
+          node scripts/waterline.mjs status --scope star-trek --json > /tmp/waterline.json
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
+          const waterline=JSON.parse(await readFile('/tmp/waterline.json','utf8'));
+          if(waterline.phase!=='ready-for-cycle'||waterline.claim_allowed!==true||waterline.media.debt!==0||waterline.jobs.in_flight!==0){
+            throw new Error(`taxonomy repair disturbed the rolling waterline: ${JSON.stringify(waterline)}`);
+          }
+          if(waterline.cycles.successful_receipts!==1||waterline.cycles.unreceipted.length!==0){
+            throw new Error(`cycle history drifted: ${JSON.stringify(waterline.cycles)}`);
+          }
+          const state=JSON.parse(await readFile('data/AUTOPILOT.json','utf8'));
+          const trek=state.jobs.filter(row=>row.scope==='star-trek');
+          const counts=Object.fromEntries([...new Set(trek.map(row=>row.status))].sort().map(status=>[status,trek.filter(row=>row.status===status).length]));
+          if((counts.leased||0)||(counts.drafted||0)||(counts.merged||0)) throw new Error('taxonomy repair left work in flight');
+          const handoffPath='HANDOFF.md';
+          let handoff=await readFile(handoffPath,'utf8');
+          const replacement=`- Star Trek Autopilot: **${trek.length.toLocaleString('en-US')} durable tasks** — **${(counts.queued||0).toLocaleString('en-US')} queued**, **${(counts.blocked||0).toLocaleString('en-US')} blocked**,\n  **${(counts.resolved||0).toLocaleString('en-US')} resolved**, and **zero in flight**.`;
+          const pattern=/- Star Trek Autopilot: \*\*[\d,]+ durable tasks\*\* — \*\*[\d,]+ queued\*\*, \*\*[\d,]+ blocked\*\*,\n  \*\*[\d,]+ resolved\*\*, and \*\*zero in flight\*\*\./;
+          if(!pattern.test(handoff)) throw new Error('HANDOFF task accounting sentence not found');
+          handoff=handoff.replace(pattern,replacement);
+          await writeFile(handoffPath,handoff);
+          console.log({trek:trek.length,counts,phase:waterline.phase});
+          NODE
+
+      - name: Prove exact Ferengi semantics before publication
+        run: |
+          npm run species:fixtures
+          node scripts/roadmap.mjs validate
+          node scripts/build-contract.mjs
+          git diff --check
+
+      - name: Remove installation and diagnostic scaffolding
+        run: |
+          rm -rf .github/ferengi-fix
+          rm -f \
+            .github/workflows/apply-ferengi-role-filter.yml \
+            .github/workflows/inspect-ferengi-role-filter.yml \
+            .github/workflows/inspect-ferengi-shelf-seams.yml
+          git config user.name 'undercast-taxonomy'
+          git config user.email 'undercast-taxonomy@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Fix: make species filters exact to displayed roles'
+
+      - name: Gate the exact permanent candidate
+        run: |
+          npx playwright install --with-deps chromium
+          npm run gate
+          npm run preserve:verify
+
+      - name: Publish the exact gated candidate
+        run: git push origin HEAD:agent/fix-ferengi-role-filter
