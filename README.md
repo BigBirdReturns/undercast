@@ -280,3 +280,13 @@ something here and want it gone, open an issue or email the maintainer and the
 specific asset comes down — no argument. That's the deal that keeps this cheap
 and friendly.
 Site-wide role integrity, fallback-art, and orphan-surface contract: `docs/FULL-SITE-SWEEP.md`; enforce it with `npm run site:sweep`.
+
+## Collection-only operations
+
+The archive is now in collection mode: the v1 experience is frozen by default while
+verified records, sources, media, corrections and additional IP estates continue to
+accumulate. `npm run corpus -- status` reports the active estate and full induction
+frontier; `npm run corpus -- next` returns the next authorized corpus operation.
+Scheduled lead harvesting and rolling media search are candidate-only. Canonical
+growth still passes Autopilot, preservation, exact-subject review, waterline receipts
+and `npm run gate`. See `docs/COLLECTION-OPERATIONS.md`.

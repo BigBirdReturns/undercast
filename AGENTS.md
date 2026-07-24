@@ -48,6 +48,26 @@ never supersedes Active product law.
 or Luna may prepare evidence, but may not mark a second-desk or owner milestone
 complete, invent an owner decision, or replace an unknown metric with zero.
 
+## Default operating mode — collect, improve, expand
+
+The product surface is now frozen at v1 under DEC-0012. Before ordinary work run:
+
+```bash
+npm run corpus -- validate
+npm run corpus -- status
+npm run corpus -- next
+```
+
+The default task is the exact operation returned by `corpus next`: close existing
+debt, execute one bounded active-estate cycle, refresh preserved sources, review a
+media candidate, or advance the highest-priority estate gate. Do not redesign the
+site, add a new reveal, fork a microsite, alter the canonical record concept, or
+build an account/API/service layer merely because the collection is operating.
+
+New IP estates enter through `data/ESTATE-REGISTRY.json`; a shelf or URL mapping is
+not an adapter and a configured scope is not certification. Scheduled lead harvest
+and media search may create work or candidate artifacts, never canonical facts.
+
 ## Before you touch HTML, CSS, or the experience — STOP and read the law
 
 The data, provenance, and crawl are heavily protected; the **experience** is
