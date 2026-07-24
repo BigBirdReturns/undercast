@@ -18,20 +18,23 @@ async function writeJson(path,value){await mkdir(dirname(path),{recursive:true})
 const isFerengi=job=>(job.categories||[]).some(value=>norm(value)==="ferengi");
 const isActive=job=>["leased","drafted","merged"].includes(job.status);
 const firstHttps=values=>(values||[]).find(value=>{try{return new URL(value).protocol==="https:";}catch{return false;}})||null;
+const taskRow=row=>({
+  task_id:row.id,performer:row.performer,character:row.character,priority:row.priority,
+  performance_modes:row.performance_modes,categories:row.categories,sources:row.sources,
+  source_receipts:row.source_receipts||[],source_fingerprint:row.source_fingerprint
+});
 
 async function nextCommand(){
   const state=await readJson(option("state","data/AUTOPILOT.json"));
   const jobs=(state.jobs||[]).filter(isFerengi);
   const active=jobs.filter(isActive);
-  if(active.length) throw new Error(`Ferengi saturation cannot select new work while active tasks remain: ${active.map(job=>`${job.id}:${job.status}`).join(", ")}`);
+  if(active.length>1) throw new Error(`Ferengi saturation found multiple active tasks: ${active.map(job=>`${job.id}:${job.status}`).join(", ")}`);
+  if(active.length===1&&active[0].status!=="leased") throw new Error(`Ferengi saturation cannot resume ${active[0].id} from remote status ${active[0].status}; inspect the durable state`);
   const queued=jobs.filter(job=>job.status==="queued"&&job.queueable!==false).sort((a,b)=>Number(b.priority||0)-Number(a.priority||0)||a.id.localeCompare(b.id));
-  const row=queued[0]||null;
+  const resume=active.length===1;
+  const row=resume?active[0]:(queued[0]||null);
   const out=option("out");
-  const report={version:1,remaining:queued.length,task:row?{
-    task_id:row.id,performer:row.performer,character:row.character,priority:row.priority,
-    performance_modes:row.performance_modes,categories:row.categories,sources:row.sources,
-    source_receipts:row.source_receipts||[],source_fingerprint:row.source_fingerprint
-  }:null};
+  const report={version:1,resume,remaining:queued.length+(resume?1:0),task:row?taskRow(row):null};
   if(out) await writeJson(out,report);
   console.log(JSON.stringify(report,null,2));
   if(!row) process.exitCode=3;
