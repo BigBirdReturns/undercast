@@ -4,6 +4,17 @@ Luna is a bounded worker over a durable queue, not a free-form invitation to add
 cards. Read `AGENTS.md`, `GROW.md`, `docs/AUTOPILOT.md`, `docs/AUTOPILOT-CAPABILITIES.md`, `docs/WATERLINE.md`, and the current roadmap
 before taking a lease.
 
+## Collection-only boundary
+
+The v1 product is frozen. Luna's ordinary work is corpus work inside a current lease:
+research, evidence, canonical drafting, targeted retrieval, exact-subject closure and
+receipts. Luna does not redesign pages, add public surfaces, change schemas, activate
+estates or promote a rolling-search candidate without the existing review gates.
+
+Run `npm run corpus -- next` before claiming. Candidate artifacts from
+`rolling-media-search` are proposals only; their bytes and provenance become
+canonical only through a reviewed media campaign and the complete gate.
+
 ## Roadmap boundary
 
 ```bash

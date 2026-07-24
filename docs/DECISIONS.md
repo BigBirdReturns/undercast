@@ -163,3 +163,19 @@ local without becoming competing token sources.
 installs the runtime and invokes that single command. The workflow, checklists, and
 operator docs must not maintain a second command list; new canonical checks belong
 in `scripts/gate.mjs` and its adversarial fixtures.
+
+## DEC-0012 — Collection-only operations are the default state
+
+**Status:** Active · Ratified by owner direction, 2026-07-24
+
+The v1 public experience and record contract are frozen by default. Normal work adds
+verified records, improves evidence or media, refreshes preserved sources, corrects
+errors, and advances new IP estates through reviewed adapters. A new public surface,
+reveal mechanic, schema concept, account/service layer, or aesthetic system requires
+an explicit superseding owner decision. Narrow correctness, rights, security,
+accessibility and performance hotfixes remain permitted with an incident receipt and
+a documented return to collection mode.
+
+Legacy scheduled jobs may harvest leads or stage media candidates, but may not write
+new canonical records or promote media directly. Canonical growth remains bounded by
+Autopilot, exact-subject review, the rolling waterline and reviewed cycle receipts.

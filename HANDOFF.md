@@ -173,6 +173,23 @@ adapter-sdk-and-second-gold-shard
 public-trust-and-corrections
 ```
 
+## Collection-only operating mode
+
+DEC-0012 is active. The v1 experience is frozen by default; normal work now adds or
+improves corpus material, refreshes preserved sources, closes corrections, and moves
+registered IP estates through reviewed adapter gates. Run `npm run corpus --
+validate`, `status`, and `next` before ordinary work.
+
+The legacy nightly model-growth path is removed. `harvest-leads` writes only candidate
+leads and journals. `rolling-media-search` runs retrieval in a detached worktree,
+uploads candidate artifacts, and commits only attempt receipts; it never promotes
+canonical media. Autopilot remains the sole roster-growth lease path.
+
+The estate frontier is machine-readable in `data/ESTATE-REGISTRY.json`: Star Trek is
+active; Doctor Who, Star Wars, Muppets & Henson and Power Rangers await adapter
+review; Kaiju and Tokusatsu await source-model review; Babylon 5 and Farscape are
+explicit inventory work rather than invented scopes.
+
 ## Standing discipline
 
 - Machines prepare; second desk and owner exercise their named authority.
