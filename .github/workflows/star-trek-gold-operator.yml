@@ -70,6 +70,69 @@ jobs:
           path.write_text(text.replace(old,new,1))
           PY
           node --check .gold-runtime/star-trek-gold-operator.mjs
+      - name: Bind closure to the exact retrieved Dolim file
+        if: steps.command.outputs.command == 'close'
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.gold-runtime/star-trek-gold-operator.mjs')
+          text = path.read_text()
+          start_marker = 'async function verifyDolimStill(context) {'
+          end_marker = '\nasync function verifyPortrait(context)'
+          start = text.find(start_marker)
+          end = text.find(end_marker, start)
+          if start < 0 or end < 0:
+              raise SystemExit('Dolim verification function markers missing')
+          replacement = r'''async function verifyDolimStill(context) {
+            const file = context.files.find((row) => row.side === 'still');
+            if (!file) throw new Error('Dolim still is absent; use a different final cycle task or source the still before closure');
+            const local = await readFile(file.path);
+            const localSha256 = sha256(local);
+            const fileTitle = 'File:Dolim fights Archer.jpg';
+            const api = new URL('https://memory-alpha.fandom.com/api.php');
+            api.search = new URLSearchParams({ action: 'query', format: 'json', formatversion: '2', redirects: '1', prop: 'revisions|images|links', rvprop: 'ids|timestamp|sha1', imlimit: 'max', pllimit: 'max', titles: 'Dolim' });
+            const pageQuery = await fetchJson(api);
+            const page = pageQuery.query?.pages?.[0];
+            if (!page || page.missing) throw new Error('Dolim source page missing');
+            if (!(page.images || []).some((row) => row.title === fileTitle)) throw new Error(`${fileTitle} is not bound to the reviewed Dolim source revision`);
+            const fileApi = new URL('https://memory-alpha.fandom.com/api.php');
+            fileApi.search = new URLSearchParams({ action: 'query', format: 'json', formatversion: '2', redirects: '1', prop: 'revisions|links|categories|imageinfo', rvprop: 'ids|timestamp|sha1', pllimit: 'max', cllimit: 'max', iiprop: 'url|mime|size|sha1|extmetadata', iiurlwidth: '640', titles: fileTitle });
+            const fileQuery = await fetchJson(fileApi);
+            const filePage = fileQuery.query?.pages?.[0];
+            const imageInfo = filePage?.imageinfo?.[0];
+            if (!filePage || !imageInfo?.thumburl) throw new Error(`${fileTitle} metadata missing`);
+            const remote = await fetchBytes(imageInfo.thumburl);
+            const remoteSha256 = sha256(remote);
+            if (remoteSha256 !== localSha256) throw new Error(`Dolim still bytes do not match ${fileTitle} 640px source thumbnail`);
+            const names = [filePage.title, ...(filePage.links || []).map((row) => row.title), imageInfo.extmetadata?.ObjectName?.value || '', imageInfo.extmetadata?.ImageDescription?.value || ''].join(' ').toLowerCase();
+            if (!names.includes('dolim')) throw new Error('Dolim file metadata does not identify Dolim');
+            return {
+              page,
+              filePage,
+              localSha256,
+              evidence: [
+                sourceEntry('source-revision', `Memory Alpha Dolim pageid ${page.pageid} revision ${page.revisions?.[0]?.revid}; ${filePage.title} pageid ${filePage.pageid} revision ${filePage.revisions?.[0]?.revid}`),
+                sourceEntry('source-image-comparison', `local ${localSha256}; remote ${filePage.title} ${remoteSha256}; exact bytes`),
+                sourceEntry('source-selection', `${filePage.title} is an image on the reviewed Dolim article revision and its metadata links Dolim, Jonathan Archer, Star Trek: Enterprise, and Zero Hour`),
+                sourceEntry('performance-source', 'https://memory-alpha.fandom.com/wiki/Dolim identifies Scott MacDonald as Dolim and records eight Enterprise appearances'),
+              ],
+            };
+          }'''
+          text = text[:start] + replacement + text[end:]
+          old_review = "note: 'Revision-bound File:Dolim.jpg metadata and exact bytes identify Commander Dolim.'"
+          new_review = "note: 'Revision-bound File:Dolim fights Archer.jpg metadata and exact bytes identify Commander Dolim.'"
+          if text.count(old_review) != 1:
+              raise SystemExit(f'Dolim completion note patch count {text.count(old_review)}')
+          text = text.replace(old_review, new_review, 1)
+          old_presentation = "Independent review of the exact bytes shows a filmed close-up of Commander Dolim in the complete Xindi-Reptilian prosthetic design, not artwork, a prop-only image, or behind-the-scenes material."
+          new_presentation = "Independent review of the exact bytes shows a filmed scene with Commander Dolim in the complete Xindi-Reptilian prosthetic design, not artwork, a prop-only image, or behind-the-scenes material."
+          if text.count(old_presentation) != 1:
+              raise SystemExit(f'Dolim presentation note patch count {text.count(old_presentation)}')
+          text = text.replace(old_presentation, new_presentation, 1)
+          path.write_text(text)
+          PY
+          node --check .gold-runtime/star-trek-gold-operator.mjs
       - name: Resolve exact Dolim candidate provenance
         if: steps.command.outputs.command == 'close'
         run: |
