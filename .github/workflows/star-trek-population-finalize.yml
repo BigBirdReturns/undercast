@@ -1,0 +1,333 @@
+name: star-trek-population-finalize
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/STAR-TREK-POPULATION-FINALIZE.json"
+      - ".github/workflows/star-trek-population-finalize.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-population-001-finalize
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    if: github.event.pull_request.head.ref == 'agent/star-trek-population-001'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-population-001
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Build the hash-bound two-facet media campaign
+        run: |
+          set -euo pipefail
+          out=/tmp/star-trek-population-finalize
+          rm -rf "$out"
+          mkdir -p "$out"
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const sha=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
+          const jsonBytes=value=>Buffer.from(JSON.stringify(value,null,2)+'\n');
+          const command=JSON.parse(fs.readFileSync('.github/STAR-TREK-POPULATION-FINALIZE.json','utf8'));
+          const reviewedAt=new Date().toISOString();
+          const paths={
+            state:'data/MEDIA-AUDIT.json',
+            specimens:'data/specimens.json',
+            sources:'data/SOURCES.json',
+            manifest:'data/media-manifest.json',
+            scopes:'data/MEDIA-AUDIT-SCOPES.json'
+          };
+          const docs=Object.fromEntries(Object.entries(paths).map(([key,path])=>[key,{path,bytes:fs.readFileSync(path)}]));
+          const state=JSON.parse(docs.state.bytes);
+          const specimens=JSON.parse(docs.specimens.bytes);
+          const sources=JSON.parse(docs.sources.bytes);
+          const selection=JSON.parse(fs.readFileSync('data/review/trek-population-001-zek-media-selection.json','utf8'));
+          const lease=JSON.parse(fs.readFileSync('data/review/trek-population-001-zek-lease.json','utf8'));
+          if(command.wall_id!=='UC-1281'||command.task_id!=='ap_d3afc683a39f7fa108090790'||command.lease_id!==lease.lease_id) throw new Error('finalize command does not match the durable Zek cycle');
+          const record=specimens.find(row=>row.id===command.wall_id);
+          const ledger=sources.find(row=>row.id===command.wall_id);
+          if(!record||!ledger||record.actor!=='Wallace Shawn'||record.character!=='Zek') throw new Error('canonical Zek identity drifted');
+          const stillBytes=fs.readFileSync(record.still.src),portraitBytes=fs.readFileSync(record.portrait.src);
+          if(sha(stillBytes)!==command.still_sha256||sha(portraitBytes)!==command.portrait_sha256) throw new Error('canonical Zek media bytes differ from the reviewed hashes');
+          if(JSON.stringify(record.still)!==JSON.stringify(ledger.still)||JSON.stringify(record.portrait)!==JSON.stringify(ledger.portrait)) throw new Error('specimen and source media differ');
+          const open=state.items.filter(item=>item.scope==='star-trek'&&item.asset&&!['verified','absent'].includes(item.status));
+          if(open.length!==2||open.some(item=>item.wall_id!==command.wall_id||item.status!=='review')) throw new Error(`expected exactly the two open Zek facets, found ${open.map(item=>item.id+':'+item.status).join(', ')}`);
+          const bySide=Object.fromEntries(open.map(item=>[item.side,item]));
+          if(bySide.still.asset.sha256!==command.still_sha256||bySide.portrait.asset.sha256!==command.portrait_sha256) throw new Error('media-audit state does not bind the selected bytes');
+          const source={
+            specimens_path:paths.specimens,
+            specimens_sha256:sha(docs.specimens.bytes),
+            sources_path:paths.sources,
+            sources_sha256:sha(docs.sources.bytes),
+            media_manifest_path:paths.manifest,
+            media_manifest_sha256:sha(docs.manifest.bytes),
+            scopes_path:paths.scopes,
+            scopes_sha256:sha(docs.scopes.bytes),
+            item_set_sha256:state.source.item_set_sha256
+          };
+          const performanceReceipt=lease.tasks[0].source_receipts[0];
+          const commonEvidence=[
+            {type:'lease-source-revision',value:`Memory Alpha Zek pageid ${performanceReceipt.pageid} revision ${performanceReceipt.revision} timestamp ${performanceReceipt.timestamp}; content ${performanceReceipt.content_sha256}`},
+            {type:'performance-source',value:'https://memory-alpha.fandom.com/wiki/Zek identifies Wallace Shawn as Grand Nagus Zek in Star Trek: Deep Space Nine.'},
+            {type:'workflow-run',value:'GitHub Actions run 30130651566 — exact reviewed media pin, hash verification, and deterministic audit rebuild.'}
+          ];
+          const rows=[
+            {
+              item_id:bySide.still.id,
+              wall_id:command.wall_id,
+              side:'still',
+              expected_subject:'Zek',
+              asset_sha256:command.still_sha256,
+              asset_origin:record.still.origin,
+              disposition:'verify',
+              identity_signal:{kind:'source-context-exact-asset',value:'The exact source asset is embedded in a review of DS9 The Nagus; the revision-bound Zek performance source identifies Wallace Shawn as Zek, and second-desk review confirms the bytes depict the live-action character.'},
+              presentation:'character-depiction',
+              evidence:[
+                ...commonEvidence,
+                {type:'source-asset',value:`${selection.selected.still.source_asset}; local ${command.still_sha256}; ${stillBytes.length} bytes; exact downloaded bytes`},
+                {type:'source-context',value:`${record.still.origin} is an episode review of Star Trek: Deep Space Nine “The Nagus” containing the selected frame.`},
+                {type:'second-desk-review',value:'Exact bytes show Grand Nagus Zek on the right in the complete live-action Ferengi prosthetic, not the rejected Picard skull, artwork, a prop-only image, or behind-the-scenes material.'}
+              ]
+            },
+            {
+              item_id:bySide.portrait.id,
+              wall_id:command.wall_id,
+              side:'portrait',
+              expected_subject:'Wallace Shawn',
+              asset_sha256:command.portrait_sha256,
+              asset_origin:record.portrait.origin,
+              disposition:'verify',
+              identity_signal:{kind:'commons-file-page-exact-asset',value:'The Wikimedia Commons file page names Wallace Shawn and supplies the exact freely licensed portrait bytes.'},
+              presentation:'neutral-human',
+              evidence:[
+                {type:'source-file-page',value:`${record.portrait.origin} identifies Wallace Shawn; author ${record.portrait.author}; license ${record.portrait.license}; year ${record.portrait.year}.`},
+                {type:'source-image-comparison',value:`${selection.selected.portrait.source_asset}; local ${command.portrait_sha256}; ${portraitBytes.length} bytes; exact downloaded bytes`},
+                {type:'workflow-run',value:'GitHub Actions run 30130651566 — exact reviewed media pin, hash verification, and deterministic audit rebuild.'},
+                {type:'second-desk-review',value:'Exact bytes show a clear solo event portrait of Wallace Shawn with an unobstructed human face, not a role depiction, group shot, or non-person image.'}
+              ]
+            }
+          ];
+          const receipt={
+            version:1,
+            scope:'star-trek',
+            reviewed_at:reviewedAt,
+            semantics:'Identity uses revision-bound role evidence, attributable source/file metadata, and exact source-asset receipts, never facial recognition. Presentation is a second-desk judgment over the exact hash-bound bytes.',
+            source,
+            rows,
+            counts:{total:2,verify:2,null:0}
+          };
+          const receiptPath='data/review/trek-population-001-zek-media-source-receipt.json';
+          const receiptBytes=jsonBytes(receipt);
+          fs.writeFileSync(receiptPath,receiptBytes);
+          const approvals=rows.map(row=>({
+            item_id:row.item_id,
+            asset_sha256:row.asset_sha256,
+            identity_note:row.side==='still'
+              ? 'Revision-bound role evidence and the attributable episode-review asset identify the exact bytes as live-action Grand Nagus Zek.'
+              : 'The Wikimedia Commons file page identifies the exact freely licensed portrait bytes as Wallace Shawn.',
+            identity_evidence:row.evidence,
+            presentation:row.presentation,
+            presentation_note:row.side==='still'
+              ? 'Second-desk review of the exact bytes shows a filmed DS9 scene with Grand Nagus Zek in the complete Ferengi prosthetic, not a skull, artwork, prop-only image, or production material.'
+              : 'Second-desk review of the exact bytes shows a clear solo human portrait of Wallace Shawn, not a role depiction, group image, or non-person asset.',
+            presentation_evidence:[
+              row.evidence.find(item=>item.type==='second-desk-review'),
+              {type:'workflow-run',value:`GitHub Actions run ${process.env.GITHUB_RUN_ID} — hash-bound Zek campaign and cycle finalizer.`}
+            ]
+          }));
+          const campaign={
+            version:2,
+            scope:'star-trek',
+            reviewed_by:'chatgpt-second-desk',
+            reviewed_role:'second-desk',
+            reviewed_at:reviewedAt,
+            source,
+            source_receipt:{path:receiptPath,sha256:sha(receiptBytes)},
+            expected_result:{total:756,verified:566,absent:190,review:0,attention:0},
+            machine_reviewer:'source-metadata-bot',
+            remediations:[],
+            approvals
+          };
+          const campaignPath='data/review/trek-population-001-zek-media-audit-campaign.json';
+          fs.writeFileSync(campaignPath,jsonBytes(campaign));
+          fs.writeFileSync('/tmp/star-trek-population-finalize/campaign-preflight.json',jsonBytes({reviewed_at:reviewedAt,source,open_items:open.map(item=>({id:item.id,side:item.side,sha256:item.asset.sha256})),receipt_sha256:campaign.source_receipt.sha256}));
+          NODE
+      - name: Apply the complete exact-subject media campaign
+        run: |
+          set -euo pipefail
+          out=/tmp/star-trek-population-finalize
+          node scripts/media-audit-campaign.mjs \
+            --input data/review/trek-population-001-zek-media-audit-campaign.json \
+            | tee "$out/media-campaign.log"
+          node scripts/media-audit.mjs status --scope star-trek --json | tee "$out/media-after.json"
+          node - <<'NODE'
+          const fs=require('fs');
+          const status=JSON.parse(fs.readFileSync('/tmp/star-trek-population-finalize/media-after.json','utf8'));
+          if(status.total!==756||status.complete!==756||status.verified!==566||status.absent!==190||status.review!==0||status.attention!==0) throw new Error(`unexpected post-campaign media state: ${JSON.stringify(status)}`);
+          NODE
+      - name: Resolve the exact task through the canonical post-merge review
+        run: |
+          set -euo pipefail
+          out=/tmp/star-trek-population-finalize
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const reviewedAt=new Date().toISOString();
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(row=>row.id==='UC-1281');
+          if(!source) throw new Error('Zek source row is missing');
+          const review={
+            version:1,
+            reviewed_by:'chatgpt-second-desk',
+            lease_id:'lease_094fce30fd83f322e2d0ddb7',
+            reviews:[{
+              task_id:'ap_d3afc683a39f7fa108090790',
+              records:[{
+                wall_id:'UC-1281',
+                still:{disposition:'verified',subject:'Zek',source:source.still.origin,note:'The hash-bound exact-subject campaign verifies the selected live-action DS9 frame as Grand Nagus Zek in the complete Ferengi prosthetic.'},
+                portrait:{disposition:'verified',subject:'Wallace Shawn',source:source.portrait.origin,note:'The hash-bound Commons file receipt and exact-subject campaign verify the clean solo portrait as Wallace Shawn.'}
+              }]
+            }]
+          };
+          fs.writeFileSync('data/review/trek-population-001-zek-post-merge-review.json',JSON.stringify(review,null,2)+'\n');
+          NODE
+          node scripts/autopilot.mjs complete \
+            --input data/review/trek-population-001-zek-post-merge-review.json \
+            | tee "$out/autopilot-complete.log"
+          node scripts/autopilot.mjs status --scope star-trek --json | tee "$out/autopilot-after.json"
+          node - <<'NODE'
+          const fs=require('fs');
+          const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const job=state.jobs.find(row=>row.id==='ap_d3afc683a39f7fa108090790');
+          if(job?.status!=='resolved'||!job.wall_ids?.includes('UC-1281')) throw new Error(`Zek task did not resolve: ${job?.status||'missing'}`);
+          const status=JSON.parse(fs.readFileSync('/tmp/star-trek-population-finalize/autopilot-after.json','utf8'));
+          if(status.in_flight!==0||status.statuses.resolved!==327||status.statuses.queued!==1897||status.statuses.blocked!==2) throw new Error(`unexpected post-completion task state: ${JSON.stringify(status)}`);
+          NODE
+      - name: Record the reviewed cycle and refresh exact five-way accounting
+        run: |
+          set -euo pipefail
+          out=/tmp/star-trek-population-finalize
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import { jobSetDigest } from './scripts/lib/waterline.mjs';
+          const reviewedAt=new Date().toISOString();
+          const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const jobs=state.jobs.filter(job=>job.scope==='star-trek').sort((a,b)=>a.id.localeCompare(b.id));
+          if(jobs.some(job=>['leased','drafted','merged'].includes(job.status))) throw new Error('accounting refused while Star Trek work is in flight');
+          const semantics={
+            eligible:'Task-level eligibility has been positively established but the role is not yet filed.',
+            filed:'The exact performer-role is represented by a resolved canonical wall record.',
+            blocked:'Required evidence or runtime capability is unavailable; the task remains visible for retry.',
+            excluded:'A reviewed rejection or retirement removes the task from the eligible corpus without erasing history.',
+            unresolved:'No final eligibility disposition exists yet. Queued and attention work remains unresolved rather than being presumed eligible.'
+          };
+          const rows=jobs.map(job=>{
+            let disposition,note=null;
+            if(job.status==='resolved') disposition='filed';
+            else if(job.status==='blocked') {disposition='blocked';note=job.outcome?.reason||'The task is explicitly blocked pending evidence or runtime capability.';}
+            else if(['rejected','retired'].includes(job.status)) {disposition='excluded';note=job.outcome?.reason||'A reviewed final disposition excludes this task without erasing its history.';}
+            else if(['queued','attention'].includes(job.status)) {disposition='unresolved';note='Queued work remains unresolved pending task-level eligibility research; queueability is not itself an eligibility ruling.';}
+            else throw new Error(`unsupported accounting status ${job.id}: ${job.status}`);
+            return {task_id:job.id,performer:job.performer,character:job.character,durable_status:job.status,disposition,wall_ids:[...(job.wall_ids||[])].sort(),source_fingerprint:job.source_fingerprint,note};
+          });
+          const keys=['eligible','filed','blocked','excluded','unresolved'];
+          const counts=Object.fromEntries(keys.map(key=>[key,rows.filter(row=>row.disposition===key).length]));
+          if(counts.eligible!==0||counts.filed!==327||counts.blocked!==2||counts.excluded!==0||counts.unresolved!==1897) throw new Error(`unexpected five-way counts ${JSON.stringify(counts)}`);
+          const digest=jobSetDigest(state,'star-trek');
+          const ledger={version:1,scope_id:'star-trek',generated_at:reviewedAt,semantics,denominator:rows.length,counts,job_set_sha256:digest,rows};
+          fs.writeFileSync('data/review/star-trek-five-way-accounting-2026-07-24.json',JSON.stringify(ledger,null,2)+'\n');
+          const cycle={
+            scope_id:'star-trek',
+            lease_id:'lease_094fce30fd83f322e2d0ddb7',
+            outcome:'completed',
+            note:'The first visible Star Trek population cycle resumed from its committed lease, added Wallace Shawn as Grand Nagus Zek, rejected a Picard skull misfile, pinned reviewed live-action Zek and Wallace Shawn images, resolved the task, and returned all 756 Star Trek media facets to verified or honestly absent.',
+            evidence:[
+              {type:'workflow-run',value:`GitHub Actions run ${process.env.GITHUB_RUN_ID} — hash-bound media campaign, task resolution, accounting, and canonical gate.`},
+              {type:'commit',value:'87b9a0701b06682d6016a8cf9880c9b4d2455ada — exact reviewed Zek media pin and deterministic audit rebuild.'},
+              {type:'restart-proof',value:'Lease lease_094fce30fd83f322e2d0ddb7 was committed at 019bd87c5add7cfdb5d47e1b62ffa0e07f386dfd before canonical processing began.'}
+            ],
+            reviewed_by:'chatgpt-second-desk',
+            reviewed_role:'second-desk',
+            reviewed_at:reviewedAt
+          };
+          fs.writeFileSync('data/review/trek-population-001-zek-cycle-receipt.json',JSON.stringify(cycle,null,2)+'\n');
+          const accounting={
+            scope_id:'star-trek',counts,
+            note:'Every durable Star Trek task is assigned exactly once after the Zek cycle. Queued work remains unresolved until task-level eligibility is researched; it is never promoted by inference.',
+            evidence:[
+              {type:'report',value:`data/review/star-trek-five-way-accounting-2026-07-24.json — ${rows.length} exact task rows; job set ${digest}`},
+              {type:'workflow-run',value:`GitHub Actions run ${process.env.GITHUB_RUN_ID} — post-Zek five-way accounting and canonical gate.`}
+            ],
+            reviewed_by:'chatgpt-second-desk',
+            reviewed_role:'second-desk',
+            reviewed_at:reviewedAt
+          };
+          fs.writeFileSync('data/review/trek-population-001-zek-accounting-receipt.json',JSON.stringify(accounting,null,2)+'\n');
+          fs.writeFileSync('/tmp/star-trek-population-finalize/accounting-summary.json',JSON.stringify({counts,denominator:rows.length,job_set_sha256:digest,zek:rows.find(row=>row.task_id==='ap_d3afc683a39f7fa108090790')},null,2)+'\n');
+          NODE
+          node scripts/waterline.mjs record-cycle \
+            --input data/review/trek-population-001-zek-cycle-receipt.json \
+            | tee "$out/waterline-cycle.log"
+          node scripts/waterline.mjs record-accounting \
+            --input data/review/trek-population-001-zek-accounting-receipt.json \
+            | tee "$out/waterline-accounting.log"
+          node scripts/waterline.mjs status --scope star-trek --json | tee "$out/waterline-after.json"
+          node - <<'NODE'
+          const fs=require('fs');
+          const status=JSON.parse(fs.readFileSync('/tmp/star-trek-population-finalize/waterline-after.json','utf8'));
+          if(!status.claim_allowed||status.media.debt!==0||status.jobs.in_flight!==0||status.cycles.unreceipted.length!==0||!status.accounting.current) throw new Error(`waterline did not close cleanly: ${JSON.stringify(status)}`);
+          NODE
+      - name: Build the permanent candidate and remove the finalizer
+        run: |
+          set -euo pipefail
+          out=/tmp/star-trek-population-finalize
+          node scripts/shard.mjs | tee "$out/shard.log"
+          node scripts/build-contract.mjs | tee "$out/build-contract.log"
+          node scripts/autopilot.mjs validate | tee "$out/autopilot-validate.log"
+          node scripts/waterline.mjs validate | tee "$out/waterline-validate.log"
+          node scripts/roadmap.mjs validate | tee "$out/roadmap-validate.log"
+          rm -f .github/STAR-TREK-POPULATION-FINALIZE.json
+          rm -f .github/workflows/star-trek-population-finalize.yml
+          git config user.name "undercast-population"
+          git config user.email "undercast-population@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Population: resolve Wallace Shawn as Grand Nagus Zek"
+          git show --stat --oneline HEAD > "$out/commit.txt"
+      - name: Run the complete permanent-head gate
+        id: gate
+        run: |
+          set +e
+          out=/tmp/star-trek-population-finalize
+          npm run gate 2>&1 | tee "$out/gate.log"
+          code=${PIPESTATUS[0]}
+          git status --short > "$out/status.txt"
+          node scripts/media-audit.mjs status --scope star-trek --json > "$out/final-media.json"
+          node scripts/autopilot.mjs status --scope star-trek --json > "$out/final-autopilot.json"
+          node scripts/waterline.mjs status --scope star-trek --json > "$out/final-waterline.json"
+          exit "$code"
+      - name: Retain exact closure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-population-zek-final-${{ github.run_id }}
+          path: /tmp/star-trek-population-finalize
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish the exact gated candidate
+        if: steps.gate.outcome == 'success'
+        run: git push origin HEAD:agent/star-trek-population-001
