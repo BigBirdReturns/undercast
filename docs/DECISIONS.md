@@ -163,3 +163,29 @@ local without becoming competing token sources.
 installs the runtime and invokes that single command. The workflow, checklists, and
 operator docs must not maintain a second command list; new canonical checks belong
 in `scripts/gate.mjs` and its adversarial fixtures.
+
+---
+
+## DEC-0012 — UNDERCAST v1 enters collection-only operating mode
+**Status:** Active owner direction · Implemented by the corpus-operations change, 2026-07-24
+
+The existing reader product, archive contract, preservation layer, exact-subject
+media system, certified Autopilot, and rolling waterline are the platform. The
+default work is now to make the corpus as complete, accurate, well-sourced, and
+durable as possible, to keep retrying honest gaps for better evidence, and to bring
+additional IP estates through the same reviewed adapter pipeline.
+
+Without a later owner decision or a time-bounded reviewed exception, allowed work
+is limited to corpus additions, source refresh, evidence/media improvement,
+correction and rights response, preservation, adapter construction/certification,
+operations, security, accessibility, and performance.
+
+The following are not default collection work and require a new owner decision:
+new reader surfaces, new primary-navigation destinations, a new
+character→performer reveal, a runtime service, a canonical entity type, an
+account/contributor system, or a public write interface.
+
+Legacy scheduled jobs may harvest leads and search for candidate media, but they
+may not directly add specimens or replace canonical media. Canonical growth runs
+through a certified bounded lease. Candidate media remains noncanonical until
+hash-bound exact-subject review promotes it.
