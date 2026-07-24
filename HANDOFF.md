@@ -56,6 +56,10 @@ The retained Ferengi scope currently contains 70 named credits: 16 primary-card
 credits across 14 illustrated cards, 16 additional performances on file, and 38
 unfiled named credits, plus eight source pages without a named performer.
 
+The exact role-aware taxonomy candidate passed workflow run `30062093909`, including
+producer recertification, the 750-facet media gate, deterministic projections, all
+archive invariants, and all 20 rendered-browser tests before publication.
+
 ## Rolling gold waterline
 
 Current Star Trek phase:
