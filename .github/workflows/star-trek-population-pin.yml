@@ -1,0 +1,188 @@
+name: star-trek-population-pin
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/STAR-TREK-POPULATION-PIN.json"
+      - ".github/workflows/star-trek-population-pin.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-population-001-pin
+  cancel-in-progress: false
+
+jobs:
+  pin:
+    if: github.event.pull_request.head.ref == 'agent/star-trek-population-001'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-population-001
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Fetch and verify the reviewed exact bytes
+        run: |
+          set -euo pipefail
+          out=/tmp/star-trek-population-pin
+          rm -rf "$out"
+          mkdir -p "$out"
+          ua='Mozilla/5.0 UNDERCAST/0.1 (+https://github.com/BigBirdReturns/undercast; bigbirdreturns@proton.me)'
+          curl --location --fail --silent --show-error --retry 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 90 -A "$ua" \
+            -e 'https://latetothegame.blog/2019/03/18/retro-tv-review-star-trek-ds9-ssn-one-episode-ten-the-nagus/' \
+            -o "$out/uc-1281-still.jpg" \
+            'https://latetothegame.blog/wp-content/uploads/2019/03/nagus-3.jpg'
+          curl --location --fail --silent --show-error --retry 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 90 -A "$ua" \
+            -e 'https://commons.wikimedia.org/wiki/File:Wallace_Shawn_2014_(cropped).jpg' \
+            -o "$out/uc-1281-portrait.jpg" \
+            'https://commons.wikimedia.org/wiki/Special:Redirect/file/Wallace_Shawn_2014_%28cropped%29.jpg?width=1000'
+          printf '%s  %s\n' \
+            '0c6d4c4ae613ea4bdc92a9f1b6008e304615da73d495ea34ef82068a3fcc8380' "$out/uc-1281-still.jpg" \
+            'e8ecb0dadf05ca47be2ab1bef906bf8255e7754a1387be29385fc8d767348082' "$out/uc-1281-portrait.jpg" \
+            | sha256sum --check
+          test "$(file -b --mime-type "$out/uc-1281-still.jpg")" = image/jpeg
+          test "$(file -b --mime-type "$out/uc-1281-portrait.jpg")" = image/jpeg
+          cp "$out/uc-1281-still.jpg" images/uc-1281-still.jpg
+          cp "$out/uc-1281-portrait.jpg" images/uc-1281-portrait.jpg
+      - name: Pin provenance and crop focus in both canonical ledgers
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          const crypto=require('crypto');
+          const command=JSON.parse(fs.readFileSync('.github/STAR-TREK-POPULATION-PIN.json','utf8'));
+          if(command.wall_id!=='UC-1281') throw new Error('pin command wall id drifted');
+          const still={
+            src:'images/uc-1281-still.jpg',
+            kind:'still',
+            origin:'https://latetothegame.blog/2019/03/18/retro-tv-review-star-trek-ds9-ssn-one-episode-ten-the-nagus/',
+            focus:{x:'right',y:'upper'}
+          };
+          const portrait={
+            src:'images/uc-1281-portrait.jpg',
+            kind:'free',
+            origin:'https://commons.wikimedia.org/wiki/File:Wallace_Shawn_2014_(cropped).jpg',
+            author:'PEN American Center',
+            license:'CC BY 2.0',
+            year:2014,
+            focus:{x:'center',y:'upper'}
+          };
+          for(const file of ['data/specimens.json','data/SOURCES.json']){
+            const rows=JSON.parse(fs.readFileSync(file,'utf8'));
+            const row=rows.find(item=>item.id==='UC-1281');
+            if(!row||row.actor!=='Wallace Shawn'||row.character!=='Zek') throw new Error(`${file} lacks exact Zek row`);
+            row.still=structuredClone(still);
+            row.portrait=structuredClone(portrait);
+            if(file.endsWith('SOURCES.json')) row.fetched_at='2026-07-24';
+            fs.writeFileSync(file,JSON.stringify(rows,null,2)+'\n');
+          }
+          const stillBytes=fs.readFileSync(still.src),portraitBytes=fs.readFileSync(portrait.src);
+          const receipt={
+            version:1,
+            reviewed_at:'2026-07-24T22:18:06.000Z',
+            wall_id:'UC-1281',
+            task_id:'ap_d3afc683a39f7fa108090790',
+            lease_id:'lease_094fce30fd83f322e2d0ddb7',
+            rejected_candidate:{
+              side:'still',
+              sha256:'f989957eb553e3a0a1dffeee276f485c20fbe6ca711c71fb639678fc4e308cbe',
+              reason:'The retrieved image depicts Zek’s skull in Star Trek: Picard, not Wallace Shawn performing the live-action DS9 character.'
+            },
+            selected:{
+              still:{
+                source_page:still.origin,
+                source_asset:'https://latetothegame.blog/wp-content/uploads/2019/03/nagus-3.jpg',
+                sha256:crypto.createHash('sha256').update(stillBytes).digest('hex'),
+                bytes:stillBytes.length,
+                evidence:[
+                  'https://memory-alpha.fandom.com/wiki/Zek',
+                  'https://memory-alpha.fandom.com/wiki/Category:Memory_Alpha_files_by_production_(DS9:_The_Nagus)',
+                  still.origin
+                ],
+                review_note:'Exact bytes visibly depict live-action Grand Nagus Zek in the DS9 prosthetic; crop focus isolates Zek on the right.'
+              },
+              portrait:{
+                source_page:portrait.origin,
+                source_asset:'https://commons.wikimedia.org/wiki/Special:Redirect/file/Wallace_Shawn_2014_%28cropped%29.jpg?width=1000',
+                sha256:crypto.createHash('sha256').update(portraitBytes).digest('hex'),
+                bytes:portraitBytes.length,
+                author:portrait.author,
+                license:portrait.license,
+                review_note:'Exact bytes are the Commons file-page portrait of Wallace Shawn, cleanly framed and freely licensed.'
+              }
+            }
+          };
+          if(receipt.selected.still.sha256!==command.still_sha256||receipt.selected.portrait.sha256!==command.portrait_sha256) throw new Error('selected bytes differ from the reviewed hashes');
+          fs.writeFileSync('data/review/trek-population-001-zek-media-selection.json',JSON.stringify(receipt,null,2)+'\n');
+          fs.writeFileSync('/tmp/star-trek-population-pin/media-selection.json',JSON.stringify(receipt,null,2)+'\n');
+          NODE
+      - name: Rebuild deterministic projections and the media review state
+        run: |
+          set -euo pipefail
+          out=/tmp/star-trek-population-pin
+          node scripts/credits.mjs | tee "$out/credits.log"
+          node scripts/shard.mjs | tee "$out/shard.log"
+          node scripts/build-contract.mjs | tee "$out/build-contract.log"
+          node scripts/autopilot.mjs sync | tee "$out/autopilot-sync.log"
+          node scripts/media-audit.mjs sync | tee "$out/media-audit-sync.log"
+          node scripts/media-audit.mjs status --scope star-trek --json > "$out/media-status.json"
+          node scripts/autopilot.mjs status --scope star-trek --json > "$out/autopilot-status.json"
+          node scripts/validate.mjs | tee "$out/validate.log"
+          node - <<'NODE'
+          const fs=require('fs');
+          const crypto=require('crypto');
+          const specimens=JSON.parse(fs.readFileSync('data/specimens.json','utf8'));
+          const sources=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8'));
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8'));
+          const record=specimens.find(row=>row.id==='UC-1281');
+          const source=sources.find(row=>row.id==='UC-1281');
+          const items=(audit.items||[]).filter(row=>row.wall_id==='UC-1281');
+          if(!record||!source||items.length!==2||items.some(item=>item.status!=='review')) throw new Error('pinned Zek facets are not exactly two review items');
+          for(const side of ['still','portrait']){
+            const bytes=fs.readFileSync(record[side].src);
+            const item=items.find(row=>row.side===side);
+            const hash=crypto.createHash('sha256').update(bytes).digest('hex');
+            if(item?.asset?.sha256!==hash||item.asset.bytes!==bytes.length) throw new Error(`${side} media-audit receipt does not bind the pinned bytes`);
+          }
+          const context={version:2,wall_id:'UC-1281',record,source,audit_items:items};
+          fs.writeFileSync('data/review/trek-population-001-zek-context.json',JSON.stringify(context,null,2)+'\n');
+          fs.writeFileSync('/tmp/star-trek-population-pin/context.json',JSON.stringify(context,null,2)+'\n');
+          NODE
+          cp images/uc-1281-still.jpg "$out/"
+          cp images/uc-1281-portrait.jpg "$out/"
+          (cd "$out" && find . -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+      - name: Commit the pinned candidate and remove temporary capture operators
+        run: |
+          set -euo pipefail
+          out=/tmp/star-trek-population-pin
+          git config user.name "undercast-population"
+          git config user.email "undercast-population@users.noreply.github.com"
+          rm -f .github/STAR-TREK-POPULATION-MEDIA-CANDIDATES.json
+          rm -f .github/workflows/star-trek-population-media-candidates.yml
+          rm -f .github/STAR-TREK-POPULATION-PIN.json
+          rm -f .github/workflows/star-trek-population-pin.yml
+          git add -A
+          git diff --cached --check
+          git commit -m "Population: pin reviewed Grand Nagus Zek media"
+          git show --stat --oneline HEAD > "$out/commit.txt"
+          git push origin HEAD:agent/star-trek-population-001
+      - name: Upload the exact pinned review candidate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-population-zek-pinned-${{ github.run_id }}
+          path: /tmp/star-trek-population-pin
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
