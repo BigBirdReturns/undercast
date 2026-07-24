@@ -1,0 +1,53 @@
+name: patch-tosk-preflight
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patch-tosk-preflight
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    if: github.event.pull_request.number == 78
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-gold-completion
+          fetch-depth: 1
+      - name: Move deterministic rebuild ahead of Autopilot complete
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('.github/workflows/close-tosk-cycle.yml')
+          text=path.read_text()
+          needle='''          node scripts/media-audit.mjs validate
+          node scripts/media-audit.mjs gate --scope star-trek
+'''
+          replacement='''          node scripts/media-audit.mjs validate
+          node scripts/media-audit.mjs gate --scope star-trek
+          node scripts/credits.mjs
+          node scripts/sync-sources.mjs
+          node scripts/shard.mjs
+          node scripts/census-gate.mjs --write
+          node scripts/build-record-pages.mjs
+          node scripts/build-contract.mjs
+          node scripts/validate.mjs
+'''
+          if text.count(needle)!=1:
+              raise SystemExit(f'preflight insertion count {text.count(needle)}')
+          path.write_text(text.replace(needle,replacement,1))
+          PY
+          rm -f .github/workflows/patch-tosk-preflight.yml
+          git config user.name 'undercast-cycle-operator'
+          git config user.email 'undercast-cycle-operator@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Cycle 2: rebuild before completing Tosk media'
+          git push origin HEAD:agent/star-trek-gold-completion
