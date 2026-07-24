@@ -279,3 +279,4 @@ This is a fan project made out of love for the craft. If you hold rights to
 something here and want it gone, open an issue or email the maintainer and the
 specific asset comes down — no argument. That's the deal that keeps this cheap
 and friendly.
+Site-wide role integrity, fallback-art, and orphan-surface contract: `docs/FULL-SITE-SWEEP.md`; enforce it with `npm run site:sweep`.

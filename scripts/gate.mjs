@@ -96,6 +96,7 @@ const stepDefinitions = [
   { id: "census-sync", label: "Validate isolated certification-aware census sync", action: runAutopilotSyncAssertion },
   { id: "corpus", label: "Validate semantic corpus", action: () => runNpmScript("Corpus audit", "audit:corpus") },
   { id: "site-seams", label: "Validate public site seams", action: () => runNpmScript("Site seams", "test:site-seams") },
+  { id: "site-sweep", label: "Validate full-site role integrity and fallback design", action: () => { runNpmScript("Site sweep fixtures", "site:sweep:fixtures"); runNpmScript("Site sweep", "site:sweep"); } },
   { id: "routes-build", label: "Build permanent routes", action: () => runNodeScript("Permanent routes", "scripts/build-record-pages.mjs") },
   { id: "rendered", label: "Exercise rendered interactions", rendered: true, action: () => runNpmScript("Rendered interactions", "test:rendered") },
   { id: "route-count", label: "Verify route count", action: () => assertRouteCount() },
