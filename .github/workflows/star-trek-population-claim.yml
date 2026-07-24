@@ -30,21 +30,37 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: Verify exact task compatibility and readiness
+      - name: Verify exact task identity and readiness
         run: |
           set -euo pipefail
           mkdir -p /tmp/star-trek-population-claim
           node scripts/corpus-ops.mjs status --json | tee /tmp/star-trek-population-claim/corpus-before.json
           node scripts/waterline.mjs status --scope star-trek --json | tee /tmp/star-trek-population-claim/waterline-before.json
-          node scripts/autopilot.mjs candidates --scope star-trek --capability-profile text-vision --limit 200 --json > /tmp/star-trek-population-claim/candidates.json
+          node scripts/autopilot.mjs readiness --scope star-trek --require-active --json > /tmp/star-trek-population-claim/readiness.json
           node - <<'NODE'
           const fs=require('fs');
-          const report=JSON.parse(fs.readFileSync('/tmp/star-trek-population-claim/candidates.json','utf8'));
+          const crypto=require('crypto');
+          const bytes=fs.readFileSync('data/AUTOPILOT.json');
+          const state=JSON.parse(bytes);
           const id='ap_d3afc683a39f7fa108090790';
-          const row=(report.compatible||[]).find(item=>item.task_id===id);
-          if(!row) throw new Error(`selected task ${id} is not compatible with text-vision`);
-          if(row.performer!=='Wallace Shawn'||row.character!=='Zek') throw new Error('selected task identity drifted');
-          fs.writeFileSync('/tmp/star-trek-population-claim/selected.json',JSON.stringify(row,null,2)+'\n');
+          const row=(state.jobs||[]).find(item=>item.id===id);
+          if(!row) throw new Error(`selected task ${id} is absent from durable state`);
+          if(row.scope!=='star-trek'||row.performer!=='Wallace Shawn'||row.character!=='Zek') throw new Error('selected task identity drifted');
+          if(row.status!=='queued'||row.queueable!==true) throw new Error(`selected task is not queueable: ${row.status}`);
+          if(!(row.performance_modes||[]).some(mode=>['physical-prosthetic','physical-and-voice'].includes(mode))) throw new Error('selected task is not a physical performance');
+          if(!(row.source_receipts||[]).some(receipt=>receipt.revision&&receipt.content_sha256)) throw new Error('selected task lacks an exact source-revision receipt');
+          const selected={
+            task_id:row.id,
+            scope:row.scope,
+            performer:row.performer,
+            character:row.character,
+            categories:row.categories,
+            performance_modes:row.performance_modes,
+            source_fingerprint:row.source_fingerprint,
+            source_receipts:row.source_receipts,
+            autopilot_sha256:crypto.createHash('sha256').update(bytes).digest('hex')
+          };
+          fs.writeFileSync('/tmp/star-trek-population-claim/selected.json',JSON.stringify(selected,null,2)+'\n');
           NODE
       - name: Persist one exact restart-safe lease
         run: |
