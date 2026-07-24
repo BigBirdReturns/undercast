@@ -344,10 +344,10 @@ test("small archival labels retain WCAG AA contrast on every display surface",as
     image:getComputedStyle(node).backgroundImage,
     size:getComputedStyle(node).backgroundSize
   }));
-  expect(texture.paper).toBe("rgb(233, 228, 216)");
-  expect(texture.image).toContain("rgba(32, 31, 27, 0.08)");
+  expect(texture.paper).toBe("rgb(21, 18, 13)");
+  expect(texture.image).toContain("rgba(234, 227, 212");
   expect(texture.size).toBe("17px 17px");
-  for(const selector of [".eyebrow",".hero-side label",".scope-note",".node:not(.person-node) .node-type"]) await expectContrast(page,selector,"rgb(217, 212, 201)");
+  for(const selector of [".eyebrow",".hero-side label",".scope-note",".node:not(.person-node) .node-type"]) await expectContrast(page,selector);
   await expectContrast(page,".person-no","rgb(41, 42, 39)");
 
   await open(page,"records/UC-001/");
@@ -605,4 +605,40 @@ test("full-site sweep uses canonical absence plates and connects every public su
   if(missing.missingPortrait){await expect(card.locator('.face.back picture.absence-plate img[src$="assets/placeholder-light-clean.png"]')).toHaveCount(1);await expect(card.locator('.face.back picture.absence-plate source[srcset$="assets/placeholder-dark-clean.png"]')).toHaveCount(1);}
   await expect(card.locator('svg.portrait')).toHaveCount(0);
   for(const route of ["index.html","recognition.html","coverage.html","constellation.html","404.html","records/UC-019/"]){await open(page,route);await expect(page.locator(".archive-map")).toHaveCount(1);await expect(page.locator(".archive-map a")).toHaveCount(5);}
+});
+
+test("homepage purpose and theme are explicit across the archive",async({page})=>{
+  await open(page,"index.html");
+  await waitForWall(page);
+  const doors=page.locator(".archive-door");
+  await expect(doors).toHaveCount(4);
+  await expect(doors.nth(0)).toContainText("Who is under this face?");
+  await expect(doors.nth(1)).toContainText("What is still missing?");
+  await expect(doors.nth(2)).toContainText("Who built the look?");
+  await expect(doors.nth(3)).toContainText("Where does the evidence lead?");
+  await expect(doors.nth(0)).toHaveAttribute("href","./recognition.html#UC-001");
+  await expect(doors.nth(1)).toHaveAttribute("href","./coverage.html");
+  await expect(doors.nth(2)).toHaveAttribute("href","#makers");
+  await expect(doors.nth(3)).toHaveAttribute("href","./constellation.html");
+
+  const toggle=page.locator("[data-theme-toggle]");
+  await expect(toggle).toHaveText(/Dark/);
+  await toggle.click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme","dark");
+  await expect(toggle).toHaveText(/Light/);
+
+  const missing=await page.evaluate(async()=>{const rows=await fetch("./data/specimens.json").then(r=>r.json());return rows.find(record=>!record.still||!record.portrait).id;});
+  await open(page,"index.html#"+missing);
+  const absence=page.locator('[data-uid="'+missing+'"] .absence-plate').first();
+  await expect(absence).toBeVisible();
+  await expect(absence).toHaveAttribute("data-absence-label",/not on file/i);
+  const treatment=await absence.evaluate(node=>({filter:getComputedStyle(node.querySelector("img")).filter,frame:getComputedStyle(node,"::before").borderTopStyle}));
+  expect(treatment.filter).not.toBe("none");
+  expect(treatment.frame).toBe("solid");
+
+  for(const route of ["coverage.html","constellation.html","404.html","records/UC-040/"]){
+    await open(page,route);
+    await expect(page.locator("html")).toHaveAttribute("data-theme","dark");
+    await expect(page.locator("[data-theme-toggle]")).toHaveText(/Light/);
+  }
 });
