@@ -1,0 +1,135 @@
+name: finalize-estate-inventory
+
+on:
+  push:
+    branches: [agent/corpus-operations-mode]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: corpus-operations-final-qualification
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/corpus-operations-mode
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install runtime
+        run: npm ci
+
+      - name: Wire exact estate inventory into the permanent command and gate surface
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          package_path=Path('package.json')
+          package=json.loads(package_path.read_text())
+          package['scripts']['estate:inventory']='node scripts/estate-inventory.mjs'
+          package['scripts']['estate:inventory:fixtures']='node scripts/estate-inventory-fixtures.mjs'
+          package_path.write_text(json.dumps(package,indent=2)+'\n')
+
+          gate_path=Path('scripts/gate.mjs')
+          gate=gate_path.read_text()
+          old='''{ id: "corpus-operations", label: "Validate collection-only corpus operations", action: () => { runNpmScript("Corpus operations fixtures", "corpus:ops:fixtures"); runNpmScript("Media search fixtures", "media:search:fixtures"); runNpmScript("Media search state", "media:search", ["--", "validate"]); runNpmScript("Corpus operations contract", "corpus:ops", ["--", "validate"]); runNpmScript("Corpus operations status", "corpus:ops", ["--", "status", "--json"]); runNpmScript("Corpus operations plan", "corpus:ops", ["--", "plan", "--json"]); } },'''
+          new='''{ id: "corpus-operations", label: "Validate collection-only corpus operations", action: () => { runNpmScript("Corpus operations fixtures", "corpus:ops:fixtures"); runNpmScript("Media search fixtures", "media:search:fixtures"); runNpmScript("Estate inventory fixtures", "estate:inventory:fixtures"); runNpmScript("Media search state", "media:search", ["--", "validate"]); runNpmScript("Estate mappings", "estate:inventory", ["--", "validate"]); runNpmScript("Estate inventory", "estate:inventory", ["--", "status", "--limit", "20", "--json"]); runNpmScript("Corpus operations contract", "corpus:ops", ["--", "validate"]); runNpmScript("Corpus operations status", "corpus:ops", ["--", "status", "--json"]); runNpmScript("Corpus operations plan", "corpus:ops", ["--", "plan", "--json"]); } },'''
+          if old not in gate:
+              raise SystemExit('corpus-operations gate anchor missing')
+          gate_path.write_text(gate.replace(old,new,1))
+
+          workflow_path=Path('.github/workflows/corpus-operations.yml')
+          workflow=workflow_path.read_text()
+          anchor='''          npm run corpus:ops -- next-estate --json > .corpus-operations/next-estate.json
+          npm run media:search -- plan --scope star-trek --limit 20 --json > .corpus-operations/media-search-plan.json
+'''
+          replacement='''          npm run corpus:ops -- next-estate --json > .corpus-operations/next-estate.json
+          npm run estate:inventory -- status --limit 100 --json > .corpus-operations/estate-inventory.json
+          npm run media:search -- plan --scope star-trek --limit 20 --json > .corpus-operations/media-search-plan.json
+'''
+          if anchor not in workflow:
+              raise SystemExit('corpus-operations workflow anchor missing')
+          workflow_path.write_text(workflow.replace(anchor,replacement,1))
+
+          docs_path=Path('docs/CORPUS-OPERATIONS.md')
+          docs=docs_path.read_text()
+          needle='''npm run corpus:ops -- next-estate
+```
+'''
+          addition='''npm run corpus:ops -- next-estate
+npm run estate:inventory -- status --limit 100
+```
+'''
+          if needle not in docs:
+              raise SystemExit('operator command block missing')
+          docs=docs.replace(needle,addition,1)
+          docs += '''
+
+## Exact estate inventory
+
+`data/ESTATE-MAPPINGS.json` contains only reviewed exact `universe` or
+`production` values. `npm run estate:inventory -- status` groups every canonical
+record and reports the unmatched production groups. Regexes, substrings, model
+classification, and keyword inference are rejected. A mapping PR therefore moves
+known records into an estate without hiding the remaining long tail or claiming a
+new producer is certified.
+'''
+          docs_path.write_text(docs)
+          PY
+
+      - name: Reconcile deterministic outputs
+        run: |
+          node scripts/shard.mjs
+          node scripts/build-record-pages.mjs
+          node scripts/build-contract.mjs
+
+      - name: Write the exact qualification receipt and remove one-shot machinery
+        run: |
+          mkdir -p docs
+          cat > docs/CORPUS-OPERATIONS-QUALIFICATION.md <<EOF
+          # Corpus-operations exact-head qualification
+
+          This receipt is part of the candidate it qualifies.
+
+          - workflow run: \`${{ github.run_id }}\`
+          - workflow: \`finalize-estate-inventory\`
+          - source branch head at checkout: \`${{ github.sha }}\`
+          - operating mode: \`collection-only\`
+          - canonical gate: \`npm run gate\`
+          - preservation check: \`npm run preserve:status -- --json\`
+
+          The workflow pushes this receipt only after both checks pass. The
+          permanent candidate includes exact estate inventory, noncanonical media
+          search, bounded growth, and removal of all one-shot qualification files.
+          EOF
+          rm -f \
+            .github/workflows/reconcile-corpus-operations.yml \
+            .github/workflows/finalize-corpus-operations.yml \
+            .github/workflows/qualify-corpus-operations.yml \
+            .github/workflows/finalize-estate-inventory.yml
+          git config user.name "undercast-operations"
+          git config user.email "undercast-operations@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Operations: finalize collection-only estate pipeline"
+
+      - name: Gate the exact permanent candidate
+        run: |
+          npx playwright install --with-deps chromium
+          npm run gate
+          npm run preserve:status -- --json
+
+      - name: Publish the qualified candidate
+        run: git push origin HEAD:agent/corpus-operations-mode
