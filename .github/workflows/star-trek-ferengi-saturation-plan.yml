@@ -1,0 +1,82 @@
+name: star-trek-ferengi-saturation-plan
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/STAR-TREK-FERENGI-SATURATION-PLAN.json"
+      - ".github/workflows/star-trek-ferengi-saturation-plan.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    if: github.event.pull_request.head.ref == 'agent/star-trek-population-002'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-population-002
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Inventory every durable Ferengi task
+        run: |
+          set -euo pipefail
+          out=/tmp/ferengi-saturation-plan
+          rm -rf "$out"
+          mkdir -p "$out"
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const species=JSON.parse(fs.readFileSync('data/species.json','utf8'));
+          const capabilities=JSON.parse(fs.readFileSync('data/AUTOPILOT-CAPABILITIES.json','utf8'));
+          const waterline=JSON.parse(fs.readFileSync('data/WATERLINE.json','utf8'));
+          const norm=value=>String(value||'').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
+          const jobs=(state.jobs||[]).filter(job=>(job.categories||[]).some(category=>norm(category)==='ferengi'));
+          const taxon=(species.taxa||[]).find(row=>row.key==='species:star-trek:ferengi');
+          const byStatus=Object.fromEntries([...new Set(jobs.map(job=>job.status))].sort().map(status=>[status,jobs.filter(job=>job.status===status).length]));
+          const byMode={};
+          for(const job of jobs) for(const mode of job.performance_modes||['unresolved']) byMode[mode]=(byMode[mode]||0)+1;
+          const rows=jobs.map(job=>({
+            task_id:job.id,
+            status:job.status,
+            performer:job.performer,
+            character:job.character,
+            categories:job.categories,
+            performance_modes:job.performance_modes,
+            queueable:job.queueable,
+            priority:job.priority,
+            attempts:job.attempts,
+            performer_on_wall:job.performer_on_wall,
+            role_on_wall:job.role_on_wall,
+            wall_ids:job.wall_ids||[],
+            sources:job.sources,
+            source_receipts:job.source_receipts||[],
+            source_fingerprint:job.source_fingerprint,
+            outcome:job.outcome||null
+          })).sort((a,b)=>a.status.localeCompare(b.status)||b.priority-a.priority||a.task_id.localeCompare(b.task_id));
+          const report={
+            version:1,
+            generated_at:new Date().toISOString(),
+            head:process.env.GITHUB_SHA,
+            category:'Ferengi',
+            totals:{tasks:jobs.length,by_status:byStatus,by_mode:byMode},
+            species_counts:taxon?.counts||null,
+            capacity:waterline.scopes?.find(row=>row.id==='star-trek')||null,
+            capability_policy:capabilities,
+            rows
+          };
+          fs.writeFileSync('/tmp/ferengi-saturation-plan/report.json',JSON.stringify(report,null,2)+'\n');
+          fs.writeFileSync('/tmp/ferengi-saturation-plan/queued.json',JSON.stringify(rows.filter(row=>row.status==='queued'),null,2)+'\n');
+          fs.writeFileSync('/tmp/ferengi-saturation-plan/in-flight.json',JSON.stringify(rows.filter(row=>['leased','drafted','merged'].includes(row.status)),null,2)+'\n');
+          console.log(JSON.stringify({totals:report.totals,species_counts:report.species_counts,capacity:report.capacity,in_flight:rows.filter(row=>['leased','drafted','merged'].includes(row.status))},null,2));
+          NODE
+      - name: Upload exact Ferengi saturation inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-ferengi-saturation-plan-${{ github.run_id }}
+          path: /tmp/ferengi-saturation-plan
+          if-no-files-found: error
+          retention-days: 30
