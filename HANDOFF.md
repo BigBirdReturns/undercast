@@ -1,10 +1,11 @@
-# UNDERCAST — handoff after the first successful Star Trek cycle, 2026-07-23
+# UNDERCAST — collection-only operating handoff, 2026-07-24
 
 UNDERCAST is a public, preservation-backed static archive. The trusted foundation,
 certified Star Trek producer, bounded Luna Autopilot, capability-aware leasing,
 five-year roadmap, exact source/original-media preservation, exact-subject media
-audit, canonical cross-platform gate, DS9 owner-decision tooling, and rolling gold
-waterline are canonical.
+audit, canonical cross-platform gate, DS9 owner-decision tooling, rolling gold
+waterline, full-site role-integrity sweep, and approved absence-card design are
+canonical.
 
 ## Current truthful state
 
@@ -49,7 +50,7 @@ portrait are exact-subject verified. The durable task
 Species filters classify the **displayed primary card role**, never the performer as
 a whole. `data/species.json` separately retains every captured named credit as a
 primary card, an additional performance on file, or an unfiled role. Normal named
-anchors such as `#makers` must preserve URL filters; only `#UC-…` hashes may invoke
+anchors such as `#makers` preserve URL filters; only `#UC-…` hashes may invoke
 card focus and clear an incompatible view.
 
 The retained Ferengi scope currently contains 70 named credits: 16 primary-card
@@ -59,6 +60,58 @@ unfiled named credits, plus eight source pages without a named performer.
 The exact role-aware taxonomy candidate passed workflow run `30062093909`, including
 producer recertification, the 750-facet media gate, deterministic projections, all
 archive invariants, and all 20 rendered-browser tests before publication.
+
+## Collection-only operating mode
+
+The repository is now intended to spend its time on the collection rather than
+rebuilding the product shell. The machine-readable contract is
+`data/CORPUS-OPERATIONS.json`; estate stages and next gates live in
+`data/ESTATE-REGISTRY.json`.
+
+Every session begins with:
+
+```bash
+npm run corpus:ops -- validate
+npm run corpus:ops -- status
+npm run corpus:ops -- plan
+```
+
+Default authorized work is:
+
+```text
+repair known correctness / rights / incident debt
+→ refresh a due certified source scope
+→ reconcile the queue
+→ run one bounded growth cycle
+→ close exact-subject media debt
+→ receipt the cycle
+→ retry old honest media absences in isolation
+→ harvest sourced leads
+→ advance one dependency-authorized estate stage
+```
+
+The old direct-writer schedules are retired:
+
+- `nightly.yml` harvests sourced leads only and cannot call `grow.mjs` or use a model key;
+- `retrieve.yml` searches old absences in an isolated temporary corpus, uploads
+  candidate bytes as a workflow artifact, and commits attempt receipts only;
+- verified media is never automatically overwritten;
+- no candidate becomes canonical without hash-bound media-audit review;
+- `autopilot.yml` remains the only scheduled source/queue mutation lane and refreshes
+  only due certified scopes;
+- `corpus-operations.yml` is read-only and publishes the current machine plan.
+
+The estate frontier is recorded without claiming activation: Star Trek is active;
+Doctor Who, Star Wars, Muppets & Henson, and Power Rangers are at adapter review;
+Kaiju and Tokusatsu require an exact role-bearing source model; Babylon 5 and
+Farscape are discovered estates awaiting inventory. `next-estate` remains blocked
+until both `star-trek-gold-shard` and `operational-reliability` receive reviewed
+completion receipts.
+
+Product expansion is no longer the default. A new reader surface, primary-navigation
+destination, reveal mechanic, runtime service, canonical entity type, account
+system, or public write interface requires an explicit owner decision or a reviewed,
+time-bounded exception.
 
 ## Rolling gold waterline
 
@@ -113,6 +166,7 @@ mode hint.
 Before the next lease:
 
 ```bash
+npm run corpus:ops -- plan
 npm run roadmap -- status
 npm run autopilot -- readiness --scope star-trek --require-active
 npm run media:audit -- gate --scope star-trek
@@ -181,4 +235,5 @@ public-trust-and-corrections
 - A green schema is not semantic truth; a source URL is not subject identity.
 - A missing runtime capability is not an eligibility rejection.
 - Preserve source snapshots, immutable media hashes, replacement/expunge history,
-  capability receipts, cycle receipts, and provider read-back evidence.
+  capability receipts, cycle receipts, media-search attempt receipts, and provider
+  read-back evidence.
