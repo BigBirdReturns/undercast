@@ -92,21 +92,46 @@ jobs:
             git diff --check
           } 2>&1 | tee collection-mode-diagnostics/proof.log
 
-      - name: Remove one-shot transition machinery
+      - name: Build clean core and workflow-policy commits
         run: |
-          rm -rf .github/collection-mode collection-mode-diagnostics
-          rm -f .github/workflows/apply-collection-mode.yml
+          rm -rf collection-mode-diagnostics
           git config user.name 'undercast-operations'
           git config user.email 'undercast-operations@users.noreply.github.com'
-          git add -A
+
+          git add -A -- . ':(exclude).github/workflows/**' ':(exclude).github/collection-mode/**'
           git diff --cached --check
-          git commit -m 'Operations: enter collection-only corpus mode'
+          git commit -m 'Operations: install collection-only corpus core'
+
+          rm -rf .github/collection-mode
+          rm -f .github/workflows/apply-collection-mode.yml
+          git add -A -- .github/workflows .github/collection-mode
+          git diff --cached --check
+          git commit -m 'Operations: replace legacy writers with governed collection jobs'
 
       - name: Gate the exact permanent candidate
         run: |
           npx playwright install --with-deps chromium
           npm run gate
           npm run preserve:status -- --json
+
+      - name: Retain publication transaction
+        run: |
+          mkdir -p collection-mode-publication
+          git format-patch --stdout HEAD~1..HEAD > collection-mode-publication/workflow-policy.patch
+          git rev-parse HEAD~1 > collection-mode-publication/core-commit.txt
+          git rev-parse HEAD > collection-mode-publication/full-candidate.txt
+          git show --stat --oneline HEAD~1 > collection-mode-publication/core-stat.txt
+          git show --stat --oneline HEAD > collection-mode-publication/workflow-stat.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: collection-mode-publication
+          path: collection-mode-publication
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish the gated core to a clean staging branch
+        run: git push --force origin HEAD~1:agent/collection-only-candidate
 
       - name: Retain diagnostics on failure
         if: failure()
@@ -120,6 +145,3 @@ jobs:
             .ci
           if-no-files-found: ignore
           retention-days: 7
-
-      - name: Publish the exact gated candidate
-        run: git push origin HEAD:agent/collection-only-operations
