@@ -1,55 +1,57 @@
-name: retrieve-images
+name: search-media-improvements
 
-# Keyless. Crawls wikis for stills + portraits, caches them into the repo,
-# updates the provenance ledger, rebuilds CREDITS.md. No ANTHROPIC_API_KEY needed.
+# Collection-only media lane. Candidate bytes and provenance are searched in an
+# isolated temporary corpus and retained as a workflow artifact. This workflow
+# never modifies canonical specimens, SOURCES, media assignments, or images.
 
 on:
   schedule:
-    - cron: "23 7 * * *"     # nightly, offset from any other job
+    - cron: "23 7 * * 2,5"
   workflow_dispatch: {}
 
 permissions:
   contents: write
 
 concurrency:
-  group: retrieve
+  group: media-search
   cancel-in-progress: false
 
 jobs:
-  retrieve:
+  search:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
 
-      - name: Retrieve images + provenance
+      - name: Validate collection-only operating mode
+        run: npm run corpus:ops -- validate
+
+      - name: Search due honest absences in isolation
         env:
-          RETRIEVE_MAX: "40"          # chip away 40 cards per night
-          CRAWL_DELAY_MS: "1500"      # be gentle with the wikis
-          IMAGE_MODE: "loose"         # also pull Fandom performer photos (denser)
-          CONTACT: "bigbirdreturns@proton.me"  # goes in the crawler's User-Agent
-        run: node scripts/retrieve.mjs
+          CONTACT: "bigbirdreturns@proton.me"
+          CRAWL_DELAY_MS: "1500"
+        run: node scripts/media-search.mjs search --scope star-trek --limit 12 --output .media-search
 
-      - name: Rebuild credits
-        run: node scripts/credits.mjs
+      - name: Retain noncanonical candidate bytes and manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: media-search-${{ github.run_id }}
+          path: .media-search
+          if-no-files-found: error
+          retention-days: 14
 
-      - name: Rebuild serving projections (index + shards from the canonical data)
-        run: node scripts/shard.mjs
+      - name: Validate attempt receipts
+        run: node scripts/media-search.mjs validate
 
-      - name: Validate invariants (gate — refuse to commit a corrupt state)
-        run: node scripts/validate.mjs
-
-      - name: Commit
+      - name: Commit search receipts only
         run: |
-          git config user.name  "undercast-bot"
+          git config user.name "undercast-bot"
           git config user.email "undercast-bot@users.noreply.github.com"
-          git add data/specimens.json data/SOURCES.json data/GAPS.json CREDITS.md images
-          git add data/index.json data/shard-manifest.json data/shards   # generated serving projections
-          git add data/archive.json data/entities.json data/dataset.jsonld data/search sitemap.xml
-          git add data/media-live.json 2>/dev/null || true               # lean release-url map (if any)
+          git add data/MEDIA-SEARCH-STATE.json data/journal/media-search.jsonl 2>/dev/null || true
           git diff --cached --quiet && exit 0
-          git commit -m "retrieve: images + provenance ($(date -u +%F))"
+          git commit -m "media: record noncanonical search attempts ($(date -u +%F))"
           for i in 1 2 3; do git pull --rebase --autostash origin main && git push && exit 0 || sleep $((i*3)); done
           echo "push failed after retries"; exit 1
