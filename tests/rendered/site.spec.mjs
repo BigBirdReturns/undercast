@@ -569,14 +569,22 @@ test("Ferengi URL preserves the makers anchor and shows only exact displayed rol
   await expect(page).toHaveURL(/shelf=Star\+Trek&species=Ferengi#makers$/);
   await expect(page.getByRole("button",{name:"Star Trek",exact:true})).toHaveAttribute("aria-pressed","true");
   await expect(page.getByRole("button",{name:"Ferengi",exact:true})).toHaveAttribute("aria-pressed","true");
-  await expect(page.locator("#result-status")).toHaveText("15 specimens match; 15 shown.");
+  const expected=await page.evaluate(async()=>{
+    const [species,specimens]=await Promise.all([fetch("./data/species.json").then(response=>response.json()),fetch("./data/specimens.json").then(response=>response.json())]);
+    const taxon=species.taxa.find(row=>row.key==="species:star-trek:ferengi");
+    const byId=new Map(specimens.map(row=>[row.id,row]));
+    return {counts:taxon.counts,names:taxon.wall_records.map(row=>byId.get(row.id).character)};
+  });
+  await expect(page.locator("#result-status")).toHaveText(`${expected.counts.primary_card_records} specimens match; ${expected.counts.primary_card_records} shown.`);
   const names=await page.locator(".charname").allTextContents();
-  expect(names).toEqual(["Quark","Rom","Nog","Quark (mirror)","Brunt (mirror)","Nog (mirror)","Ishka","Zek","Bok / Gral / Prak","Krax","DaiMon Lurin","Grimp","Leck","Pel","Berik"]);
+  expect(names).toEqual(expected.names);
+  expect(names).toContain("Zek");
+  expect(names).toContain("Arridor");
   expect(names).not.toContain("Weyoun");
   expect(names).not.toContain("Neelix");
-  await expect(page.locator("#speciesContext")).toContainText("70 captured named credits");
-  await expect(page.locator("#speciesContext")).toContainText("16 additional performances on file");
-  await expect(page.locator("#speciesLedger > li")).toHaveCount(70);
+  await expect(page.locator("#speciesContext")).toContainText(`${expected.counts.named_credits} captured named credits`);
+  await expect(page.locator("#speciesContext")).toContainText(`${expected.counts.additional_performance_credits} additional performances on file`);
+  await expect(page.locator("#speciesLedger > li")).toHaveCount(expected.counts.named_credits);
   await expect(page.locator("#makers")).toBeInViewport();
 });
 

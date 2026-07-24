@@ -27,7 +27,7 @@ A profile name is not proof of capability. `audio-vision` remains paused until a
 
 ### `text-vision`
 
-Active. The pool can research text evidence and inspect images, but cannot hear audio. It may lease capability-compatible physical tasks. Voice-mode tasks and exact reviewed voice overrides are skipped.
+Active. The pool can research exact text evidence and inspect images, but cannot hear audio. It may file an exact source-credited voice role at the conservative baseline without claiming an independently measured vocal distance. Exact task overrides still require audio when the performance itself cannot be established from the source record.
 
 ### `audio-vision`
 
@@ -104,6 +104,6 @@ npm run autopilot -- next \
 
 ## Current Star Trek correction
 
-The Sargon task is source-reviewed as a disembodied James Doohan voice even though its current census mode hint says `physical-prosthetic`. The exact task override therefore requires `audio-listening` and is pinned to its current source fingerprint. The policy also conservatively requires audio for `voice-animation` and `physical-and-voice` mode hints.
+The Sargon task is source-reviewed as a disembodied James Doohan voice even though its current census mode hint says `physical-prosthetic`. The exact task override therefore requires `audio-listening` and is pinned to its current source fingerprint. Ordinary exact source-credited voice roles may be filed at transform 2 without claiming a measured voice-distance score.
 
 This change prevents the Enwright/M-5 failure pattern from repeating while preserving those tasks as visible queue debt for an actually capable review pool.

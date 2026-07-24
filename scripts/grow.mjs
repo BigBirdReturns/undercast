@@ -4,7 +4,7 @@
  *
  * Pipeline (per new card):
  *   1. Claude drafts a specimen from a chosen vein (real people only).
- *   2. Wikipedia confirms the person is real (else discard).
+ *   2. Wikipedia or an exact committed Autopilot source receipt confirms the performer identity (else discard).
  *   3. An image is attached ONLY if a FREELY-LICENSED one is found. The gate is
  *      the LICENSE, not the domain — we try several wikis and keep the first
  *      image whose license is free (PD / CC0 / CC-BY / CC-BY-SA). Everything
@@ -31,6 +31,7 @@ const DATA    = "data/specimens.json";
 const LEDGER  = "data/SOURCES.json"; // one provenance ledger; credits.mjs renders CREDITS.md from it
 const QUEUE   = "data/CANDIDATES.json"; // leads harvested by ingest.mjs, awaiting triage
 const DRAFTS  = "data/drafts.json";     // specimens a coding-session model drafted (keyless path)
+const AUTOPILOT = "data/AUTOPILOT.json"; // exact source-bound task receipts for keyless Autopilot drafts
 
 const VEINS = {
   "Doctor Who":        "Doctor Who monster & creature performers and the Dalek/Cyberman voice artists",
@@ -63,6 +64,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const norm  = (s) => String(s || "").trim().toLowerCase();
 const identity = (card) => [card?.actor, card?.character, card?.production].map(norm).join("|");
 const identityLabel = (card) => `${card.actor} — ${card.character} (${card.production})`;
+const sourceKey = (value) => {
+  try { const url = new URL(value); url.hash = ""; return url.toString().replace(/\/$/, ""); }
+  catch { return String(value || "").trim(); }
+};
+function autopilotReceiptFor(card, state) {
+  const meta = card?._autopilot;
+  if (!meta?.task_id || !meta.lease_id || !meta.readiness_token || !meta.source_fingerprint) return null;
+  const job = (state.jobs || []).find((row) => row.id === meta.task_id);
+  if (!job || job.status !== "drafted" || norm(job.performer) !== norm(card.actor) || norm(job.character) !== norm(card.character)) return null;
+  const outcome = job.outcome || {};
+  if (outcome.kind !== "draft" || outcome.lease_id !== meta.lease_id || outcome.readiness_token !== meta.readiness_token || outcome.source_fingerprint !== meta.source_fingerprint || job.source_fingerprint !== meta.source_fingerprint) return null;
+  const references = new Set((card.references || []).map((row) => sourceKey(row?.source)).filter(Boolean));
+  const source = (job.sources || []).find((value) => references.has(sourceKey(value)));
+  return source ? { task_id: job.id, source } : null;
+}
 
 // ── the buffalo journal ──────────────────────────────────────────────────────
 // Growth is a filter: most candidates are rejected (already on the wall, not
@@ -225,6 +241,8 @@ async function growFromDrafts(file) {
   const drafts = JSON.parse(await readFile(file, "utf8").catch(() => "[]"));
   if (!Array.isArray(drafts) || !drafts.length) { console.log(`no drafts in ${file} — write an array of cards there first (see GROW.md).`); return; }
   const specimens = JSON.parse(await readFile(DATA, "utf8"));
+  let autopilot = { jobs: [] };
+  try { autopilot = JSON.parse(await readFile(AUTOPILOT, "utf8")); } catch {}
   const have = new Set(specimens.map(identity));
   let maxN = Math.max(0, ...specimens.map((s) => parseInt((String(s.id).match(/UC-(\d+)/) || [])[1] || "0", 10)));
   const added = [], dropped = [];
@@ -239,11 +257,12 @@ async function growFromDrafts(file) {
       await journal("rejections.jsonl", { op: "draft.reject", reason: "performance already on the wall", actor_name: c.actor, character: c.character || "", wiki: c.wiki || "" });
       continue;
     }
-    const title = await verify({ wiki: c.wiki, actor: c.actor }).catch(() => null);
-    await sleep(700);
+    const receipt = autopilotReceiptFor(c, autopilot);
+    const title = receipt ? c.actor : await verify({ wiki: c.wiki, actor: c.actor }).catch(() => null);
+    if (!receipt) await sleep(700);
     if (!title) {
-      dropped.push([c.actor, "unverified on Wikipedia"]);
-      await journal("rejections.jsonl", { op: "draft.reject", reason: "unverified on Wikipedia", actor_name: c.actor, character: c.character || "", wiki: c.wiki || "" });
+      dropped.push([c.actor, "unverified by Wikipedia or an exact Autopilot source receipt"]);
+      await journal("rejections.jsonl", { op: "draft.reject", reason: "unverified by Wikipedia or exact Autopilot source receipt", actor_name: c.actor, character: c.character || "", wiki: c.wiki || "" });
       continue;
     }
     const row = {
@@ -257,10 +276,10 @@ async function growFromDrafts(file) {
       transform: Math.max(1, Math.min(5, parseInt(c.transform) || 4)),
       knownFor: c.knownFor || "", reveal: c.reveal || "",
       ...(Array.isArray(c.references) && c.references.length ? { references: c.references } : {}),
-      link: c.wiki || ("https://en.wikipedia.org/wiki/" + encodeURIComponent(String(title).replace(/ /g, "_"))),
+      link: c.wiki || receipt?.source || ("https://en.wikipedia.org/wiki/" + encodeURIComponent(String(title).replace(/ /g, "_"))),
     };
     specimens.push(row); have.add(identity(row)); added.push(row.id + "  " + row.actor + " — " + row.character);
-    await journal("candidates.jsonl", { op: "draft.accept", specimen: row.id, actor_name: row.actor, character: row.character, universe: row.universe, production: row.production || "", link: row.link });
+    await journal("candidates.jsonl", { op: "draft.accept", specimen: row.id, actor_name: row.actor, character: row.character, universe: row.universe, production: row.production || "", link: row.link, verification: receipt ? "autopilot-source-receipt" : "wikipedia" });
   }
   await writeFile(DATA, JSON.stringify(specimens, null, 2) + "\n");
   await writeFile(file, "[]\n"); // consume the drafts so a re-run can't double-add
