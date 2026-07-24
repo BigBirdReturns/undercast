@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: agent/star-trek-population-001
-      - name: Download exact source-file candidates without thumbnail APIs
+      - name: Download exact still and portrait candidates
         run: |
           set -euo pipefail
           out=/tmp/zek-media-candidates
@@ -26,11 +26,11 @@ jobs:
           mkdir -p "$out/stills" "$out/portrait" "$out/headers"
           ua='Mozilla/5.0 UNDERCAST/0.1 (+https://github.com/BigBirdReturns/undercast; bigbirdreturns@proton.me)'
           fetch_one(){
-            label="$1"; url="$2"; target="$3"
+            label="$1"; url="$2"; referer="$3"; target="$4"
             set +e
-            curl --location --fail --silent --show-error --retry 4 --retry-all-errors \
-              --connect-timeout 20 --max-time 120 \
-              -A "$ua" -e 'https://memory-alpha.fandom.com/' \
+            curl --location --fail --silent --show-error --retry 2 --retry-all-errors \
+              --connect-timeout 15 --max-time 60 \
+              -A "$ua" -e "$referer" \
               -D "$out/headers/${label}.headers" -o "$target" "$url"
             code=$?
             set -e
@@ -47,53 +47,74 @@ jobs:
               rm -f "$target"
               return 0
             fi
-            printf '%s\tOK\t%s\t%s\t%s\t%s\n' "$label" "$mime" "$bytes" "$sha" "$url" >> "$out/results.tsv"
+            dimensions=$(identify -format '%wx%h' "$target" 2>/dev/null || true)
+            printf '%s\tOK\t%s\t%s\t%s\t%s\t%s\n' "$label" "$mime" "$bytes" "$sha" "$dimensions" "$url" >> "$out/results.tsv"
           }
           : > "$out/results.tsv"
-          fetch_one zek-2369 \
+
+          # Maintained Memory Alpha file names remain the preferred provenance, but
+          # Cloudflare currently challenges Actions downloads. Keep these probes in
+          # the receipt and continue to stable exact-subject sources below.
+          fetch_one memory-alpha-zek-2369 \
             'https://memory-alpha.fandom.com/wiki/Special:Redirect/file/Zek%2C_2369.jpg?width=1200' \
-            "$out/stills/zek-2369.jpg"
-          fetch_one zek-2370 \
+            'https://memory-alpha.fandom.com/wiki/File:Zek,_2369.jpg' \
+            "$out/stills/memory-alpha-zek-2369.jpg"
+          fetch_one memory-alpha-zek-2370 \
             'https://memory-alpha.fandom.com/wiki/Special:Redirect/file/Zek%2C_2370.jpg?width=1200' \
-            "$out/stills/zek-2370.jpg"
-          fetch_one ishka-and-zek \
-            'https://memory-alpha.fandom.com/wiki/Special:Redirect/file/Ishka_and_Zek.jpg?width=1200' \
-            "$out/stills/ishka-and-zek.jpg"
-          fetch_one zek-in-closet \
-            'https://memory-alpha.fandom.com/wiki/Special:Redirect/file/Zek_in_closet.jpg?width=1200' \
-            "$out/stills/zek-in-closet.jpg"
-          fetch_one zek-saves-quark \
-            'https://memory-alpha.fandom.com/wiki/Special:Redirect/file/Zek_saves_Quark.jpg?width=1200' \
-            "$out/stills/zek-saves-quark.jpg"
+            'https://memory-alpha.fandom.com/wiki/File:Zek,_2370.jpg' \
+            "$out/stills/memory-alpha-zek-2370.jpg"
+
+          # Stable exact-subject fallback: DITL labels this image Grand Nagus Zek
+          # and cites DS9 season 1, The Nagus.
+          fetch_one ditl-zek \
+            'https://www.ditl.org/thumbs/Images/Z/Zek.png' \
+            'https://www.ditl.org/personnel-pictures.php?ImageNo=1&ListID=Lineage&PersonID=-54' \
+            "$out/stills/ditl-zek.png"
+
+          # Independent episode-review captures, each explicitly embedded in a page
+          # about DS9 The Nagus. These are retained for visual comparison only.
+          for n in 3 5 6 8 9; do
+            fetch_one "late-game-nagus-${n}" \
+              "https://latetothegame.blog/wp-content/uploads/2019/03/nagus-${n}.jpg" \
+              'https://latetothegame.blog/2019/03/18/retro-tv-review-star-trek-ds9-ssn-one-episode-ten-the-nagus/' \
+              "$out/stills/late-game-nagus-${n}.jpg"
+          done
+
           fetch_one wallace-shawn-2014 \
             'https://commons.wikimedia.org/wiki/Special:Redirect/file/Wallace_Shawn_2014_%28cropped%29.jpg?width=1000' \
+            'https://commons.wikimedia.org/wiki/File:Wallace_Shawn_2014_(cropped).jpg' \
             "$out/portrait/wallace-shawn-2014-cropped.jpg"
+
           cat "$out/results.tsv"
           node - <<'NODE'
           const fs=require('fs');
-          const path=require('path');
           const rows=fs.readFileSync('/tmp/zek-media-candidates/results.tsv','utf8').trim().split(/\n/).filter(Boolean).map(line=>{
-            const [label,status,mime,bytes,sha256,url]=line.split('\t');
-            return {label,status,mime:mime||null,bytes:bytes?Number(bytes):null,sha256:sha256||null,url:url||null};
+            const [label,status,mime,bytes,sha256,dimensions,url]=line.split('\t');
+            return {label,status,mime:mime||null,bytes:bytes?Number(bytes):null,sha256:sha256||null,dimensions:dimensions||null,url:url||null};
           });
           const files=[];
           for(const dir of ['stills','portrait']) for(const name of fs.readdirSync(`/tmp/zek-media-candidates/${dir}`)) files.push(`${dir}/${name}`);
           const manifest={
-            version:1,
+            version:2,
             captured_at:new Date().toISOString(),
+            identity_evidence:{
+              character:'https://memory-alpha.fandom.com/wiki/Zek',
+              maintained_live_action_files:[
+                'https://memory-alpha.fandom.com/wiki/File:Zek,_2369.jpg',
+                'https://memory-alpha.fandom.com/wiki/File:Zek,_2370.jpg'
+              ],
+              performer:'https://commons.wikimedia.org/wiki/File:Wallace_Shawn_2014_(cropped).jpg'
+            },
             source_pages:{
-              zek_2369:'https://memory-alpha.fandom.com/wiki/File:Zek,_2369.jpg',
-              zek_2370:'https://memory-alpha.fandom.com/wiki/File:Zek,_2370.jpg',
-              ishka_and_zek:'https://memory-alpha.fandom.com/wiki/File:Ishka_and_Zek.jpg',
-              zek_in_closet:'https://memory-alpha.fandom.com/wiki/File:Zek_in_closet.jpg',
-              zek_saves_quark:'https://memory-alpha.fandom.com/wiki/File:Zek_saves_Quark.jpg',
+              ditl_zek:'https://www.ditl.org/personnel-pictures.php?ImageNo=1&ListID=Lineage&PersonID=-54',
+              late_game:'https://latetothegame.blog/2019/03/18/retro-tv-review-star-trek-ds9-ssn-one-episode-ten-the-nagus/',
               wallace_shawn_2014:'https://commons.wikimedia.org/wiki/File:Wallace_Shawn_2014_(cropped).jpg'
             },
             results:rows,
             files
           };
           fs.writeFileSync('/tmp/zek-media-candidates/manifest.json',JSON.stringify(manifest,null,2)+'\n');
-          if(!rows.some(row=>row.label==='zek-2369'&&row.status==='OK')&&!rows.some(row=>row.label==='zek-2370'&&row.status==='OK')) process.exitCode=2;
+          if(!rows.some(row=>['ditl-zek','late-game-nagus-3','late-game-nagus-5','late-game-nagus-6','late-game-nagus-8','late-game-nagus-9'].includes(row.label)&&row.status==='OK')) process.exitCode=2;
           NODE
           (cd "$out" && find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
       - name: Upload exact source candidates
