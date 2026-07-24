@@ -70,6 +70,63 @@ jobs:
           path.write_text(text.replace(old,new,1))
           PY
           node --check .gold-runtime/star-trek-gold-operator.mjs
+      - name: Resolve exact Dolim candidate provenance
+        if: steps.command.outputs.command == 'close'
+        run: |
+          set -euo pipefail
+          mkdir -p .gold-output
+          node --input-type=module <<'JS'
+          import { createHash } from 'node:crypto';
+          import { readFile, writeFile } from 'node:fs/promises';
+          const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+          const api = async (params) => {
+            const url = new URL('https://memory-alpha.fandom.com/api.php');
+            url.search = new URLSearchParams({ action: 'query', format: 'json', formatversion: '2', redirects: '1', ...params });
+            const response = await fetch(url, { headers: { 'User-Agent': 'undercast-gold-operator/1.0 (bigbirdreturns@proton.me)' } });
+            if (!response.ok) throw new Error(`${url} returned ${response.status}`);
+            return response.json();
+          };
+          const local = await readFile('images/uc-1280-still.jpg');
+          const localSha256 = sha256(local);
+          const pageQuery = await api({ prop: 'revisions|pageimages|images', rvprop: 'ids|timestamp|sha1', piprop: 'name', imlimit: 'max', titles: 'Dolim' });
+          const page = pageQuery.query?.pages?.[0];
+          if (!page || page.missing) throw new Error('Dolim source page missing');
+          const names = (page.images || []).map((row) => row.title).filter((title) => /\.(?:jpe?g|png)$/i.test(title) && title.toLowerCase().includes('dolim')).slice(0, 20);
+          const candidates = [];
+          for (const title of names) {
+            const query = await api({ prop: 'revisions|links|categories|imageinfo', rvprop: 'ids|timestamp|sha1', pllimit: 'max', cllimit: 'max', iiprop: 'url|mime|size|sha1|extmetadata', iiurlwidth: '640', titles: title });
+            const filePage = query.query?.pages?.[0];
+            const imageInfo = filePage?.imageinfo?.[0];
+            if (!imageInfo?.thumburl) continue;
+            const response = await fetch(imageInfo.thumburl, { headers: { 'User-Agent': 'undercast-gold-operator/1.0 (bigbirdreturns@proton.me)' } });
+            if (!response.ok) throw new Error(`${imageInfo.thumburl} returned ${response.status}`);
+            const remote = Buffer.from(await response.arrayBuffer());
+            candidates.push({
+              title: filePage.title,
+              pageid: filePage.pageid,
+              revision: filePage.revisions?.[0]?.revid || null,
+              revision_timestamp: filePage.revisions?.[0]?.timestamp || null,
+              mediawiki_sha1: imageInfo.sha1 || null,
+              thumburl: imageInfo.thumburl,
+              remote_sha256: sha256(remote),
+              remote_bytes: remote.length,
+              exact: sha256(remote) === localSha256,
+              object_name: imageInfo.extmetadata?.ObjectName?.value || null,
+              description: imageInfo.extmetadata?.ImageDescription?.value || null,
+              links: (filePage.links || []).map((row) => row.title),
+              categories: (filePage.categories || []).map((row) => row.title),
+            });
+          }
+          const result = {
+            version: 1,
+            source_page: { title: page.title, pageid: page.pageid, revision: page.revisions?.[0]?.revid || null, revision_timestamp: page.revisions?.[0]?.timestamp || null, lead_file: page.pageimage || null },
+            local: { path: 'images/uc-1280-still.jpg', sha256: localSha256, bytes: local.length },
+            candidates,
+            exact_matches: candidates.filter((row) => row.exact),
+          };
+          await writeFile('.gold-output/dolim-source-diagnostic.json', JSON.stringify(result, null, 2) + '\n');
+          console.log(`Dolim source candidates: ${candidates.length}; exact matches: ${result.exact_matches.map((row) => row.title).join(', ') || 'none'}`);
+          JS
       - name: Execute the exact phase
         if: steps.command.outputs.run == 'true'
         id: operate
