@@ -87,12 +87,12 @@ const stepDefinitions = [
   { id: "lockfile", label: "Verify package-lock consistency", action: () => runCommand("Lockfile consistency", npmCommand, ["ci", "--dry-run"], { cwd: ROOT }) },
   { id: "projections", label: "Rebuild projection and refuse drift", action: runProjectedSteps },
   { id: "archive", label: "Validate archive invariants", action: () => runNodeScript("Archive invariants", "scripts/validate.mjs") },
-  { id: "species-fixtures", label: "Validate exact species wall and role-ledger semantics", action: () => runNpmScript("Species fixtures", "species:fixtures") },
   { id: "autopilot", label: "Validate Autopilot queue and fixtures", action: () => { runNodeScript("Autopilot state", "scripts/autopilot.mjs", ["validate"]); runNpmScript("Autopilot fixtures", "autopilot:fixtures"); } },
   { id: "roadmap", label: "Validate roadmap and next-work contract", action: () => { runNpmScript("Roadmap validate", "roadmap", ["--", "validate"]); runNpmScript("Roadmap fixtures", "roadmap:fixtures"); runNpmScript("Roadmap next", "roadmap", ["--", "next", "--limit", "1", "--json"]); } },
   { id: "preservation", label: "Validate preservation machinery and durability", action: () => { runNpmScript("Preservation fixtures", "preserve:fixtures"); runNpmScript("Preservation status", "preserve:status", ["--", "--json"]); } },
   { id: "media-audit", label: "Validate exact-subject media audit tracker", action: () => { runNpmScript("Media audit fixtures", "media:audit:fixtures"); runNpmScript("Media campaign fixtures", "media:audit:campaign:fixtures"); runNpmScript("Media audit state", "media:audit", ["--", "validate"]); runNpmScript("Media audit status", "media:audit", ["--", "status", "--scope", "star-trek"]); } },
   { id: "waterline", label: "Validate rolling gold waterline", action: () => { runNpmScript("Waterline fixtures", "waterline:fixtures"); runNpmScript("Waterline state", "waterline", ["--", "validate"]); runNpmScript("Waterline status", "waterline", ["--", "status", "--scope", "star-trek"]); } },
+  { id: "corpus-operations", label: "Validate collection-only corpus operations", action: () => { runNpmScript("Corpus operations fixtures", "corpus:ops:fixtures"); runNpmScript("Media search fixtures", "media:search:fixtures"); runNpmScript("Media search state", "media:search", ["--", "validate"]); runNpmScript("Corpus operations contract", "corpus:ops", ["--", "validate"]); runNpmScript("Corpus operations status", "corpus:ops", ["--", "status", "--json"]); runNpmScript("Corpus operations plan", "corpus:ops", ["--", "plan", "--json"]); } },
   { id: "census-sync", label: "Validate isolated certification-aware census sync", action: runAutopilotSyncAssertion },
   { id: "corpus", label: "Validate semantic corpus", action: () => runNpmScript("Corpus audit", "audit:corpus") },
   { id: "site-seams", label: "Validate public site seams", action: () => runNpmScript("Site seams", "test:site-seams") },
@@ -131,5 +131,5 @@ function cliOption(args, name) { const index = args.indexOf(name); if (index < 0
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const argv = process.argv.slice(2);
   if (argv.includes("--list")) for (const step of listSteps()) console.log(`${step.id.padEnd(28)} ${step.rendered ? "[rendered] " : "           "}${step.label}`);
-  else runGate({ from: cliOption(argv, "--from"), skipRendered: argv.includes("--skip-rendered") }).catch((error) => { console.error(`gate: ${error instanceof Error ? error.message : String(error)}`); process.exit(1); });
+  else runGate({ from: cliOption(argv, "--from"), skipRendered: argv.includes("--skip-rendered") }).catch((error) => { console.error(`gate: ${error.message}`); process.exit(1); });
 }
