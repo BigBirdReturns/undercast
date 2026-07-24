@@ -1,66 +1,49 @@
-name: grow-cards
+name: harvest-leads
 
-# OPTIONAL. Drafts new specimens with a model and verifies each person on
-# Wikipedia, then rebuilds credits. Needs an ANTHROPIC_API_KEY repo secret
-# (a metered console.anthropic.com key — a Claude subscription is NOT one).
-# With no key set, the run skips cleanly instead of failing — so it's safe to
-# leave enabled on a fork that hasn't added the secret.
+# Collection-only input lane. This workflow may discover sourced leads, but it
+# cannot draft or merge specimens. Canonical growth belongs to a certified,
+# capability-aware Autopilot lease and the rolling waterline.
 
 on:
   schedule:
-    - cron: "41 5 * * *"     # nightly, offset from retrieve.yml (07:23)
+    - cron: "41 5 * * *"
   workflow_dispatch: {}
 
 permissions:
   contents: write
 
 concurrency:
-  group: grow
+  group: lead-harvest
   cancel-in-progress: false
 
 jobs:
-  grow:
+  harvest:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
 
-      - name: Top up the lead queue (keyless)
+      - name: Validate collection-only operating mode
+        run: npm run corpus:ops -- validate
+
+      - name: Top up the sourced lead queue
         env:
           INGEST_MAX: "300"
           CONTACT: "bigbirdreturns@proton.me"
-        run: node scripts/ingest.mjs || true
+        run: node scripts/ingest.mjs
 
-      - name: Grow new cards from the queue (only if a key is present)
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GROW_BUDGET: "6"            # cap new cards per run
+      - name: Report the governed next operation
+        run: npm run corpus:ops -- plan --json
+
+      - name: Commit lead inputs only
         run: |
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "No ANTHROPIC_API_KEY secret set — skipping grow (this is fine; leads still queued for triage)."
-            exit 0
-          fi
-          node scripts/grow.mjs
-          node scripts/credits.mjs
-
-      - name: Rebuild serving projections (index + shards from the canonical data)
-        run: node scripts/shard.mjs
-
-      - name: Validate invariants (gate — refuse to commit a corrupt state)
-        run: node scripts/validate.mjs
-
-      - name: Commit
-        run: |
-          git config user.name  "undercast-bot"
+          git config user.name "undercast-bot"
           git config user.email "undercast-bot@users.noreply.github.com"
-          git add data/specimens.json data/SOURCES.json data/CANDIDATES.json CREDITS.md
-          git add data/index.json data/shard-manifest.json data/shards   # generated serving projections
-          git add data/archive.json data/entities.json data/dataset.jsonld data/search sitemap.xml
-          git add data/media-live.json 2>/dev/null || true               # lean release-url map (if any)
-          git add data/journal 2>/dev/null || true   # append-only buffalo journal (candidates/rejections)
+          git add data/CANDIDATES.json data/journal 2>/dev/null || true
           git diff --cached --quiet && exit 0
-          git commit -m "grow: triage leads into specimens ($(date -u +%F))"
+          git commit -m "ingest: harvest sourced leads ($(date -u +%F))"
           for i in 1 2 3; do git pull --rebase --autostash origin main && git push && exit 0 || sleep $((i*3)); done
           echo "push failed after retries"; exit 1
