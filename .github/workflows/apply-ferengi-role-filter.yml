@@ -48,18 +48,20 @@ jobs:
 
       - name: Re-certify the changed producer and reconcile governed state
         run: |
-          npm run autopilot -- certify \
-            --scope star-trek \
-            --reviewed-by chatgpt-second-desk \
-            --activate \
-            --now 2026-07-24T02:00:00.000Z
-          npm run autopilot -- sync --now 2026-07-24T02:01:00.000Z
-          npm run autopilot -- validate
-          npm run media:audit -- sync --now 2026-07-24T02:02:00.000Z
-          npm run media:audit -- validate
-          npm run media:audit -- gate --scope star-trek
-          node scripts/waterline.mjs status --scope star-trek --json > /tmp/waterline.json
-          node --input-type=module <<'NODE'
+          set +e
+          (
+            npm run autopilot -- certify \
+              --scope star-trek \
+              --reviewed-by chatgpt-second-desk \
+              --activate \
+              --now 2026-07-24T02:00:00.000Z
+            npm run autopilot -- sync --now 2026-07-24T02:01:00.000Z
+            npm run autopilot -- validate
+            npm run media:audit -- sync --now 2026-07-24T02:02:00.000Z
+            npm run media:audit -- validate
+            npm run media:audit -- gate --scope star-trek
+            node scripts/waterline.mjs status --scope star-trek --json > /tmp/waterline.json
+            node --input-type=module <<'NODE'
           import { readFile, writeFile } from 'node:fs/promises';
           const waterline=JSON.parse(await readFile('/tmp/waterline.json','utf8'));
           if(waterline.phase!=='ready-for-cycle'||waterline.claim_allowed!==true||waterline.media.debt!==0||waterline.jobs.in_flight!==0){
@@ -81,6 +83,24 @@ jobs:
           await writeFile(handoffPath,handoff);
           console.log({trek:trek.length,counts,phase:waterline.phase});
           NODE
+          ) > /tmp/ferengi-governance.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/ferengi-governance.log
+          if [ "$code" -ne 0 ]; then
+            mkdir -p ferengi-governance-diagnostics
+            cp /tmp/ferengi-governance.log ferengi-governance-diagnostics/log.txt
+            exit "$code"
+          fi
+
+      - name: Upload governance diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ferengi-governance-diagnostics
+          path: ferengi-governance-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Prove exact Ferengi semantics before publication
         run: |
