@@ -29,7 +29,9 @@ const imageUrl=image=>{
   return RELEASE.test(live||"")?live:"../../"+image.src.replace(/^\.?\//,"");
 };
 const imageMime=image=>/\.png(?:$|[?#])/i.test(image?.src||"")?"image/png":"image/jpeg";
-const absence=(label,status)=>`<div class="record-absence ${status}" role="img" aria-label="${esc(`${label} image ${status==="load-failed"?"could not be loaded; filed evidence is temporarily unavailable":"is not on file"}`)}"><span>${status==="load-failed"?"Filed image unavailable":"Evidence not on file"}</span></div>`;
+const absence=(label,status)=>status==="load-failed"
+  ? `<div class="record-absence load-failed" role="img" aria-label="${esc(`${label} image could not be loaded; filed evidence is temporarily unavailable`)}"><img class="record-absence-offline" src="../../assets/absence-offline.svg" alt=""><span>Filed image unavailable</span></div>`
+  : `<div class="record-absence not-filed" role="img" aria-label="${esc(`${label} image is not on file`)}"><picture><source media="(prefers-color-scheme: dark)" srcset="../../assets/placeholder-dark-clean.png"><img src="../../assets/placeholder-light-clean.png" alt=""></picture><span>Evidence not on file</span></div>`;
 const figure=(image,label,title)=>{
   const visual=image?.src
     ? `<object class="record-media" data="${esc(imageUrl(image))}" type="${imageMime(image)}" aria-label="${esc(title)}">${absence(label,"load-failed")}</object>`
@@ -43,7 +45,7 @@ const performanceRows=record=>Array.isArray(record.performances)?record.performa
   const references=Array.isArray(performance.references)?performance.references.map(reference=>`<a href="${esc(url(reference.source))}" rel="noopener">${esc(reference.label||"Open evidence")}</a>`).join(" · "):"";
   return `<div class="record-row"><span>Filed performance</span><b>${esc(performance.character)}</b>${context?`<div>${esc(context)}</div>`:""}${performance.performance_mode?`<div>${esc(performance.performance_mode.replace(/-/g," "))}${references?` · ${references}`:""}</div>`:references?`<div>${references}</div>`:""}</div>`;
 }).join(""):"";
-const speciesRows=record=>(speciesProjection.taxa||[]).map(taxon=>({taxon,filed:(taxon.records||[]).find(item=>item.id===record.id)})).filter(item=>item.filed).map(({taxon,filed})=>{
+const speciesRows=record=>(speciesProjection.taxa||[]).map(taxon=>({taxon,filed:(taxon.wall_records||[]).find(item=>item.id===record.id)})).filter(item=>item.filed).map(({taxon,filed})=>{
   const roles=[...new Set(filed.credits.map(credit=>credit.character))].join(" · ");
   return `<div class="record-row"><span>Species · exact sourced role</span><b><a href="../../${esc(taxon.wall_route)}">${esc(taxon.label)} · see ${esc(taxon.counts.filed_records)} filed records</a></b><div>${esc(roles)} · <a href="../../${esc(taxon.coverage_route)}">audit source census</a></div></div>`;
 }).join("");
@@ -71,7 +73,11 @@ function page(record){
 <div class="record-pair">${figure(record.still,"Character",record.character)}${figure(record.portrait,"Performer",record.actor)}</div>
 <section class="record-columns"><div><p class="record-reveal">${esc(record.reveal)}</p><p class="record-source">This permanent record is readable without JavaScript. The interactive view adds paired image evidence and live connection paths.</p><div class="record-actions"><a class="record-action primary" href="../../recognition.html#${esc(id)}">Open interactive record <span>→</span></a><a class="record-action" href="../../index.html#${esc(id)}">Find on the wall <span>→</span></a>${constellationAction}</div></div>
 <aside class="record-ledger" aria-label="Record details"><div class="record-row"><span>${record.kind==="voice"?"Voiced by":"Performed by"}</span><b>${esc(record.actor)}</b></div>${speciesRows(record)}<div class="record-row"><span>${record.kind==="voice"?"Filed production credit":"Design and build credit"}</span><b>${esc(creditPresent(record.designer)?record.designer:"Not yet on file")}</b></div>${performanceRows(record)}${conditionRows}${referenceRows}<div class="record-row"><span>You already knew them</span><b>${esc(record.knownFor)}</b></div>${source!=="#"?`<div class="record-row"><span>Performer profile</span><b><a href="${esc(source)}" rel="noopener">Open profile</a></b></div>`:""}${imageEvidence(record.still,"Character")}${imageEvidence(record.portrait,"Performer")}</aside></section>
-</main></div></body></html>`;
+</main></div><nav class="archive-map" aria-label="Archive paths">
+  <span class="archive-map__label">Archive paths</span>
+  <a href="../../index.html">The wall</a><a href="../../recognition.html">Recognition records</a><a href="../../coverage.html">Coverage &amp; gaps</a><a href="../../constellation.html">Evidence paths</a><a href="../../data/archive.json">Machine archive</a>
+</nav>
+</body></html>`;
 }
 
 function tombstonePage(row){
