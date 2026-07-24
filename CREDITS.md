@@ -247,6 +247,7 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **Ryan Spahn** (UC-1273) — Ryanchristoper, CC0 — [source](https://commons.wikimedia.org/wiki/File:0922_Red_Bull_Theater_Richard_II_Meet_and_Greet_RebeccaJMichelson-23.jpg)
 - **Andrea Martin** (UC-1278) — PhilipRomanoPhoto, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:AndreaMartin-byPhilipRomano.jpg)
 - **Bin Furuya** (UC-128) — Super Festivals, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Bin_Furuya_Photo_Op_GalaxyCon_Louisville_2019.jpg)
+- **Wallace Shawn** (UC-1281) — PEN American Center, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Wallace_Shawn_2014_(cropped).jpg)
 - **Tsutomu Kitagawa** (UC-130) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Tsutomu_Kitagawa_(48602342676).jpg)
 - **Peter Weller** (UC-132) — Florida Supercon, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Peter_Weller_2016.jpg)
 - **Karl Urban** (UC-133) — Kevin Paul, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:Karl_Urban_at_53rd_Saturn_Awards_2026.jpg)
@@ -733,8 +734,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **703**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **953**
+- Free-licensed portraits (attributed above): **704**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **954**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
 email and any specific asset comes down.
