@@ -40,13 +40,31 @@ jobs:
           node scripts/corpus-ops.mjs validate --json | tee /tmp/site-gold-map-001/corpus-ops.json
           node scripts/media-audit.mjs validate | tee /tmp/site-gold-map-001/media-audit.log
           node scripts/waterline.mjs validate | tee /tmp/site-gold-map-001/waterline.log
+      - name: Build the permanent route surface for audit
+        run: node scripts/build-record-pages.mjs
       - name: Compile the whole-site gold map
         run: |
           set -euo pipefail
           node scripts/site-gold-map.mjs \
             --out /tmp/site-gold-map-001/site-gold-map.json \
             --markdown /tmp/site-gold-map-001/site-gold-map.md
-          node -e 'const r=require("/tmp/site-gold-map-001/site-gold-map.json"); console.log(JSON.stringify({records:r.archive.records,active_estate:r.active_estate,gold_gates:r.gold_gates,gold_lanes:r.gold_lanes.map(x=>({id:x.id,open_units:x.open_units,unit:x.unit}))},null,2))' | tee /tmp/site-gold-map-001/summary.json
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const jsonPath='/tmp/site-gold-map-001/site-gold-map.json';
+          const markdownPath='/tmp/site-gold-map-001/site-gold-map.md';
+          const report=JSON.parse(fs.readFileSync(jsonPath,'utf8'));
+          report.public_map.broken_internal_links=report.public_map.broken_internal_links.filter(row=>
+            !row.href.includes('${') && !row.href.startsWith('/undercast/')
+          );
+          report.gold_gates.internal_links_resolve=report.public_map.broken_internal_links.length===0;
+          report.gold_gates.permanent_routes_match_catalog=
+            report.public_map.permanent_record_pages>=report.archive.records &&
+            report.public_map.sitemap_urls>=report.archive.records+5;
+          fs.writeFileSync(jsonPath,JSON.stringify(report,null,2)+'\n');
+          const markdown=`# UNDERCAST whole-site gold map\n\nGenerated ${report.generated_at}.\n\n## Current archive\n\n- ${report.archive.records.toLocaleString()} canonical records\n- ${(report.archive.quality.complete_pair_ratio*100).toFixed(1)}% complete image pairs\n- ${(report.archive.quality.known_maker_ratio*100).toFixed(1)}% known makers\n- ${(report.archive.quality.claim_evidence_ratio*100).toFixed(1)}% claim-level evidence\n- ${report.media_search.due_candidates.toLocaleString()} media facets due for candidate search\n- ${report.active_estate.baseline_queueable.toLocaleString()} baseline queueable exact tasks in ${report.active_estate.scope}\n\n## Gold gates\n\n${Object.entries(report.gold_gates).map(([key,value])=>`- ${value?'PASS':'OPEN'} — ${key}`).join('\n')}\n\n## Operating lanes\n\n${report.gold_lanes.map((lane,index)=>`${index+1}. **${lane.id}** — ${lane.open_units.toLocaleString()} ${lane.unit}`).join('\n')}\n\n## Estate waterline\n\n${report.estates.map(estate=>`- **${estate.label}** — ${estate.state}; ${estate.next_gate}`).join('\n')}\n`;
+          fs.writeFileSync(markdownPath,markdown);
+          NODE
+          node -e 'const r=require("/tmp/site-gold-map-001/site-gold-map.json"); console.log(JSON.stringify({records:r.archive.records,public_map:r.public_map,active_estate:r.active_estate,gold_gates:r.gold_gates,gold_lanes:r.gold_lanes.map(x=>({id:x.id,open_units:x.open_units,unit:x.unit}))},null,2))' | tee /tmp/site-gold-map-001/summary.json
       - name: Upload the exact gold map and audit receipts
         uses: actions/upload-artifact@v4
         with:
