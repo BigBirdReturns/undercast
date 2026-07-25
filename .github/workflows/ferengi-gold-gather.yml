@@ -18,10 +18,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  gather:
+  validate:
     if: github.event.pull_request.head.ref == 'agent/star-trek-ferengi-gold'
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,50 +33,59 @@ jobs:
           cache: npm
       - name: Install canonical runtime
         run: npm ci
-      - name: Validate the single-species gold queue
-        run: node scripts/star-trek-species-gold.mjs validate
-      - name: Build the exact active-species target set
+      - name: Validate the single-species gold queue and exact target partition
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/ferengi-gold-gather"
           mkdir -p "$root"
-          species=$(node -e "console.log(require('./.github/FERENGI-GOLD-GATHER.json').species)")
-          batch_size=$(node -e "console.log(require('./.github/FERENGI-GOLD-GATHER.json').batch_size)")
-          node scripts/star-trek-species-gold.mjs targets --species "$species" --out "$root/targets.json" > "$root/targets.stdout.json"
-          ROOT="$root" BATCH_SIZE="$batch_size" node --input-type=module - <<'NODE'
+          node scripts/star-trek-species-gold.mjs validate
+          node scripts/star-trek-species-gold.mjs targets --species ferengi --out "$root/targets.json" > "$root/targets.stdout.json"
+          ROOT="$root" node --input-type=module - <<'NODE'
           import fs from 'node:fs';
-          const root=process.env.ROOT;
-          const size=Number(process.env.BATCH_SIZE);
-          const report=JSON.parse(fs.readFileSync(`${root}/targets.json`,'utf8'));
-          const ids=report.targets.map(row=>row.id);
-          if(!ids.length)throw new Error('Ferengi is already media-complete; gather pass has no targets');
-          const batches=[];
-          for(let i=0;i<ids.length;i+=size){
-            const n=String(batches.length).padStart(2,'0');
-            const batch=ids.slice(i,i+size);
-            fs.writeFileSync(`${root}/batch-${n}.txt`,batch.join(' '));
-            batches.push({batch:Number(n),ids:batch});
-          }
-          fs.writeFileSync(`${root}/batches.json`,JSON.stringify({version:1,species:report.species,targets:report.targets.length,batches},null,2)+'\n');
-          console.log(JSON.stringify({species:report.species,targets:report.targets.length,batches:batches.length},null,2));
+          const control=JSON.parse(fs.readFileSync('.github/FERENGI-GOLD-GATHER.json','utf8'));
+          const targets=JSON.parse(fs.readFileSync(`${process.env.ROOT}/targets.json`,'utf8')).targets.map(row=>row.id).sort();
+          const batches=control.batches.flat().slice().sort();
+          if(new Set(batches).size!==batches.length)throw new Error('control batches contain duplicate card ids');
+          if(JSON.stringify(targets)!==JSON.stringify(batches))throw new Error(`control batches do not equal exact active target set: targets=${targets.length} batches=${batches.length}`);
+          console.log(`PASS — ${targets.length} exact Ferengi media targets partitioned into ${control.batches.length} batches`);
           NODE
-      - name: Gather candidate stills and portraits in bounded batches
+
+  gather:
+    needs: validate
+    if: github.event.pull_request.head.ref == 'agent/star-trek-ferengi-gold'
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-ferengi-gold
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Gather one exact candidate batch
         env:
           CONTACT: bigbirdreturns@proton.me
+          BATCH_INDEX: ${{ matrix.batch }}
         run: |
           set -euo pipefail
-          root="$RUNNER_TEMP/ferengi-gold-gather"
-          for batch in "$root"/batch-*.txt; do
-            name=$(basename "$batch" .txt)
-            ids=$(cat "$batch")
-            echo "gathering $name: $ids"
-            CURATE_DIR="$root/$name" node scripts/curate.mjs gather $ids | tee "$root/$name.log"
-          done
-      - name: Upload exact candidate manifests, thumbnails and review sheets
+          root="$RUNNER_TEMP/ferengi-gold-gather/batch-${BATCH_INDEX}"
+          mkdir -p "$root"
+          ids=$(BATCH_INDEX="$BATCH_INDEX" node -e "const c=require('./.github/FERENGI-GOLD-GATHER.json'); console.log(c.batches[Number(process.env.BATCH_INDEX)].join(' '))")
+          echo "$ids" > "$root/ids.txt"
+          CURATE_DIR="$root/candidates" timeout 75m node scripts/curate.mjs gather $ids | tee "$root/gather.log"
+      - name: Upload exact candidate manifest, thumbnails and review sheet
         uses: actions/upload-artifact@v4
         with:
-          name: ferengi-gold-gather-${{ github.run_id }}
-          path: ${{ runner.temp }}/ferengi-gold-gather
+          name: ferengi-gold-gather-${{ github.run_id }}-batch-${{ matrix.batch }}
+          path: ${{ runner.temp }}/ferengi-gold-gather/batch-${{ matrix.batch }}
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 90
