@@ -1,0 +1,77 @@
+name: species-eligibility-audit
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/SPECIES-ELIGIBILITY-AUDIT.json"
+      - ".github/workflows/species-eligibility-audit.yml"
+      - "scripts/species-eligibility-audit.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: species-eligibility-audit-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    if: startsWith(github.event.pull_request.head.ref, 'agent/site-gold-map-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Audit exact performer-role and displayed-species eligibility
+        env:
+          CONTACT: bigbirdreturns@proton.me
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/species-eligibility-audit
+          control=.github/SPECIES-ELIGIBILITY-AUDIT.json
+          category=$(CONTROL="$control" node -e 'console.log(require("./"+process.env.CONTROL).category)')
+          label=$(CONTROL="$control" node -e 'console.log(require("./"+process.env.CONTROL).label)')
+          include=$(CONTROL="$control" node -e 'console.log(require("./"+process.env.CONTROL).include_resolved?"yes":"no")')
+          extra=()
+          if [ "$include" = yes ]; then extra+=(--include-resolved); fi
+          node scripts/species-eligibility-audit.mjs \
+            --category "$category" \
+            --label "$label" \
+            --out /tmp/species-eligibility-audit/report.json \
+            "${extra[@]}" \
+            2>&1 | tee /tmp/species-eligibility-audit/audit.log
+          node --input-type=module - <<'NODE' | tee /tmp/species-eligibility-audit/summary.md
+          import fs from 'node:fs';
+          const report=JSON.parse(fs.readFileSync('/tmp/species-eligibility-audit/report.json','utf8'));
+          console.log(`# ${report.label} eligibility audit\n`);
+          console.log(`- tasks examined: ${report.input.jobs}`);
+          for(const [key,value] of Object.entries(report.counts))console.log(`- ${key}: ${value}`);
+          console.log('\n## Review and exclusions\n');
+          for(const row of report.results.filter(row=>row.disposition!=='eligible')){
+            console.log(`- **${row.performer} — ${row.character}** — ${row.disposition}: ${(row.reasons||[]).join('; ')}`);
+          }
+          NODE
+      - name: Assert the known Dal R'El category-contamination fixture is not eligible
+        run: |
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const report=JSON.parse(fs.readFileSync('/tmp/species-eligibility-audit/report.json','utf8'));
+          const dal=report.results.find(row=>row.character==="Dal R'El"&&row.performer==='Kate Mulgrew');
+          if(!dal)throw new Error("expected the retained Kate Mulgrew — Dal R'El queue task in the Tellarite audit");
+          if(dal.disposition==='eligible')throw new Error("identity invariant failed: Dal R'El may not auto-file as a Tellarite designed-face role");
+          console.log(JSON.stringify({task_id:dal.task_id,disposition:dal.disposition,reasons:dal.reasons,species:dal.species_evidence,performer:dal.performer_evidence},null,2));
+          NODE
+      - name: Upload hash-bound task dossiers
+        uses: actions/upload-artifact@v4
+        with:
+          name: species-eligibility-audit-${{ github.run_id }}
+          path: /tmp/species-eligibility-audit
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
