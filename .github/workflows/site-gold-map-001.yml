@@ -1,0 +1,57 @@
+name: site-gold-map-001
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/SITE-GOLD-MAP-001.json"
+      - ".github/workflows/site-gold-map-001.yml"
+      - "scripts/site-gold-map.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-gold-map-001
+  cancel-in-progress: true
+
+jobs:
+  map:
+    if: github.event.pull_request.head.ref == 'agent/site-gold-map-001'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/site-gold-map-001
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Validate the existing collection contracts
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/site-gold-map-001
+          npm run site:sweep 2>&1 | tee /tmp/site-gold-map-001/site-sweep.log
+          npm run audit:corpus -- --json | tee /tmp/site-gold-map-001/corpus-audit.json
+          node scripts/corpus-ops.mjs validate --json | tee /tmp/site-gold-map-001/corpus-ops.json
+          node scripts/media-audit.mjs validate | tee /tmp/site-gold-map-001/media-audit.log
+          node scripts/waterline.mjs validate | tee /tmp/site-gold-map-001/waterline.log
+      - name: Compile the whole-site gold map
+        run: |
+          set -euo pipefail
+          node scripts/site-gold-map.mjs \
+            --out /tmp/site-gold-map-001/site-gold-map.json \
+            --markdown /tmp/site-gold-map-001/site-gold-map.md
+          node -e 'const r=require("/tmp/site-gold-map-001/site-gold-map.json"); console.log(JSON.stringify({records:r.archive.records,active_estate:r.active_estate,gold_gates:r.gold_gates,gold_lanes:r.gold_lanes.map(x=>({id:x.id,open_units:x.open_units,unit:x.unit}))},null,2))' | tee /tmp/site-gold-map-001/summary.json
+      - name: Upload the exact gold map and audit receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-gold-map-001-${{ github.run_id }}
+          path: /tmp/site-gold-map-001
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
