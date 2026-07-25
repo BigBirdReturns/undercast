@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   MEDIA_AUDIT_VERSION,
   applyVotes,
@@ -33,6 +34,7 @@ function state(items = [item()]) {
   validateState(doc); return doc;
 }
 const vote = (itemId, namespace, value, reviewer, role, extra = {}) => ({ item_id: itemId, namespace, value, reviewer, role, note: `Reviewed ${namespace} as ${value} with visible evidence.`, ...extra });
+const enforcedEvidence = [{ type: "second-desk-review", value: "Exact hash-bound bytes were reviewed." }];
 
 {
   let doc = state();
@@ -55,15 +57,19 @@ const vote = (itemId, namespace, value, reviewer, role, extra = {}) => ({ item_i
 }
 {
   let doc = state(); const id = doc.items[0].id;
-  doc = applyVotes(doc, [vote(id, "presentation", "role-depiction", "desk", "second-desk", { enforced: true })]).state;
+  assert.throws(
+    () => applyVotes(doc, [vote(id, "presentation", "role-depiction", "desk", "second-desk", { enforced: true })]),
+    /enforced media-audit votes require evidence/,
+  );
+  doc = applyVotes(doc, [vote(id, "presentation", "role-depiction", "desk", "second-desk", { enforced: true, evidence: enforcedEvidence })]).state;
   assert.equal(doc.items[0].claims.presentation.state, "enforced");
   assert.equal(doc.items[0].status, "attention");
 }
 {
   let doc = state(); const id = doc.items[0].id;
   doc = applyVotes(doc, [
-    vote(id, "presentation", "role-depiction", "desk", "second-desk", { enforced: true }),
-    vote(id, "presentation", "neutral-human", "owner", "owner", { enforced: true }),
+    vote(id, "presentation", "role-depiction", "desk", "second-desk", { enforced: true, evidence: enforcedEvidence }),
+    vote(id, "presentation", "neutral-human", "owner", "owner", { enforced: true, evidence: enforcedEvidence }),
   ]).state;
   assert.equal(doc.items[0].claims.presentation.state, "contested");
   assert.equal(doc.items[0].status, "attention");
@@ -90,7 +96,7 @@ const vote = (itemId, namespace, value, reviewer, role, extra = {}) => ({ item_i
   try {
     const badState = join(root, "MEDIA-AUDIT.json"), lock = join(root, "MEDIA-AUDIT.lock");
     await writeFile(badState, "{ malformed\n");
-    const run = spawnSync(process.execPath, [new URL("./media-audit.mjs", import.meta.url).pathname, "sync", "--state", badState, "--lock", lock, "--root", root], { encoding: "utf8" });
+    const run = spawnSync(process.execPath, [fileURLToPath(new URL("./media-audit.mjs", import.meta.url)), "sync", "--state", badState, "--lock", lock, "--root", root], { encoding: "utf8" });
     assert.notEqual(run.status, 0, "sync must reject malformed existing state rather than replacing it");
     assert.match(`${run.stdout}${run.stderr}`, /cannot read .*MEDIA-AUDIT\.json/i);
     assert.equal(await readFile(badState, "utf8"), "{ malformed\n", "malformed state must remain untouched");

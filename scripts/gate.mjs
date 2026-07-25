@@ -12,7 +12,8 @@ const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const MAX_BUFFER = 128 * 1024 * 1024;
 export function runCommand(label, command, args, options = {}) {
   const { cwd = ROOT, env = process.env, stdio = "inherit", allowFail = false } = options;
-  const result = spawnSync(command, args, { cwd, env: { ...process.env, ...env }, encoding: "utf8", stdio, maxBuffer: MAX_BUFFER });
+  const shell = process.platform === "win32" && /\.cmd$/i.test(command);
+  const result = spawnSync(command, args, { cwd, env: { ...process.env, ...env }, encoding: "utf8", stdio, maxBuffer: MAX_BUFFER, shell });
   if (result.error) {
     if (allowFail) return { status: 1, stdout: "", stderr: result.error.message, failed: true };
     throw new Error(`${label} could not start "${command}": ${result.error.message}`);

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { validateState } from "./lib/media-audit.mjs";
 
 const args=process.argv.slice(2);
 const command=args.shift()||"status";
@@ -17,6 +18,7 @@ const [plan,species,vocabulary,specimens,media]=await Promise.all([
   readJson("data/specimens.json"),
   readJson("data/MEDIA-AUDIT.json")
 ]);
+validateState(media);
 
 const specimenById=new Map(specimens.map(row=>[row.id,row]));
 const auditByKey=new Map((media.items||[]).map(row=>[`${row.wall_id}|${row.side}`,row]));

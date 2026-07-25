@@ -60,6 +60,9 @@ export function validateVote(vote, item = null) {
   if (vote.enforced === true && REVIEWER_ROLES[vote.role].rank < REVIEWER_ROLES["second-desk"].rank) {
     throw new Error("only second-desk or owner votes may be enforced");
   }
+  if (vote.enforced === true && (!Array.isArray(vote.evidence) || !vote.evidence.length)) {
+    throw new Error("enforced media-audit votes require evidence");
+  }
   if (item && vote.asset_sha256.toLowerCase() !== item.asset?.sha256) throw new Error(`vote for ${item.id} targets a stale asset`);
   return true;
 }

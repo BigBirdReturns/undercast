@@ -236,7 +236,29 @@ function escapeHtml(value) { return String(value || "").replace(/[&<>"']/g, (cha
 async function syncCommand() {
   return withLock(async () => {
     let previous = null;
-    try { previous = await readJson(option("state", DEFAULT_STATE)); validateState(previous); }
+    try {
+      previous = await readJson(option("state", DEFAULT_STATE));
+      try {
+        validateState(previous);
+      } catch (error) {
+        if (!flag("drop-enforced-votes-without-evidence")) throw error;
+        let dropped = 0;
+        for (const item of previous.items || []) {
+          const votes = (item.votes || []).filter((vote) => {
+            const invalid = vote.enforced === true && (!Array.isArray(vote.evidence) || !vote.evidence.length);
+            if (invalid) dropped++;
+            return !invalid;
+          });
+          item.votes = votes;
+          const derived = deriveItem(item);
+          item.status = derived.status;
+          item.claims = derived.claims;
+        }
+        if (!dropped) throw error;
+        validateState(previous);
+        console.log(`discarded ${dropped} enforced vote(s) without evidence before sync`);
+      }
+    }
     catch (error) { if (error.code !== "ENOENT") throw error; }
     const result = await buildCurrentState({ previous });
     if (result.changed || !previous) await atomicJson(result.statePath, result.state);
