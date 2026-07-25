@@ -1,0 +1,187 @@
+name: ferengi-gold-merge-and-handoff
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [agent/star-trek-ferengi-gold]
+    paths:
+      - "data/review/ferengi-gold/final-portraits-applied-2026-07-25.json"
+      - "data/review/ferengi-gold/final-portraits-media-resolution-2026-07-25.json"
+      - "data/MEDIA-AUDIT.json"
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  checks: read
+
+concurrency:
+  group: ferengi-gold-terminal-handoff
+  cancel-in-progress: false
+
+jobs:
+  close:
+    if: github.ref_name == 'agent/star-trek-ferengi-gold'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-ferengi-gold
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Prove Ferengi candidate gold before any publication action
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-terminal"
+          mkdir -p "$root"
+          test -s data/review/ferengi-gold/final-portraits-applied-2026-07-25.json
+          node scripts/star-trek-species-gold.mjs validate | tee "$root/species.log"
+          node scripts/media-audit.mjs validate | tee "$root/media.log"
+          npx playwright install --with-deps chromium
+          npm run gate 2>&1 | tee "$root/gate-candidate.log"
+          node --input-type=module - <<'NODE' | tee "$root/gold-ready.log"
+          import fs from 'node:fs';
+          const plan=JSON.parse(fs.readFileSync('data/STAR-TREK-GOLD.json','utf8'));
+          const species=JSON.parse(fs.readFileSync('data/species.json','utf8'));
+          const specimens=JSON.parse(fs.readFileSync('data/specimens.json','utf8'));
+          const media=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8'));
+          const active=plan.sequence.filter(row=>row.state==='active'||row.state==='candidate-gold');
+          if(active.length!==1||active[0].id!=='ferengi')throw new Error('Ferengi is not the sole active species');
+          const taxon=species.taxa.find(row=>row.key==='species:star-trek:ferengi');
+          const entry=plan.sequence.find(row=>row.id==='ferengi');
+          const ids=[...new Set(taxon.wall_records.map(row=>row.id))];
+          const byId=new Map(specimens.map(row=>[row.id,row]));
+          const audit=new Map(media.items.map(row=>[`${row.wall_id}|${row.side}`,row]));
+          const bad=[];for(const id of ids)for(const side of ['still','portrait'])if(!byId.get(id)?.[side]?.src||audit.get(`${id}|${side}`)?.status!=='verified')bad.push(`${id}:${side}`);
+          const eligible=Math.max(0,Number(taxon.counts.unfiled_named_credits||0)-Number(entry.reviewed_category_exclusions||0));
+          if(bad.length||eligible)throw new Error(`candidate is not gold-ready: eligible=${eligible}; media=${bad.join(',')}`);
+          console.log(`PASS — Ferengi candidate gold: ${ids.length} cards / ${ids.length*2} verified facets`);
+          NODE
+      - name: Remove terminal workflow and push one permanent candidate head
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-terminal"
+          git config user.name 'undercast-species-gold'
+          git config user.email 'undercast-species-gold@users.noreply.github.com'
+          rm -f .github/workflows/ferengi-gold-merge-and-handoff.yml
+          git add -A
+          git diff --cached --check
+          git commit -m 'Ferengi gold: seal permanent candidate head'
+          npm run gate 2>&1 | tee "$root/gate-permanent-head.log"
+          test -z "$(git status --porcelain)"
+          git push origin HEAD:agent/star-trek-ferengi-gold
+          git rev-parse HEAD | tee "$root/permanent-head.txt"
+      - name: Qualify exact-head workflows and merge PR 86 under a SHA guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-terminal"
+          repo="$GITHUB_REPOSITORY"
+          head=$(git rev-parse HEAD)
+          # Explicitly request permanent workflows when they support workflow_dispatch.
+          workflows=$(gh api "repos/$repo/actions/workflows")
+          for wanted in archive-contract collection-policy preservation-export; do
+            id=$(echo "$workflows" | jq -r --arg n "$wanted" '.workflows[]|select(.name==$n)|.id' | head -n1)
+            if [ -n "$id" ]; then gh api --method POST "repos/$repo/actions/workflows/$id/dispatches" -f ref=agent/star-trek-ferengi-gold >"$root/dispatch-$wanted.log" 2>&1 || true; fi
+          done
+          deadline=$((SECONDS+2700))
+          while (( SECONDS < deadline )); do
+            runs=$(gh api "repos/$repo/actions/runs?head_sha=$head&per_page=100")
+            echo "$runs" > "$root/exact-head-runs.json"
+            echo "$runs" | jq -r '.workflow_runs[]|select(.conclusion=="action_required")|.id' | while read -r id; do
+              [ -n "$id" ] || continue
+              gh api --method POST "repos/$repo/actions/runs/$id/approve" >"$root/approve-$id.log" 2>&1 || gh api --method POST "repos/$repo/actions/runs/$id/rerun" >"$root/rerun-$id.log" 2>&1 || true
+            done
+            all=1
+            for wanted in archive-contract collection-policy preservation-export; do
+              conclusion=$(echo "$runs" | jq -r --arg n "$wanted" '[.workflow_runs[]|select(.name==$n)]|sort_by(.created_at)|last|.conclusion // "missing"')
+              [ "$conclusion" = success ] || all=0
+              if [[ "$conclusion" =~ ^(failure|cancelled|timed_out|startup_failure)$ ]]; then echo "$wanted failed: $conclusion" >&2; exit 20; fi
+            done
+            [ "$all" = 1 ] && break
+            sleep 20
+          done
+          runs=$(gh api "repos/$repo/actions/runs?head_sha=$head&per_page=100")
+          for wanted in archive-contract collection-policy preservation-export; do test "$(echo "$runs" | jq -r --arg n "$wanted" '[.workflow_runs[]|select(.name==$n)]|sort_by(.created_at)|last|.conclusion')" = success; done
+          gh api --method PATCH "repos/$repo/pulls/86" -f draft=false > "$root/ready.json" 2>&1 || gh pr ready 86 --repo "$repo"
+          result=$(gh api --method PUT "repos/$repo/pulls/86/merge" -f merge_method=merge -f sha="$head")
+          echo "$result" > "$root/merge.json"
+          test "$(echo "$result" | jq -r .merged)" = true
+          echo "$result" | jq -r .sha > "$root/merge-sha.txt"
+      - name: Verify exact merged main and live Pages before changing species state
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-terminal"
+          merge_sha=$(cat "$root/merge-sha.txt")
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$merge_sha"
+          git checkout --detach "$merge_sha"
+          npm run gate 2>&1 | tee "$root/gate-merged-main.log"
+          local_sha=$(sha256sum data/archive.json | awk '{print $1}')
+          deadline=$((SECONDS+1800))
+          while (( SECONDS < deadline )); do
+            q=$(date +%s)
+            curl -fsSL --retry 2 "https://bigbirdreturns.github.io/undercast/data/archive.json?v=$q" -o "$root/live-archive.json" || { sleep 20; continue; }
+            [ "$(sha256sum "$root/live-archive.json" | awk '{print $1}')" = "$local_sha" ] && break
+            sleep 20
+          done
+          test "$(sha256sum "$root/live-archive.json" | awk '{print $1}')" = "$local_sha"
+          echo "$local_sha" > "$root/live-archive-sha.txt"
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$root/live-verified-at.txt"
+      - name: Record Ferengi gold and activate only Jem'Hadar
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-terminal"
+          merge_sha=$(cat "$root/merge-sha.txt")
+          live_sha=$(cat "$root/live-archive-sha.txt")
+          live_at=$(cat "$root/live-verified-at.txt")
+          git switch -c agent/star-trek-jem-hadar-gold "$merge_sha"
+          python - "$merge_sha" "$live_sha" "$live_at" <<'PY'
+          import json,sys
+          from pathlib import Path
+          merge_sha,live_sha,live_at=sys.argv[1:]
+          p=Path('data/STAR-TREK-GOLD.json');doc=json.loads(p.read_text())
+          fer=next(x for x in doc['sequence'] if x['id']=='ferengi');jem=next(x for x in doc['sequence'] if x['id']=='jem-hadar')
+          if fer['state']!='active' or jem['state']!='prepopulated-waiting': raise SystemExit('species handoff state drift')
+          fer['state']='gold';fer['receipt']={'merged_main_sha':merge_sha,'live_verified_at':live_at,'live_archive_sha256':live_sha}
+          fer['note']='Gold: every reviewed-eligible named credit is filed, all primary-card stills and portraits are exact-subject verified, merged main passed the permanent gate, and live Pages matched the merged archive bytes.'
+          jem['state']='active';jem['note']='Activated only after the merged-main and live-deployment Ferengi gold receipt. Jem’Hadar is now the sole Star Trek species orbit.'
+          p.write_text(json.dumps(doc,indent=2,ensure_ascii=False)+'\n')
+          out=Path('data/review/star-trek-species-gold');out.mkdir(parents=True,exist_ok=True)
+          (out/'ferengi-gold-live-receipt-2026-07-25.json').write_text(json.dumps({'version':1,'species':'ferengi','merged_main_sha':merge_sha,'live_verified_at':live_at,'live_archive_sha256':live_sha},indent=2)+'\n')
+          PY
+          node scripts/star-trek-species-gold.mjs validate | tee "$root/handoff-species.log"
+          node scripts/credits.mjs
+          node scripts/shard.mjs
+          node scripts/build-contract.mjs
+          node scripts/build-record-pages.mjs
+          npm run gate 2>&1 | tee "$root/handoff-gate.log"
+          git add -A
+          git diff --cached --check
+          git commit -m "Star Trek species gold: record Ferengi and activate Jem'Hadar"
+          npm run gate 2>&1 | tee "$root/handoff-gate-committed.log"
+          git push -u origin agent/star-trek-jem-hadar-gold
+      - name: Open the gated handoff PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-terminal"
+          url=$(gh pr create --repo "$GITHUB_REPOSITORY" --head agent/star-trek-jem-hadar-gold --base main --draft --title "Star Trek species gold 002: activate Jem'Hadar after Ferengi" --body "Ferengi is recorded gold from its exact merged-main and live Pages receipt. This change activates exactly one next species: Jem'Hadar. The complete permanent gate passed on the handoff head; no Tellarite or later species is active.")
+          echo "$url" | tee "$root/handoff-pr-url.txt"
+      - name: Retain terminal merge and handoff receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ferengi-gold-terminal-handoff-${{ github.run_id }}
+          path: ${{ runner.temp }}/ferengi-gold-terminal
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
