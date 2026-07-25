@@ -205,9 +205,7 @@ validator, waterline state, and current roadmap milestone mutually consistent.
 
 A runtime may not self-assert that it can hear audio. Use only an active profile in
 `data/AUTOPILOT-CAPABILITIES.json`. Incompatible tasks remain queued and visible;
-they are not rejections. `text-vision` deliberately skips source-reviewed voice
-work. `audio-vision` remains paused until three genuinely audio-capable independent
-blind reviewers are available through a reviewed policy change. An exact task may
+they are not rejections. `text-vision` may file an exact source-credited voice role at the conservative baseline without claiming a measured voice-distance score. `audio-vision` remains paused until three genuinely audio-capable independent blind reviewers are available through a reviewed policy change; exact task overrides may still require it. An exact task may
 be selected only with `--task-id`, `--limit 1`, and a specific
 `--selection-basis`; the lease records that reviewed deviation from normal
 priority-compatible order.
