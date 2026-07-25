@@ -72,6 +72,7 @@ function stripWiki(value){
     .replace(/\[\[([^\]]+)\]\]/g,"$1")
     .replace(/\{\{(?:dis|d|ma|mirror|prime|alternate|alt|nowrap|sortname)\|([^{}|]+)(?:\|[^{}]*)?\}\}/gi,"$1")
     .replace(/\{\{[^{}]*\}\}/g," ")
+    .replace(/[{}]+/g," ")
     .replace(/'{2,}/g,"")
     .replace(/<[^>]+>/g," ")
     .replace(/\s+/g," ").trim();
@@ -126,7 +127,8 @@ function classify(job,revision){
     ["hologram-or-illusion",/hologram|holo-duplicate|illusion|simulation/i],
     ["possession",/possess(?:ed|ion)|inhabited the body/i],
   ];
-  const signals=ambiguityPatterns.filter(([,pattern])=>pattern.test(firstChunk)).map(([name])=>name);
+  const creditedContext=`${actorFields.join(" ")} ${firstChunk.slice(0,2500)}`;
+  const signals=ambiguityPatterns.filter(([,pattern])=>pattern.test(creditedContext)).map(([name])=>name);
   const multiplePerformers=actorList.length>1;
   const mode=modeOf(job);
   const reasons=[];
@@ -136,7 +138,7 @@ function classify(job,revision){
   if(speciesFields.length&& !speciesContains)reasons.push(`explicit species field does not identify ${label}: ${speciesFields.join(" | ")}`);
   if(!speciesFields.length&&!leadSpecies)reasons.push(`no explicit ${label} species assertion was found`);
   if(multiplePerformers)reasons.push(`source credits multiple performers: ${actorFields.join(" | ")}`);
-  if(signals.length)reasons.push(`ambiguity signals: ${signals.join(", ")}`);
+  if(signals.length)reasons.push(`credit-context ambiguity signals: ${signals.join(", ")}`);
 
   if(speciesFields.length&&!speciesContains)disposition="excluded-category";
   else if(mode!=="unresolved"&&(performerInActorField||performerSentence)&&(speciesExact||(!speciesFields.length&&leadSpecies))&&!multiplePerformers&&!signals.length)disposition="eligible";
@@ -156,19 +158,19 @@ for(const [index,job] of jobs.entries()){
   const receipts=(job.source_receipts||[]).filter(receipt=>receipt?.source&&receipt?.revision&&receipt?.content_sha256);
   const receipt=receipts.find(row=>(job.sources||[]).includes(row.source))||receipts[0]||null;
   if(!receipt){
-    results.push({task_id:job.id,performer:job.performer,character:job.character,status:job.status,priority:job.priority,disposition:"blocked",reasons:["no exact source receipt"],source:null});
+    results.push({task_id:job.id,source_fingerprint:job.source_fingerprint,performer:job.performer,character:job.character,status:job.status,priority:job.priority,disposition:"blocked",reasons:["no exact source receipt"],source:null});
     continue;
   }
   try{
     const revision=await fetchExact(receipt);
     const decision=classify(job,revision);
     results.push({
-      task_id:job.id,performer:job.performer,character:job.character,status:job.status,priority:job.priority,
+      task_id:job.id,source_fingerprint:job.source_fingerprint,performer:job.performer,character:job.character,status:job.status,priority:job.priority,
       categories:job.categories,performance_modes:job.performance_modes,source:{url:receipt.source,pageid:revision.pageid,title:revision.title,revision:revision.revision,timestamp:revision.timestamp,content_sha256:revision.content_sha256},
       ...decision
     });
   }catch(error){
-    results.push({task_id:job.id,performer:job.performer,character:job.character,status:job.status,priority:job.priority,categories:job.categories,performance_modes:job.performance_modes,source:{url:receipt.source,pageid:receipt.pageid,revision:receipt.revision,timestamp:receipt.timestamp,content_sha256:receipt.content_sha256},disposition:"blocked",reasons:[error.message]});
+    results.push({task_id:job.id,source_fingerprint:job.source_fingerprint,performer:job.performer,character:job.character,status:job.status,priority:job.priority,categories:job.categories,performance_modes:job.performance_modes,source:{url:receipt.source,pageid:receipt.pageid,revision:receipt.revision,timestamp:receipt.timestamp,content_sha256:receipt.content_sha256},disposition:"blocked",reasons:[error.message]});
   }
   if(index<jobs.length-1)await sleep(350);
 }
@@ -176,7 +178,7 @@ const counts=Object.fromEntries([...new Set(results.map(row=>row.disposition))].
 const report={
   version:1,generated_at:new Date().toISOString(),scope:"star-trek",category,label,
   semantics:{
-    eligible:"The exact retained revision directly establishes the performer and explicitly identifies the displayed character as the selected species, without body-swap, genetic-trait-only, disguise, hologram, possession, multiple-performer, or unresolved-mode ambiguity.",
+    eligible:"The exact retained revision directly establishes the performer and explicitly identifies the displayed character as the selected species, without credit-context body-swap, genetic-trait-only, disguise, hologram, possession, multiple-performer, or unresolved-mode ambiguity.",
     review:"The source contains a potentially relevant credit but automatic filing is unsafe; independent task-level adjudication is required.",
     "excluded-category":"The source's explicit species field does not identify the selected species; category-page membership alone is insufficient.",
     blocked:"The exact revision could not be retrieved and hash-verified, or the task lacks an exact source receipt."
