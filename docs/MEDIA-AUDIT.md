@@ -10,6 +10,12 @@ claims, weighted but attributable review power, visible weak/active/solid states
 a tracker for disputed work, explicit authority for enforcement, and an
 append-only history. It does not copy any source site's content policy.
 
+Star Trek retains the dedicated `star-trek` gold-shard scope. The later
+`sitewide` fallback assigns every other public wall specimen to the same
+hash-bound review machinery. Because scope matching is first-match, the fallback
+does not reinterpret Star Trek receipts; it makes previously excluded media
+claims visible as review debt or honest absence.
+
 ## Two independent claims per available asset
 
 A **still** must establish:

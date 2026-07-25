@@ -37,6 +37,13 @@ export function normalize(value) {
     .replace(/[’‘]/g, "'").replace(/[^a-zA-Z0-9']+/g, " ").trim().toLowerCase();
 }
 
+export function scopeForSpecimen(scopes, specimen) {
+  return scopes.find((scope) =>
+    scope.status !== "retired"
+    && (!scope.match?.universe || normalize(scope.match.universe) === normalize(specimen.universe)),
+  );
+}
+
 export function mediaItemId(scope, wallId, side) {
   return `ma_${sha256(`${scope}|${wallId}|${side}`).slice(0, 24)}`;
 }

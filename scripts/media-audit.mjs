@@ -9,6 +9,7 @@ import {
   makePacket,
   mediaItemId,
   normalize,
+  scopeForSpecimen,
   sha256,
   stableJson,
   summarize,
@@ -121,9 +122,6 @@ function safeAssetPath(root, src) {
   const rel = relative(resolve(root), absolute);
   if (!src || rel.startsWith("..") || rel === "" || rel.startsWith("/")) throw new Error(`unsafe media asset path ${src}`);
   return absolute;
-}
-function scopeForSpecimen(scopes, specimen) {
-  return scopes.find((scope) => scope.status !== "retired" && (!scope.match?.universe || normalize(scope.match.universe) === normalize(specimen.universe)));
 }
 function deriveRiskCodes(side, asset, counterpartHash) {
   if (!asset) return ["source-declared-absent"];

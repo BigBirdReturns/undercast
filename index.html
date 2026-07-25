@@ -601,6 +601,42 @@ let SPECIES_PROJECTION = {taxa:[]}; // complete source-backed role ledger + exac
 const RECORDS = new Map();    // id -> full record (populated lazily from shards)
 const SHARDS = new Map();     // shard# -> in-flight/settled load promise (dedupe)
 let renderSeq = 0;            // guards against a stale async render clobbering a newer one
+const FILTER_GROUPS = new Map();
+
+function mountRovingTabindex(group){
+  if(!group||FILTER_GROUPS.has(group)) return FILTER_GROUPS.get(group);
+  const state={
+    sync(){
+      const buttons=[...group.querySelectorAll("button")];
+      if(!buttons.length)return;
+      const active=buttons.find(button=>button.getAttribute("aria-pressed")==="true")
+        ||buttons.find(button=>button.tabIndex===0)
+        ||buttons[0];
+      buttons.forEach(button=>{button.tabIndex=button===active?0:-1;});
+    }
+  };
+  group.addEventListener("keydown",event=>{
+    const buttons=[...group.querySelectorAll("button")];
+    const current=buttons.indexOf(document.activeElement);
+    if(current<0)return;
+    let next=null;
+    if(event.key==="Home")next=0;
+    else if(event.key==="End")next=buttons.length-1;
+    else if(["ArrowLeft","ArrowUp"].includes(event.key))next=(current-1+buttons.length)%buttons.length;
+    else if(["ArrowRight","ArrowDown"].includes(event.key))next=(current+1)%buttons.length;
+    if(next===null)return;
+    event.preventDefault();
+    buttons.forEach((button,index)=>{button.tabIndex=index===next?0:-1;});
+    buttons[next].focus();
+  });
+  FILTER_GROUPS.set(group,state);
+  state.sync();
+  return state;
+}
+
+function syncFilterRovingTabs(){
+  for(const state of FILTER_GROUPS.values())state.sync();
+}
 
 /* ---------- deterministic pseudo-random from an id ---------- */
 function seedRand(str){
@@ -698,11 +734,14 @@ function buildFilters(){
   chipsEl.innerHTML="";
   decadesEl.innerHTML="";
   speciesChipsEl.innerHTML="";
+  const shelfNav=mountRovingTabindex(chipsEl);
+  const decadeNav=mountRovingTabindex(decadesEl);
+  const speciesNav=mountRovingTabindex(speciesChipsEl);
   const universes=["All",...Array.from(new Set(INDEX.map(e=>e.u)))];
   universes.forEach(u=>{
     const b=document.createElement("button");
     b.className="chip";b.textContent=u;b.setAttribute("aria-pressed",u===universeFilter);
-    b.onclick=()=>{universeFilter=u;[...chipsEl.children].forEach(c=>c.setAttribute("aria-pressed",c.textContent===u));render();};
+    b.onclick=()=>setUniverse(u);
     chipsEl.appendChild(b);
   });
 
@@ -711,7 +750,7 @@ function buildFilters(){
   decades.forEach(d=>{
     const b=document.createElement("button");
     b.className="chip";b.textContent=d;b.setAttribute("aria-pressed",d===decadeFilter);
-    b.onclick=()=>{decadeFilter=d;[...decadesEl.children].forEach(c=>c.setAttribute("aria-pressed",c.textContent===d));render();};
+    b.onclick=()=>setDecade(d);
     decadesEl.appendChild(b);
   });
 
@@ -723,11 +762,29 @@ function buildFilters(){
     b.onclick=()=>setSpecies(label);
     speciesChipsEl.appendChild(b);
   });
+  shelfNav.sync();
+  decadeNav.sync();
+  speciesNav.sync();
+}
+
+function setUniverse(value){
+  universeFilter=value;
+  [...chipsEl.children].forEach(button=>button.setAttribute("aria-pressed",String(button.textContent===universeFilter)));
+  syncFilterRovingTabs();
+  render();
+}
+
+function setDecade(value){
+  decadeFilter=value;
+  [...decadesEl.children].forEach(button=>button.setAttribute("aria-pressed",String(button.textContent===decadeFilter)));
+  syncFilterRovingTabs();
+  render();
 }
 
 function setSpecies(label){
   speciesFilter=label||"All";
   [...speciesChipsEl.children].forEach(c=>c.setAttribute("aria-pressed",c.textContent===speciesFilter));
+  syncFilterRovingTabs();
   render();
 }
 function speciesClick(event,el){
@@ -756,6 +813,7 @@ function renderSpeciesContext(rows){
 /* the makers strip: every hand that built >=2 faces, ranked, click to filter */
 function buildMakers(){
   MAKER_INDEX=buildMakerIndex(INDEX);
+  const makerNav=mountRovingTabindex(makerChipsEl);
   const ranked=Object.entries(MAKER_INDEX).filter(([,n])=>n>=2).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]));
   makerChipsEl.innerHTML="";
   for(const [name,n] of ranked){
@@ -766,11 +824,13 @@ function buildMakers(){
     b.addEventListener("click",()=>setMaker(name));
     makerChipsEl.appendChild(b);
   }
+  makerNav.sync();
 }
 function reflectMakerChips(){ [...makerChipsEl.children].forEach(c=>c.setAttribute("aria-pressed",String(c.dataset.maker===makerFilter))); }
 function setMaker(name){
   makerFilter=(makerFilter===name)?"":(name||"");
   reflectMakerChips();
+  syncFilterRovingTabs();
   render();
   (document.getElementById("grid")||document.body).scrollIntoView({behavior:reducedMotion()?"auto":"smooth",block:"start"});
 }
@@ -880,7 +940,7 @@ function card(s){
 
 // Render cap: only ever put PAGE cards in the DOM at once, "load more" for the
 // rest. Keeps the browser fast whether the roster is 175 or 175,000.
-const PAGE=120;
+const PAGE=30;
 let shownCount=PAGE;
 
 // Fandom speaks in acronyms; the data mostly spells things out. Expand BOTH the

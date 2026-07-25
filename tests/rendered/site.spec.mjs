@@ -59,7 +59,15 @@ test("wall controls execute, announce, and survive browser history",async({page}
   await expect(page.getByRole("button",{name:"20s",exact:true})).toBeVisible();
 
   const articles=page.locator("article.cast");
-  await expect(articles).toHaveCount(120);
+  await expect(articles).toHaveCount(30);
+  await expect(page.locator("#result-status")).toHaveText(/\d+ specimens match; 30 shown\./);
+  const firstBatch=await articles.evaluateAll(nodes=>nodes.map(node=>node.dataset.uid));
+  await page.getByRole("button",{name:"Load 30 more",exact:true}).click();
+  await expect(articles).toHaveCount(60);
+  await expect(page.locator("#result-status")).toHaveText(/\d+ specimens match; 60 shown\./);
+  const expanded=await articles.evaluateAll(nodes=>nodes.map(node=>node.dataset.uid));
+  expect(expanded.slice(0,30)).toEqual(firstBatch);
+  expect(new Set(expanded).size).toBe(60);
   const labels=await articles.evaluateAll(nodes=>nodes.map(node=>node.getAttribute("aria-label")));
   expect(new Set(labels).size).toBe(labels.length);
   expect(labels.every(Boolean)).toBeTruthy();
@@ -95,14 +103,40 @@ test("wall controls execute, announce, and survive browser history",async({page}
   expect(errors).toEqual([]);
 });
 
+test("filter groups expose one Tab stop and preserve native activation",async({page})=>{
+  await open(page,"index.html");
+  await waitForWall(page);
+  const groups=["#chips","#decades","#speciesChips","#makerChips"];
+  for(const selector of groups){
+    const group=page.locator(selector);
+    expect(await group.locator("button").count()).toBeGreaterThan(1);
+    await expect(group.locator('button[tabindex="0"]')).toHaveCount(1);
+    expect(await group.locator('button[tabindex="-1"]').count()).toBeGreaterThan(0);
+  }
+
+  const shelf=page.locator("#chips");
+  const first=shelf.locator("button").first();
+  const second=shelf.locator("button").nth(1);
+  await first.focus();
+  const selectedBefore=await shelf.locator('button[aria-pressed="true"]').textContent();
+  await page.keyboard.press("ArrowRight");
+  await expect(second).toBeFocused();
+  await expect(shelf.locator('button[aria-pressed="true"]')).toHaveText(selectedBefore);
+  await page.keyboard.press("Space");
+  await expect(second).toHaveAttribute("aria-pressed","true");
+  await page.keyboard.press("Tab");
+  await expect(second).not.toBeFocused();
+  expect(await shelf.evaluate(group=>group.contains(document.activeElement))).toBeFalsy();
+});
+
 test("archive navigation stays complete, consistent, and inside every viewport",async({page})=>{
   const surfaces=[
-    {path:"index.html",ready:"#result-status",align:".controls",current:1},
-    {path:"recognition.html#UC-001",ready:"#record-title",align:".uc-record",current:1},
-    {path:"coverage.html",ready:"#rows tr",align:".eyebrow",current:1},
-    {path:"constellation.html",ready:".person-row",align:".hero",current:0},
-    {path:"records/UC-001/",ready:"#record-main",align:".record-meta",current:1},
-    {path:"404.html",ready:"#recovery",align:".kicker",current:0}
+    {path:"index.html",ready:"#result-status",align:".controls",current:"Browse"},
+    {path:"recognition.html#UC-001",ready:"#record-title",align:".uc-record",current:"Recognition Loop"},
+    {path:"coverage.html",ready:"#rows tr",align:".eyebrow",current:"Coverage"},
+    {path:"constellation.html",ready:".person-row",align:".hero",current:"Evidence paths"},
+    {path:"records/UC-001/",ready:"#record-main",align:".record-meta",current:"Permanent record"},
+    {path:"404.html",ready:"#recovery",align:".kicker",current:"Not found"}
   ];
   const core=["Browse","Coverage","Makers","About"];
   for(const viewport of [{width:1280,height:900},{width:390,height:844}]){
@@ -116,7 +150,11 @@ test("archive navigation stays complete, consistent, and inside every viewport",
       await expect(nav.getByRole("link",{name:"Constellations",exact:true})).toHaveCount(0);
       const browseTarget=await nav.getByRole("link",{name:"Browse",exact:true}).evaluate(link=>new URL(link.href).hash);
       expect(browseTarget,`${surface.path} Browse destination`).toBe("#archive");
-      await expect(nav.locator('[aria-current="page"]')).toHaveCount(surface.current);
+      const current=page.locator('[aria-current="page"]');
+      await expect(current).toHaveCount(1);
+      await expect(current).toBeVisible();
+      await expect(current).toHaveText(surface.current);
+      await expect(current).toHaveCSS("text-decoration-line","underline");
       const targets=await nav.locator("a,button").evaluateAll(nodes=>nodes.filter(node=>{
         const style=getComputedStyle(node),rect=node.getBoundingClientRect();
         return style.display!=="none"&&style.visibility!=="hidden"&&rect.width>0&&rect.height>0;
@@ -160,7 +198,9 @@ test("wall search, current decade, flip semantics, and partial failure are hones
 
   await page.getByRole("searchbox",{name:"Search a character, a performer, or a production",exact:true}).fill("");
   await page.getByRole("button",{name:"20s",exact:true}).click();
-  await expect(page.locator("#result-status")).toHaveText("89 specimens match; 89 shown.");
+  await expect(page.locator("#result-status")).toHaveText("89 specimens match; 30 shown.");
+  await expect(page.locator(".cast-shell")).toHaveCount(30);
+  await expect(page.getByRole("button",{name:"Load 30 more",exact:true})).toBeVisible();
 
   const firstArticle=page.locator("article.cast").first();
   const character=await firstArticle.locator(".charname").textContent();
@@ -577,6 +617,10 @@ test("Ferengi URL preserves the makers anchor and shows only exact displayed rol
     const byId=new Map(specimens.map(row=>[row.id,row]));
     return {counts:taxon.counts,ids:taxon.wall_records.map(row=>row.id),names:taxon.wall_records.map(row=>byId.get(row.id).character)};
   });
+  await expect(page.locator("#result-status")).toHaveText(`${expected.counts.primary_card_records} specimens match; 30 shown.`);
+  await expect(page.locator("article.cast")).toHaveCount(30);
+  await expect(page.locator("#makers")).toBeInViewport();
+  await page.getByRole("button",{name:`Load ${expected.counts.primary_card_records-30} more`,exact:true}).click();
   await expect(page.locator("#result-status")).toHaveText(`${expected.counts.primary_card_records} specimens match; ${expected.counts.primary_card_records} shown.`);
   const names=await page.locator(".charname").allTextContents();
   expect(names).toHaveLength(expected.names.length);
@@ -592,7 +636,6 @@ test("Ferengi URL preserves the makers anchor and shows only exact displayed rol
   await expect(page.locator("#speciesContext")).toContainText(`${expected.counts.named_credits} captured named credits`);
   await expect(page.locator("#speciesContext")).toContainText(`${expected.counts.additional_performance_credits} additional performances on file`);
   await expect(page.locator("#speciesLedger > li")).toHaveCount(expected.counts.named_credits);
-  await expect(page.locator("#makers")).toBeInViewport();
 });
 
 test("full-site sweep keeps species role-level on recognition and permanent records",async({page})=>{

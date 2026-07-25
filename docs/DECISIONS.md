@@ -203,3 +203,33 @@ The frozen v1 product receives this bounded owner-approved correction:
 This decision changes presentation and wayfinding only. It adds no schema concept,
 reinterprets no unresolved credit as a finished card, and does not reopen general
 product development under DEC-0012.
+
+---
+
+## DEC-0014 — Whole-wall truth and bounded polish corrections
+
+**Status:** Active · Ratified by owner direction, 2026-07-25
+
+The owner directed the current site to be brought to the established best-card
+standard while preserving its existing information architecture and signature
+flip. This authorizes the following bounded corrections under DEC-0012:
+
+- Every public wall specimen must enter exact-subject media accounting. The
+  existing Star Trek scope keeps precedence; a fallback scope exposes every
+  remaining still and portrait as verified, review debt, attention, or honest
+  absence.
+- A source-proven wrong subject is removed from the public card immediately and
+  shown as evidence not on file until an exact replacement is reviewed. Immutable
+  historical bytes may remain preserved outside the active binding.
+- The raw complete-image-pair floor is reset from 0.54 to 0.53 after those
+  removals. The old floor counted proven-wrong bindings as quality; the lower
+  truthful floor remains a hard non-regression gate for subsequent work.
+- Every public surface exposes one visible current-location marker. Contextual
+  Evidence paths remains outside permanent top navigation under DEC-0009.
+- Measured homepage performance and keyboard-load corrections may reduce the
+  initial wall batch without changing search, filters, Load more, card anatomy,
+  record identity, or the character-first reveal.
+
+This decision does not authorize a new surface, reveal mechanic, schema concept,
+account/service layer, or aesthetic system. After these corrections, ordinary
+work returns to collection-only mode.

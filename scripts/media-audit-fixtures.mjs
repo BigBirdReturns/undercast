@@ -11,6 +11,7 @@ import {
   deriveItem,
   makePacket,
   mediaItemId,
+  scopeForSpecimen,
   sha256,
   stableJson,
   summarize,
@@ -35,6 +36,19 @@ function state(items = [item()]) {
 }
 const vote = (itemId, namespace, value, reviewer, role, extra = {}) => ({ item_id: itemId, namespace, value, reviewer, role, note: `Reviewed ${namespace} as ${value} with visible evidence.`, ...extra });
 const enforcedEvidence = [{ type: "second-desk-review", value: "Exact hash-bound bytes were reviewed." }];
+
+{
+  const scopes = [
+    { id: "star-trek", status: "active", match: { universe: "Star Trek" }, facets: ["still", "portrait"] },
+    { id: "sitewide", status: "active", facets: ["still", "portrait"] },
+  ];
+  const starTrek = { id: "UC-001", universe: "Star Trek", actor: "Mark Allen Shepherd", character: "Morn" };
+  const horror = { id: "UC-025", universe: "Horror", actor: "Javier Botet", character: "Mama, the Crooked Man & others" };
+  assert.equal(scopeForSpecimen(scopes, starTrek)?.id, "star-trek", "specific first-match scope wins");
+  const fallback = scopeForSpecimen(scopes, horror);
+  assert.equal(fallback?.id, "sitewide", "non-Star-Trek specimen enters the fallback scope");
+  assert.deepEqual(fallback.facets, ["still", "portrait"], "fallback exposes both public card faces");
+}
 
 {
   let doc = state();
