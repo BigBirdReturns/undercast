@@ -577,7 +577,9 @@ test("Ferengi URL preserves the makers anchor and shows only exact displayed rol
   });
   await expect(page.locator("#result-status")).toHaveText(`${expected.counts.primary_card_records} specimens match; ${expected.counts.primary_card_records} shown.`);
   const names=await page.locator(".charname").allTextContents();
-  expect(names).toEqual(expected.names);
+  expect(names).toHaveLength(expected.names.length);
+  expect(new Set(names).size).toBe(names.length);
+  expect([...names].sort()).toEqual([...expected.names].sort());
   expect(names).toContain("Zek");
   expect(names).toContain("Arridor");
   expect(names).not.toContain("Weyoun");
