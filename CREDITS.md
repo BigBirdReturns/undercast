@@ -200,6 +200,7 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **Patricia Tallman** (UC-1153) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Pat_Tallman_by_Gage_Skidmore.jpg)
 - **Jeffrey Combs** (UC-1155) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Jeffrey_Combs_Photo_Op_GalaxyCon_Richmond_2022.jpg)
 - **June Foray** (UC-116) — CBS Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:June_Foray_1952.JPG)
+- **Jeffrey Combs** (UC-1161) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Jeffrey_Combs_(53392306235).jpg)
 - **Tom Morga** (UC-1164) — Kigsz, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Tom_Morga_at_The_Scandinavian_Sci-Fi,_Game_%26_Film_Convention.jpg)
 - **René Auberjonois** (UC-1168) — Luigi Rosa, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Rene_Auberjonois_by_Luigi_Rosa,_11.jpg)
 - **Frank Welker** (UC-117) — StartHereMarketing, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Frank_Welker_Headshot_2016.jpg)
@@ -249,7 +250,21 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **Bin Furuya** (UC-128) — Super Festivals, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Bin_Furuya_Photo_Op_GalaxyCon_Louisville_2019.jpg)
 - **Wallace Shawn** (UC-1281) — PEN American Center, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Wallace_Shawn_2014_(cropped).jpg)
 - **Dan Shor** (UC-1282) — Comraderick (talk), CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Dan_Shor_in_2004.jpg)
+- **Eric Bauza** (UC-1283) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Eric_Bauza_by_Gage_Skidmore.jpg)
+- **Paul F. Tompkins** (UC-1284) — Joel Mandelkorn, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Paul_F._Tompkins_(cropped).jpg)
+- **Grey Griffin** (UC-1285) — mskilian, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Grey_Delisle.jpg)
+- **Cecily Adams** (UC-1286) — Jim Beaver (her husband), CC BY-SA 2.5 — [source](https://commons.wikimedia.org/wiki/File:Cecily_Adams.jpg)
+- **Max Grodénchik** (UC-1287) — The original uploader was Hypertrek at English Wikipedia., CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Max_Grod%C3%A9nchik_2009.jpg)
+- **Tom Kenny** (UC-1288) — Florida Supercon, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Tom_Kenny_FSC_2015.jpg)
+- **Clint Howard** (UC-1289) — Super Festivals, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:Clint_Howard_Photo_Op_Nightmare_Weekend_Cleveland_2025.jpg)
+- **Tom Kenny** (UC-1290) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Tom_Kenny_by_Gage_Skidmore_2.jpg)
 - **Tsutomu Kitagawa** (UC-130) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Tsutomu_Kitagawa_(48602342676).jpg)
+- **Aaron Stanford** (UC-1300) — Meutia Chaerani / Indradi Soemardjan http://www.indrani.net, CC BY 2.5 — [source](https://commons.wikimedia.org/wiki/File:Aaron_Stanford_2002.jpg)
+- **Leslie Jordan** (UC-1301) — Greg Hernandez, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Leslie_Jordan_2012.png)
+- **Henry Gibson** (UC-1307) — Roy Cummings Inc.-Hollywood, Public domain — [source](https://commons.wikimedia.org/wiki/File:Henry_Gibson_1969.JPG)
+- **Eugene Cordero** (UC-1315) — Nuno Media, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Eugene_Cordero,_Aswang_Next_Door_cropped.jpg)
+- **Dave Foley** (UC-1316) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Dave_Foley_Photo_Op_GalaxyCon_Richmond_2023.jpg)
+- **Melissa Villasenor** (UC-1317) — Chairman of the Joint Chiefs of Staff from Washington D.C, United States, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Melissa_Villase%C3%B1or_2024_(cropped).jpg)
 - **Peter Weller** (UC-132) — Florida Supercon, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Peter_Weller_2016.jpg)
 - **Karl Urban** (UC-133) — Kevin Paul, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:Karl_Urban_at_53rd_Saturn_Awards_2026.jpg)
 - **Vaughn Armstrong** (UC-140) — AFroese, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Vaughn_Armstrong.JPG)
@@ -735,8 +750,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **705**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **955**
+- Free-licensed portraits (attributed above): **720**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **982**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
 email and any specific asset comes down.
