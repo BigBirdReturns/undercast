@@ -1,0 +1,182 @@
+name: ferengi-gold-final-controller
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [agent/star-trek-ferengi-gold]
+    paths:
+      - ".github/FERENGI-GOLD-FINAL-PORTRAITS.json"
+      - ".github/workflows/ferengi-gold-final-controller.yml"
+      - "scripts/ferengi-gold-final-portraits.mjs"
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/FERENGI-GOLD-FINAL-PORTRAITS.json"
+      - ".github/workflows/ferengi-gold-final-controller.yml"
+      - "scripts/ferengi-gold-final-portraits.mjs"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: ferengi-gold-final-controller
+  cancel-in-progress: true
+
+jobs:
+  close:
+    if: github.ref_name == 'agent/star-trek-ferengi-gold' || github.event.pull_request.head.ref == 'agent/star-trek-ferengi-gold'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-ferengi-gold
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Determine the exact residual without assuming the old denominator
+        id: boundary
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-final-controller"
+          mkdir -p "$root"
+          node scripts/star-trek-species-gold.mjs validate | tee "$root/species-before.log"
+          count=$(node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const control=JSON.parse(fs.readFileSync('.github/FERENGI-GOLD-FINAL-PORTRAITS.json','utf8'));
+          const plan=JSON.parse(fs.readFileSync('data/STAR-TREK-GOLD.json','utf8'));
+          const species=JSON.parse(fs.readFileSync('data/species.json','utf8'));
+          const specimens=JSON.parse(fs.readFileSync('data/specimens.json','utf8'));
+          const media=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8'));
+          const active=plan.sequence.filter(row=>row.state==='active'||row.state==='candidate-gold');
+          if(active.length!==1||active[0].id!=='ferengi')throw new Error('Ferengi is not the sole active species');
+          const taxon=species.taxa.find(row=>row.key==='species:star-trek:ferengi');
+          const ids=[...new Set(taxon.wall_records.map(row=>row.id))];
+          const byId=new Map(specimens.map(row=>[row.id,row]));
+          const audit=new Map(media.items.map(row=>[`${row.wall_id}|${row.side}`,row]));
+          const residual=ids.filter(id=>!byId.get(id)?.portrait?.src||audit.get(`${id}|portrait`)?.status!=='verified').sort();
+          const expected=control.targets.flatMap(row=>row.cards).sort();
+          if(residual.length!==0&&JSON.stringify(residual)!==JSON.stringify(expected))throw new Error(`unexpected residual: ${residual.join(', ')}`);
+          console.log(residual.length);
+          NODE
+          )
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "residual=$count" | tee "$root/boundary.log"
+      - name: Download retained orbit when mutation is still required
+        if: steps.boundary.outputs.count == '10'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-final-controller"
+          orbit="$root/orbit"
+          mkdir -p "$orbit"
+          run_id=$(jq -r .source_workflow_run .github/FERENGI-GOLD-FINAL-PORTRAITS.json)
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$root/artifacts.json"
+          test "$(jq '.artifacts|length' "$root/artifacts.json")" -ge 8
+          jq -r '.artifacts[]|[.id,.name]|@tsv' "$root/artifacts.json" | while IFS=$'\t' read -r id name; do
+            mkdir -p "$orbit/$name"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > "$root/$name.zip"
+            unzip -q -o "$root/$name.zip" -d "$orbit/$name"
+          done
+      - name: Select and apply the exact residual
+        if: steps.boundary.outputs.count == '10'
+        env:
+          FERENGI_ORBIT_ROOT: ${{ runner.temp }}/ferengi-gold-final-controller/orbit
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-final-controller"
+          node scripts/ferengi-gold-final-portraits.mjs select | tee "$root/select.log"
+          node scripts/ferengi-gold-final-portraits.mjs apply | tee "$root/apply.log"
+          ids=(UC-1295 UC-1296 UC-1297 UC-1298 UC-1304 UC-1305 UC-1306 UC-1310 UC-1311 UC-1313)
+          node scripts/media-stage.mjs --ids "${ids[@]}" | tee "$root/media-stage.log"
+          node scripts/credits.mjs | tee "$root/credits-1.log"
+          node scripts/shard.mjs | tee "$root/shard-1.log"
+          node scripts/build-contract.mjs | tee "$root/contract-1.log"
+          node scripts/media-audit.mjs sync | tee "$root/media-sync.log"
+          node scripts/ferengi-gold-final-portraits.mjs resolution | tee "$root/resolution-build.log"
+          node scripts/media-audit.mjs resolve --input data/review/ferengi-gold/final-portraits-media-resolution-2026-07-25.json | tee "$root/media-resolve.log"
+      - name: Rebuild every permanent projection and prove Ferengi candidate gold
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-final-controller"
+          node scripts/credits.mjs | tee "$root/credits-final.log"
+          node scripts/shard.mjs | tee "$root/shard-final.log"
+          node scripts/build-contract.mjs | tee "$root/contract-final.log"
+          node scripts/ds9-census.mjs --project-only | tee "$root/ds9-census.log"
+          node scripts/ds9-graph.mjs --project-only | tee "$root/ds9-graph.log"
+          node scripts/ds9-eligibility-queue.mjs | tee "$root/ds9-eligibility.log"
+          node scripts/ds9-maker-queue.mjs | tee "$root/ds9-maker.log"
+          node scripts/build-record-pages.mjs | tee "$root/record-pages.log"
+          node scripts/media-audit.mjs validate | tee "$root/media-validate.log"
+          node scripts/star-trek-species-gold.mjs validate | tee "$root/species-after.log"
+          node --input-type=module - <<'NODE' | tee "$root/gold-ready.log"
+          import fs from 'node:fs';
+          const plan=JSON.parse(fs.readFileSync('data/STAR-TREK-GOLD.json','utf8'));
+          const species=JSON.parse(fs.readFileSync('data/species.json','utf8'));
+          const specimens=JSON.parse(fs.readFileSync('data/specimens.json','utf8'));
+          const media=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8'));
+          const taxon=species.taxa.find(row=>row.key==='species:star-trek:ferengi');
+          const entry=plan.sequence.find(row=>row.id==='ferengi');
+          const ids=[...new Set(taxon.wall_records.map(row=>row.id))];
+          const byId=new Map(specimens.map(row=>[row.id,row]));
+          const audit=new Map(media.items.map(row=>[`${row.wall_id}|${row.side}`,row]));
+          const bad=[];for(const id of ids)for(const side of ['still','portrait'])if(!byId.get(id)?.[side]?.src||audit.get(`${id}|${side}`)?.status!=='verified')bad.push(`${id}:${side}`);
+          const eligible=Math.max(0,Number(taxon.counts.unfiled_named_credits||0)-Number(entry.reviewed_category_exclusions||0));
+          if(bad.length||eligible)throw new Error(`not gold-ready: eligible=${eligible}; media=${bad.join(',')}`);
+          console.log(`PASS — ${ids.length} Ferengi cards / ${ids.length*2} verified media facets / zero eligible unfiled credits`);
+          NODE
+      - name: Remove temporary operators and commit the exact permanent candidate
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-final-controller"
+          git config user.name 'undercast-media-review'
+          git config user.email 'undercast-media-review@users.noreply.github.com'
+          rm -f tmp-test.txt \
+            .github/FERENGI-GOLD-FINAL-PORTRAITS.json \
+            .github/workflows/ferengi-gold-final-portraits.yml \
+            .github/workflows/ferengi-gold-final-controller.yml \
+            scripts/ferengi-gold-final-portraits.mjs \
+            .github/FERENGI-GOLD-PORTRAIT-DEEP-001.json \
+            .github/FERENGI-GOLD-RESIDUAL-PORTRAIT-ORBIT-005.json \
+            .github/workflows/ferengi-gold-residual-portrait-orbit-005.yml \
+            scripts/ferengi-gold-residual-portrait-orbit-005.mjs \
+            scripts/ferengi-gold-portrait-gather.mjs \
+            .github/FERENGI-GOLD-GATHER.json \
+            .github/workflows/ferengi-gold-gather.yml \
+            .github/FERENGI-GOLD-TARGETED-STILLS.json \
+            .github/workflows/ferengi-gold-targeted-stills.yml \
+            scripts/direct-media-candidates.mjs \
+            .github/workflows/ferengi-gold-integrity-audit.yml \
+            scripts/ferengi-gold-integrity-audit.mjs
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then echo 'Permanent candidate already committed'; else git commit -m 'Ferengi gold: close every performer portrait obligation'; fi
+          git rev-parse HEAD | tee "$root/candidate-head.txt"
+      - name: Install Chromium for the permanent-head gate
+        run: npx playwright install --with-deps chromium
+      - name: Run complete permanent-head gate and publish
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-final-controller"
+          npm run gate 2>&1 | tee "$root/gate.log"
+          test -z "$(git status --porcelain)"
+          git push origin HEAD:agent/star-trek-ferengi-gold
+      - name: Retain terminal candidate receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ferengi-gold-final-controller-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/ferengi-gold-final-controller
+            data/review/ferengi-gold/final-portrait-selection-2026-07-25.json
+            data/review/ferengi-gold/final-portraits-applied-2026-07-25.json
+            data/review/ferengi-gold/final-portraits-media-resolution-2026-07-25.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
