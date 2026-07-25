@@ -44,6 +44,7 @@ jobs:
           review_root="data/review/species-orbit/$slug"
           rm -rf "$out"
           mkdir -p "$out" "$review_root"
+          trap 'status=$?; echo "$status" > "$out/exit-status.txt"; git status --short > "$out/git-status.txt" || true' EXIT
           git config user.name "undercast-population"
           git config user.email "undercast-population@users.noreply.github.com"
           : > "$out/cycles.jsonl"
@@ -54,14 +55,13 @@ jobs:
               --category "$category" \
               --label "$label" \
               --out "$out/next.json" \
-              > "$out/next.log" 2>&1
-            code=$?
+              2>&1 | tee "$out/next.log"
+            code=${PIPESTATUS[0]}
             set -e
             if [ "$code" -eq 3 ]; then
               break
             fi
             if [ "$code" -ne 0 ]; then
-              cat "$out/next.log"
               exit "$code"
             fi
             task_id=$(node -e "console.log(require('$out/next.json').task.task_id)")
@@ -97,7 +97,7 @@ jobs:
                 --selection-basis "Species orbit for $label: exact source-bound supported-mode credit selected in deterministic priority order; missing media remains explicitly not on file until enrichment." \
                 --out "$batch" \
                 --prompt "$prompt" \
-                > "$out/claim-${cycle}.json"
+                2>&1 | tee "$out/claim-${cycle}.log"
               lease_id=$(node -e "console.log(require('./$batch').lease_id)")
               git add data/AUTOPILOT.json data/journal/autopilot.jsonl "$batch" "$prompt"
               git diff --cached --check
@@ -119,21 +119,7 @@ jobs:
             node scripts/species-fill.mjs review --category "$category" --label "$label" --batch "$batch" --map "$map" --out "$review" | tee "$out/review-${cycle}.log"
             node scripts/autopilot.mjs complete --input "$review" | tee "$out/complete-${cycle}.log"
             node scripts/media-audit.mjs gate --scope star-trek > "$out/media-gate-${cycle}.log" 2>&1
-
-            LEASE_ID="$lease_id" TASK_ID="$task_id" PERFORMER="$performer" CHARACTER="$character" LABEL="$label" CLAIM_COMMIT="$claim_commit" RECEIPT="$cycle_receipt" node --input-type=module - <<'NODE'
-            import fs from 'node:fs';
-            const doc={
-              scope_id:'star-trek',lease_id:process.env.LEASE_ID,outcome:'completed',
-              note:`Exact-source ${process.env.LABEL} population filed ${process.env.PERFORMER} as ${process.env.CHARACTER}; both media sides remain honestly not on file for later rolling enrichment.`,
-              evidence:[
-                {type:'workflow-run',value:`GitHub Actions run ${process.env.GITHUB_RUN_ID} — deterministic species orbit for ${process.env.TASK_ID}.`},
-                {type:'commit',value:`${process.env.CLAIM_COMMIT} — restart-safe lease committed before drafting or canonical mutation.`},
-                {type:'restart-proof',value:`Lease ${process.env.LEASE_ID} was persisted before the task was submitted.`}
-              ],
-              reviewed_by:'chatgpt-second-desk',reviewed_role:'second-desk',reviewed_at:new Date().toISOString()
-            };
-            fs.writeFileSync(process.env.RECEIPT,JSON.stringify(doc,null,2)+'\n');
-            NODE
+            node scripts/species-fill.mjs cycle-receipt --category "$category" --label "$label" --batch "$batch" --claim-commit "$claim_commit" --out "$cycle_receipt" | tee "$out/cycle-receipt-${cycle}.log"
             node scripts/waterline.mjs record-cycle --input "$cycle_receipt" | tee "$out/waterline-${cycle}.log"
 
             wall_id=$(node -e "console.log(require('./$map').records[0].wall_id)")
@@ -164,34 +150,7 @@ jobs:
           node scripts/species-fixtures.mjs | tee "$out/species-fixtures.log"
           node scripts/site-sweep.mjs | tee "$out/site-sweep.log"
           npm run audit:corpus -- --json | tee "$out/corpus-audit.json"
-
-          CATEGORY="$category" LABEL="$label" OUT="$out" node --input-type=module - <<'NODE'
-          import fs from 'node:fs';
-          const norm=value=>String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[’‘]/g,"'").replace(/[^a-zA-Z0-9']+/g,' ').trim().toLowerCase();
-          const modeOf=job=>{const modes=job.performance_modes||[];if(modes.some(mode=>mode==='physical-prosthetic'||mode==='physical-and-voice'))return'physical';if(modes.some(mode=>mode==='voice-animation'||mode==='voice-only'||mode==='voice'))return'voice';return'unresolved';};
-          const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
-          const species=JSON.parse(fs.readFileSync('data/species.json','utf8'));
-          const media=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8'));
-          const jobs=state.jobs.filter(job=>job.scope==='star-trek'&&(job.categories||[]).some(value=>norm(value)===norm(process.env.CATEGORY)));
-          const remainingSupported=jobs.filter(job=>job.status==='queued'&&job.queueable!==false&&modeOf(job)!=='unresolved');
-          const active=jobs.filter(job=>['leased','drafted','merged'].includes(job.status));
-          if(remainingSupported.length)throw new Error(`${remainingSupported.length} supported ${process.env.LABEL} task(s) remain queued`);
-          if(active.length)throw new Error(`${active.length} ${process.env.LABEL} task(s) remain in flight`);
-          const taxon=species.taxa.find(row=>norm(row.label)===norm(process.env.LABEL));
-          if(!taxon)throw new Error(`species projection lacks ${process.env.LABEL}`);
-          const mediaRows=media.items.filter(item=>item.scope==='star-trek');
-          const complete=mediaRows.filter(item=>['verified','absent'].includes(item.status)).length;
-          if(complete!==mediaRows.length)throw new Error('Star Trek media baseline is not complete');
-          const summary={
-            version:1,category:process.env.CATEGORY,label:process.env.LABEL,
-            task_statuses:Object.fromEntries([...new Set(jobs.map(job=>job.status))].map(status=>[status,jobs.filter(job=>job.status===status).length])),
-            unresolved_mode:jobs.filter(job=>job.status==='queued'&&modeOf(job)==='unresolved').length,
-            species_counts:taxon.counts,
-            star_trek_media:{total:mediaRows.length,complete}
-          };
-          fs.writeFileSync(`${process.env.OUT}/final-state.json`,JSON.stringify(summary,null,2)+'\n');
-          console.log(JSON.stringify(summary,null,2));
-          NODE
+          node scripts/species-fill.mjs final-state --category "$category" --label "$label" --out "$out/final-state.json" | tee "$out/final-state.log"
 
           git add -A
           git diff --cached --check
