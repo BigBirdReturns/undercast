@@ -1,0 +1,131 @@
+name: ferengi-media-enrichment-001-gather
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/FERENGI-MEDIA-ENRICHMENT-001.json"
+      - ".github/workflows/ferengi-media-enrichment-001-gather.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ferengi-media-enrichment-001-gather
+  cancel-in-progress: true
+
+jobs:
+  gather:
+    if: github.event.pull_request.head.ref == 'agent/ferengi-media-enrichment-001'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/ferengi-media-enrichment-001
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Install Chromium for review sheets
+        run: npx playwright install --with-deps chromium
+      - name: Gather every missing Ferengi media facet
+        env:
+          CONTACT: bigbirdreturns@proton.me
+        run: |
+          set -euo pipefail
+          out=/tmp/ferengi-media-enrichment-001
+          rm -rf "$out"
+          mkdir -p "$out"
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import { spawnSync } from 'node:child_process';
+          import { pathToFileURL } from 'node:url';
+          import { chromium } from '@playwright/test';
+
+          const out='/tmp/ferengi-media-enrichment-001';
+          const species=JSON.parse(fs.readFileSync('data/species.json','utf8'));
+          const specimens=JSON.parse(fs.readFileSync('data/specimens.json','utf8'));
+          const taxon=species.taxa.find(row=>row.key==='species:star-trek:ferengi');
+          if(!taxon) throw new Error('Ferengi taxon missing');
+          const byId=new Map(specimens.map(row=>[row.id,row]));
+          const rows=taxon.wall_records.map(row=>byId.get(row.id)).filter(Boolean);
+          const missing=rows.filter(row=>!row.still||!row.portrait).map(row=>({
+            id:row.id,
+            character:row.character,
+            actor:row.actor,
+            missing_still:!row.still,
+            missing_portrait:!row.portrait
+          }));
+          fs.writeFileSync(path.join(out,'targets.json'),JSON.stringify({
+            version:1,
+            generated_at:new Date().toISOString(),
+            displayed_ferengi_cards:rows.length,
+            cards_with_missing_media:missing.length,
+            missing_still_facets:missing.filter(row=>row.missing_still).length,
+            missing_portrait_facets:missing.filter(row=>row.missing_portrait).length,
+            targets:missing
+          },null,2)+'\n');
+          if(!missing.length) process.exit(0);
+
+          const chunks=[];
+          for(let i=0;i<missing.length;i+=6) chunks.push(missing.slice(i,i+6));
+          for(let index=0;index<chunks.length;index++){
+            const batch=String(index+1).padStart(2,'0');
+            const dir=path.join(out,`batch-${batch}`);
+            const result=spawnSync(process.execPath,['scripts/curate.mjs','gather',...chunks[index].map(row=>row.id)],{
+              cwd:process.cwd(),
+              env:{...process.env,CURATE_DIR:dir},
+              encoding:'utf8',
+              stdio:'pipe',
+              maxBuffer:64*1024*1024
+            });
+            fs.writeFileSync(path.join(out,`batch-${batch}.log`),(result.stdout||'')+(result.stderr||''));
+            if(result.status!==0) throw new Error(`curate gather batch ${batch} failed with ${result.status}`);
+          }
+
+          const browser=await chromium.launch({headless:true});
+          try{
+            for(let index=0;index<chunks.length;index++){
+              const batch=String(index+1).padStart(2,'0');
+              const dir=path.join(out,`batch-${batch}`);
+              const page=await browser.newPage({viewport:{width:1700,height:1000},deviceScaleFactor:1});
+              await page.goto(pathToFileURL(path.join(dir,'sheet.html')).href,{waitUntil:'load'});
+              await page.screenshot({path:path.join(out,`batch-${batch}.png`),fullPage:true});
+              await page.close();
+            }
+          } finally {
+            await browser.close();
+          }
+
+          const manifests=[];
+          for(let index=0;index<chunks.length;index++){
+            const batch=String(index+1).padStart(2,'0');
+            const dir=path.join(out,`batch-${batch}`);
+            const manifest=JSON.parse(fs.readFileSync(path.join(dir,'manifest.json'),'utf8'));
+            manifests.push(...manifest.map(row=>({...row,batch})));
+          }
+          const summary={
+            version:1,
+            targets:missing.length,
+            batches:chunks.length,
+            still_candidates:manifests.reduce((sum,row)=>sum+row.still.length,0),
+            portrait_candidates:manifests.reduce((sum,row)=>sum+row.portrait.length,0),
+            zero_still_candidates:manifests.filter(row=>row.still.length===0).map(row=>row.id),
+            zero_portrait_candidates:manifests.filter(row=>row.portrait.length===0).map(row=>row.id),
+            cards:manifests.map(row=>({id:row.id,character:row.character,actor:row.actor,batch:row.batch,still_candidates:row.still.length,portrait_candidates:row.portrait.length}))
+          };
+          fs.writeFileSync(path.join(out,'candidate-summary.json'),JSON.stringify(summary,null,2)+'\n');
+          NODE
+      - name: Upload exact candidates and rendered review sheets
+        uses: actions/upload-artifact@v4
+        with:
+          name: ferengi-media-enrichment-001-${{ github.run_id }}
+          path: /tmp/ferengi-media-enrichment-001
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
