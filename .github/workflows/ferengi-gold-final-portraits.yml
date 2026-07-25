@@ -1,0 +1,176 @@
+name: ferengi-gold-final-portraits
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/FERENGI-GOLD-FINAL-PORTRAITS.json"
+      - ".github/workflows/ferengi-gold-final-portraits.yml"
+      - "scripts/ferengi-gold-final-portraits.mjs"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: ferengi-gold-final-portraits-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  close:
+    if: github.event.pull_request.head.ref == 'agent/star-trek-ferengi-gold'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-ferengi-gold
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Verify the exact active species and residual boundary
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-final-portraits"
+          mkdir -p "$root"
+          node scripts/star-trek-species-gold.mjs validate | tee "$root/species-before.log"
+          node --input-type=module - <<'NODE' | tee "$root/boundary.log"
+          import fs from 'node:fs';
+          const control=JSON.parse(fs.readFileSync('.github/FERENGI-GOLD-FINAL-PORTRAITS.json','utf8'));
+          const plan=JSON.parse(fs.readFileSync('data/STAR-TREK-GOLD.json','utf8'));
+          const species=JSON.parse(fs.readFileSync('data/species.json','utf8'));
+          const specimens=JSON.parse(fs.readFileSync('data/specimens.json','utf8'));
+          const media=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8'));
+          const active=plan.sequence.filter(row=>row.state==='active'||row.state==='candidate-gold');
+          if(active.length!==1||active[0].id!=='ferengi')throw new Error('Ferengi is not the sole active species');
+          if(control.targets.reduce((sum,row)=>sum+row.cards.length,0)!==10)throw new Error('control does not cover ten cards');
+          const taxon=species.taxa.find(row=>row.key==='species:star-trek:ferengi');
+          const ids=[...new Set(taxon.wall_records.map(row=>row.id))];
+          const byId=new Map(specimens.map(row=>[row.id,row]));
+          const audit=new Map(media.items.map(row=>[`${row.wall_id}|${row.side}`,row]));
+          const residual=ids.filter(id=>!byId.get(id)?.portrait?.src||audit.get(`${id}|portrait`)?.status!=='verified');
+          const expected=control.targets.flatMap(row=>row.cards).sort();
+          if(JSON.stringify(residual.sort())!==JSON.stringify(expected))throw new Error(`residual drift: ${residual.join(', ')}`);
+          console.log(`PASS — exact residual is ${residual.length} portrait cards; all character stills remain verified`);
+          NODE
+      - name: Download the retained eight-lane evidence orbit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-final-portraits"
+          orbit="$root/orbit"
+          mkdir -p "$orbit"
+          run_id=$(jq -r .source_workflow_run .github/FERENGI-GOLD-FINAL-PORTRAITS.json)
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$root/artifacts.json"
+          count=$(jq '.artifacts|length' "$root/artifacts.json")
+          test "$count" -ge 8
+          jq -r '.artifacts[]|[.id,.name]|@tsv' "$root/artifacts.json" | while IFS=$'\t' read -r id name; do
+            mkdir -p "$orbit/$name"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > "$root/$name.zip"
+            unzip -q -o "$root/$name.zip" -d "$orbit/$name"
+          done
+          find "$orbit" -type f -print | sort > "$root/orbit-files.txt"
+      - name: Select and apply ten distinct exact-page portraits
+        env:
+          FERENGI_ORBIT_ROOT: ${{ runner.temp }}/ferengi-gold-final-portraits/orbit
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-final-portraits"
+          node scripts/ferengi-gold-final-portraits.mjs select | tee "$root/select.log"
+          node scripts/ferengi-gold-final-portraits.mjs apply | tee "$root/apply.log"
+      - name: Stage bytes, rebuild projections and enforce exact-subject review
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-final-portraits"
+          ids=(UC-1295 UC-1296 UC-1297 UC-1298 UC-1304 UC-1305 UC-1306 UC-1310 UC-1311 UC-1313)
+          node scripts/media-stage.mjs --ids "${ids[@]}" | tee "$root/media-stage.log"
+          node scripts/credits.mjs | tee "$root/credits-1.log"
+          node scripts/shard.mjs | tee "$root/shard-1.log"
+          node scripts/build-contract.mjs | tee "$root/contract-1.log"
+          node scripts/media-audit.mjs sync | tee "$root/media-sync.log"
+          node scripts/ferengi-gold-final-portraits.mjs resolution | tee "$root/resolution-build.log"
+          node scripts/media-audit.mjs resolve --input data/review/ferengi-gold/final-portraits-media-resolution-2026-07-25.json | tee "$root/media-resolve.log"
+          node scripts/credits.mjs | tee "$root/credits-2.log"
+          node scripts/shard.mjs | tee "$root/shard-2.log"
+          node scripts/build-contract.mjs | tee "$root/contract-2.log"
+          node scripts/ds9-census.mjs --project-only | tee "$root/ds9-census.log"
+          node scripts/ds9-graph.mjs --project-only | tee "$root/ds9-graph.log"
+          node scripts/ds9-eligibility-queue.mjs | tee "$root/ds9-eligibility.log"
+          node scripts/ds9-maker-queue.mjs | tee "$root/ds9-maker.log"
+          node scripts/build-record-pages.mjs | tee "$root/record-pages.log"
+          node scripts/ferengi-gold-final-portraits.mjs validate | tee "$root/validate-final-portraits.log"
+          node scripts/media-audit.mjs validate | tee "$root/validate-media.log"
+          node scripts/star-trek-species-gold.mjs validate | tee "$root/species-after.log"
+          node --input-type=module - <<'NODE' | tee "$root/gold-ready.log"
+          import fs from 'node:fs';
+          const plan=JSON.parse(fs.readFileSync('data/STAR-TREK-GOLD.json','utf8'));
+          const species=JSON.parse(fs.readFileSync('data/species.json','utf8'));
+          const specimens=JSON.parse(fs.readFileSync('data/specimens.json','utf8'));
+          const media=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8'));
+          const taxon=species.taxa.find(row=>row.key==='species:star-trek:ferengi');
+          const entry=plan.sequence.find(row=>row.id==='ferengi');
+          const ids=[...new Set(taxon.wall_records.map(row=>row.id))];
+          const byId=new Map(specimens.map(row=>[row.id,row]));
+          const audit=new Map(media.items.map(row=>[`${row.wall_id}|${row.side}`,row]));
+          const bad=[];
+          for(const id of ids)for(const side of ['still','portrait'])if(!byId.get(id)?.[side]?.src||audit.get(`${id}|${side}`)?.status!=='verified')bad.push(`${id}:${side}`);
+          const eligible=Math.max(0,Number(taxon.counts.unfiled_named_credits||0)-Number(entry.reviewed_category_exclusions||0));
+          if(bad.length||eligible)throw new Error(`Ferengi not gold-ready: eligible=${eligible}; media=${bad.join(',')}`);
+          console.log(`PASS — Ferengi candidate gold: ${ids.length} primary cards, ${ids.length*2} verified facets, zero eligible unfiled credits`);
+          NODE
+      - name: Build the permanent candidate and remove every completed temporary operator
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-final-portraits"
+          git config user.name 'undercast-media-review'
+          git config user.email 'undercast-media-review@users.noreply.github.com'
+          rm -f \
+            tmp-test.txt \
+            .github/FERENGI-GOLD-FINAL-PORTRAITS.json \
+            .github/workflows/ferengi-gold-final-portraits.yml \
+            scripts/ferengi-gold-final-portraits.mjs \
+            .github/FERENGI-GOLD-PORTRAIT-DEEP-001.json \
+            .github/FERENGI-GOLD-RESIDUAL-PORTRAIT-ORBIT-005.json \
+            .github/workflows/ferengi-gold-residual-portrait-orbit-005.yml \
+            scripts/ferengi-gold-residual-portrait-orbit-005.mjs \
+            scripts/ferengi-gold-portrait-gather.mjs \
+            .github/FERENGI-GOLD-GATHER.json \
+            .github/workflows/ferengi-gold-gather.yml \
+            .github/FERENGI-GOLD-TARGETED-STILLS.json \
+            .github/workflows/ferengi-gold-targeted-stills.yml \
+            scripts/direct-media-candidates.mjs \
+            .github/workflows/ferengi-gold-integrity-audit.yml \
+            scripts/ferengi-gold-integrity-audit.mjs
+          git add -A
+          git diff --cached --check
+          git commit -m 'Ferengi gold: close every performer portrait obligation'
+          git rev-parse HEAD | tee "$root/candidate-head.txt"
+      - name: Install Chromium for the permanent-head gate
+        run: npx playwright install --with-deps chromium
+      - name: Run the complete permanent-head gate
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-final-portraits"
+          npm run gate 2>&1 | tee "$root/gate.log"
+          git status --short | tee "$root/status.txt"
+          test -z "$(git status --porcelain)"
+      - name: Publish the exact gated candidate
+        run: git push origin HEAD:agent/star-trek-ferengi-gold
+      - name: Retain selection, application, review and gate receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ferengi-gold-final-portraits-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/ferengi-gold-final-portraits
+            data/review/ferengi-gold/final-portrait-selection-2026-07-25.json
+            data/review/ferengi-gold/final-portraits-applied-2026-07-25.json
+            data/review/ferengi-gold/final-portraits-media-resolution-2026-07-25.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
