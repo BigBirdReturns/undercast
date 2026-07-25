@@ -573,13 +573,16 @@ test("Ferengi URL preserves the makers anchor and shows only exact displayed rol
     const [species,specimens]=await Promise.all([fetch("./data/species.json").then(response=>response.json()),fetch("./data/specimens.json").then(response=>response.json())]);
     const taxon=species.taxa.find(row=>row.key==="species:star-trek:ferengi");
     const byId=new Map(specimens.map(row=>[row.id,row]));
-    return {counts:taxon.counts,names:taxon.wall_records.map(row=>byId.get(row.id).character)};
+    return {counts:taxon.counts,ids:taxon.wall_records.map(row=>row.id),names:taxon.wall_records.map(row=>byId.get(row.id).character)};
   });
   await expect(page.locator("#result-status")).toHaveText(`${expected.counts.primary_card_records} specimens match; ${expected.counts.primary_card_records} shown.`);
   const names=await page.locator(".charname").allTextContents();
   expect(names).toHaveLength(expected.names.length);
-  expect(new Set(names).size).toBe(names.length);
   expect([...names].sort()).toEqual([...expected.names].sort());
+  const ids=await page.locator("article.cast").evaluateAll(nodes=>nodes.map(node=>node.dataset.uid));
+  expect(ids).toHaveLength(expected.ids.length);
+  expect(new Set(ids).size).toBe(ids.length);
+  expect([...ids].sort()).toEqual([...expected.ids].sort());
   expect(names).toContain("Zek");
   expect(names).toContain("Arridor");
   expect(names).not.toContain("Weyoun");
