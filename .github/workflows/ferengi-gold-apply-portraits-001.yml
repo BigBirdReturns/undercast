@@ -1,0 +1,113 @@
+name: ferengi-gold-apply-portraits-001
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/FERENGI-GOLD-PORTRAIT-TRANCHE-001.json"
+      - ".github/workflows/ferengi-gold-apply-portraits-001.yml"
+      - "scripts/ferengi-gold-apply-portraits-001.mjs"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ferengi-gold-apply-portraits-001-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/star-trek-ferengi-gold'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-ferengi-gold
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Verify the active Ferengi lock and nine exact reviewed portraits
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-apply-portraits-001"
+          mkdir -p "$root"
+          node scripts/star-trek-species-gold.mjs validate | tee "$root/species-lock-before.log"
+          node --input-type=module - <<'NODE' | tee "$root/authorization.log"
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/FERENGI-GOLD-PORTRAIT-TRANCHE-001.json','utf8'));
+          if(row.scope!=='star-trek'||row.species!=='ferengi'||row.reviewed_role!=='second-desk')throw new Error('portrait tranche scope or review authority drift');
+          if(!Array.isArray(row.entries)||row.entries.length!==9)throw new Error('portrait tranche must contain exactly nine entries');
+          const ids=row.entries.map(entry=>entry.id);
+          if(new Set(ids).size!==ids.length)throw new Error('portrait tranche contains duplicate card ids');
+          for(const entry of row.entries){
+            if(!/^https:\/\//.test(entry.source_page)||!/^https:\/\//.test(entry.asset_url))throw new Error(`${entry.id} lacks HTTPS source or asset URL`);
+            if(!/^[0-9a-f]{64}$/.test(entry.sha256)||!Number.isInteger(entry.bytes)||entry.bytes<700)throw new Error(`${entry.id} lacks exact reviewed bytes`);
+          }
+          console.log(`PASS — exact reviewed portrait tranche covers ${ids.join(', ')}`);
+          NODE
+      - name: Apply the exact nine reviewed portrait derivatives
+        env:
+          CONTACT: bigbirdreturns@proton.me
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-apply-portraits-001"
+          node scripts/ferengi-gold-apply-portraits-001.mjs apply 2>&1 | tee "$root/apply.log"
+      - name: Stage bytes, rebuild projections and enforce exact-subject rulings
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-apply-portraits-001"
+          node scripts/media-stage.mjs --ids UC-677 UC-1291 UC-1294 UC-1299 UC-1302 UC-1308 UC-1309 UC-1312 UC-1314 | tee "$root/media-stage.log"
+          node scripts/credits.mjs | tee "$root/credits-1.log"
+          node scripts/shard.mjs | tee "$root/shard-1.log"
+          node scripts/build-contract.mjs | tee "$root/contract-1.log"
+          node scripts/media-audit.mjs sync | tee "$root/media-sync.log"
+          node scripts/ferengi-gold-apply-portraits-001.mjs resolution | tee "$root/resolution-build.log"
+          node scripts/media-audit.mjs resolve --input data/review/ferengi-gold/portrait-tranche-001-media-resolution-2026-07-25.json | tee "$root/media-resolve.log"
+          node scripts/credits.mjs | tee "$root/credits-2.log"
+          node scripts/shard.mjs | tee "$root/shard-2.log"
+          node scripts/build-contract.mjs | tee "$root/contract-2.log"
+          node scripts/ds9-census.mjs --project-only | tee "$root/ds9-census.log"
+          node scripts/ds9-graph.mjs --project-only | tee "$root/ds9-graph.log"
+          node scripts/ds9-eligibility-queue.mjs | tee "$root/ds9-eligibility.log"
+          node scripts/ds9-maker-queue.mjs | tee "$root/ds9-maker.log"
+          node scripts/build-record-pages.mjs | tee "$root/record-pages.log"
+          node scripts/ferengi-gold-apply-portraits-001.mjs validate | tee "$root/validate-portraits.log"
+          node scripts/media-audit.mjs validate | tee "$root/validate-media.log"
+          node scripts/star-trek-species-gold.mjs validate | tee "$root/species-lock-after.log"
+      - name: Build the permanent candidate and remove the completed tranche operator
+        run: |
+          set -euo pipefail
+          git config user.name 'undercast-media-review'
+          git config user.email 'undercast-media-review@users.noreply.github.com'
+          rm -f .github/FERENGI-GOLD-PORTRAIT-TRANCHE-001.json .github/workflows/ferengi-gold-apply-portraits-001.yml scripts/ferengi-gold-apply-portraits-001.mjs
+          git add -A
+          git diff --cached --check
+          git commit -m 'Ferengi gold: apply nine reviewed performer portraits'
+      - name: Install Chromium for the permanent-head gate
+        run: npx playwright install --with-deps chromium
+      - name: Run the complete permanent-head gate
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ferengi-gold-apply-portraits-001"
+          npm run gate 2>&1 | tee "$root/gate.log"
+          git status --short | tee "$root/status.txt"
+          test -z "$(git status --porcelain)"
+      - name: Publish the exact gated candidate
+        run: git push origin HEAD:agent/star-trek-ferengi-gold
+      - name: Retain exact apply, review and gate receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ferengi-gold-apply-portraits-001-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/ferengi-gold-apply-portraits-001
+            data/review/ferengi-gold/portrait-tranche-001-applied-2026-07-25.json
+            data/review/ferengi-gold/portrait-tranche-001-media-resolution-2026-07-25.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
