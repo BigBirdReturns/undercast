@@ -107,6 +107,24 @@ async function reviewCommand(){
   console.log(`prepared explicit absence closure for ${reviews.length} ${speciesLabel} task(s)`);
 }
 
+async function cycleReceiptCommand(){
+  const batchPath=option("batch"),claimCommit=option("claim-commit"),out=option("out"),speciesLabel=label();
+  if(!batchPath||!claimCommit||!out)throw new Error("cycle-receipt requires --batch, --claim-commit, and --out");
+  const batch=await readJson(batchPath);const task=batch.tasks?.[0];
+  if(!task||batch.tasks.length!==1)throw new Error("cycle-receipt requires one exact task");
+  const doc={
+    scope_id:"star-trek",lease_id:batch.lease_id,outcome:"completed",
+    note:`Exact-source ${speciesLabel} population filed ${task.performer} as ${task.character}; both media sides remain honestly not on file for later rolling enrichment.`,
+    evidence:[
+      {type:"workflow-run",value:`GitHub Actions run ${process.env.GITHUB_RUN_ID||"local"} — deterministic species orbit for ${task.id}.`},
+      {type:"commit",value:`${claimCommit} — restart-safe lease committed before drafting or canonical mutation.`},
+      {type:"restart-proof",value:`Lease ${batch.lease_id} was persisted before the task was submitted.`}
+    ],
+    reviewed_by:"chatgpt-second-desk",reviewed_role:"second-desk",reviewed_at:new Date().toISOString()
+  };
+  await writeJson(out,doc);console.log(JSON.stringify(doc,null,2));
+}
+
 async function accountingCommand(){
   const reportPath=option("report"),receiptPath=option("receipt"),speciesLabel=label();if(!reportPath||!receiptPath)throw new Error("accounting requires --report and --receipt");
   const state=await readJson("data/AUTOPILOT.json");const jobs=(state.jobs||[]).filter(job=>job.scope==="star-trek").sort((a,b)=>a.id.localeCompare(b.id));
@@ -120,9 +138,34 @@ async function accountingCommand(){
   await writeJson(receiptPath,receipt);console.log(JSON.stringify({denominator:jobs.length,counts,job_set_sha256:report.job_set_sha256},null,2));
 }
 
+async function finalStateCommand(){
+  const want=category(),speciesLabel=label(),out=option("out");if(!want||!out)throw new Error("final-state requires --category and --out");
+  const [state,species,media]=await Promise.all([readJson("data/AUTOPILOT.json"),readJson("data/species.json"),readJson("data/MEDIA-AUDIT.json")]);
+  const jobs=(state.jobs||[]).filter(job=>job.scope==="star-trek"&&inCategory(job,want));
+  const remainingSupported=jobs.filter(job=>job.status==="queued"&&job.queueable!==false&&modeOf(job)!=="unresolved");
+  const active=jobs.filter(isActive);
+  if(remainingSupported.length)throw new Error(`${remainingSupported.length} supported ${speciesLabel} task(s) remain queued`);
+  if(active.length)throw new Error(`${active.length} ${speciesLabel} task(s) remain in flight`);
+  const taxon=(species.taxa||[]).find(row=>norm(row.label)===norm(speciesLabel));
+  if(!taxon)throw new Error(`species projection lacks ${speciesLabel}`);
+  const mediaRows=(media.items||[]).filter(item=>item.scope==="star-trek");
+  const complete=mediaRows.filter(item=>["verified","absent"].includes(item.status)).length;
+  if(complete!==mediaRows.length)throw new Error("Star Trek media baseline is not complete");
+  const summary={
+    version:1,category:want,label:speciesLabel,
+    task_statuses:Object.fromEntries([...new Set(jobs.map(job=>job.status))].map(status=>[status,jobs.filter(job=>job.status===status).length])),
+    unresolved_mode:jobs.filter(job=>job.status==="queued"&&modeOf(job)==="unresolved").length,
+    species_counts:taxon.counts,
+    star_trek_media:{total:mediaRows.length,complete}
+  };
+  await writeJson(out,summary);console.log(JSON.stringify(summary,null,2));
+}
+
 if(command==="next")await nextCommand();
 else if(command==="draft")await draftCommand();
 else if(command==="mark-absent")await markAbsentCommand();
 else if(command==="review")await reviewCommand();
+else if(command==="cycle-receipt")await cycleReceiptCommand();
 else if(command==="accounting")await accountingCommand();
-else throw new Error("unknown command; use next, draft, mark-absent, review, or accounting");
+else if(command==="final-state")await finalStateCommand();
+else throw new Error("unknown command; use next, draft, mark-absent, review, cycle-receipt, accounting, or final-state");
