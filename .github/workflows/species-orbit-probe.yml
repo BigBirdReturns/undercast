@@ -1,0 +1,54 @@
+name: species-orbit-probe
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/SPECIES-ORBIT-PROBE.json"
+      - ".github/workflows/species-orbit-probe.yml"
+      - "scripts/species-fill.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: species-orbit-probe
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    if: github.event.pull_request.head.ref == 'agent/site-gold-map-001'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/site-gold-map-001
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Probe exact category and supported task selection
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/species-orbit-probe
+          category=$(node -e 'console.log(require("./.github/SPECIES-ORBIT-PROBE.json").category)')
+          CATEGORY="$category" node --input-type=module - <<'NODE' | tee /tmp/species-orbit-probe/category.json
+          import fs from 'node:fs';
+          const category=process.env.CATEGORY;
+          const norm=value=>String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[’‘]/g,"'").replace(/[^a-zA-Z0-9']+/g,' ').trim().toLowerCase();
+          const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const rows=state.jobs.filter(job=>(job.categories||[]).some(value=>norm(value)===norm(category)));
+          console.log(JSON.stringify({category,total:rows.length,statuses:Object.fromEntries([...new Set(rows.map(row=>row.status))].map(status=>[status,rows.filter(row=>row.status===status).length])),modes:Object.fromEntries([...new Set(rows.flatMap(row=>row.performance_modes||['<none>']))].map(mode=>[mode,rows.filter(row=>(row.performance_modes||[]).includes(mode)).length])),preview:rows.slice(0,20).map(row=>({id:row.id,performer:row.performer,character:row.character,status:row.status,queueable:row.queueable,performance_modes:row.performance_modes,required_capabilities:row.required_capabilities,categories:row.categories}))},null,2));
+          NODE
+          set +e
+          node scripts/species-fill.mjs next --category "$category" --label "$category" --out /tmp/species-orbit-probe/next.json 2>&1 | tee /tmp/species-orbit-probe/next.log
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "$code" | tee /tmp/species-orbit-probe/exit-code.txt
+          test "$code" -eq 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: species-orbit-probe-${{ github.run_id }}
+          path: /tmp/species-orbit-probe
+          if-no-files-found: warn
+          retention-days: 30
