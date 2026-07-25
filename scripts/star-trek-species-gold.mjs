@@ -51,15 +51,16 @@ function speciesStatus(entry){
   }
   const named=Number(taxon.counts?.named_credits||0);
   const unfiled=Number(taxon.counts?.unfiled_named_credits||0);
-  const exclusions=Number(entry.reviewed_category_exclusions||0);
-  const eligibleUnfiled=Math.max(0,unfiled-exclusions);
+  const exclusions=Number(taxon.counts?.excluded_named_credits||0);
+  const plannedExclusions=Number(entry.reviewed_category_exclusions||0);
+  const eligibleUnfiled=unfiled;
   const missingStill=targets.filter(row=>row.missing_still).length;
   const missingPortrait=targets.filter(row=>row.missing_portrait).length;
   const goldReady=!missingRecords.length&&eligibleUnfiled===0&&missingStill===0&&missingPortrait===0&&missingAuditRows===0&&nonVerifiedFacets===0;
   return {
     id:entry.id,label:entry.label,source_category:entry.source_category,state:entry.state,
     named_credits:named,filed_role_credits:Number(taxon.counts?.filed_role_credits||0),
-    unfiled_named_credits:unfiled,reviewed_category_exclusions:exclusions,eligible_unfiled_named_credits:eligibleUnfiled,
+    unfiled_named_credits:unfiled,reviewed_category_exclusions:exclusions,planned_category_exclusions:plannedExclusions,eligible_unfiled_named_credits:eligibleUnfiled,
     primary_card_records:Number(taxon.counts?.primary_card_records||0),wall_records:ids.length,
     missing_still:missingStill,missing_portrait:missingPortrait,
     audited_facets:verifiedFacets+nonVerifiedFacets,verified_facets:verifiedFacets,
@@ -92,6 +93,7 @@ function validatePlan(statuses){
   }
   for(const row of statuses){
     if(row.error)errors.push(`${row.entry?.id||"unknown"}: ${row.error}`);
+    if(row.reviewed_category_exclusions!==row.planned_category_exclusions)errors.push(`${row.label} exclusion count ${row.reviewed_category_exclusions} does not match planned ${row.planned_category_exclusions}`);
     if(row.state==="gold"){
       if(!row.gold_ready)errors.push(`${row.label} is marked gold but current corpus/media state is not gold-ready`);
       if(!row.receipt?.merged_main_sha||!row.receipt?.live_verified_at)errors.push(`${row.label} is marked gold without merged-main and live-deployment receipt`);

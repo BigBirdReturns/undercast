@@ -27,7 +27,7 @@ export function validateSpeciesProjection({projection,index,specimens}){
       if(!primaryKeys.has(key))errors.push(`${taxon.label} ${record.id} wall credit is not primary-card: ${credit.character} / ${credit.performer}`);
       if(!byId.has(record.id))errors.push(`${taxon.label} points at missing ${record.id}`);
     }
-    for(const row of taxon.credits||[])if(!["primary-card","additional-performance","unfiled"].includes(row.status))errors.push(`${taxon.label} has unknown credit status ${row.status}`);
+    for(const row of taxon.credits||[])if(!["primary-card","additional-performance","unfiled","excluded"].includes(row.status))errors.push(`${taxon.label} has unknown credit status ${row.status}`);
   }
   return errors;
 }

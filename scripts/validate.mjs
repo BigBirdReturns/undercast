@@ -524,11 +524,15 @@ if (["data/CENSUS.json", "data/CENSUS-COVERAGE.json", "data/CENSUS-GAPS.json", "
 // Sourced species navigation may only contain exact filed performer-role
 // credits from its declared census category. Unknown performer pages remain in
 // their own list and never become a wall classification.
-if (existsSync("data/species.json") && existsSync("data/CENSUS-COVERAGE.json") && existsSync("data/CENSUS-UNRESOLVED.json")) {
+if (existsSync("data/species.json") && existsSync("data/CENSUS-COVERAGE.json") && existsSync("data/CENSUS-UNRESOLVED.json") && existsSync("data/CENSUS-EXCLUSIONS.json")) {
   mark("species.navigation_integrity");
   const projection = load("data/species.json");
   const coverage = load("data/CENSUS-COVERAGE.json");
   const unresolved = load("data/CENSUS-UNRESOLVED.json");
+  const exclusionsEnvelope = load("data/CENSUS-EXCLUSIONS.json");
+  const exclusions = Array.isArray(exclusionsEnvelope) ? exclusionsEnvelope : (exclusionsEnvelope.records || []);
+  const exclusionKey = (row) => [row.franchise, row.category, row.character, row.performer].map(normalizeCensusKey).join("|");
+  const excludedKeys = new Set(exclusions.filter((row) => row.performer).map(exclusionKey));
   const index = existsSync("data/index.json") ? load("data/index.json") : [];
   const indexById = new Map(index.map((entry) => [entry.id, entry]));
   for (const taxon of projection.taxa || []) {
@@ -556,17 +560,18 @@ if (existsSync("data/species.json") && existsSync("data/CENSUS-COVERAGE.json") &
     const primaryKeys = new Set(wallRecords.flatMap((record) => (record.credits || []).map(dispositionKey)));
     const ledger = taxon.credits || [];
     if (ledger.length !== credits.length) fail("species.navigation_integrity", `${taxon.label} complete credit ledger count drifted`);
-    const dispositionCounts = { "primary-card": 0, "additional-performance": 0, unfiled: 0 };
+    const dispositionCounts = { "primary-card": 0, "additional-performance": 0, unfiled: 0, excluded: 0 };
     for (const row of ledger) {
       const exact = credits.find((credit) => credit.character === row.character && credit.performer === row.performer && credit.performance_mode === row.performance_mode && credit.source === row.source);
       if (!exact) { fail("species.navigation_integrity", `${taxon.label} ledger carries a non-source credit ${row.character} / ${row.performer}`); continue; }
-      const expectedStatus = !exact.role_on_wall ? "unfiled" : primaryKeys.has(dispositionKey(row)) ? "primary-card" : "additional-performance";
+      const excluded = excludedKeys.has(exclusionKey({ franchise: taxon.franchise, category: taxon.source_category, character: row.character, performer: row.performer }));
+      const expectedStatus = excluded ? "excluded" : !exact.role_on_wall ? "unfiled" : primaryKeys.has(dispositionKey(row)) ? "primary-card" : "additional-performance";
       if (row.status !== expectedStatus) fail("species.navigation_integrity", `${taxon.label} ${row.character} / ${row.performer} is ${row.status}; expected ${expectedStatus}`);
       const expectedWallIds = [...(exact.wall_ids || [])].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
       if (JSON.stringify(row.wall_ids || []) !== JSON.stringify(expectedWallIds)) fail("species.navigation_integrity", `${taxon.label} ${row.character} / ${row.performer} wall binding drifted`);
       if (row.status in dispositionCounts) dispositionCounts[row.status]++;
     }
-    if (taxon.counts?.primary_card_credits !== dispositionCounts["primary-card"] || taxon.counts?.additional_performance_credits !== dispositionCounts["additional-performance"] || taxon.counts?.unfiled_named_credits !== dispositionCounts.unfiled)
+    if (taxon.counts?.primary_card_credits !== dispositionCounts["primary-card"] || taxon.counts?.additional_performance_credits !== dispositionCounts["additional-performance"] || taxon.counts?.unfiled_named_credits !== dispositionCounts.unfiled || taxon.counts?.excluded_named_credits !== dispositionCounts.excluded)
       fail("species.navigation_integrity", `${taxon.label} role disposition counts drifted`);
     for (const record of taxon.records || []) {
       if (!specIds.has(record.id)) fail("species.navigation_integrity", `${taxon.label} points at missing ${record.id}`);
@@ -590,7 +595,7 @@ if (existsSync("data/species.json") && existsSync("data/CENSUS-COVERAGE.json") &
   exactSpeciesAnchor("Klingon", "UC-028", ["Gowron|Robert O'Reilly"]);
   exactSpeciesAnchor("Klingon", "UC-029", ["Martok|J.G. Hertzler"]);
   exactSpeciesAnchor("Klingon", "UC-036", ["Kor|John Colicos"]);
-} else skip("species.navigation_integrity", "species or census projections missing — run node scripts/shard.mjs");
+} else skip("species.navigation_integrity", "species, census, or exclusion projections missing — run node scripts/shard.mjs");
 
 // Census source observations bind the committed snapshot to the exact wiki
 // revisions seen by the networked crawler. Project-only rebuilds preserve this

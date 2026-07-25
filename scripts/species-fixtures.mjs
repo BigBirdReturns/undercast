@@ -16,8 +16,9 @@ assert.equal(taxon.counts.named_credits,taxon.credits.length,"named credit count
 assert.equal(taxon.counts.primary_card_credits,statusCount("primary-card"));
 assert.equal(taxon.counts.additional_performance_credits,statusCount("additional-performance"));
 assert.equal(taxon.counts.unfiled_named_credits,statusCount("unfiled"));
+assert.equal(taxon.counts.excluded_named_credits,statusCount("excluded"));
 assert.equal(
-  taxon.counts.primary_card_credits+taxon.counts.additional_performance_credits+taxon.counts.unfiled_named_credits,
+  taxon.counts.primary_card_credits+taxon.counts.additional_performance_credits+taxon.counts.unfiled_named_credits+taxon.counts.excluded_named_credits,
   taxon.counts.named_credits,
   "every named credit is classified exactly once"
 );
@@ -50,7 +51,7 @@ for(const credit of taxon.credits){
   const source=coverage.find(row=>row.franchise==="Star Trek"&&row.category==="Ferengi"&&normalize(row.performer)===normalize(credit.performer)&&normalize(row.character)===normalize(credit.character));
   assert.ok(source,`${credit.performer} — ${credit.character} remains in exact census coverage`);
   assert.deepEqual([...(source.wall_ids||[])].sort(),[...(credit.wall_ids||[])].sort(),`${credit.performer} — ${credit.character} wall IDs agree across projections`);
-  assert.equal(Boolean(source.role_on_wall),credit.status!=="unfiled",`${credit.performer} — ${credit.character} filing status agrees across projections`);
+  assert.equal(Boolean(source.role_on_wall),["primary-card","additional-performance"].includes(credit.status),`${credit.performer} — ${credit.character} filing status agrees across projections`);
 }
 
-console.log(`PASS — Ferengi ledger is exact and saturation-safe: ${taxon.counts.primary_card_records} cards, ${taxon.counts.unfiled_named_credits} named credits still unfiled`);
+console.log(`PASS — Ferengi ledger is exact and saturation-safe: ${taxon.counts.primary_card_records} cards, ${taxon.counts.unfiled_named_credits} eligible named credits still unfiled, ${taxon.counts.excluded_named_credits} reviewed exclusions`);

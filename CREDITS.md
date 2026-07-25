@@ -264,7 +264,6 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **Henry Gibson** (UC-1307) — Roy Cummings Inc.-Hollywood, Public domain — [source](https://commons.wikimedia.org/wiki/File:Henry_Gibson_1969.JPG)
 - **Eugene Cordero** (UC-1315) — Nuno Media, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Eugene_Cordero,_Aswang_Next_Door_cropped.jpg)
 - **Dave Foley** (UC-1316) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Dave_Foley_Photo_Op_GalaxyCon_Richmond_2023.jpg)
-- **Melissa Villasenor** (UC-1317) — Chairman of the Joint Chiefs of Staff from Washington D.C, United States, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Melissa_Villase%C3%B1or_2024_(cropped).jpg)
 - **Peter Weller** (UC-132) — Florida Supercon, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Peter_Weller_2016.jpg)
 - **Karl Urban** (UC-133) — Kevin Paul, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:Karl_Urban_at_53rd_Saturn_Awards_2026.jpg)
 - **Vaughn Armstrong** (UC-140) — AFroese, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Vaughn_Armstrong.JPG)
@@ -750,7 +749,7 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **720**
+- Free-licensed portraits (attributed above): **719**
 - Character stills (studio-copyright, shown under fan-use; see ledger): **982**
 
 Copyright holders: this is a fan project. See the takedown note in the README —

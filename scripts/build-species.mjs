@@ -4,14 +4,18 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { normalizeCensusKey as normalize } from "./census-key.mjs";
 
-const paths={coverage:"data/CENSUS-COVERAGE.json",unresolved:"data/CENSUS-UNRESOLVED.json",vocabulary:"data/vocabularies/species.json",specimens:"data/specimens.json"};
+const paths={coverage:"data/CENSUS-COVERAGE.json",unresolved:"data/CENSUS-UNRESOLVED.json",vocabulary:"data/vocabularies/species.json",exclusions:"data/CENSUS-EXCLUSIONS.json",specimens:"data/specimens.json"};
 const sha256=value=>createHash("sha256").update(value).digest("hex");
 const read=async path=>{const body=await readFile(path);return {body,json:JSON.parse(body)};};
-const [coverageInput,unresolvedInput,vocabularyInput,specimensInput]=await Promise.all(Object.values(paths).map(read));
+const [coverageInput,unresolvedInput,vocabularyInput,exclusionsInput,specimensInput]=await Promise.all(Object.values(paths).map(read));
 const coverage=coverageInput.json;
 const unresolved=unresolvedInput.json;
 const vocabulary=vocabularyInput.json;
+const exclusionsEnvelope=exclusionsInput.json;
+const exclusions=Array.isArray(exclusionsEnvelope)?exclusionsEnvelope:(exclusionsEnvelope.records||[]);
 const specimens=specimensInput.json;
+const exclusionKey=row=>[row.franchise,row.category,row.character,row.performer].map(value=>normalize(value)).join("|");
+const excludedKeys=new Set(exclusions.filter(row=>row.performer).map(exclusionKey));
 const specimensById=new Map(specimens.map(record=>[record.id,record]));
 const same=(row,taxon)=>row.franchise===taxon.franchise&&row.category===taxon.source_category;
 const route=(base,params)=>base+"?"+new URLSearchParams(params).toString();
@@ -67,8 +71,10 @@ const taxa=vocabulary.taxa.map(taxon=>{
   }
   const creditRows=credits.map(credit=>{
     const key=creditKey(credit);
+    const excluded=excludedKeys.has(exclusionKey({franchise:taxon.franchise,category:taxon.source_category,character:credit.character,performer:credit.performer}));
+    if(excluded&&credit.role_on_wall) throw new Error(`${taxon.key} excluded credit remains mapped to a wall record: ${credit.character} / ${credit.performer}`);
     const wallIds=[...(credit.wall_ids||[])].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
-    const status=!credit.role_on_wall?"unfiled":primaryKeys.has(key)?"primary-card":"additional-performance";
+    const status=excluded?"excluded":!credit.role_on_wall?"unfiled":primaryKeys.has(key)?"primary-card":"additional-performance";
     return {character:credit.character,performer:credit.performer,performance_mode:credit.performance_mode,
       source:credit.source,status,wall_ids:wallIds};
   }).sort((a,b)=>a.character.localeCompare(b.character)||a.performer.localeCompare(b.performer));
@@ -78,16 +84,17 @@ const taxa=vocabulary.taxa.map(taxon=>{
   const primaryCount=creditRows.filter(row=>row.status==="primary-card").length;
   const additionalCount=creditRows.filter(row=>row.status==="additional-performance").length;
   const unfiledCount=creditRows.filter(row=>row.status==="unfiled").length;
-  if(primaryCount+additionalCount+unfiledCount!==credits.length) throw new Error(`${taxon.key} role disposition accounting drift`);
+  const excludedCount=creditRows.filter(row=>row.status==="excluded").length;
+  if(primaryCount+additionalCount+unfiledCount+excludedCount!==credits.length) throw new Error(`${taxon.key} role disposition accounting drift`);
   return {
     ...taxon,
     wall_route:route("index.html",{species:taxon.label}),
     coverage_route:route("coverage.html",{franchise:taxon.franchise,category:taxon.source_category,mode:"physical-any"}),
     counts:{named_credits:credits.length,distinct_performers:new Set(credits.map(row=>row.performer.normalize("NFKC").toLowerCase())).size,
       physical_credits:physical.length,voice_credits:voice.length,unresolved_mode_credits:unresolvedMode.length,
-      unresolved_characters:unknowns.length,filed_role_credits:credits.filter(row=>row.role_on_wall).length,
+      unresolved_characters:unknowns.length,filed_role_credits:creditRows.filter(row=>row.status==="primary-card"||row.status==="additional-performance").length,
       filed_records:filed.length,primary_card_credits:primaryCount,primary_card_records:wallRecords.length,
-      additional_performance_credits:additionalCount,unfiled_named_credits:unfiledCount},
+      additional_performance_credits:additionalCount,unfiled_named_credits:unfiledCount,excluded_named_credits:excludedCount},
     records:filed,
     wall_records:wallRecords,
     credits:creditRows,
@@ -95,9 +102,9 @@ const taxa=vocabulary.taxa.map(taxon=>{
   };
 }).sort((a,b)=>a.franchise.localeCompare(b.franchise)||a.label.localeCompare(b.label));
 
-const sourceInputs=[coverageInput,unresolvedInput,vocabularyInput,specimensInput];
+const sourceInputs=[coverageInput,unresolvedInput,vocabularyInput,exclusionsInput,specimensInput];
 const inputs=Object.fromEntries(Object.keys(paths).map((key,index)=>[key,{path:paths[key],sha256:sha256(sourceInputs[index].body)}]));
 const projection={version:2,schema:"schema/species.schema.json",generated_from:inputs,
-  semantics:"Exact source-category role projection. The wall facet contains only records whose displayed primary role is in the taxon; additional filed performances and unfiled named credits remain visible in the complete role ledger. Counts describe the captured community-wiki scope, not all licensed media.",taxa};
+  semantics:"Exact source-category role projection. The wall facet contains only records whose displayed primary role is in the taxon; additional filed performances, reviewed exclusions and unfiled named credits remain visible in the complete role ledger. Counts describe the captured community-wiki scope, not all licensed media.",taxa};
 await writeFile("data/species.json",JSON.stringify(projection,null,1)+"\n");
 console.log(`built species navigation: ${taxa.map(taxon=>`${taxon.label} ${taxon.counts.primary_card_records} primary cards / ${taxon.counts.named_credits} named credits`).join(", ")}`);
