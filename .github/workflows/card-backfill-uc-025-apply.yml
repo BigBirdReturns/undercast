@@ -1,0 +1,129 @@
+name: card-backfill-uc-025-apply
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-025-APPLY.json"
+      - "scripts/card-backfill-uc-025-apply.mjs"
+      - ".github/workflows/card-backfill-uc-025-apply.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: card-backfill-uc-025-apply-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-002'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-002
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Verify exact reviewed candidate authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-025-APPLY.json','utf8'));
+          if(row.version!==1||row.lane!=='card-backfill'||row.record_id!=='UC-025'||row.actor!=='Javier Botet'||row.side!=='still'||row.reviewed_role!=='second-desk')throw new Error('UC-025 apply authorization drift');
+          if(row.render_artifact?.artifact_id!==8627036627||row.render_artifact?.head_sha!=='aa864ae758e2ed19cccb8b2ceb0517715fa88f27')throw new Error('UC-025 render custody drift');
+          if(row.expected?.candidate_sha256!=='eeaf43fa634215f2a374a710cc03ddd4fde6576006d59fc377b751ee88238d92')throw new Error('UC-025 candidate authorization drift');
+          if(row.expected?.crop_preview_sha256!=='ab661176084e1199553b030ff2cd3aaff7684b75ec7c0cc99e5d7e069a2105fe')throw new Error('UC-025 crop authorization drift');
+          if(row.ruling?.identity!=='expected-subject'||row.ruling?.presentation!=='character-depiction'||row.ruling?.canonical_mutation!==false)throw new Error('UC-025 exact-subject ruling drift');
+          console.log('PASS — exact UC-025 candidate, crop and evidence-only ruling authorized');
+          NODE
+      - name: Retrieve and verify the exact render artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-025-apply"
+          mkdir -p "$root/source"
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8627036627/zip" > "$root/render.zip"
+          echo "5dc06e6b950530c1fd945543d3243dab03568f9bca0366331c9f10e8d883c938  $root/render.zip" | sha256sum -c -
+          unzip -q "$root/render.zip" -d "$root/source"
+          test -f "$root/source/card-backfill-uc-025-render/manifest.json"
+          echo "eeaf43fa634215f2a374a710cc03ddd4fde6576006d59fc377b751ee88238d92  $root/source/card-backfill-uc-025-render/uc-025-still-candidate.jpg" | sha256sum -c -
+          echo "ab661176084e1199553b030ff2cd3aaff7684b75ec7c0cc99e5d7e069a2105fe  $root/source/card-backfill-uc-025-render/card-crop-preview.jpg" | sha256sum -c -
+      - name: Materialize and independently validate the evidence-only packet
+        env:
+          SOURCE_ROOT: ${{ runner.temp }}/card-backfill-uc-025-apply/source/card-backfill-uc-025-render
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-025-apply"
+          node scripts/card-backfill-uc-025-apply.mjs materialize 2>&1 | tee "$root/materialize.log"
+          node scripts/card-backfill-uc-025-apply.mjs validate 2>&1 | tee "$root/validate.log"
+          test ! -e images/uc-025-still.jpg
+          node --input-type=module - <<'NODE' | tee "$root/no-canonical-mutation.log"
+          import fs from 'node:fs';
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(row=>row.id==='UC-025');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(row=>row.id==='UC-025');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(row=>row.wall_id==='UC-025'&&row.side==='still');
+          if(!specimen||specimen.still)throw new Error('UC-025 specimen was canonically mutated');
+          if(!source||source.still)throw new Error('UC-025 source ledger was canonically mutated');
+          if(!audit||audit.status!=='absent')throw new Error('UC-025 audit disposition was canonically mutated');
+          console.log('PASS — UC-025 remains canonically absent; only the reviewed evidence packet was added');
+          NODE
+      - name: Build the permanent evidence commit and retire every temporary operator
+        run: |
+          set -euo pipefail
+          git config user.name 'undercast-card-backfill'
+          git config user.email 'undercast-card-backfill@users.noreply.github.com'
+          rm -f \
+            .github/CARD-BACKFILL-UC-025.json \
+            .github/CARD-BACKFILL-UC-025-RENDER.json \
+            .github/CARD-BACKFILL-UC-025-APPLY.json \
+            .github/workflows/card-backfill-next-selection.yml \
+            .github/workflows/card-backfill-uc-025-gather.yml \
+            .github/workflows/card-backfill-uc-025-render.yml \
+            .github/workflows/card-backfill-uc-025-apply.yml \
+            scripts/card-backfill-next-selection.mjs \
+            scripts/card-backfill-uc-025-gather.mjs \
+            scripts/card-backfill-uc-025-render.mjs \
+            scripts/card-backfill-uc-025-render-from-artifact.mjs \
+            scripts/card-backfill-uc-025-apply.mjs
+          git add -A
+          git diff --cached --check
+          git commit -m 'Card backfill: retain UC-025 reviewed horror triptych'
+          mapfile -t changed < <(git diff --name-only origin/agent/card-backfill-uc-007...HEAD)
+          test "${#changed[@]}" -eq 10
+          for path in "${changed[@]}"; do
+            case "$path" in
+              data/review/card-backfill/UC-025/*) ;;
+              *) echo "unexpected permanent card-lane path: $path" >&2; exit 1 ;;
+            esac
+          done
+          printf '%s\n' "${changed[@]}" | tee "$RUNNER_TEMP/card-backfill-uc-025-apply/permanent-paths.txt"
+      - name: Run the complete canonical gate on the exact permanent candidate
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-025-apply"
+          npm run gate 2>&1 | tee "$root/gate.log"
+          git status --short | tee "$root/status.txt"
+          test -z "$(git status --porcelain)"
+      - name: Publish the exact gated evidence candidate
+        run: git push origin HEAD:agent/card-backfill-next-002
+      - name: Retain materialization, evidence, gate and publication receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-025-apply-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-025-apply
+            data/review/card-backfill/UC-025
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
