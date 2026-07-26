@@ -1,0 +1,98 @@
+name: card-backfill-uc-066-render
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-066-RENDER.json"
+      - "scripts/card-backfill-uc-066-render.mjs"
+      - ".github/workflows/card-backfill-uc-066-render.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: card-backfill-uc-066-render-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-011'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-011
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Install deterministic image renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/magick" -version | head -n 2
+      - name: Verify exact reviewed John Merrick authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-066-RENDER.json','utf8'));
+          if(row.version!==1||row.record_id!=='UC-066'||row.actor!=='John Hurt'||row.side!=='still'||row.reviewed_role!=='second-desk')throw new Error('UC-066 render authorization drift');
+          if(row.face_artifact?.artifact_id!==8636067244||row.face_artifact?.head_sha!=='3c6c453e49a4348d800da64b80c7a9b1f2d65ad0')throw new Error('UC-066 face artifact custody drift');
+          if(row.selection?.sha256!=='7fde809e38fc2c183e708551fdf8637e033ce86b8df1e669ceca717d3afceca5'||row.selection?.source_manifest_sha256!=='92fa1ba17c4ddd4d32895fd6ef1e50a4b861d4ce8b46ff624f6617e9dbf52de6')throw new Error('UC-066 selected source drift');
+          if(row.rejected_visual_duplicates?.length!==4||row.crop?.gravity!=='center'||row.ruling?.crop_ruling!=='pass-center-focus')throw new Error('UC-066 visual-duplicate or crop ruling drift');
+          console.log('PASS — exact source-pinned John Merrick face and centered crop authorized');
+          NODE
+      - name: Retrieve and verify exact face-orbit artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-066-render"
+          mkdir -p "$root/face"
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8636067244/zip" > "$root/face.zip"
+          echo "bc3ecd0e24b1e2f663ff908159f1228bd2f8904397ff293f28e4b3a50388f6ae  $root/face.zip" | sha256sum -c -
+          unzip -q "$root/face.zip" -d "$root/face"
+          test -f "$root/face/card-backfill-uc-066-face/manifest.json"
+          echo "92fa1ba17c4ddd4d32895fd6ef1e50a4b861d4ce8b46ff624f6617e9dbf52de6  $root/face/card-backfill-uc-066-face/manifest.json" | sha256sum -c -
+          echo "7fde809e38fc2c183e708551fdf8637e033ce86b8df1e669ceca717d3afceca5  $root/face/card-backfill-uc-066-face/candidates/04-spooky-isles-spooky-isles.jpg" | sha256sum -c -
+          echo "32423a871eaeb71759db93ac7862333768e7b0b3babb930f4a6a107b51ab84b5  $root/face/card-backfill-uc-066-face/pages/spooky-isles.png" | sha256sum -c -
+      - name: Render exact John Merrick candidate and enforce duplicate boundary
+        env:
+          SOURCE_ROOT: ${{ runner.temp }}/card-backfill-uc-066-render/face/card-backfill-uc-066-face
+          OUT: ${{ runner.temp }}/card-backfill-uc-066-render/output
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-uc-066-render.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-066-render/run.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload exact candidate, source page, review and crop preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-066-render-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-066-render/output
+            ${{ runner.temp }}/card-backfill-uc-066-render/run.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
