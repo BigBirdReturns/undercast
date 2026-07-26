@@ -1,0 +1,90 @@
+name: card-backfill-uc-040-gather
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-040.json"
+      - "scripts/card-backfill-uc-040-gather.mjs"
+      - ".github/workflows/card-backfill-uc-040-gather.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: card-backfill-uc-040-gather-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gather:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-003'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-003
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical and browser runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Install deterministic review-sheet renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/magick" -version | head -n 2
+          montage -version | head -n 2
+      - name: Verify exact UC-040 audit and portrait boundary
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const control=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-040.json','utf8'));
+          const specimens=JSON.parse(fs.readFileSync('data/specimens.json','utf8'));
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8'));
+          const record=specimens.find(row=>row.id==='UC-040');
+          const item=(audit.items||[]).find(row=>row.id==='ma_f83566bc6ebfab76453a4d3c');
+          if(control.version!==1||control.record_id!=='UC-040'||control.actor!=='Tim Choate'||control.side!=='portrait')throw new Error('UC-040 control drift');
+          if(!record||record.actor!=='Tim Choate'||record.character!=='Zathras'||record.portrait)throw new Error('UC-040 canonical portrait boundary changed');
+          if(!item||item.wall_id!=='UC-040'||item.side!=='portrait'||item.status!=='absent'||item.expected_subject!=='Tim Choate'||item.asset)throw new Error('UC-040 audit boundary changed');
+          if(control.sources?.length!==4)throw new Error('UC-040 orbit must retain four exact-name source lanes');
+          console.log('PASS — UC-040 remains a source-declared Tim Choate portrait absence');
+          NODE
+      - name: Gather, hash and build the exact portrait review sheet
+        env:
+          OUT: ${{ runner.temp }}/card-backfill-uc-040
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-uc-040-gather.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-040.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload exact portrait candidates, pages, hashes and contact sheet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-040-gather-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-040
+            ${{ runner.temp }}/card-backfill-uc-040.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
