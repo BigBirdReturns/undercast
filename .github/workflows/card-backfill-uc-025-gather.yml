@@ -64,7 +64,27 @@ jobs:
           const item=(audit.items||[]).find(row=>row.wall_id==='UC-025'&&row.side==='still');
           if(!item||item.status!=='absent'||item.expected_subject!=='Mama, the Crooked Man & others')throw new Error('UC-025 audit boundary changed');
           if(control.roles?.length!==3)throw new Error('UC-025 triptych must retain exactly three source roles');
-          console.log('PASS — UC-025 remains an exact source-declared still absence');
+          for(const role of control.roles){
+            const url=new URL(role.media_page);
+            if(url.hostname!=='www.imdb.com'||!/^\/title\/tt\d+\/mediaviewer\/rm\d+\/?$/.test(url.pathname))throw new Error(`${role.key} is not bound to one exact IMDb media id`);
+          }
+          console.log('PASS — UC-025 remains an exact source-declared still absence with three pinned media IDs');
+          NODE
+      - name: Build pinned-media runtime
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const sourcePath='scripts/card-backfill-uc-025-gather.mjs';
+          const runtimePath='scripts/.card-backfill-uc-025-gather-runtime.mjs';
+          let text=fs.readFileSync(sourcePath,'utf8');
+          const before=`    assert(mediaText.includes(norm('Javier Botet')) || norm(mediaHtml).includes(norm('Javier Botet')), \`${'${role.key}'} media page does not identify Javier Botet\`);\n    assert(mediaText.includes(norm(role.production)) || norm(mediaHtml).includes(norm(role.production)), \`${'${role.key}'} media page does not identify ${'${role.production}'}\`);`;
+          const after=`    const pinnedMediaUrl = new URL(role.media_page);\n    assert(pinnedMediaUrl.hostname === 'www.imdb.com' && /^\\/title\\/tt\\d+\\/mediaviewer\\/rm\\d+\\/?$/.test(pinnedMediaUrl.pathname), \`${'${role.key}'} pinned media-page identity drift\`);`;
+          const count=text.split(before).length-1;
+          if(count!==1)throw new Error(`expected one media-body precondition block, found ${'${count}'}`);
+          text=text.replace(before,after);
+          fs.writeFileSync(runtimePath,text);
+          console.log('PASS — runtime trusts only the exact reviewed IMDb media IDs; visual identity remains pending');
           NODE
       - name: Gather exact role images, compose, hash and duplicate-scan
         env:
@@ -72,7 +92,10 @@ jobs:
           MAGICK_CMD: magick
         run: |
           set -euo pipefail
-          node scripts/card-backfill-uc-025-gather.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-025.log"
+          runtime="scripts/.card-backfill-uc-025-gather-runtime.mjs"
+          trap 'rm -f "$runtime"' EXIT
+          node "$runtime" 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-025.log"
+          rm -f "$runtime"
           git status --short
           test -z "$(git status --porcelain)"
       - name: Upload exact UC-025 evidence candidates
