@@ -21,7 +21,6 @@
  * Env:  RETRIEVE_MAX (default 20), CONTACT (put a real email in your User-Agent)
  */
 import { readFile, writeFile, mkdir, access } from "node:fs/promises";
-import { existsSync } from "node:fs";
 
 const REPO    = "https://github.com/BigBirdReturns/undercast";
 const CONTACT = process.env.CONTACT || "maintainer";
@@ -151,7 +150,9 @@ async function mw(base, params) {
 }
 let warnedWikimedia = false;
 async function download(url, out) {
-  if (existsSync(out)) return true; // cache: never re-fetch
+  // A missing canonical facet may share a filename with bytes retained from an
+  // older, rejected selection. Re-fetch the selected URL so the bytes actually
+  // bind to the provenance we are about to write.
   const r = await politeFetch(url);
   if (!r.ok) {
     // Wikimedia sometimes 403s automated fetches to its media host ("robot policy").
