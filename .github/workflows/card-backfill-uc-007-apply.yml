@@ -1,0 +1,176 @@
+name: card-backfill-uc-007-apply
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-007-APPLY.json"
+      - ".github/workflows/card-backfill-uc-007-apply.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: card-backfill-uc-007-apply-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-uc-007'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-uc-007
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Install deterministic image renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          (magick -version 2>/dev/null || convert -version) | head -n 2
+      - name: Rebuild the exact reviewed evidence bytes
+        env:
+          CONTACT: bigbirdreturns@proton.me
+          OUT: ${{ runner.temp }}/uc-007-card-backfill
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-uc-007.mjs 2>&1 | tee "$RUNNER_TEMP/uc-007-card-backfill-apply.log"
+      - name: Verify exact hashes and materialize the evidence-only packet
+        env:
+          OUT: ${{ runner.temp }}/uc-007-card-backfill
+        run: |
+          set -euo pipefail
+          evidence="data/review/card-backfill/UC-007"
+          mkdir -p "$evidence"
+          node --input-type=module - <<'NODE'
+          import crypto from 'node:crypto';
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const out=process.env.OUT;
+          const auth=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-007-APPLY.json','utf8'));
+          const manifest=JSON.parse(fs.readFileSync(path.join(out,'manifest.json'),'utf8'));
+          const dup=JSON.parse(fs.readFileSync(path.join(out,'duplicate-scan.json'),'utf8'));
+          const hash=p=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+          const assert=(condition,message)=>{if(!condition)throw new Error(message)};
+          assert(auth.lane==='card-backfill'&&auth.record_id==='UC-007'&&auth.canonical_acceptance===false,'apply authorization scope drift');
+          assert(manifest.record.id==='UC-007'&&manifest.disposition==='candidate-only','rebuilt manifest scope drift');
+          const expectations=[
+            ['pale_man','pale-man-original.webp',auth.originals.pale_man.sha256],
+            ['faun','faun-original.webp',auth.originals.faun.sha256],
+            ['candidate','uc-007-still-candidate.jpg',auth.candidate.sha256],
+          ];
+          for(const [label,file,expected] of expectations){
+            const actual=hash(path.join(out,file));
+            assert(actual===expected,`${label} hash drift: ${actual} != ${expected}`);
+          }
+          assert(manifest.originals.pale_man.sha256===auth.originals.pale_man.sha256,'Pale Man manifest hash drift');
+          assert(manifest.originals.faun.sha256===auth.originals.faun.sha256,'Faun manifest hash drift');
+          assert(manifest.composition.sha256===auth.candidate.sha256,'candidate manifest hash drift');
+          assert(manifest.composition.width===1600&&manifest.composition.height===1000,'candidate geometry drift');
+          assert(dup.status==='PASS'&&Object.values(dup.matches).every(rows=>rows.length===0),'duplicate scan is not clean');
+          const review={
+            version:1,
+            lane:'card-backfill',
+            disposition:'candidate-reviewed',
+            record_id:'UC-007',
+            actor:auth.actor,
+            character:auth.character,
+            production:auth.production,
+            side:auth.side,
+            reviewed_by:auth.reviewed_by,
+            reviewed_role:auth.reviewed_role,
+            reviewed_at:auth.reviewed_at,
+            canonical_acceptance:false,
+            source:auth.source,
+            originals:auth.originals,
+            candidate:auth.candidate,
+            exact_subject_ruling:{
+              pale_man:'verified candidate depiction',
+              faun:'verified candidate depiction',
+              combined_card_subject:'verified candidate represents both displayed roles',
+              performer_portrait_claim:'none',
+            },
+            handoff:'Website-maintenance controller must independently accept and apply this candidate to its current exact head, rebuild projections once, and let the canonical gate decide acceptance.'
+          };
+          fs.writeFileSync('data/review/card-backfill/UC-007/review.json',JSON.stringify(review,null,2)+'\n');
+          NODE
+          cp "$OUT/pale-man-original.webp" "$evidence/pale-man-original.webp"
+          cp "$OUT/faun-original.webp" "$evidence/faun-original.webp"
+          cp "$OUT/uc-007-still-candidate.jpg" "$evidence/uc-007-still-candidate.jpg"
+          cp "$OUT/manifest.json" "$evidence/manifest.json"
+          cp "$OUT/duplicate-scan.json" "$evidence/duplicate-scan.json"
+          # Simulate the live wall image box: card 3/4.15, image height 58%, centered cover crop.
+          convert "$OUT/uc-007-still-candidate.jpg" \
+            -gravity center -crop 1246x1000+0+0 +repage \
+            -resize 536x430 \
+            -colorspace sRGB -quality 92 \
+            "$evidence/card-crop-preview.jpg"
+          cat > "$evidence/review.md" <<'EOF'
+          # UC-007 — reviewed still candidate
+
+          **Card:** The Faun & the Pale Man — Doug Jones — *Pan's Labyrinth*
+
+          - Pale Man source: exact Picturehouse production image captioned by TIME.
+          - Faun source: distinct exact Picturehouse production image captioned by TIME.
+          - Composite: Pale Man left, neutral divider, Faun right.
+          - Exact-byte duplicate scan: PASS against the media manifest and every present repository image.
+          - Live wall crop simulation: both defining faces and silhouettes remain legible.
+          - Performer-portrait claim: none.
+          - Canonical acceptance: not granted by this packet.
+
+          This is the complete card-backfill handoff. The website-maintenance controller owns canonical application, projection rebuild, audit disposition, gate, merge, deployment, roadmap and lifecycle state.
+          EOF
+          (cd "$evidence" && sha256sum \
+            pale-man-original.webp \
+            faun-original.webp \
+            uc-007-still-candidate.jpg \
+            card-crop-preview.jpg \
+            manifest.json \
+            duplicate-scan.json \
+            review.json \
+            review.md > SHA256SUMS)
+      - name: Build the permanent candidate commit and retire temporary operators
+        run: |
+          set -euo pipefail
+          git config user.name 'undercast-card-backfill'
+          git config user.email 'undercast-card-backfill@users.noreply.github.com'
+          rm -f \
+            .github/CARD-BACKFILL-UC-007.json \
+            .github/CARD-BACKFILL-UC-007-APPLY.json \
+            .github/workflows/card-backfill-uc-007.yml \
+            .github/workflows/card-backfill-uc-007-apply.yml \
+            scripts/card-backfill-uc-007.mjs
+          git add -A
+          git diff --cached --check
+          git commit -m 'Card backfill: submit reviewed UC-007 still candidate'
+      - name: Run the complete canonical gate on the exact candidate head
+        run: |
+          set -euo pipefail
+          npx playwright install --with-deps chromium
+          npm run gate 2>&1 | tee "$RUNNER_TEMP/uc-007-card-backfill-gate.log"
+          git status --short | tee "$RUNNER_TEMP/uc-007-card-backfill-status.txt"
+          test -z "$(git status --porcelain)"
+      - name: Publish the exact gated candidate
+        run: git push origin HEAD:agent/card-backfill-uc-007
+      - name: Retain apply and gate receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uc-007-card-backfill-apply-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/uc-007-card-backfill
+            ${{ runner.temp }}/uc-007-card-backfill-apply.log
+            ${{ runner.temp }}/uc-007-card-backfill-gate.log
+            ${{ runner.temp }}/uc-007-card-backfill-status.txt
+            data/review/card-backfill/UC-007
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
