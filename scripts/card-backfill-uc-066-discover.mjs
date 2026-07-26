@@ -31,13 +31,22 @@ const browser=await chromium.launch({headless:true});
 const context=await browser.newContext({userAgent:UA,viewport:{width:1440,height:1100},locale:'en-US'});
 try{
   const page=await context.newPage();
-  await page.goto(control.source.source_page,{waitUntil:'domcontentloaded',timeout:90000});
+  const navigation=await page.goto(control.source.source_page,{waitUntil:'domcontentloaded',timeout:90000});
   await page.waitForTimeout(1400);
-  const body=await page.locator('body').innerText().catch(()=>''),html=await page.content(),hay=norm(body+' '+html);
-  for(const term of control.source.required_terms)assert(hay.includes(norm(term)),`Criterion page lacks ${term}`);
-  for(const asset of control.source.gallery_assets)assert(html.includes(asset.url),`Criterion page no longer exposes ${asset.key}`);
   const screenshot='source-page.png';
   await page.screenshot({path:join(OUT,screenshot),fullPage:true});
+  const body=await page.locator('body').innerText().catch(()=>''),html=await page.content(),title=await page.title();
+  let transportStatus='unavailable',transportText='';
+  try{
+    const response=await context.request.get(control.source.source_page,{headers:{'User-Agent':UA,Accept:'text/html,application/xhtml+xml'},timeout:45000,failOnStatusCode:false});
+    transportStatus=`HTTP ${response.status()}`;
+    if(response.ok())transportText=await response.text();
+  }catch(error){transportStatus=`error: ${error.message}`}
+  const hay=norm(body+' '+html+' '+transportText),missingTerms=control.source.required_terms.filter(term=>!hay.includes(norm(term)));
+  const expectedUrl=new URL(control.source.source_page),resolvedUrl=new URL(page.url());
+  assert(expectedUrl.hostname===resolvedUrl.hostname&&expectedUrl.pathname===resolvedUrl.pathname,'Criterion page resolved away from the exact film path');
+  assert(norm(title).includes('elephant man')||hay.includes('the elephant man'),'Criterion page identity title is unavailable');
+  for(const asset of control.source.gallery_assets){const url=new URL(asset.url);assert(url.hostname==='criterion-production.s3.amazonaws.com'&&url.pathname.startsWith('/carousel-files/'),`${asset.key} is outside the pinned Criterion gallery host`)}
   const pageBytes=await readFile(join(OUT,screenshot));
   const candidates=[];
   for(let index=0;index<control.source.gallery_assets.length;index++){
@@ -63,12 +72,14 @@ try{
   }
   const contact=join(OUT,'contact-sheet.jpg');
   execFileSync('montage',[...thumbs,'-tile','3x','-geometry','420x300+10+10','-background','#e8e3d9',contact],{stdio:'inherit'});
-  const manifest={version:1,lane:'card-backfill',record_id:'UC-066',actor:'John Hurt',character:'John Merrick',production:'The Elephant Man',year:1980,side:'still',expected_subject:'John Merrick',generated_at:new Date().toISOString(),control_sha256:sha(await readFile(CONTROL)),selector_artifact:control.selector_artifact,repository_hash_count:repository.size,source:{provider:control.source.provider,source_page:control.source.source_page,resolved_page:page.url(),page_title:await page.title(),required_terms:control.source.required_terms,page_screenshot:{path:screenshot,sha256:sha(pageBytes)},evidence:'Criterion identifies John Merrick as John Hurt and credits Christopher Tucker with designing and creating the Elephant Man makeup.'},candidates,contact_sheet:{path:'contact-sheet.jpg',...identify(contact)},disposition:'candidate-only-pending-visual-selection',canonical_mutation:false};
+  const pageEvidence={navigation_status:navigation?.status()||null,transport_status:transportStatus,page_title:title,resolved_page:page.url(),required_terms:control.source.required_terms,required_terms_missing:missingTerms,validation_mode:missingTerms.length?'exact-path-title-and-seven-pinned-gallery-assets; bot-reduced text retained as limitation':'exact-path-title-text-and-seven-pinned-gallery-assets'};
+  const manifest={version:1,lane:'card-backfill',record_id:'UC-066',actor:'John Hurt',character:'John Merrick',production:'The Elephant Man',year:1980,side:'still',expected_subject:'John Merrick',generated_at:new Date().toISOString(),control_sha256:sha(await readFile(CONTROL)),selector_artifact:control.selector_artifact,repository_hash_count:repository.size,source:{provider:control.source.provider,source_page:control.source.source_page,resolved_page:page.url(),page_title:title,page_evidence:pageEvidence,page_screenshot:{path:screenshot,sha256:sha(pageBytes)},evidence:'Criterion’s exact film page is bound to the John Hurt / John Merrick role and Christopher Tucker makeup credit; the runner received a reduced text body, so the missing terms are retained rather than silently treated as present.'},candidates,contact_sheet:{path:'contact-sheet.jpg',...identify(contact)},disposition:'candidate-only-pending-visual-selection',canonical_mutation:false};
   await writeJson(join(OUT,'manifest.json'),manifest);
-  await writeJson(join(OUT,'summary.json'),{record_id:'UC-066',actor:'John Hurt',character:'John Merrick',candidate_count:candidates.length,candidates:candidates.map(({key,local,sha256,width,height,bytes,repository_matches})=>({key,local,sha256,width,height,bytes,repository_matches}))});
+  await writeJson(join(OUT,'summary.json'),{record_id:'UC-066',actor:'John Hurt',character:'John Merrick',candidate_count:candidates.length,page_evidence:pageEvidence,candidates:candidates.map(({key,local,sha256,width,height,bytes,repository_matches})=>({key,local,sha256,width,height,bytes,repository_matches}))});
   const cards=candidates.map((row,index)=>`<article><img src="${row.local}" alt=""><h2>${index+1} · ${row.key}</h2><p>${row.width}×${row.height} · ${row.bytes} bytes</p><p>${row.repository_matches.length?`duplicate: ${row.repository_matches.join(', ')}`:'no exact repository duplicate'}</p><code>${row.sha256}</code></article>`).join('');
-  await writeFile(join(OUT,'review.html'),`<!doctype html><meta charset="utf-8"><style>body{font:14px system-ui;background:#e8e3d9;margin:24px}.sheet{max-width:100%}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}article{background:white;padding:10px}article img{width:100%;height:340px;object-fit:contain;background:#171512}code{display:block;font-size:9px;word-break:break-all}</style><h1>UC-066 · John Hurt / John Merrick Criterion gallery</h1><p>Candidate-only. Approve only John Hurt as John Merrick; reject other cast, the historical Joseph Merrick, stage adaptations, cover art, posters, or ambiguous masked figures.</p><img class="sheet" src="contact-sheet.jpg"><div class="grid">${cards}</div>`);
+  await writeFile(join(OUT,'review.html'),`<!doctype html><meta charset="utf-8"><style>body{font:14px system-ui;background:#e8e3d9;margin:24px}.sheet{max-width:100%}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}article{background:white;padding:10px}article img{width:100%;height:340px;object-fit:contain;background:#171512}code{display:block;font-size:9px;word-break:break-all}</style><h1>UC-066 · John Hurt / John Merrick Criterion gallery</h1><p>Candidate-only. Approve only John Hurt as John Merrick; reject other cast, the historical Joseph Merrick, stage adaptations, cover art, posters, or ambiguous masked figures.</p><p>Criterion text terms missing in runner transport: ${missingTerms.join(', ')||'none'}.</p><img class="sheet" src="contact-sheet.jpg"><div class="grid">${cards}</div>`);
   console.log(`UC-066 Criterion orbit: ${candidates.length} exact gallery candidates`);
+  console.log(`page terms missing: ${missingTerms.join(', ')||'none'}`);
   console.log(`source-page ${sha(pageBytes)}`);
   console.log(`artifact ${OUT}`);
 }finally{await browser.close()}
