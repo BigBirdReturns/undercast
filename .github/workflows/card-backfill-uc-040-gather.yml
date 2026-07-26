@@ -66,7 +66,53 @@ jobs:
           if(!record||record.actor!=='Tim Choate'||record.character!=='Zathras'||record.portrait)throw new Error('UC-040 canonical portrait boundary changed');
           if(!item||item.wall_id!=='UC-040'||item.side!=='portrait'||item.status!=='absent'||item.expected_subject!=='Tim Choate'||item.asset)throw new Error('UC-040 audit boundary changed');
           if(control.sources?.length!==4)throw new Error('UC-040 orbit must retain four exact-name source lanes');
-          console.log('PASS — UC-040 remains a source-declared Tim Choate portrait absence');
+          const wikipedia=control.sources.find(source=>source.key==='wikipedia');
+          if(!wikipedia?.asset_url||!wikipedia?.file_page||!wikipedia?.file_title)throw new Error('UC-040 Wikipedia source is not fully pinned');
+          console.log('PASS — UC-040 remains a source-declared Tim Choate portrait absence with a pinned Wikipedia upload');
+          NODE
+      - name: Build an API-tolerant exact-source runtime
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const source='scripts/card-backfill-uc-040-gather.mjs';
+          const runtime='scripts/.card-backfill-uc-040-gather-runtime.mjs';
+          let text=fs.readFileSync(source,'utf8');
+          const start=text.indexOf('async function wikipediaCandidate');
+          const end=text.indexOf('\nasync function imdbCandidate',start);
+          if(start<0||end<0)throw new Error('Wikipedia candidate function boundary not found');
+          const replacement=`async function wikipediaCandidate(context,source,evidence){
+            let pageTitle=source.file_title,info=null,apiStatus='unavailable';
+            try{
+              const params=new URLSearchParams({action:'query',format:'json',origin:'*',prop:'imageinfo',iiprop:'url|mime|size|timestamp|sha1|extmetadata',titles:source.file_title});
+              const response=await context.request.get(\`https://en.wikipedia.org/w/api.php?\${params}\`,{headers:{'User-Agent':UA,Accept:'application/json'},timeout:30000,failOnStatusCode:false});
+              apiStatus=\`HTTP \${response.status()}\`;
+              if(response.ok()){
+                const payload=await response.json();
+                const page=Object.values(payload?.query?.pages||{})[0];
+                const candidate=page?.imageinfo?.[0];
+                if(page&&!('missing'in page)&&candidate?.url&&norm(page.title)===norm(source.file_title)){
+                  pageTitle=page.title;info=candidate;apiStatus='success';
+                }
+              }
+            }catch(error){apiStatus=\`error: \${error.message}\`;}
+            const url=source.asset_url||info?.url;
+            assert(/^https:\/\//.test(url||''),'Wikipedia Tim Choate upload URL is unavailable');
+            return{
+              provider:source.provider,provider_priority:source.priority,label:pageTitle,exact_name:true,
+              source_page:source.source_page,file_page:source.file_page||\`https://en.wikipedia.org/wiki/\${encodeURIComponent(source.file_title.replace(/ /g,'_'))}\`,
+              url,thumbnail_url:source.asset_url||info?.thumburl||url,
+              author:String(info?.extmetadata?.Artist?.value||'').replace(/<[^>]+>/g,' ').replace(/\\s+/g,' ').trim(),
+              license:String(info?.extmetadata?.LicenseShortName?.value||'').replace(/<[^>]+>/g,' ').trim(),
+              source_note:'English Wikipedia exact Tim Choate article uses this pinned image and captions him during filming of The Europeans in 1978.',
+              page_evidence:evidence,
+              imageinfo:info?{api_status:apiStatus,mime:info.mime,width:info.width,height:info.height,timestamp:info.timestamp,sha1:info.sha1}:{api_status:apiStatus,pinned_asset_url:url}
+            };
+          }
+          `;
+          text=text.slice(0,start)+replacement+text.slice(end+1);
+          fs.writeFileSync(runtime,text);
+          console.log('PASS — runtime uses the pinned immutable upload and treats API metadata as optional');
           NODE
       - name: Gather, hash and build the exact portrait review sheet
         env:
@@ -74,7 +120,10 @@ jobs:
           MAGICK_CMD: magick
         run: |
           set -euo pipefail
-          node scripts/card-backfill-uc-040-gather.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-040.log"
+          runtime="scripts/.card-backfill-uc-040-gather-runtime.mjs"
+          trap 'rm -f "$runtime"' EXIT
+          node "$runtime" 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-040.log"
+          rm -f "$runtime"
           git status --short
           test -z "$(git status --porcelain)"
       - name: Upload exact portrait candidates, pages, hashes and contact sheet
