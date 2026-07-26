@@ -1,0 +1,82 @@
+name: card-backfill-uc-025-render
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-025-RENDER.json"
+      - "scripts/card-backfill-uc-025-render.mjs"
+      - ".github/workflows/card-backfill-uc-025-render.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: card-backfill-uc-025-render-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-002'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-002
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Install deterministic image renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/magick" -version | head -n 2
+      - name: Verify exact reviewed source authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-025-RENDER.json','utf8'));
+          if(row.version!==1||row.record_id!=='UC-025'||row.actor!=='Javier Botet'||row.side!=='still'||row.reviewed_role!=='second-desk')throw new Error('UC-025 render authorization drift');
+          if(row.sources?.length!==3||new Set(row.sources.map(source=>source.key)).size!==3)throw new Error('UC-025 render must bind three distinct role sources');
+          if(row.sources.some(source=>!/^[0-9a-f]{64}$/.test(source.expected_sha256||'')))throw new Error('UC-025 source hash authorization incomplete');
+          if(row.sources.reduce((sum,source)=>sum+source.band_height,0)+row.composition.divider_height*2!==row.composition.height)throw new Error('UC-025 composition does not close');
+          console.log('PASS — exact Mama, Crooked Man and KeyFace source bytes authorized');
+          NODE
+      - name: Rebuild exact selected bytes and render the candidate
+        env:
+          OUT: ${{ runner.temp }}/card-backfill-uc-025-render
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-uc-025-render.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-025-render.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload exact candidate, sources, hashes and crop preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-025-render-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-025-render
+            ${{ runner.temp }}/card-backfill-uc-025-render.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
