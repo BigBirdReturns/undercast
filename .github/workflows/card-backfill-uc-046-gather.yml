@@ -1,0 +1,89 @@
+name: card-backfill-uc-046-gather
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-046.json"
+      - "scripts/card-backfill-uc-046-gather.mjs"
+      - ".github/workflows/card-backfill-uc-046-gather.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: card-backfill-uc-046-gather-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gather:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-004'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-004
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical and browser runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Install deterministic image renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/magick" -version | head -n 2
+      - name: Verify exact UC-046 audit and still boundary
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const control=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-046.json','utf8'));
+          const specimens=JSON.parse(fs.readFileSync('data/specimens.json','utf8'));
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8'));
+          const record=specimens.find(row=>row.id==='UC-046');
+          const item=(audit.items||[]).find(row=>row.id==='ma_8ae9c8180626eb6cd09d8eae');
+          if(control.version!==1||control.record_id!=='UC-046'||control.actor!=='Lon Chaney'||control.side!=='still')throw new Error('UC-046 control drift');
+          if(!record||record.actor!=='Lon Chaney'||record.character!=='The Phantom'||record.still)throw new Error('UC-046 canonical still boundary changed');
+          if(!item||item.wall_id!=='UC-046'||item.side!=='still'||item.status!=='absent'||item.expected_subject!=='The Phantom'||item.asset)throw new Error('UC-046 audit boundary changed');
+          if(control.source?.file_title!=='File:Lon Chaney as The Phantom.jpg')throw new Error('UC-046 Commons file-title drift');
+          console.log('PASS — UC-046 remains a source-declared Phantom still absence with one exact Commons file');
+          NODE
+      - name: Gather exact Commons bytes, crop, hash and duplicate-scan
+        env:
+          OUT: ${{ runner.temp }}/card-backfill-uc-046
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-uc-046-gather.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-046.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload exact source, candidate, crop and review boundary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-046-gather-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-046
+            ${{ runner.temp }}/card-backfill-uc-046.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
