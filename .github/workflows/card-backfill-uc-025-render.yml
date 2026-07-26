@@ -5,11 +5,12 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - ".github/CARD-BACKFILL-UC-025-RENDER.json"
-      - "scripts/card-backfill-uc-025-render.mjs"
+      - "scripts/card-backfill-uc-025-render-from-artifact.mjs"
       - ".github/workflows/card-backfill-uc-025-render.yml"
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: card-backfill-uc-025-render-${{ github.event.pull_request.number }}
@@ -29,11 +30,8 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - name: Install canonical and browser runtime
-        run: |
-          set -euo pipefail
-          npm ci
-          npx playwright install --with-deps chromium
+      - name: Install canonical runtime
+        run: npm ci
       - name: Install deterministic image renderer
         run: |
           set -euo pipefail
@@ -51,50 +49,40 @@ jobs:
           chmod +x "$RUNNER_TEMP/bin/magick"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/bin/magick" -version | head -n 2
-      - name: Verify exact reviewed source authorization
+      - name: Verify exact reviewed source and artifact authorization
         run: |
           set -euo pipefail
           node --input-type=module - <<'NODE'
           import fs from 'node:fs';
           const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-025-RENDER.json','utf8'));
-          if(row.version!==1||row.record_id!=='UC-025'||row.actor!=='Javier Botet'||row.side!=='still'||row.reviewed_role!=='second-desk')throw new Error('UC-025 render authorization drift');
+          if(row.version!==2||row.record_id!=='UC-025'||row.actor!=='Javier Botet'||row.side!=='still'||row.reviewed_role!=='second-desk')throw new Error('UC-025 render authorization drift');
+          if(row.discovery_artifact?.artifact_id!==8626866743||row.discovery_artifact?.head_sha!=='f3c8ce4e821e090fcd3da6c13a42b8bf53812eb8')throw new Error('UC-025 artifact custody drift');
           if(row.sources?.length!==3||new Set(row.sources.map(source=>source.key)).size!==3)throw new Error('UC-025 render must bind three distinct role sources');
-          if(row.sources.some(source=>!/^[0-9a-f]{64}$/.test(source.expected_sha256||'')))throw new Error('UC-025 source hash authorization incomplete');
+          if(row.sources.some(source=>!/^[0-9a-f]{64}$/.test(source.expected_sha256||'')||!source.artifact_path))throw new Error('UC-025 source authorization incomplete');
           if(row.sources.reduce((sum,source)=>sum+source.band_height,0)+row.composition.divider_height*2!==row.composition.height)throw new Error('UC-025 composition does not close');
-          console.log('PASS — exact Mama, Crooked Man and KeyFace source bytes authorized');
+          console.log('PASS — exact discovery artifact and three selected role sources authorized');
           NODE
-      - name: Build an exact discovery-transport runtime
+      - name: Retrieve and hash-verify the retained discovery artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          node --input-type=module - <<'NODE'
-          import fs from 'node:fs';
-          const source='scripts/card-backfill-uc-025-render.mjs';
-          const runtime='scripts/.card-backfill-uc-025-render-runtime.mjs';
-          let text=fs.readFileSync(source,'utf8');
-          const replacements=[
-            ["import { request } from '@playwright/test';", "import { chromium } from '@playwright/test';"],
-            ["const api=await request.newContext({userAgent:UA});", "const browser=await chromium.launch({headless:true});\nconst browserContext=await browser.newContext({userAgent:UA});\nconst api=browserContext.request;"],
-            ["Accept:source.expected_mime==='image/webp'?'image/webp,image/*,*/*;q=0.1':'image/jpeg,image/*,*/*;q=0.1'", "Accept:'image/avif,image/webp,image/png,image/jpeg,*/*'"],
-            ["}finally{await api.dispose()}", "}finally{await browser.close()}"],
-          ];
-          for(const [before,after] of replacements){
-            const count=text.split(before).length-1;
-            if(count!==1)throw new Error(`expected one runtime fragment, found ${count}: ${before}`);
-            text=text.replace(before,after);
-          }
-          fs.writeFileSync(runtime,text);
-          console.log('PASS — render will replay the discovery browser context and headers');
-          NODE
-      - name: Rebuild exact selected bytes and render the candidate
+          root="$RUNNER_TEMP/card-backfill-uc-025-source"
+          mkdir -p "$root"
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8626866743/zip" > "$root/discovery.zip"
+          echo "0e1383c5c7d71475548f78de4211783bc47b208bdd8afaae44bc1c669b7e4b55  $root/discovery.zip" | sha256sum -c -
+          unzip -q "$root/discovery.zip" -d "$root/unpacked"
+          echo "b0036e7542b69f744ebc10e9f1a90cf6ef4b3f817892bd5ae62dbf7d7634af83  $root/unpacked/card-backfill-uc-025/candidates/mama/06.webp" | sha256sum -c -
+          echo "8a8f722a9e51dd6e0bb517d379a242e9a426c1495aac6b338f63df6826fa888d  $root/unpacked/card-backfill-uc-025/candidates/crooked-man/03.jpg" | sha256sum -c -
+          echo "35edf51952d53f92d2abee9b3d07889eb58ddd97b5828e9d3aa54cde49476cc7  $root/unpacked/card-backfill-uc-025/candidates/keyface/02.jpg" | sha256sum -c -
+      - name: Render the exact candidate and enforce duplicate boundary
         env:
+          SOURCE_ROOT: ${{ runner.temp }}/card-backfill-uc-025-source/unpacked
           OUT: ${{ runner.temp }}/card-backfill-uc-025-render
           MAGICK_CMD: magick
         run: |
           set -euo pipefail
-          runtime="scripts/.card-backfill-uc-025-render-runtime.mjs"
-          trap 'rm -f "$runtime"' EXIT
-          node "$runtime" 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-025-render.log"
-          rm -f "$runtime"
+          node scripts/card-backfill-uc-025-render-from-artifact.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-025-render.log"
           git status --short
           test -z "$(git status --porcelain)"
       - name: Upload exact candidate, sources, hashes and crop preview
