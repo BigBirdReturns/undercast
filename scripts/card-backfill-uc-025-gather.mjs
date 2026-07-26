@@ -2,260 +2,29 @@
 import { chromium } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { dirname, extname, join, relative } from 'node:path';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
-const CONTROL = '.github/CARD-BACKFILL-UC-025.json';
-const OUT = process.env.OUT || '/tmp/card-backfill-uc-025';
-const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/132 Safari/537.36 UNDERCAST-card-backfill/1.0';
-const sha256 = (value) => createHash('sha256').update(value).digest('hex');
-const norm = (value) => String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[’‘]/g, "'").replace(/[^a-zA-Z0-9']+/g, ' ').trim().toLowerCase();
-const esc = (value) => String(value || '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
-const assert = (condition, message) => { if (!condition) throw new Error(message); };
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const readJson = async (path) => JSON.parse(await readFile(path, 'utf8'));
-const writeJson = async (path, value) => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, `${JSON.stringify(value, null, 2)}\n`); };
+const CONTROL='.github/CARD-BACKFILL-UC-025.json';
+const OUT=process.env.OUT||'/tmp/card-backfill-uc-025';
+const UA='Mozilla/5.0 Chrome/132 UNDERCAST-card-backfill/1.0';
+const sha=v=>createHash('sha256').update(v).digest('hex');
+const norm=v=>String(v||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,' ').trim().toLowerCase();
+const slug=v=>norm(v).replace(/ /g,'-')||'unknown';
+const esc=v=>String(v||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const assert=(ok,msg)=>{if(!ok)throw new Error(msg)};
+const json=async p=>JSON.parse(await readFile(p,'utf8'));
+const writeJson=async(p,v)=>{await mkdir(dirname(p),{recursive:true});await writeFile(p,JSON.stringify(v,null,2)+'\n')};
+function mime(b){if(b[0]===0xff&&b[1]===0xd8)return'image/jpeg';if(b[0]===0x89&&b[1]===0x50)return'image/png';if(b.subarray(0,4).toString()==='RIFF'&&b.subarray(8,12).toString()==='WEBP')return'image/webp';return'unknown'}
+function ext(m){return m==='image/jpeg'?'jpg':m==='image/png'?'png':m==='image/webp'?'webp':'bin'}
+function magick(...a){execFileSync(process.env.MAGICK_CMD||'magick',a,{stdio:'inherit'})}
+function identify(p){const [w,h]=execFileSync(process.env.MAGICK_CMD||'magick',['identify','-format','%w %h',p],{encoding:'utf8'}).trim().split(/\s+/).map(Number);return{width:w,height:h}}
+async function walk(root,out=[]){let es;try{es=await readdir(root,{withFileTypes:true})}catch{return out}for(const e of es){const p=join(root,e.name);if(e.isDirectory())await walk(p,out);else if(/\.(jpe?g|png|webp)$/i.test(e.name))out.push(p)}return out}
+async function repoHashes(){const m=new Map();try{const x=await json('data/media-manifest.json');for(const[p,r]of Object.entries(x.assets||{}))if(/^[0-9a-f]{64}$/i.test(r.sha256||'')){const a=m.get(r.sha256)||[];a.push('manifest:'+p);m.set(r.sha256,a)}}catch{}for(const p of await walk('images')){try{const h=sha(await readFile(p));const a=m.get(h)||[];a.push('file:'+p);m.set(h,a)}catch{}}return m}
+function score(c,r){const t=norm([c.alt,c.caption,c.context,c.url].join(' '));let s=0;for(const q of[r.label,r.production,...(r.image_terms||[])])if(t.includes(norm(q)))s+=norm(q)==='javier botet'?5:10;if(c.width>=800)s+=3;if(c.height>=500)s+=2;if(/logo|avatar|icon|banner|advert|newsletter|author/.test(t))s-=25;return s}
+async function pageCandidates(page,url,role){await page.goto(url,{waitUntil:'domcontentloaded',timeout:90000});await page.waitForTimeout(1200);for(let i=0;i<6;i++){await page.evaluate(()=>scrollBy(0,innerHeight*.8));await page.waitForTimeout(250)}const shot=`pages/${role.key}-${slug(new URL(url).hostname)}-${sha(url).slice(0,7)}.png`;await mkdir(join(OUT,'pages'),{recursive:true});await page.screenshot({path:join(OUT,shot),fullPage:true});const rows=await page.evaluate(()=>{const abs=v=>{try{return new URL(v,document.baseURI).href}catch{return''}};const out=[];for(const img of document.images){const fig=img.closest('figure');const vals=[img.currentSrc,img.src,img.dataset.src,img.dataset.lazySrc,img.dataset.original].filter(Boolean);for(const part of String(img.srcset||img.dataset.srcset||'').split(',')){const v=part.trim().split(/\s+/)[0];if(v)vals.push(v)}for(const v of vals)out.push({url:abs(v),alt:img.alt||'',caption:fig?.querySelector('figcaption')?.textContent||'',context:[fig?.textContent,img.parentElement?.textContent,img.parentElement?.previousElementSibling?.textContent].filter(Boolean).join(' ').slice(0,900),width:img.naturalWidth||img.width||0,height:img.naturalHeight||img.height||0})}for(const q of['meta[property="og:image"]','meta[name="twitter:image"]'])for(const e of document.querySelectorAll(q))out.push({url:abs(e.content),alt:'',caption:'',context:document.title,width:0,height:0});return out});const u=new Map();for(const r of rows)if(/^https?:/.test(r.url)&&!u.has(r.url))u.set(r.url,r);return{url,title:await page.title(),screenshot:shot,candidates:[...u.values()].map(c=>({...c,score:score(c,role)})).sort((a,b)=>b.score-a.score||(b.width*b.height-a.width*a.height)).slice(0,24)}}
+async function download(ctx,role,c,i){let r;try{r=await ctx.request.get(c.url,{headers:{'User-Agent':UA,Referer:c.source_page,Accept:'image/avif,image/webp,image/png,image/jpeg,*/*'},timeout:45000,failOnStatusCode:false})}catch(e){return{...c,error:e.message}}if(!r.ok())return{...c,error:'HTTP '+r.status()};const b=Buffer.from(await r.body()),m=mime(b);if(b.length<1200||m==='unknown')return{...c,error:`bad image ${b.length} ${m}`};const rel=`candidates/${role.key}/${String(i).padStart(2,'0')}.${ext(m)}`,p=join(OUT,rel);await mkdir(dirname(p),{recursive:true});await writeFile(p,b);let d={width:0,height:0};try{d=identify(p)}catch{}if(d.width<300||d.height<220)return{...c,local:rel,mime:m,bytes:b.length,sha256:sha(b),...d,error:'too small'};return{...c,local:rel,mime:m,bytes:b.length,sha256:sha(b),...d}}
+async function sheet(role,rows){const good=rows.filter(x=>x.local&&!x.error).slice(0,15);if(!good.length)return null;const thumbs=[];let n=0;for(const r of good){const p=join(OUT,'thumbs',role.key,`${String(++n).padStart(2,'0')}.jpg`);await mkdir(dirname(p),{recursive:true});magick(join(OUT,r.local),'-auto-orient','-thumbnail','350x250>','-background','#171512','-gravity','center','-extent','350x250','-fill','white','-undercolor','#171512cc','-gravity','south','-pointsize','18','-annotate','+0+5',`${String(n).padStart(2,'0')} score ${r.score}`,'-strip','-quality','88',p);thumbs.push(p)}const out=join(OUT,`contact-sheet-${role.key}.jpg`);execFileSync('montage',[...thumbs,'-tile','3x','-geometry','350x250+10+10','-background','#e8e3d9',out],{stdio:'inherit'});return{path:`contact-sheet-${role.key}.jpg`,...identify(out)}}
 
-function signatureMime(bytes) {
-  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]))) return 'image/png';
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
-  if (bytes.length >= 12 && bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
-  return 'unknown';
-}
-function extensionFor(mime) { return mime === 'image/png' ? 'png' : mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'bin'; }
-function magick(...args) {
-  const command = process.env.MAGICK_CMD || 'magick';
-  execFileSync(command, args, { stdio: 'inherit' });
-}
-function identify(path) {
-  const command = process.env.MAGICK_CMD || 'magick';
-  const text = execFileSync(command, ['identify', '-format', '%w %h', path], { encoding: 'utf8' }).trim();
-  const [width, height] = text.split(/\s+/).map(Number);
-  assert(width > 0 && height > 0, `could not identify ${path}`);
-  return { width, height };
-}
-async function fetchRetry(url, options = {}, label = url) {
-  let last;
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    try {
-      const response = await fetch(url, { ...options, redirect: 'follow', signal: AbortSignal.timeout(45_000) });
-      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-      return response;
-    } catch (error) {
-      last = error;
-      if (attempt < 4) await sleep(attempt * 900);
-    }
-  }
-  throw new Error(`${label} unavailable after retries: ${last?.message || last}`);
-}
-async function walkImages(root) {
-  const files = [];
-  async function visit(path) {
-    let entries;
-    try { entries = await readdir(path, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      const child = join(path, entry.name);
-      if (entry.isDirectory()) await visit(child);
-      else if (/\.(?:jpe?g|png|webp)$/i.test(entry.name)) files.push(child);
-    }
-  }
-  await visit(root);
-  return files;
-}
-async function existingHashes() {
-  const hashes = new Map();
-  try {
-    const manifest = await readJson('data/media-manifest.json');
-    for (const [path, row] of Object.entries(manifest.assets || {})) {
-      if (/^[0-9a-f]{64}$/i.test(row?.sha256 || '')) {
-        const key = row.sha256.toLowerCase();
-        const list = hashes.get(key) || [];
-        list.push(`manifest:${path}`);
-        hashes.set(key, list);
-      }
-    }
-  } catch {}
-  for (const path of await walkImages('images')) {
-    try {
-      const bytes = await readFile(path);
-      const key = sha256(bytes);
-      const list = hashes.get(key) || [];
-      list.push(`file:${path}`);
-      hashes.set(key, list);
-    } catch {}
-  }
-  return hashes;
-}
-function extractImageUrl(html, fallback = '') {
-  const meta = [
-    /<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i,
-    /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image(?::secure_url)?["']/i,
-    /<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i,
-    /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image(?::src)?["']/i,
-  ];
-  for (const pattern of meta) {
-    const match = html.match(pattern);
-    if (match?.[1]) return match[1].replace(/&amp;/g, '&').replace(/\\\//g, '/');
-  }
-  const amazon = html.match(/https:\/\/m\.media-amazon\.com\/images\/M\/[^"'\\\s<]+/i);
-  return amazon?.[0]?.replace(/\\u0026/g, '&').replace(/\\\//g, '/') || fallback;
-}
-
-const control = await readJson(CONTROL);
-assert(control.record_id === 'UC-025' && control.side === 'still', 'UC-025 authorization drift');
-assert(control.actor === 'Javier Botet', 'actor authorization drift');
-assert(Array.isArray(control.roles) && control.roles.length === 3, 'UC-025 requires exactly three role sources');
-assert(control.composition?.width === 1260 && control.composition?.height === 1000 && control.composition?.divider === 12, 'composition geometry drift');
-await mkdir(OUT, { recursive: true });
-await mkdir(join(OUT, 'pages'), { recursive: true });
-await mkdir(join(OUT, 'originals'), { recursive: true });
-await mkdir(join(OUT, 'panels'), { recursive: true });
-
-const browser = await chromium.launch({ headless: true });
-const context = await browser.newContext({ userAgent: UA, viewport: { width: 1440, height: 1100 }, locale: 'en-US' });
-const records = [];
-try {
-  for (const role of control.roles) {
-    const creditPage = await context.newPage();
-    await creditPage.goto(role.credit_page, { waitUntil: 'domcontentloaded', timeout: 90_000 });
-    await creditPage.waitForTimeout(1500);
-    const creditHtml = await creditPage.content();
-    const creditText = norm(await creditPage.locator('body').innerText().catch(() => ''));
-    for (const term of role.required_terms) assert(creditText.includes(norm(term)) || norm(creditHtml).includes(norm(term)), `${role.key} credit page lacks required term ${term}`);
-    await creditPage.screenshot({ path: join(OUT, 'pages', `${role.key}-credit.png`), fullPage: true });
-    const creditTitle = await creditPage.title();
-    await creditPage.close();
-
-    const mediaPage = await context.newPage();
-    await mediaPage.goto(role.media_page, { waitUntil: 'domcontentloaded', timeout: 90_000 });
-    await mediaPage.waitForTimeout(1800);
-    const mediaHtml = await mediaPage.content();
-    const mediaText = norm(await mediaPage.locator('body').innerText().catch(() => ''));
-    assert(mediaText.includes(norm('Javier Botet')) || norm(mediaHtml).includes(norm('Javier Botet')), `${role.key} media page does not identify Javier Botet`);
-    assert(mediaText.includes(norm(role.production)) || norm(mediaHtml).includes(norm(role.production)), `${role.key} media page does not identify ${role.production}`);
-    const locatorUrl = await mediaPage.locator('meta[property="og:image"]').getAttribute('content').catch(() => null);
-    const imageUrl = extractImageUrl(mediaHtml, locatorUrl || '');
-    assert(/^https:\/\//.test(imageUrl), `${role.key} media page exposed no HTTPS image`);
-    await mediaPage.screenshot({ path: join(OUT, 'pages', `${role.key}-media.png`), fullPage: true });
-    const mediaTitle = await mediaPage.title();
-    await mediaPage.close();
-
-    const response = await fetchRetry(imageUrl, { headers: { 'User-Agent': UA, Referer: role.media_page, Accept: 'image/avif,image/webp,image/png,image/jpeg,*/*;q=0.2' } }, `${role.key} image`);
-    const bytes = Buffer.from(await response.arrayBuffer());
-    const mime = signatureMime(bytes);
-    assert(bytes.length > 10_000 && mime !== 'unknown', `${role.key} returned unusable image bytes (${bytes.length}, ${mime})`);
-    const extension = extensionFor(mime);
-    const originalRelative = `originals/${role.key}.${extension}`;
-    const originalPath = join(OUT, originalRelative);
-    await writeFile(originalPath, bytes);
-    const dimensions = identify(originalPath);
-    assert(dimensions.width >= 500 && dimensions.height >= 400, `${role.key} source is too small (${dimensions.width}x${dimensions.height})`);
-
-    const panelRelative = `panels/${role.key}.jpg`;
-    const panelPath = join(OUT, panelRelative);
-    magick(originalPath, '-auto-orient', '-resize', '412x1000^', '-gravity', 'center', '-extent', '412x1000', '-strip', '-quality', '92', panelPath);
-    const panelBytes = await readFile(panelPath);
-    records.push({
-      ...role,
-      credit_title: creditTitle,
-      media_title: mediaTitle,
-      resolved_media_page: role.media_page,
-      resolved_image_url: response.url || imageUrl,
-      original: { path: originalRelative, mime, bytes: bytes.length, sha256: sha256(bytes), ...dimensions },
-      panel: { path: panelRelative, mime: 'image/jpeg', bytes: panelBytes.length, sha256: sha256(panelBytes), ...identify(panelPath) },
-    });
-  }
-} finally {
-  await browser.close();
-}
-
-const divider = join(OUT, 'panels', 'divider.png');
-magick('-size', '12x1000', 'xc:#e8e3d9', divider);
-const composite = join(OUT, 'uc-025-still-candidate.jpg');
-magick(
-  join(OUT, records[0].panel.path), divider,
-  join(OUT, records[1].panel.path), divider,
-  join(OUT, records[2].panel.path),
-  '+append', '-strip', '-quality', '94', composite,
-);
-const compositeDimensions = identify(composite);
-assert(compositeDimensions.width === 1260 && compositeDimensions.height === 1000, `triptych geometry drifted to ${compositeDimensions.width}x${compositeDimensions.height}`);
-const compositeBytes = await readFile(composite);
-
-const cropPreview = join(OUT, 'card-crop-preview.jpg');
-magick(composite, '-gravity', 'center', '-crop', '1246x1000+0+0', '+repage', '-strip', '-quality', '94', cropPreview);
-const cropBytes = await readFile(cropPreview);
-
-const existing = await existingHashes();
-const checks = [
-  ...records.map((row) => ({ label: row.key, path: row.original.path, sha256: row.original.sha256 })),
-  { label: 'composite', path: 'uc-025-still-candidate.jpg', sha256: sha256(compositeBytes) },
-];
-const duplicateScan = {
-  checked_manifest_and_image_hashes: existing.size,
-  items: checks.map((row) => ({ ...row, matches: existing.get(row.sha256) || [] })),
-};
-for (const row of duplicateScan.items) assert(row.matches.length === 0, `${row.label} duplicates existing repository media: ${row.matches.join(', ')}`);
-await writeJson(join(OUT, 'duplicate-scan.json'), duplicateScan);
-
-const manifest = {
-  version: 1,
-  lane: control.lane,
-  record_id: control.record_id,
-  actor: control.actor,
-  character: control.character,
-  production: control.production,
-  side: control.side,
-  expected_subject: control.expected_subject,
-  generated_at: new Date().toISOString(),
-  control_sha256: sha256(await readFile(CONTROL)),
-  sources: records,
-  composite: {
-    path: 'uc-025-still-candidate.jpg',
-    mime: 'image/jpeg',
-    bytes: compositeBytes.length,
-    sha256: sha256(compositeBytes),
-    ...compositeDimensions,
-    recipe: 'three 412x1000 center-crop panels; Mama, 12px #e8e3d9 divider, Crooked Man, 12px #e8e3d9 divider, Keyface; stripped JPEG quality 94',
-  },
-  live_crop_preview: {
-    path: 'card-crop-preview.jpg',
-    mime: 'image/jpeg',
-    bytes: cropBytes.length,
-    sha256: sha256(cropBytes),
-    ...identify(cropPreview),
-    semantics: 'Simulation of the existing 58%-height wall image box at its approximately 1.246:1 aspect ratio.',
-  },
-  duplicate_scan: duplicateScan,
-  disposition: 'candidate-only-pending-exact-subject-review',
-};
-await writeJson(join(OUT, 'manifest.json'), manifest);
-await writeJson(join(OUT, 'review.json'), {
-  version: 1,
-  record_id: control.record_id,
-  expected_subject: control.expected_subject,
-  side: control.side,
-  candidate_sha256: manifest.composite.sha256,
-  identity_ruling: 'pending',
-  presentation_ruling: 'pending',
-  canonical_mutation: false,
-  notes: [
-    'Candidate must visibly and distinctly represent Mama, the Crooked Man and a third Javier Botet creature performance (Keyface).',
-    'IMDb credit pages independently bind Javier Botet to each role; the media pages bind each downloaded image to the matching production.',
-    'No panel or composite is a performer portrait.',
-  ],
-});
-
-const cards = records.map((row) => `<article><h2>${esc(row.label)} · ${esc(row.production)}</h2><img src="${esc(row.original.path)}" alt=""><p><a href="${esc(row.credit_page)}">role credit</a> · <a href="${esc(row.media_page)}">media page</a></p><code>${esc(row.original.sha256)}</code></article>`).join('\n');
-const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>UC-025 candidate review</title><style>body{font:14px system-ui;margin:24px;background:#e8e3d9;color:#171512}main{max-width:1260px;margin:auto}.sources{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.sources article{background:#fff;padding:12px;border:1px solid #777}.sources img{width:100%;height:420px;object-fit:contain;background:#111}.hero{width:100%;display:block;margin:24px 0;border:2px solid #111}.crop{width:100%;display:block;margin:24px 0;border:2px solid #806f59}code{font-size:10px;word-break:break-all}a{color:#574b3c}</style></head><body><main><h1>UC-025 · Mama, the Crooked Man &amp; others</h1><p>Candidate-only. Review exact role identity, panel order and wall crop before any canonical application.</p><section class="sources">${cards}</section><h2>Deterministic triptych</h2><img class="hero" src="uc-025-still-candidate.jpg" alt=""><h2>Live wall crop simulation</h2><img class="crop" src="card-crop-preview.jpg" alt=""></main></body></html>`;
-await writeFile(join(OUT, 'review.html'), html);
-await writeFile(join(OUT, 'SHA256SUMS'), [
-  ...records.map((row) => `${row.original.sha256}  ${row.original.path}`),
-  `${manifest.composite.sha256}  uc-025-still-candidate.jpg`,
-  `${manifest.live_crop_preview.sha256}  card-crop-preview.jpg`,
-].join('\n') + '\n');
-
-console.log(`UC-025 candidate: ${manifest.composite.sha256}`);
-console.log(`sources: ${records.map((row) => `${row.key}=${row.original.sha256}`).join(' ')}`);
-console.log(`duplicate scan: PASS across ${existing.size} distinct repository hashes`);
-console.log(`evidence -> ${OUT}`);
+const ctl=await json(CONTROL);assert(ctl.version===2&&ctl.record_id==='UC-025'&&ctl.actor==='Javier Botet','control drift');const existing=await repoHashes();await mkdir(OUT,{recursive:true});const browser=await chromium.launch({headless:true});const ctx=await browser.newContext({userAgent:UA,viewport:{width:1440,height:1000}});const roles=[];try{for(const role of ctl.roles){const credit=await ctx.newPage();await credit.goto(role.credit_page,{waitUntil:'domcontentloaded',timeout:90000});const body=norm(await credit.locator('body').innerText().catch(()=>''));for(const t of role.credit_terms)assert(body.includes(norm(t)),`${role.key} credit lacks ${t}`);const creditShot=`pages/${role.key}-credit.png`;await mkdir(join(OUT,'pages'),{recursive:true});await credit.screenshot({path:join(OUT,creditShot),fullPage:true});await credit.close();const pages=[],all=[],seen=new Set();for(const url of role.candidate_pages){const p=await ctx.newPage();try{const x=await pageCandidates(p,url,role);pages.push({...x,candidates:x.candidates.map(({url,alt,caption,context,width,height,score})=>({url,alt,caption,context,width,height,score}))});for(const c of x.candidates)if(!seen.has(c.url)){seen.add(c.url);all.push({...c,source_page:url,page_title:x.title})}}catch(e){pages.push({url,error:e.message,candidates:[]})}finally{await p.close()}}all.sort((a,b)=>b.score-a.score||(b.width*b.height-a.width*a.height));const got=[],hashes=new Set();for(const c of all.slice(0,30)){const x=await download(ctx,role,c,got.length+1);if(x.sha256&&hashes.has(x.sha256))continue;if(x.sha256)hashes.add(x.sha256);if(x.sha256)x.repository_matches=existing.get(x.sha256)||[];got.push(x);if(got.filter(y=>y.local&&!y.error).length>=15)break}const contact=await sheet(role,got);const usable=got.filter(x=>x.local&&!x.error);assert(usable.length,`${role.key} has no usable candidates`);roles.push({key:role.key,label:role.label,production:role.production,credit_page:role.credit_page,credit_terms:role.credit_terms,credit_screenshot:creditShot,reference_media_page:role.reference_media_page,pages,candidates:got,usable_candidate_count:usable.length,contact_sheet:contact})}}finally{await browser.close()}
+const manifest={version:1,lane:ctl.lane,record_id:ctl.record_id,actor:ctl.actor,character:ctl.character,side:ctl.side,expected_subject:ctl.expected_subject,generated_at:new Date().toISOString(),control_sha256:sha(await readFile(CONTROL)),repository_hash_count:existing.size,roles,disposition:'candidate-only-pending-visual-selection'};await writeJson(join(OUT,'manifest.json'),manifest);await writeJson(join(OUT,'summary.json'),{record_id:ctl.record_id,total_usable_candidates:roles.reduce((n,r)=>n+r.usable_candidate_count,0),roles:roles.map(r=>({key:r.key,count:r.usable_candidate_count,contact_sheet:r.contact_sheet?.path}))});const sections=roles.map(r=>`<section><h2>${esc(r.label)} · ${esc(r.production)}</h2><img class="sheet" src="${esc(r.contact_sheet.path)}"><div class="grid">${r.candidates.map((c,i)=>`<article>${c.local&&!c.error?`<img src="${esc(c.local)}">`:`<div class="bad">${esc(c.error)}</div>`}<b>${i+1} · score ${c.score}</b><p>${esc(c.alt||c.caption||c.context||'')}</p><a href="${esc(c.source_page)}">article</a><code>${esc(c.sha256||'')}</code></article>`).join('')}</div></section>`).join('');await writeFile(join(OUT,'review.html'),`<!doctype html><meta charset="utf-8"><style>body{font:14px system-ui;background:#e8e3d9;margin:24px}.sheet{max-width:100%}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}article{background:white;padding:10px}article img,.bad{width:100%;height:240px;object-fit:contain;background:#171512;color:white}.bad{display:grid;place-items:center}code{display:block;font-size:9px;word-break:break-all}</style><h1>UC-025 candidate discovery</h1><p>Candidate-only: select one visibly exact image per role before composition.</p>${sections}`);console.log('UC-025 discovery '+roles.map(r=>`${r.key}=${r.usable_candidate_count}`).join(' '));console.log('artifact '+OUT);
