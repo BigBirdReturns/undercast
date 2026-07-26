@@ -1,0 +1,97 @@
+name: card-backfill-uc-060-render
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-060-RENDER.json"
+      - "scripts/card-backfill-uc-060-render.mjs"
+      - ".github/workflows/card-backfill-uc-060-render.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: card-backfill-uc-060-render-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-009'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-009
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Install deterministic image renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then shift; exec identify "$@"; fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify exact reviewed Darth Maul authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const c=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-060-RENDER.json','utf8'));
+          if(c.version!==1||c.record_id!=='UC-060'||c.actor!=='Ray Park'||c.side!=='still'||c.reviewed_role!=='second-desk')throw new Error('UC-060 render authorization drift');
+          if(c.discovery_artifact?.artifact_id!==8635066901||c.hires_artifact?.artifact_id!==8635178650)throw new Error('UC-060 source custody drift');
+          if(c.selection?.sha256!=='1322a48f78fc796695284a8932a006eb4abebfadf02d782378818f358836d442')throw new Error('UC-060 selected original drift');
+          if(c.rejected_visual_duplicates?.length!==2||c.crop?.gravity!=='west')throw new Error('UC-060 visual duplicate or crop boundary drift');
+          console.log('PASS — exact Lucasfilm Episode I Darth Maul original authorized');
+          NODE
+      - name: Retrieve and verify discovery and hires artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-060-render"
+          mkdir -p "$root/discovery" "$root/hires"
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8635066901/zip" > "$root/discovery.zip"
+          echo "6723404fd52c443d3af062f8ec4da2b318c685f8b8b9b2d16092a30d080fc472  $root/discovery.zip" | sha256sum -c -
+          unzip -q "$root/discovery.zip" -d "$root/discovery"
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8635178650/zip" > "$root/hires.zip"
+          echo "d6b14e6f11978b1c02b11e16d57a00c4e7e1d828bf6a8975890518e1beeb63da  $root/hires.zip" | sha256sum -c -
+          unzip -q "$root/hires.zip" -d "$root/hires"
+          echo "a45d8373fad6fdc75983663d25d73d2f4b07a6b25dfbfa9755b2a07d3175f1d4  $root/discovery/card-backfill-uc-060/manifest.json" | sha256sum -c -
+          echo "7974614d8ba7e9a14607d276a8e70281654cb7fa188c6d6b77951939523d869a  $root/discovery/card-backfill-uc-060/pages/duel-into-core.png" | sha256sum -c -
+          echo "c22e0f07ee28a7f6e37bdcd7cd9abbb239a0f02c1810d2ff1888296c8be76edf  $root/hires/output/manifest.json" | sha256sum -c -
+          echo "1322a48f78fc796695284a8932a006eb4abebfadf02d782378818f358836d442  $root/hires/output/candidates/01-duel-into-core-original.jpg" | sha256sum -c -
+      - name: Render exact Darth Maul candidate and enforce duplicate boundary
+        env:
+          DISCOVERY_ROOT: ${{ runner.temp }}/card-backfill-uc-060-render/discovery/card-backfill-uc-060
+          HIRES_ROOT: ${{ runner.temp }}/card-backfill-uc-060-render/hires/output
+          OUT: ${{ runner.temp }}/card-backfill-uc-060-render/output
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-uc-060-render.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-060-render/run.log"
+          test -z "$(git status --porcelain)"
+      - name: Upload exact candidate, source page, review and crop preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-060-render-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-060-render/output
+            ${{ runner.temp }}/card-backfill-uc-060-render/run.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
