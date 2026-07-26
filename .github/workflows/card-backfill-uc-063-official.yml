@@ -1,0 +1,103 @@
+name: card-backfill-uc-063-official
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-063-OFFICIAL.json"
+      - "scripts/card-backfill-uc-063-official.mjs"
+      - ".github/workflows/card-backfill-uc-063-official.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: card-backfill-uc-063-official-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-010'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-010
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical and browser runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Install deterministic image renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/magick" -version | head -n 2
+      - name: Verify exact online checkpoint and canonical boundary
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const control=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-063-OFFICIAL.json','utf8'));
+          const specimens=JSON.parse(fs.readFileSync('data/specimens.json','utf8'));
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8'));
+          const record=specimens.find(row=>row.id==='UC-063');
+          const item=(audit.items||[]).find(row=>row.id==='ma_97a8ad449acea930428c9665');
+          if(control.version!==1||control.record_id!=='UC-063'||control.actor!=='Jim Carrey'||control.side!=='still')throw new Error('UC-063 official checkpoint drift');
+          if(control.discovery_artifact?.artifact_id!==8635401043||control.discovery_artifact?.head_sha!=='4532f6ef3cf24d80ac44b089c361c8dc8e0cfd4a')throw new Error('UC-063 discovery custody drift');
+          if(!record||record.actor!=='Jim Carrey'||record.character!=='The Grinch'||record.still)throw new Error('UC-063 canonical still boundary changed');
+          if(!item||item.wall_id!=='UC-063'||item.side!=='still'||item.status!=='absent'||item.asset)throw new Error('UC-063 audit boundary changed');
+          console.log('PASS — UC-063 official-source checkpoint is exact and canonical state remains absent');
+          NODE
+      - name: Retrieve and verify the discovery checkpoint artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-063-official"
+          mkdir -p "$root/reference"
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8635401043/zip" > "$root/discovery.zip"
+          echo "4d2f80a234f590a8f9f6e2b57c5acca838507b866ef2f8438f3b6e7edb58add7  $root/discovery.zip" | sha256sum -c -
+          unzip -q "$root/discovery.zip" -d "$root/reference"
+          test -f "$root/reference/card-backfill-uc-063/manifest.json"
+          echo "654b047e6e726d58c606c5750e029d5317a0312bee42deabc44913deeb16b232  $root/reference/card-backfill-uc-063/candidates/05-slashfilm-grinch-film.jpg" | sha256sum -c -
+      - name: Probe official Universal image surfaces
+        env:
+          OUT: ${{ runner.temp }}/card-backfill-uc-063-official/output
+          REFERENCE_ROOT: ${{ runner.temp }}/card-backfill-uc-063-official/reference/card-backfill-uc-063
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-uc-063-official.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-063-official/run.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload official-source checkpoint artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-063-official-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-063-official/output
+            ${{ runner.temp }}/card-backfill-uc-063-official/run.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
