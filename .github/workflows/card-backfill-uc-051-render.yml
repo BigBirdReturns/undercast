@@ -1,0 +1,98 @@
+name: card-backfill-uc-051-render
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-051-RENDER.json"
+      - "scripts/card-backfill-uc-051-render.mjs"
+      - ".github/workflows/card-backfill-uc-051-render.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: card-backfill-uc-051-render-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-006'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-006
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Install deterministic image renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/magick" -version | head -n 2
+      - name: Verify exact reviewed Brundlefly authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-051-RENDER.json','utf8'));
+          if(row.version!==1||row.lane!=='card-backfill'||row.record_id!=='UC-051'||row.actor!=='Jeff Goldblum'||row.side!=='still'||row.reviewed_role!=='second-desk')throw new Error('UC-051 render authorization drift');
+          if(row.discovery_artifact?.artifact_id!==8634266371||row.discovery_artifact?.head_sha!=='a8ca970987c35ddf076684c547161d495649c4b3')throw new Error('UC-051 discovery custody drift');
+          if(row.selection?.source_key!=='bloody-disgusting-effects'||row.selection?.sha256!=='a6e23837c93a0d64419cc142379a563f4fd76f9f8738c2c2be7c7a331dc4f1a6')throw new Error('UC-051 selected Brundlefly drift');
+          if(row.ruling?.identity!=='expected-subject'||row.ruling?.presentation!=='character-depiction'||row.ruling?.canonical_mutation!==false)throw new Error('UC-051 ruling drift');
+          console.log('PASS — exact final Brundlefly source and evidence-only ruling authorized');
+          NODE
+      - name: Retrieve and verify the exact discovery artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-051-render"
+          mkdir -p "$root/source"
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8634266371/zip" > "$root/discovery.zip"
+          echo "0cbb35899f396840ffa93c963b55a67a76ceb170e3d31f4f341b4835689f4ae9  $root/discovery.zip" | sha256sum -c -
+          unzip -q "$root/discovery.zip" -d "$root/source"
+          test -f "$root/source/card-backfill-uc-051/manifest.json"
+          echo "a6e23837c93a0d64419cc142379a563f4fd76f9f8738c2c2be7c7a331dc4f1a6  $root/source/card-backfill-uc-051/candidates/18-bloody-disgusting-effects-bloody-disgusting.jpg" | sha256sum -c -
+          echo "123fcfe230b3282fba8b9a5b627f7ebc92fc555d14623e2d230c4e0d8b1ec23d  $root/source/card-backfill-uc-051/pages/bloody-disgusting-effects.png" | sha256sum -c -
+          echo "1aa6b719bfcde0f59af699de3eaa9731199a51566418d8238563fe2d1a782ef4  $root/source/card-backfill-uc-051/manifest.json" | sha256sum -c -
+      - name: Render exact Brundlefly candidate and enforce duplicate boundary
+        env:
+          SOURCE_ROOT: ${{ runner.temp }}/card-backfill-uc-051-render/source/card-backfill-uc-051
+          OUT: ${{ runner.temp }}/card-backfill-uc-051-render/output
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-uc-051-render.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-051-render/render.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload exact candidate, source page, review and crop preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-051-render-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-051-render/output
+            ${{ runner.temp }}/card-backfill-uc-051-render/render.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
