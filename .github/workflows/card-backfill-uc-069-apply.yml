@@ -1,0 +1,133 @@
+name: card-backfill-uc-069-apply
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-069-APPLY.json"
+      - "scripts/card-backfill-uc-069-apply.mjs"
+      - ".github/workflows/card-backfill-uc-069-apply.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: card-backfill-uc-069-apply-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-012'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-012
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Verify exact reviewed candidate authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-069-APPLY.json','utf8'));
+          if(row.version!==1||row.record_id!=='UC-069'||row.actor!=='Danny DeVito'||row.side!=='still'||row.reviewed_role!=='second-desk')throw new Error('UC-069 apply authorization drift');
+          if(row.render_artifact?.artifact_id!==8636506496||row.render_artifact?.head_sha!=='3eb06a2b3020d8461cef043af32f093d97a0e558')throw new Error('UC-069 render custody drift');
+          if(row.expected?.candidate_sha256!=='4f968665d354aed320244ea02d233d3fd318a6844cf7a7207fff44bf56c956eb')throw new Error('UC-069 candidate authorization drift');
+          if(row.expected?.crop_preview_sha256!=='408000c50c36b2034752fecae8724ec964ccb0ebcf2d3945e8730030135b6699'||row.ruling?.crop_ruling!=='pass-east-focus')throw new Error('UC-069 crop authorization drift');
+          console.log('PASS — exact UC-069 Penguin candidate and east-focused crop authorized');
+          NODE
+      - name: Retrieve and verify the exact render artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-069-apply"
+          mkdir -p "$root/source"
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8636506496/zip" > "$root/render.zip"
+          echo "aa34b1313555fddfa3531139cb6f5aaddf6312a867db4d39b3f4c5427e5b2360  $root/render.zip" | sha256sum -c -
+          unzip -q "$root/render.zip" -d "$root/source"
+          test -f "$root/source/output/manifest.json"
+          echo "4f968665d354aed320244ea02d233d3fd318a6844cf7a7207fff44bf56c956eb  $root/source/output/uc-069-still-candidate.jpg" | sha256sum -c -
+          echo "408000c50c36b2034752fecae8724ec964ccb0ebcf2d3945e8730030135b6699  $root/source/output/card-crop-preview.jpg" | sha256sum -c -
+          echo "12a694b3db192ce101901bcf74c2c8c0614775e97c7d93aa25fa7727695266ae  $root/source/output/source-page.png" | sha256sum -c -
+          echo "9c645f05eeb4d4a4548c33e9c5835344fadc23f6e7f49877fcf1549a4d374512  $root/source/output/manifest.json" | sha256sum -c -
+          echo "9bc1df2653c2c56702d9b91297652c256f690eeee16da5d48f2ec51fd9f5e92b  $root/source/output/duplicate-scan.json" | sha256sum -c -
+          echo "c6242fbce9f261360f8c0426f9e2ce1e0b2582dc228754d1858476383731b5ea  $root/source/output/review.json" | sha256sum -c -
+          echo "3c4fd4b3c932273ccfa34301312bbe779d30e0ec116b5f38522710612cd6cc7f  $root/source/output/review.md" | sha256sum -c -
+      - name: Materialize and independently validate the evidence-only packet
+        env:
+          SOURCE_ROOT: ${{ runner.temp }}/card-backfill-uc-069-apply/source/output
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-069-apply"
+          node scripts/card-backfill-uc-069-apply.mjs materialize 2>&1 | tee "$root/materialize.log"
+          node scripts/card-backfill-uc-069-apply.mjs validate 2>&1 | tee "$root/validate.log"
+          node --input-type=module - <<'NODE' | tee "$root/no-canonical-mutation.log"
+          import fs from 'node:fs';
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(row=>row.id==='UC-069');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(row=>row.id==='UC-069');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(row=>row.id==='ma_0edd7077e6e6c50ecbdb6472');
+          if(!specimen||specimen.still)throw new Error('UC-069 specimen was canonically mutated');
+          if(source?.still)throw new Error('UC-069 source ledger was canonically mutated');
+          if(!audit||audit.wall_id!=='UC-069'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-069 audit disposition was canonically mutated');
+          console.log('PASS — UC-069 remains canonically absent; only reviewed evidence was added');
+          NODE
+      - name: Build the permanent evidence commit and retire every temporary operator
+        run: |
+          set -euo pipefail
+          git config user.name 'undercast-card-backfill'
+          git config user.email 'undercast-card-backfill@users.noreply.github.com'
+          rm -f \
+            .github/CARD-BACKFILL-UC-069.json \
+            .github/CARD-BACKFILL-UC-069-RENDER.json \
+            .github/CARD-BACKFILL-UC-069-APPLY.json \
+            .github/workflows/card-backfill-next-selection.yml \
+            .github/workflows/card-backfill-uc-069-discover.yml \
+            .github/workflows/card-backfill-uc-069-render.yml \
+            .github/workflows/card-backfill-uc-069-apply.yml \
+            scripts/card-backfill-next-selection.mjs \
+            scripts/card-backfill-uc-069-discover.mjs \
+            scripts/card-backfill-uc-069-render.mjs \
+            scripts/card-backfill-uc-069-apply.mjs
+          git add -A
+          git diff --cached --check
+          git commit -m 'Card backfill: retain UC-069 Penguin still'
+          mapfile -t changed < <(git diff --name-only origin/agent/card-backfill-next-011...HEAD)
+          test "${#changed[@]}" -eq 8
+          for path in "${changed[@]}"; do
+            case "$path" in
+              data/review/card-backfill/UC-069/*) ;;
+              *) echo "unexpected permanent card-lane path: $path" >&2; exit 1 ;;
+            esac
+          done
+          printf '%s\n' "${changed[@]}" | tee "$RUNNER_TEMP/card-backfill-uc-069-apply/permanent-paths.txt"
+      - name: Install Chromium for the permanent-head rendered gate
+        run: npx playwright install --with-deps chromium
+      - name: Run the complete canonical gate on the exact permanent candidate
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-069-apply"
+          npm run gate 2>&1 | tee "$root/gate.log"
+          git status --short | tee "$root/status.txt"
+          test -z "$(git status --porcelain)"
+      - name: Publish the exact gated evidence candidate
+        run: git push origin HEAD:agent/card-backfill-next-012
+      - name: Retain materialization, evidence, gate and publication receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-069-apply-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-069-apply
+            data/review/card-backfill/UC-069
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
