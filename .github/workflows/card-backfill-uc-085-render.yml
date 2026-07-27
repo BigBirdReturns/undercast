@@ -1,0 +1,115 @@
+name: card-backfill-uc-085-render
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-085-RENDER.json"
+      - "scripts/card-backfill-uc-085-render.mjs"
+      - ".github/workflows/card-backfill-uc-085-render.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: card-backfill-uc-085-render-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-020'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-020
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Install deterministic renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify exact UC-085 render authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const path='.github/CARD-BACKFILL-UC-085-RENDER.json';
+          const bytes=fs.readFileSync(path);
+          const row=JSON.parse(bytes);
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(item=>item.id==='UC-085');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(item=>item.id==='UC-085');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_1bec5ea2c16e828370805dd8');
+          if(row.version!==1||row.record_id!=='UC-085'||row.actor!=='Ahmed Best'||row.character!=='Jar Jar Binks'||row.production!=='The Phantom Menace'||row.side!=='still')throw new Error('UC-085 render authorization drift');
+          if(row.discovery_artifact?.artifact_id!==8670831392||row.discovery_artifact?.head_sha!=='00b30c1ed12bf78ee223b81ee86f942e6a28bd90')throw new Error('UC-085 discovery custody drift');
+          if(row.selected_source?.sha256!=='7429128d9e5c95477b39e7fe6625e4e582d7c3b828b62db7c7e1fe5dc31e49f6'||row.selected_source?.width!==1560||row.selected_source?.height!==878)throw new Error('UC-085 selected source drift');
+          if(row.render?.candidate_width!==1260||row.render?.candidate_height!==1000||row.render?.candidate_gravity!=='center'||row.render?.wall_width!==1246||row.render?.wall_height!==1000)throw new Error('UC-085 render geometry drift');
+          if(!specimen||specimen.character!=='Jar Jar Binks'||specimen.production!=='The Phantom Menace'||specimen.still)throw new Error('UC-085 specimen boundary drift');
+          if(source?.still)throw new Error('UC-085 source-ledger boundary drift');
+          if(!audit||audit.wall_id!=='UC-085'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-085 audit boundary drift');
+          console.log(`PASS — UC-085 render control ${crypto.createHash('sha256').update(bytes).digest('hex')}`);
+          NODE
+      - name: Retrieve and verify the exact bounded discovery artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-085-render"
+          mkdir -p "$root/source"
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8670831392/zip" > "$root/discovery.zip"
+          echo "4df0bf523a7b3bc1ee04beace180b8e79ba22fc34e50aaf13d0cb6f2c8a21bc8  $root/discovery.zip" | sha256sum -c -
+          unzip -q "$root/discovery.zip" -d "$root/source"
+          base="$root/source/card-backfill-uc-085-discover"
+          test -f "$base/manifest.json"
+          echo "431dd4da7ac86c488d75ac142aa6765b947ad99ecefeb86887c8c3e9e73fb764  $base/manifest.json" | sha256sum -c -
+          echo "0704c24b704e08ab74016a010b26e7624ca68457f139928f122d0c3f977431a6  $base/summary.json" | sha256sum -c -
+          echo "fef32a8a9070721856a91443e6bbfa44281f3a35c136aa2e6425c2bf00eac0cc  $base/contact-sheet-final.jpg" | sha256sum -c -
+          echo "52f927c5ac6f6cd37c7bb89911fc58f313ca99b9a2b8c1e2d90fe376a0ae912c  $base/contact-sheet-identity.jpg" | sha256sum -c -
+          echo "6d483e0e466edffe88c2dbf02d3d237799a151391392e8e4794895a871422e68  $base/contact-sheet-unresolved.jpg" | sha256sum -c -
+          echo "7429128d9e5c95477b39e7fe6625e4e582d7c3b828b62db7c7e1fe5dc31e49f6  $base/candidates/086-starwars-jar-jar-biography-gallery-final-dom-image.jpg" | sha256sum -c -
+          echo "fd7c83127f66c4f309830cf79a14010d342951772c5025fb0a963693221bfb42  $base/pages/starwars-jar-jar-biography-gallery.png" | sha256sum -c -
+          echo "7f2633cc71864bdaa3db16077cabba8ae60420950efb43df80472e91b61bdb21  $base/pages/starwars-ahmed-best-phantom.png" | sha256sum -c -
+          echo "f92ea06dab78eba4bef09703e1186897b925d87f19fdfcabfdd7b20778be7bb1  $base/pages/starwars-phantom-film.png" | sha256sum -c -
+          echo "88a7482ac8183b7f75622a80927000e89bb5e3affaef9ec104f4519c63e6f1c9  $base/pages/starwars-jar-jar-databank.png" | sha256sum -c -
+      - name: Render exact candidate and evidence packet
+        env:
+          SOURCE_ROOT: ${{ runner.temp }}/card-backfill-uc-085-render/source/card-backfill-uc-085-discover
+          OUT: ${{ runner.temp }}/card-backfill-uc-085-render/output
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node --check scripts/card-backfill-uc-085-render.mjs
+          node scripts/card-backfill-uc-085-render.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-085-render-run.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload exact official sources, render, crop, and receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-085-render-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-085-render/output
+            ${{ runner.temp }}/card-backfill-uc-085-render-run.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
