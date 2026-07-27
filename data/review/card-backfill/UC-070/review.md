@@ -6,7 +6,7 @@
 - **Production:** Pirates of the Caribbean: Dead Man's Chest (2006)
 - **Source:** [Industrial Light & Magic animation-history article](https://www.ilm.com/ilm-evolutions-50-animation-part-one/)
 - **Candidate:** `3d8e34a8b291c88be576dfcfea6bd2649f5d7a2d237d57382ba64cf3639cc0f9`
-- **Wall-crop preview:** `f6d004aebd0568223179d129c5feb49fab8a8a336361eaee0ef386464352ef93`
+- **Wall-crop preview:** `0e23b28aebb9416e7f82c30979214f060f08b7717b1394fa96fd74ecb188e710`
 - **Identity ruling:** expected subject
 - **Presentation ruling:** character depiction
 - **Crop ruling:** pass — center focus
@@ -22,6 +22,4 @@
 - The candidate is not Bill Nighy unmasked or in the Imocap suit, another Pirates character, ship-only imagery, a poster, logo, animation/game/LEGO image, or an unrelated namesake.
 - Exact-byte duplicate screening passes against 2,070 canonical repository hashes.
 
-The source-native 2045×1147 ILM JPEG is retained unchanged. The centered crop preserves the complete designed face and tentacle beard symmetrically. The failed first render remains preserved as a diagnostic checkpoint and changed no packet or canonical state.
-
-This evidence-only packet passed its complete canonical and rendered-browser gate before exact branch publication. The website-maintenance controller retains independent authority over canonical acceptance.
+The source-native 2045×1147 ILM JPEG is retained unchanged. Three usable resized deliveries and one thumbnail remain recorded as rejected visual duplicates. The centered crop preserves the complete designed face and tentacle beard symmetrically. The failed first render is retained as a diagnostic checkpoint and changed no packet or canonical state. This packet remains evidence-only pending independent canonical acceptance.
