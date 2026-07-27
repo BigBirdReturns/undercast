@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/CARD-BACKFILL-UC-080-APPLY.json"
       - "scripts/card-backfill-uc-080-apply.mjs"
+      - "scripts/card-backfill-uc-080-apply-custody.mjs"
       - ".github/workflows/card-backfill-uc-080-apply.yml"
 
 permissions:
@@ -46,6 +47,7 @@ jobs:
           const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_b7a185b181d2292ce7e73ad7');
           if(row.version!==1||row.record_id!=='UC-080'||row.actor!=='Louis Gossett Jr.'||row.character!=="Jeriba 'Jerry' Shigan"||row.side!=='still'||row.reviewed_role!=='second-desk')throw new Error('UC-080 apply authorization drift');
           if(row.render_artifact?.artifact_id!==8669650651||row.render_artifact?.head_sha!=='3472b559c639f07d6835500c27dcdc1ed2245409')throw new Error('UC-080 render custody drift');
+          if(!row.failed_apply_checkpoints?.some(item=>item.run_id===30309556411&&item.artifact_id===8669787482))throw new Error('UC-080 failed apply custody drift');
           if(row.expected?.selected_source_sha256!=='0defb8e781dbeeb885a9b7d8177f5e6ab732686cf3d7a00a1483b800d0d8087b'||row.expected?.historic_press_sha256!=='cff0cfe0898e91461fe23038498c707b903768cd365bcaabcac53f4e25548e5b')throw new Error('UC-080 source authorization drift');
           if(row.expected?.candidate_sha256!=='3af5bb3ed284de3260940bd43cf8353141868ca808f25644f005b134476f89bf'||row.expected?.crop_preview_sha256!=='f6681b9b99a25b092e3bd447e3d362ca42089ddc76dc7fdef9abe3159b388d9a')throw new Error('UC-080 candidate or crop authorization drift');
           if(row.expected?.packet_file_count!==14||row.expected?.duplicate_item_count!==4||row.expected?.duplicate_repository_hash_count!==2070)throw new Error('UC-080 packet denominator drift');
@@ -98,17 +100,21 @@ jobs:
           set -euo pipefail
           root="$RUNNER_TEMP/card-backfill-uc-080-apply"
           node --check scripts/card-backfill-uc-080-apply.mjs
+          node --check scripts/card-backfill-uc-080-apply-custody.mjs
           node scripts/card-backfill-uc-080-apply.mjs materialize 2>&1 | tee "$root/materialize.log"
+          node scripts/card-backfill-uc-080-apply-custody.mjs 2>&1 | tee "$root/custody.log"
           node scripts/card-backfill-uc-080-apply.mjs validate 2>&1 | tee "$root/validate.log"
           node --input-type=module - <<'NODE' | tee "$root/no-canonical-mutation.log"
           import fs from 'node:fs';
           const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(row=>row.id==='UC-080');
           const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(row=>row.id==='UC-080');
           const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(row=>row.id==='ma_b7a185b181d2292ce7e73ad7');
+          const manifest=JSON.parse(fs.readFileSync('data/review/card-backfill/UC-080/manifest.json','utf8'));
           if(!specimen||specimen.still)throw new Error('UC-080 specimen was canonically mutated');
           if(source?.still)throw new Error('UC-080 source ledger was canonically mutated');
           if(!audit||audit.wall_id!=='UC-080'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-080 audit disposition was canonically mutated');
-          console.log('PASS — UC-080 remains canonically absent; only reviewed evidence was added');
+          if(!manifest.custody?.failed_apply_checkpoints?.some(item=>item.run_id===30309556411&&item.artifact_id===8669787482))throw new Error('UC-080 failed apply custody was not retained');
+          console.log('PASS — UC-080 remains canonically absent; reviewed evidence and failed-apply custody only were added');
           NODE
       - name: Build the permanent evidence commit and retire every temporary operator
         run: |
@@ -131,9 +137,10 @@ jobs:
             scripts/card-backfill-uc-080-discover.mjs \
             scripts/card-backfill-uc-080-discover-repair.mjs \
             scripts/card-backfill-uc-080-render.mjs \
-            scripts/card-backfill-uc-080-apply.mjs
+            scripts/card-backfill-uc-080-apply.mjs \
+            scripts/card-backfill-uc-080-apply-custody.mjs
           git add -A
-          git diff --cached --check
+          git diff --cached --check -- . ':(exclude,glob)data/review/card-backfill/UC-080/*.txt'
           git commit -m 'Card backfill: retain UC-080 Louis Gossett Jr. Jeriba still'
           git fetch --no-tags --depth=1 origin agent/card-backfill-next-018
           mapfile -t changed < <(git diff --name-only origin/agent/card-backfill-next-018 HEAD)
