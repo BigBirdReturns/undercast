@@ -1,0 +1,90 @@
+name: card-backfill-uc-088-discover
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-088-DISCOVER.json"
+      - "scripts/card-backfill-uc-088-discover.mjs"
+      - ".github/workflows/card-backfill-uc-088-discover.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: card-backfill-uc-088-discover-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  discover:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-021'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-021
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical and browser runtime
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Install deterministic review renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify exact UC-088 discovery authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-088-DISCOVER.json','utf8'));
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(item=>item.id==='UC-088');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(item=>item.id==='UC-088');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_0203aa7a6b845505e9c2c887');
+          if(row.version!==1||row.record_id!=='UC-088'||row.actor!=='Michael Chiklis'||row.character!=='The Thing'||row.production!=='Fantastic Four'||row.year!==2005||row.side!=='still')throw new Error('UC-088 discovery authorization drift');
+          if(row.selector_artifact?.artifact_id!==8671229850||row.scope_artifact?.artifact_id!==8671280407)throw new Error('UC-088 discovery custody drift');
+          if(row.pages?.length!==13||row.pages.filter(item=>item.strict).length!==5||row.max_candidates!==70||row.transport_timeout_ms!==25000||row.max_variants_per_url!==3)throw new Error('UC-088 source denominator drift');
+          if(row.selection_contract?.exact_2005_live_action_role_required!==true||row.selection_contract?.practical_suit_required!==true||row.selection_contract?.reject_2007_sequel_substitution!==true||row.selection_contract?.reject_2015_thing_substitution!==true||row.selection_contract?.canonical_mutation!==false)throw new Error('UC-088 selection contract drift');
+          if(!specimen||specimen.character!=='The Thing'||specimen.production!=='Fantastic Four'||specimen.years!=='2005'||specimen.still)throw new Error('UC-088 specimen boundary drift');
+          if(source?.still)throw new Error('UC-088 source-ledger boundary drift');
+          if(!audit||audit.wall_id!=='UC-088'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-088 audit boundary drift');
+          console.log('PASS — exact 2005 Michael Chiklis Thing source orbit authorized');
+          NODE
+      - name: Gather exact-role candidates and review sheets
+        env:
+          OUT: ${{ runner.temp }}/card-backfill-uc-088-discover
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node --check scripts/card-backfill-uc-088-discover.mjs
+          node scripts/card-backfill-uc-088-discover.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-088-discover-run.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload exact pages, candidates, classifications, and hashes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-088-discover-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-088-discover
+            ${{ runner.temp }}/card-backfill-uc-088-discover-run.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
