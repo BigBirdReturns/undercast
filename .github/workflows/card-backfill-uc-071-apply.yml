@@ -1,0 +1,139 @@
+name: card-backfill-uc-071-apply
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-071-APPLY.json"
+      - "scripts/card-backfill-uc-071-apply.mjs"
+      - ".github/workflows/card-backfill-uc-071-apply.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: card-backfill-uc-071-apply-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-014'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-014
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Verify exact reviewed packet authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-071-APPLY.json','utf8'));
+          if(row.version!==1||row.record_id!=='UC-071'||row.actor!=='Warwick Davis'||row.side!=='still'||row.reviewed_role!=='second-desk')throw new Error('UC-071 apply authorization drift');
+          if(row.render_artifact?.artifact_id!==8640579809||row.render_artifact?.head_sha!=='39a010ad5eec230e9a1781b74f4d16b1dbcbfb39')throw new Error('UC-071 render custody drift');
+          if(row.render_artifact?.zip_sha256!=='50b4a654946a0ff4a6c68e59a6a8df29616f8522551bbdfeeb6303a1ba9ed8d3')throw new Error('UC-071 render ZIP drift');
+          if(row.expected?.['uc-071-still-candidate.jpg']?.sha256!=='c94da4922b13fc125e6710955f838d27bf47d3a0f897802f5dd0e85819d3cb3c')throw new Error('UC-071 candidate drift');
+          if(row.expected?.['card-crop-preview.jpg']?.sha256!=='58690a5f5798c78cc6b011620d0f021d0906c2ef7e592d9a90d8910af474d44a')throw new Error('UC-071 crop drift');
+          console.log('PASS — exact UC-071 three-role evidence packet authorized');
+          NODE
+      - name: Retrieve and verify the exact render artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-071-apply"
+          mkdir -p "$root/source"
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8640579809/zip" > "$root/render.zip"
+          echo "50b4a654946a0ff4a6c68e59a6a8df29616f8522551bbdfeeb6303a1ba9ed8d3  $root/render.zip" | sha256sum -c -
+          unzip -q "$root/render.zip" -d "$root/source"
+          source="$root/source/output"
+          echo "c94da4922b13fc125e6710955f838d27bf47d3a0f897802f5dd0e85819d3cb3c  $source/uc-071-still-candidate.jpg" | sha256sum -c -
+          echo "58690a5f5798c78cc6b011620d0f021d0906c2ef7e592d9a90d8910af474d44a  $source/card-crop-preview.jpg" | sha256sum -c -
+          echo "2c73be2f5948829f939c08872718c824fa651994188acb9be6820e43a0b44d14  $source/manifest.json" | sha256sum -c -
+          echo "c8b07f7e3d10b8c1c728b41d47f64f7496d6b22b65336eaa508f3e536a791f64  $source/duplicate-scan.json" | sha256sum -c -
+          echo "b13908fe59229644c2b0d3f7e637e3c8602a112a81dd42df069b09d1404ba365  $source/review.json" | sha256sum -c -
+          echo "069e60863def21566281f5ffdb10de9e6f1d5d93a44dbd276b564bdd4b812264  $source/review.md" | sha256sum -c -
+      - name: Materialize and independently validate the evidence-only packet
+        env:
+          SOURCE_ROOT: ${{ runner.temp }}/card-backfill-uc-071-apply/source/output
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-071-apply"
+          node scripts/card-backfill-uc-071-apply.mjs materialize 2>&1 | tee "$root/materialize.log"
+          node scripts/card-backfill-uc-071-apply.mjs validate 2>&1 | tee "$root/validate.log"
+          node --input-type=module - <<'NODE' | tee "$root/no-canonical-mutation.log"
+          import fs from 'node:fs';
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(row=>row.id==='UC-071');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(row=>row.id==='UC-071');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(row=>row.id==='ma_d14edc5659bf5ae42a4ad6e5');
+          const portraitAudit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(row=>row.id==='ma_cdba7b73d07cb05b3d4ac4e0');
+          if(!specimen||specimen.still)throw new Error('UC-071 specimen was canonically mutated');
+          if(specimen.portrait?.src!=='images/uc-071-portrait.jpg')throw new Error('UC-071 existing portrait drifted');
+          if(source?.still)throw new Error('UC-071 source ledger was canonically mutated');
+          if(source?.portrait?.src!=='images/uc-071-portrait.jpg')throw new Error('UC-071 source portrait drifted');
+          if(!audit||audit.wall_id!=='UC-071'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-071 still audit disposition was canonically mutated');
+          if(!portraitAudit||portraitAudit.side!=='portrait'||portraitAudit.status!=='review'||portraitAudit.asset?.sha256!=='6342850060d0aa5ee484c911c50546c420d2472a78e94de2e66730bb5301cfa3')throw new Error('UC-071 portrait audit drifted');
+          console.log('PASS — UC-071 remains canonically absent on the still side; existing portrait state is unchanged');
+          NODE
+      - name: Build the permanent evidence commit and retire every temporary operator
+        run: |
+          set -euo pipefail
+          git config user.name 'undercast-card-backfill'
+          git config user.email 'undercast-card-backfill@users.noreply.github.com'
+          rm -f \
+            .github/CARD-BACKFILL-UC-071.json \
+            .github/CARD-BACKFILL-UC-071-RENDER.json \
+            .github/CARD-BACKFILL-UC-071-APPLY.json \
+            .github/workflows/card-backfill-next-selection.yml \
+            .github/workflows/card-backfill-uc-071-inspect.yml \
+            .github/workflows/card-backfill-uc-071-discover.yml \
+            .github/workflows/card-backfill-uc-071-render.yml \
+            .github/workflows/card-backfill-uc-071-apply.yml \
+            scripts/card-backfill-next-selection.mjs \
+            scripts/card-backfill-uc-071-inspect.mjs \
+            scripts/card-backfill-uc-071-discover.mjs \
+            scripts/card-backfill-uc-071-render.mjs \
+            scripts/card-backfill-uc-071-apply.mjs
+          git add -A
+          git diff --cached --check
+          git commit -m 'Card backfill: retain UC-071 Warwick Davis role triptych'
+          mapfile -t changed < <(git diff --name-only origin/agent/card-backfill-next-013...HEAD)
+          test "${#changed[@]}" -eq 18
+          for path in "${changed[@]}"; do
+            case "$path" in
+              data/review/card-backfill/UC-071/*) ;;
+              *) echo "unexpected permanent card-lane path: $path" >&2; exit 1 ;;
+            esac
+          done
+          printf '%s\n' "${changed[@]}" | tee "$RUNNER_TEMP/card-backfill-uc-071-apply/permanent-paths.txt"
+      - name: Install Chromium for the permanent-head rendered gate
+        run: npx playwright install --with-deps chromium
+      - name: Run the complete canonical gate on the exact permanent candidate
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-071-apply"
+          npm run gate 2>&1 | tee "$root/gate.log"
+          git status --short | tee "$root/status.txt"
+          test -z "$(git status --porcelain)"
+      - name: Publish the exact gated evidence candidate
+        run: git push origin HEAD:agent/card-backfill-next-014
+      - name: Retain materialization, evidence, gate, and publication receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-071-apply-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-071-apply
+            data/review/card-backfill/UC-071
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
