@@ -1,0 +1,123 @@
+name: card-backfill-uc-080-render
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-080-RENDER.json"
+      - "scripts/card-backfill-uc-080-render.mjs"
+      - ".github/workflows/card-backfill-uc-080-render.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: card-backfill-uc-080-render-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-019'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-019
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Install deterministic renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify exact UC-080 render authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const path='.github/CARD-BACKFILL-UC-080-RENDER.json';
+          const bytes=fs.readFileSync(path);
+          const row=JSON.parse(bytes);
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(item=>item.id==='UC-080');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(item=>item.id==='UC-080');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_b7a185b181d2292ce7e73ad7');
+          if(row.version!==1||row.record_id!=='UC-080'||row.actor!=='Louis Gossett Jr.'||row.character!=="Jeriba 'Jerry' Shigan"||row.side!=='still')throw new Error('UC-080 render authorization drift');
+          if(row.discovery_artifact?.artifact_id!==8669409887||row.discovery_artifact?.head_sha!=='10f68d31bdb6d1bb71ea932167aa75d26430b897')throw new Error('UC-080 discovery custody drift');
+          if(row.selected_source?.sha256!=='0defb8e781dbeeb885a9b7d8177f5e6ab732686cf3d7a00a1483b800d0d8087b'||row.selected_source?.width!==1216||row.selected_source?.height!==683)throw new Error('UC-080 selected source drift');
+          if(row.render?.candidate_width!==1260||row.render?.candidate_height!==1000||row.render?.candidate_gravity!=='west'||row.render?.wall_width!==1246||row.render?.wall_height!==1000)throw new Error('UC-080 render geometry drift');
+          if(!specimen||specimen.character!=="Jeriba 'Jerry' Shigan"||specimen.still)throw new Error('UC-080 specimen boundary drift');
+          if(source?.still)throw new Error('UC-080 source-ledger boundary drift');
+          if(!audit||audit.wall_id!=='UC-080'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-080 audit boundary drift');
+          console.log(`PASS — UC-080 render control ${crypto.createHash('sha256').update(bytes).digest('hex')}`);
+          NODE
+      - name: Retrieve and verify the exact discovery artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-080-render"
+          mkdir -p "$root/source"
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8669409887/zip" > "$root/discovery.zip"
+          echo "091536eedcf7935374d99f49c6e73d56bf5666c45ac1f4d5d7653167917e75fb  $root/discovery.zip" | sha256sum -c -
+          unzip -q "$root/discovery.zip" -d "$root/source"
+          base="$root/source/card-backfill-uc-080-discover"
+          test -f "$base/manifest.json"
+          echo "e9c83268c82ef96e230f1c84ef142415673997397ea73747eb4de3b130ff5395  $base/manifest.json" | sha256sum -c -
+          echo "02ef2bb164dce95b0824b8817f7d6cc35e4aca4228c93956f741f8ecf7b7e583  $base/summary.json" | sha256sum -c -
+          echo "b7b01c852de2f46dfcbca3a3df21035610778aaf8e615d3d157c8817844f7196  $base/contact-sheet.jpg" | sha256sum -c -
+          echo "0defb8e781dbeeb885a9b7d8177f5e6ab732686cf3d7a00a1483b800d0d8087b  $base/candidates/092-moria-role-dom-image.jpg" | sha256sum -c -
+          echo "dc9338be33a5bfda9cba1396e11ca7a1271bedb73f2bb6cdebe0336138753978  $base/pages/moria-role.png" | sha256sum -c -
+          echo "cff0cfe0898e91461fe23038498c707b903768cd365bcaabcac53f4e25548e5b  $base/candidates/001-historic-images-jeriba-explicit-control.webp" | sha256sum -c -
+          echo "b8393fbe8923c360fa5a3a35771a5fb048c6e57bc8d0527d0ba1a8e6609d7a12  $base/pages/historic-images-jeriba-product.txt" | sha256sum -c -
+          echo "e59838f7b242fc15251f6c1988bea08b6ab17f0f300db09198b27373f3ddc136  $base/pages/apple-tv-role-product.txt" | sha256sum -c -
+          echo "d9837b38287652c671ac692816df49585d70c1f4bfe6e3e76bf00b3302d83dc2  $base/pages/purepeople-jeriba-product.txt" | sha256sum -c -
+          echo "9ee028d26aa0a22765e1e95979091ae969db24dfb0ddc36513d1cfd2243952d7  $base/pages/purepeople-jeriba.png" | sha256sum -c -
+          cat > "$root/discovery-artifact-receipt.txt" <<'EOF'
+          run_id=30308407641
+          artifact_id=8669409887
+          artifact_name=card-backfill-uc-080-discover-30308407641
+          artifact_zip_sha256=091536eedcf7935374d99f49c6e73d56bf5666c45ac1f4d5d7653167917e75fb
+          artifact_head_sha=10f68d31bdb6d1bb71ea932167aa75d26430b897
+          manifest_sha256=e9c83268c82ef96e230f1c84ef142415673997397ea73747eb4de3b130ff5395
+          EOF
+      - name: Render exact candidate and evidence packet
+        env:
+          OUT: ${{ runner.temp }}/card-backfill-uc-080-render/output
+          SOURCE_ROOT: ${{ runner.temp }}/card-backfill-uc-080-render/source/card-backfill-uc-080-discover
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-080-render"
+          node --check scripts/card-backfill-uc-080-render.mjs
+          node scripts/card-backfill-uc-080-render.mjs 2>&1 | tee "$root/render.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload exact sources, role receipts, render, crop, and hashes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-080-render-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-080-render
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
