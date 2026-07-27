@@ -24,7 +24,7 @@ async function download(context,source){const response=await context.request.get
 const control=await readJson(CONTROL);
 assert(control.version===1&&control.record_id==='UC-075'&&control.actor==='Lou Ferrigno'&&control.character==='The Hulk'&&control.side==='still','UC-075 discovery scope drift');
 assert(control.selector_artifact?.artifact_id===8640701810&&control.selector_artifact?.head_sha==='8d2bd0c49c708fe0e4fddde69a55fdc3d74d249c','UC-075 selector custody drift');
-assert(control.failed_discovery_checkpoints?.length===2,'UC-075 failed checkpoint ledger drift');
+assert(control.failed_discovery_checkpoints?.length===3,'UC-075 failed checkpoint ledger drift');
 assert(control.image_sources?.length===2&&control.image_sources.every(source=>source.original_url&&source.expected_width&&source.expected_height)&&control.identity_source?.provider==='Universal Pictures At Home','UC-075 source-set drift');
 assert(control.commons_api?.required_for_acceptance===false,'UC-075 Commons API must remain optional');
 await mkdir(OUT,{recursive:true});
@@ -57,7 +57,7 @@ try{
   execFileSync('montage',[...thumbs,'-tile','2x','-geometry','520x620+12+12','-background','#e8e3d9',contact],{stdio:'inherit'});
   const pageScreenshots={universal:{path:identityEvidence.screenshot,sha256:sha(await readFile(join(OUT,identityEvidence.screenshot)))}};
   for(const source of control.image_sources){const screenshotPath=fileEvidence[source.key].page.screenshot;pageScreenshots[source.key]={path:screenshotPath,sha256:sha(await readFile(join(OUT,screenshotPath)))}}
-  const manifest={version:1,lane:'card-backfill',record_id:'UC-075',actor:'Lou Ferrigno',character:'The Hulk',production:'The Incredible Hulk',year_range:'1977–82',side:'still',expected_subject:'The Hulk',generated_at:new Date().toISOString(),control_sha256:sha(await readFile(CONTROL)),selector_artifact:control.selector_artifact,failed_discovery_checkpoints:control.failed_discovery_checkpoints,repository_hash_count:repository.size,identity_source:{...control.identity_source,evidence:identityEvidence},image_sources:fileEvidence,page_screenshots,candidates,contact_sheet:{path:'contact-sheet.jpg',...identify(contact)},disposition:'candidate-only-pending-visual-selection',canonical_mutation:false};
+  const manifest={version:1,lane:'card-backfill',record_id:'UC-075',actor:'Lou Ferrigno',character:'The Hulk',production:'The Incredible Hulk',year_range:'1977–82',side:'still',expected_subject:'The Hulk',generated_at:new Date().toISOString(),control_sha256:sha(await readFile(CONTROL)),selector_artifact:control.selector_artifact,failed_discovery_checkpoints:control.failed_discovery_checkpoints,repository_hash_count:repository.size,identity_source:{...control.identity_source,evidence:identityEvidence},image_sources:fileEvidence,page_screenshots:pageScreenshots,candidates,contact_sheet:{path:'contact-sheet.jpg',...identify(contact)},disposition:'candidate-only-pending-visual-selection',canonical_mutation:false};
   await writeJson(join(OUT,'manifest.json'),manifest);
   await writeJson(join(OUT,'summary.json'),{record_id:'UC-075',actor:'Lou Ferrigno',character:'The Hulk',candidates:candidates.map(({key,title,source_page,original_url,local,mime,bytes,sha256,width,height,repository_matches,description,author,license})=>({key,title,source_page,original_url,local,mime,bytes,sha256,width,height,repository_matches,description,author,license}))});
   console.log(`UC-075 discovery complete: ${candidates.map(row=>`${row.key}=${row.width}x${row.height}`).join(' ')}`);
