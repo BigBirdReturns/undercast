@@ -1,0 +1,90 @@
+name: card-backfill-uc-085-discover
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-085-DISCOVER.json"
+      - "scripts/card-backfill-uc-085-discover.mjs"
+      - ".github/workflows/card-backfill-uc-085-discover.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: card-backfill-uc-085-discover-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  discover:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-020'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-020
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical and browser runtime
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Install deterministic review renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify exact UC-085 official discovery authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-085-DISCOVER.json','utf8'));
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(item=>item.id==='UC-085');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(item=>item.id==='UC-085');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_1bec5ea2c16e828370805dd8');
+          if(row.version!==1||row.record_id!=='UC-085'||row.actor!=='Ahmed Best'||row.character!=='Jar Jar Binks'||row.production!=='The Phantom Menace'||row.side!=='still')throw new Error('UC-085 discovery authorization drift');
+          if(row.selector_artifact?.artifact_id!==8670042309||row.scope_artifact?.artifact_id!==8670097739)throw new Error('UC-085 discovery custody drift');
+          if(row.pages?.length!==8||row.pages.filter(item=>item.strict).length!==6||row.pages.some(item=>!String(item.url).startsWith('https://www.starwars.com/')))throw new Error('UC-085 official source denominator drift');
+          if(row.selection_contract?.exact_episode_i_role_required!==true||row.selection_contract?.identity_evidence_not_final_by_default!==true||row.selection_contract?.canonical_mutation!==false)throw new Error('UC-085 selection contract drift');
+          if(!specimen||specimen.character!=='Jar Jar Binks'||specimen.production!=='The Phantom Menace'||specimen.still)throw new Error('UC-085 specimen boundary drift');
+          if(source?.still)throw new Error('UC-085 source-ledger boundary drift');
+          if(!audit||audit.wall_id!=='UC-085'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-085 audit boundary drift');
+          console.log('PASS — exact official Lucasfilm UC-085 source orbit authorized');
+          NODE
+      - name: Gather official final-image and performance-evidence candidates
+        env:
+          OUT: ${{ runner.temp }}/card-backfill-uc-085-discover
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node --check scripts/card-backfill-uc-085-discover.mjs
+          node scripts/card-backfill-uc-085-discover.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-085-discover-run.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload official pages, candidates, classifications, and hashes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-085-discover-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-085-discover
+            ${{ runner.temp }}/card-backfill-uc-085-discover-run.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
