@@ -1,0 +1,107 @@
+name: card-backfill-uc-079-direct-repair
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-079-DIRECT-REPAIR.json"
+      - ".github/workflows/card-backfill-uc-079-direct-repair.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: card-backfill-uc-079-direct-repair-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-018'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-018
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical and browser runtime
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Install deterministic review renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify exact UC-079 metadata-only repair authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const repair=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-079-DIRECT-REPAIR.json','utf8'));
+          const direct=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-079-DIRECT.json','utf8'));
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(item=>item.id==='UC-079');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_12bdd74c1d97797f21a54d9a');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(item=>item.id==='UC-079');
+          if(repair.version!==1||repair.record_id!=='UC-079'||repair.actor!=='Eddie Murphy'||repair.side!=='still')throw new Error('UC-079 direct repair authorization drift');
+          if(repair.failed_direct_checkpoint?.artifact_id!==8660240212||repair.failed_direct_checkpoint?.head_sha!=='8ad2322e35ac3ec14f6e22e94e97a07bbd1ecb58')throw new Error('UC-079 failed direct custody drift');
+          if(repair.repair?.mode!=='isolated-working-copy'||repair.repair?.replace_once?.to!=='for (const script of []) {')throw new Error('UC-079 repair operation drift');
+          if(direct.targets?.length!==6||direct.targets.filter(target=>target.asset_mode==='active-page-metadata').length!==2||direct.targets.filter(target=>target.asset_mode==='declared-direct-asset').length!==4)throw new Error('UC-079 direct denominator drift');
+          if(!specimen||specimen.character!=='Barbershop crowd & Saul'||specimen.still)throw new Error('UC-079 specimen boundary drift');
+          if(!audit||audit.wall_id!=='UC-079'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-079 audit boundary drift');
+          if(source?.still)throw new Error('UC-079 source-ledger boundary drift');
+          console.log('PASS — UC-079 active-metadata-only repair authorized');
+          NODE
+      - name: Prepare the collector repair in an isolated working copy
+        run: |
+          set -euo pipefail
+          cp scripts/card-backfill-uc-079-direct.mjs scripts/.card-backfill-uc-079-direct-repair-run.mjs
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          control=json.loads(Path('.github/CARD-BACKFILL-UC-079-DIRECT-REPAIR.json').read_text())
+          path=Path('scripts/.card-backfill-uc-079-direct-repair-run.mjs')
+          text=path.read_text()
+          old=control['repair']['replace_once']['from']
+          new=control['repair']['replace_once']['to']
+          if text.count(old)!=1:
+              raise SystemExit(f'expected one metadata inventory loop, found {text.count(old)}')
+          path.write_text(text.replace(old,new,1))
+          PY
+          node --check scripts/.card-backfill-uc-079-direct-repair-run.mjs
+      - name: Collect exact active metadata and declared direct role assets
+        env:
+          OUT: ${{ runner.temp }}/card-backfill-uc-079-direct-repair
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node scripts/.card-backfill-uc-079-direct-repair-run.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-079-direct-repair-run.log"
+          rm scripts/.card-backfill-uc-079-direct-repair-run.mjs
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload repaired explicit role assets, pages, candidates, and hashes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-079-direct-repair-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-079-direct-repair
+            ${{ runner.temp }}/card-backfill-uc-079-direct-repair-run.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
