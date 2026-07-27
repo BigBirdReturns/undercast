@@ -1,0 +1,97 @@
+name: card-backfill-uc-075-render
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-075-RENDER.json"
+      - "scripts/card-backfill-uc-075-render.mjs"
+      - ".github/workflows/card-backfill-uc-075-render.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: card-backfill-uc-075-render-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-015'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-015
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Install deterministic image renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then shift; exec identify "$@"; fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify exact reviewed Hulk authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-075-RENDER.json','utf8'));
+          if(row.version!==1||row.record_id!=='UC-075'||row.actor!=='Lou Ferrigno'||row.character!=='The Hulk'||row.side!=='still'||row.reviewed_role!=='second-desk')throw new Error('UC-075 render authorization drift');
+          if(row.discovery_artifact?.artifact_id!==8640959874||row.discovery_artifact?.head_sha!=='06d754912a15610c0cfc2794799652fb2db50269')throw new Error('UC-075 discovery custody drift');
+          if(row.selection?.sha256!=='af6a3288778bf437351b68400948bb81b0e743cc1d049d2b2ac095888ea6e577')throw new Error('UC-075 selected source drift');
+          if(row.rejected_alternative?.sha256!=='39f57834aa3471631308f3442bf40fd7b54dbf4146850e9c2a90e0b3e0fa3b7e')throw new Error('UC-075 rejected alternative drift');
+          if(row.crop?.offset_y!==350||row.ruling?.crop_ruling!=='pass-custom-y350')throw new Error('UC-075 custom crop drift');
+          console.log('PASS — exact 1977 CBS solo Hulk source and custom crop authorized');
+          NODE
+      - name: Retrieve and verify exact discovery artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-075-render"
+          mkdir -p "$root/source"
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8640959874/zip" > "$root/discovery.zip"
+          echo "580a99a0fb0172f4c0b8bbb838e703b21b46c2eea715ac1ff6cf3ed6aca0437f  $root/discovery.zip" | sha256sum -c -
+          unzip -q "$root/discovery.zip" -d "$root/source"
+          source="$root/source/card-backfill-uc-075"
+          echo "15337473b924a3e025f9b7c1c12dcc7c647416097155b2fc95aa1852df817fd3  $source/manifest.json" | sha256sum -c -
+          echo "af6a3288778bf437351b68400948bb81b0e743cc1d049d2b2ac095888ea6e577  $source/candidates/solo.jpg" | sha256sum -c -
+          echo "39f57834aa3471631308f3442bf40fd7b54dbf4146850e9c2a90e0b3e0fa3b7e  $source/candidates/banner-hulk.jpg" | sha256sum -c -
+          echo "9c14dbd63d2ca8d649ced2c9abef4826ab95c3981b82b271eac241cc64e4d7c2  $source/pages/commons-solo.png" | sha256sum -c -
+          echo "3ce07c4f9dd7470b5dda52a1a860e51195523f82ae5d9d5ff14bd1791c775b93  $source/pages/commons-banner-hulk.png" | sha256sum -c -
+          echo "324910d0207008e24186f2d082f84ba7d24fd143e067ab46818c2167764bf4f5  $source/pages/universal-identity.png" | sha256sum -c -
+      - name: Render exact Hulk candidate and enforce duplicate boundary
+        env:
+          SOURCE_ROOT: ${{ runner.temp }}/card-backfill-uc-075-render/source/card-backfill-uc-075
+          OUT: ${{ runner.temp }}/card-backfill-uc-075-render/output
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-uc-075-render.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-075-render/run.log"
+          test -z "$(git status --porcelain)"
+      - name: Upload exact candidate, alternative, pages, and crop preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-075-render-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-075-render/output
+            ${{ runner.temp }}/card-backfill-uc-075-render/run.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
