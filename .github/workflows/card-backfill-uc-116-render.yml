@@ -5,6 +5,7 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - ".github/CARD-BACKFILL-UC-116-RENDER.json"
+      - ".github/CARD-BACKFILL-UC-116-RENDER-FAILURES.json"
       - "scripts/card-backfill-uc-116-render.mjs"
       - ".github/workflows/card-backfill-uc-116-render.yml"
 
@@ -54,10 +55,12 @@ jobs:
           node --input-type=module - <<'NODE'
           import fs from 'node:fs';
           const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-116-RENDER.json','utf8'));
+          const failures=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-116-RENDER-FAILURES.json','utf8'));
           const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(item=>item.id==='UC-116');
           const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(item=>item.id==='UC-116');
           const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_c5dde833a2fc5b51f783437b');
           if(row.version!==1||row.record_id!=='UC-116'||row.actor!=='June Foray'||row.character!=='Rocky, Natasha & Granny'||row.production!=='Rocky & Bullwinkle / Looney Tunes'||row.year!==1959||row.side!=='still'||row.reviewed_role!=='second-desk')throw new Error('UC-116 render authorization drift');
+          if(failures.version!==1||failures.record_id!=='UC-116'||failures.failed_render_checkpoints?.length!==1||failures.failed_render_checkpoints[0]?.artifact_id!==8678436132||failures.failed_render_checkpoints[0]?.head_sha!=='dde4dce3ba2d6817ff351efecfcc2fbe73b1fea4'||failures.failed_render_checkpoints[0]?.artifact_digest_sha256!=='dfeaef6636a670d8136ca365d1f5cec36cdf87e14b771b9435ad659c498758df')throw new Error('UC-116 failed render custody drift');
           if(row.discovery_artifact?.artifact_id!==8677975755||row.discovery_artifact?.head_sha!=='d3d8da27ae7774d112602e732ce0e9c0a1dc468c'||row.discovery_artifact?.candidate_count!==21)throw new Error('UC-116 discovery custody drift');
           if(row.failed_discovery_checkpoints?.length!==3||row.failed_discovery_checkpoints[0]?.artifact_id!==8677751571||row.failed_discovery_checkpoints[1]?.artifact_id!==8677841001||row.failed_discovery_checkpoints[2]?.artifact_id!==8677907897)throw new Error('UC-116 failed discovery custody drift');
           if(row.roles?.length!==3||row.roles[0]?.key!=='rocky'||row.roles[1]?.key!=='natasha'||row.roles[2]?.key!=='granny')throw new Error('UC-116 role denominator drift');
@@ -67,7 +70,7 @@ jobs:
           if(!specimen||specimen.actor!=='June Foray'||specimen.character!=='Rocky, Natasha & Granny'||specimen.production!=='Rocky & Bullwinkle / Looney Tunes'||specimen.years!=='1959'||specimen.still)throw new Error('UC-116 specimen boundary drift');
           if(source?.still)throw new Error('UC-116 source-ledger boundary drift');
           if(!audit||audit.wall_id!=='UC-116'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-116 audit boundary drift');
-          console.log('PASS — exact UC-116 June Foray three-role render authorized');
+          console.log('PASS — exact UC-116 June Foray three-role render repair authorized');
           NODE
       - name: Retrieve and verify exact discovery artifact
         env:
@@ -96,6 +99,43 @@ jobs:
           echo "ac213497bdafb607acc648942c2067556303f32a49f348577d4af5e955773de7  $source/candidates/rocky/001-file-rocky-1959-version-2-png.webp" | sha256sum -c -
           echo "25cd4afa815979304c72a7b3ecf733c03bdf51e910b5377fc34f0925a8a195ca  $source/candidates/natasha/001-file-natasha-fatale-1959-png.webp" | sha256sum -c -
           echo "3e7869099835fe0d82c0cdb93238e36818595343ab9b0d127e495428ce583280  $source/candidates/granny/001-file-granny-gif.webp" | sha256sum -c -
+      - name: Repair discovery and render failure custody in isolated working copy
+        run: |
+          set -euo pipefail
+          cp scripts/card-backfill-uc-116-render.mjs scripts/.card-backfill-uc-116-render-run.mjs
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('scripts/.card-backfill-uc-116-render-run.mjs')
+          text=path.read_text()
+          old_control="""const control = await readJson(CONTROL);
+          assert(SOURCE_ROOT, 'SOURCE_ROOT is required');"""
+          new_control="""const control = await readJson(CONTROL);
+          const renderFailureLedger = await readJson('.github/CARD-BACKFILL-UC-116-RENDER-FAILURES.json');
+          assert(renderFailureLedger.version === 1 && renderFailureLedger.record_id === 'UC-116' && renderFailureLedger.failed_render_checkpoints?.length === 1 && renderFailureLedger.failed_render_checkpoints[0]?.artifact_id === 8678436132, 'UC-116 failed render custody drift');
+          assert(SOURCE_ROOT, 'SOURCE_ROOT is required');"""
+          old_compare="""assert(JSON.stringify(discoveryManifest.failed_discovery_checkpoints) === JSON.stringify(control.failed_discovery_checkpoints), 'UC-116 failed discovery custody drift');"""
+          new_compare="""assert(discoveryManifest.failed_discovery_checkpoints?.length === control.failed_discovery_checkpoints.length, 'UC-116 failed discovery count drift');
+          for (let i = 0; i < control.failed_discovery_checkpoints.length; i++) {
+            for (const key of ['run_id','artifact_id','head_sha','artifact_digest_sha256']) assert(discoveryManifest.failed_discovery_checkpoints[i]?.[key] === control.failed_discovery_checkpoints[i]?.[key], `UC-116 failed discovery receipt drift ${i}:${key}`);
+          }"""
+          old_manifest="""    failed_discovery_checkpoints: control.failed_discovery_checkpoints,
+              render_control_sha256: sha(await readFile(CONTROL)),"""
+          new_manifest="""    failed_discovery_checkpoints: discoveryManifest.failed_discovery_checkpoints,
+              failed_render_checkpoints: renderFailureLedger.failed_render_checkpoints,
+              render_repair_boundary: renderFailureLedger.repair_boundary,
+              render_control_sha256: sha(await readFile(CONTROL)),"""
+          old_notes="""const notes = [
+            'The Television Academy independently identifies June Foray as the voice of Rocky the Flying Squirrel, Natasha Fatale, and Granny.',"""
+          new_notes="""const notes = [
+            'The first render checkpoint failed closed because the discovery manifest carried full failure records while the render control carried receipt projections; the repaired renderer compares immutable receipts and preserves that failure in custody.',
+            'The Television Academy independently identifies June Foray as the voice of Rocky the Flying Squirrel, Natasha Fatale, and Granny.',"""
+          for old,new,name in [(old_control,new_control,'control'),(old_compare,new_compare,'comparison'),(old_manifest,new_manifest,'manifest'),(old_notes,new_notes,'notes')]:
+              if old not in text:
+                  raise SystemExit(f'UC-116 render repair anchor missing: {name}')
+              text=text.replace(old,new,1)
+          path.write_text(text)
+          PY
+          node --check scripts/.card-backfill-uc-116-render-run.mjs
       - name: Render exact three-role candidate and evidence packet
         env:
           SOURCE_ROOT: ${{ runner.temp }}/card-backfill-uc-116-render/discovery/card-backfill-uc-116-discover
@@ -104,8 +144,8 @@ jobs:
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/card-backfill-uc-116-render"
-          node --check scripts/card-backfill-uc-116-render.mjs
-          node scripts/card-backfill-uc-116-render.mjs 2>&1 | tee "$root/run.log"
+          node scripts/.card-backfill-uc-116-render-run.mjs 2>&1 | tee "$root/run.log"
+          rm scripts/.card-backfill-uc-116-render-run.mjs
           git status --short
           test -z "$(git status --porcelain)"
       - name: Compact transport staging
