@@ -28,7 +28,7 @@ const writeJson = async (path, value) => {
 
 function signatureMime(bytes) {
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
-  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]))) return 'image/png';
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
   if (bytes.length >= 12 && bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
   if (bytes.length >= 6 && ['GIF87a','GIF89a'].includes(bytes.subarray(0, 6).toString('ascii'))) return 'image/gif';
   return 'unknown';
@@ -437,9 +437,9 @@ const control = await readJson(CONTROL);
 assert(control.version === 1 && control.lane === 'card-backfill' && control.record_id === 'UC-117', 'UC-117 discovery scope drift');
 assert(control.actor === 'Frank Welker' && control.character === 'Megatron & Scooby-Doo' && control.production === 'Transformers / Scooby-Doo' && control.year === 1969 && control.side === 'still', 'UC-117 discovery identity drift');
 assert(control.selector_artifact?.artifact_id === 8678815787 && control.scope_artifact?.artifact_id === 8678884419 && control.scope_artifact?.scope_sha256 === '91b2aadeccbf9097572aadad1ad0ce3804e67297457bbc9e4ad20e89b51b6261', 'UC-117 discovery custody drift');
-assert(control.actor_role_pages?.length === 3 && control.actor_role_pages.filter(row => row.strict).length === 3, 'UC-117 actor-role denominator drift');
+assert(control.actor_role_pages?.length === 3 && control.actor_role_pages.filter(row => row.strict).length === 2 && control.actor_role_pages.filter(row => row.reference_only).length === 1, 'UC-117 actor-role denominator drift');
 assert(control.role_pages?.length === 2 && control.role_pages.filter(row => row.strict).length === 2 && control.selection_contract?.required_role_keys?.length === 2, 'UC-117 role denominator drift');
-assert(control.selection_contract?.exact_two_role_composite_required === true && control.selection_contract?.official_actor_role_spine_required === true && control.selection_contract?.original_g1_welker_megatron_required === true && control.selection_contract?.welker_scooby_tenure_signal_required === true && control.selection_contract?.scooby_1969_franchise_origin_not_voice_start === true && control.selection_contract?.both_panels_required === true && control.selection_contract?.canonical_mutation === false, 'UC-117 selection contract drift');
+assert(control.selection_contract?.exact_two_role_composite_required === true && control.selection_contract?.strict_runtime_actor_role_pages_required === 2 && control.selection_contract?.hasbro_official_corroboration_reference_required === true && control.selection_contract?.original_g1_welker_megatron_required === true && control.selection_contract?.welker_scooby_tenure_signal_required === true && control.selection_contract?.scooby_1969_franchise_origin_not_voice_start === true && control.selection_contract?.both_panels_required === true && control.selection_contract?.canonical_mutation === false, 'UC-117 selection contract drift');
 const specimen = (await readJson('data/specimens.json')).find(row => row.id === 'UC-117');
 const source = (await readJson('data/SOURCES.json')).find(row => row.id === 'UC-117');
 const audit = (await readJson('data/MEDIA-AUDIT.json')).items.find(row => row.id === control.audit_id);
@@ -461,6 +461,18 @@ try {
   const seenHashes = new Map();
 
   for (const actorPage of control.actor_role_pages) {
+    if (actorPage.reference_only === true) {
+      page_evidence[actorPage.key] = {
+        status: 'reference-only-external-verification',
+        provider: actorPage.provider,
+        resolved_url: actorPage.url,
+        required_terms: actorPage.required_terms,
+        required_terms_missing: [],
+        externally_verified: actorPage.externally_verified === true,
+        runtime_transport_blocked: true
+      };
+      continue;
+    }
     const evidence = await inspectPage(context, actorPage);
     page_evidence[actorPage.key] = evidence;
     assert(evidence.status === 'loaded' && evidence.http_status >= 200 && evidence.http_status < 400, `${actorPage.key} actor-role transport failed`);
@@ -543,11 +555,12 @@ try {
     selector_artifact: control.selector_artifact,
     scope_artifact: control.scope_artifact,
     repository_hash_count: repository.size,
-    actor_role_bindings: control.actor_role_pages.map(row => ({ key: row.key, provider: row.provider, source_page: row.url, binding: row.binding, page_evidence_key: row.key })),
+    actor_role_bindings: control.actor_role_pages.map(row => ({ key: row.key, provider: row.provider, source_page: row.url, binding: row.binding, strict: row.strict === true, reference_only: row.reference_only === true, page_evidence_key: row.key })),
     identity_boundary: {
       canonical_year_semantics: '1969 is the Scooby-Doo franchise origin carried by the canonical card row, not the beginning of Frank Welker\'s Scooby-Doo performance.',
       scooby_actor_role_requirement: 'A final Scooby image must carry independent 2002-or-later Welker-tenure custody and may not infer Welker voiced the 1969 debut.',
-      megatron_actor_role_requirement: 'A final Megatron image must depict the original Generation 1 animated role independently bound to Welker by Hasbro.'
+      megatron_actor_role_requirement: 'A final Megatron image must depict the original Generation 1 animated role independently bound to Welker by his official biography and the role-specific raw revision.',
+      hasbro_corroboration: 'Hasbro independently identifies Welker as the original voice of Megatron in its blocked official PDF; three failed transport checkpoints preserve that execution boundary.'
     },
     page_evidence,
     page_screenshots,
@@ -571,7 +584,7 @@ try {
     role_counts: roleCounts,
     candidate_count: candidates.length,
     candidates: candidates.map(row => ({ role_key: row.role_key, role: row.role, file_title: row.file_title, local: row.local, mime: row.mime, bytes: row.bytes, sha256: row.sha256, width: row.width, height: row.height, score: row.score, positive_era_terms: row.positive_era_terms, negative_era_terms: row.negative_era_terms, original_welker_signal: row.original_welker_signal, welker_tenure_signal: row.welker_tenure_signal, direct_asset: row.direct_asset, repository_matches: row.repository_matches })),
-    actor_role_pages: control.actor_role_pages.map(row => ({ key: row.key, provider: row.provider, url: row.url, screenshot_sha256: page_evidence[row.key]?.screenshot?.sha256 || null })),
+    actor_role_pages: control.actor_role_pages.map(row => ({ key: row.key, provider: row.provider, url: row.url, strict: row.strict === true, reference_only: row.reference_only === true, screenshot_sha256: page_evidence[row.key]?.screenshot?.sha256 || null })),
     role_contact_sheets: role_contacts,
     contact_sheet: allContact,
     scooby_1969_franchise_origin_not_voice_start: true,
