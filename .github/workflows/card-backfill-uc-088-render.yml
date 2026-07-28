@@ -1,0 +1,119 @@
+name: card-backfill-uc-088-render
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-088-RENDER.json"
+      - "scripts/card-backfill-uc-088-render.mjs"
+      - ".github/workflows/card-backfill-uc-088-render.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: card-backfill-uc-088-render-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-021'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-021
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Install deterministic renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify exact UC-088 render authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const path='.github/CARD-BACKFILL-UC-088-RENDER.json';
+          const bytes=fs.readFileSync(path);
+          const row=JSON.parse(bytes);
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(item=>item.id==='UC-088');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(item=>item.id==='UC-088');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_0203aa7a6b845505e9c2c887');
+          if(row.version!==1||row.record_id!=='UC-088'||row.actor!=='Michael Chiklis'||row.character!=='The Thing'||row.production!=='Fantastic Four'||row.year!==2005||row.side!=='still')throw new Error('UC-088 render authorization drift');
+          if(row.targeted_artifact?.artifact_id!==8672092033||row.targeted_artifact?.head_sha!=='b87af9712125b074577c65e6b8c18ecec36329d0'||row.targeted_artifact?.candidate_count!==14)throw new Error('UC-088 targeted custody drift');
+          if(row.selected_source?.sha256!=='3c11e621220621aecc6b515e31b78384300270ed58593f837ae06559f8901bd4'||row.selected_source?.width!==700||row.selected_source?.height!==467)throw new Error('UC-088 source identity drift');
+          if(row.role_custody?.production_cast?.sha256!=='f01b3ec941dbbb194ef879859342ab022b18bf6830cadb32d79b391288557f41'||row.role_custody?.selected_scene?.sha256!=='ba0e9042f29722b0b2c63245c4a6cd81a15a8527dc8fd2368531b57a4238582b')throw new Error('UC-088 role custody drift');
+          if(row.failed_discovery_checkpoints?.length!==6||row.render?.candidate_width!==1260||row.render?.candidate_height!==1000||row.render?.wall_width!==1246||row.render?.wall_height!==1000)throw new Error('UC-088 render denominator drift');
+          if(!specimen||specimen.character!=='The Thing'||specimen.production!=='Fantastic Four'||specimen.years!=='2005'||specimen.still)throw new Error('UC-088 specimen boundary drift');
+          if(source?.still)throw new Error('UC-088 source-ledger boundary drift');
+          if(!audit||audit.wall_id!=='UC-088'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-088 audit boundary drift');
+          console.log(`PASS — UC-088 render control ${crypto.createHash('sha256').update(bytes).digest('hex')}`);
+          NODE
+      - name: Retrieve and verify the exact targeted artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-088-render"
+          mkdir -p "$root/source"
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8672092033/zip" > "$root/targeted.zip"
+          echo "bb7f79077718ce99fc74aa71f45df2ebcea4686d0430394e3618880e76626f52  $root/targeted.zip" | sha256sum -c -
+          unzip -q "$root/targeted.zip" -d "$root/source"
+          base="$root/source/card-backfill-uc-088-targeted"
+          test -f "$base/manifest.json"
+          echo "c83f4b4a3fef72de8dfb68a946f1eda24dd172a1199d0c118d8b40a7e5dd3c00  $base/manifest.json" | sha256sum -c -
+          echo "24ccf4c7d0e3d064b346feda35380582fe0437f4b938ce0d4c7fd44e4b2c6560  $base/summary.json" | sha256sum -c -
+          echo "56688b0591617b96e94c2dfa2f07c9ad97da6945bf5cbf025f7c1ccb4b8617d2  $base/contact-sheet.jpg" | sha256sum -c -
+          echo "3c11e621220621aecc6b515e31b78384300270ed58593f837ae06559f8901bd4  $base/candidates/012-photo-659-declared-delivery.jpg" | sha256sum -c -
+          echo "1d9c1d1bb084617d9fe2750d3a8b46b20a39e0c16c0a87c3f25238b53ada41b9  $base/pages/movieinsider-659.png" | sha256sum -c -
+          echo "f01b3ec941dbbb194ef879859342ab022b18bf6830cadb32d79b391288557f41  $base/pages/role-afi-production-cast.png" | sha256sum -c -
+          echo "e3e8fe1875e12a0765fb52032b911deb594a1431bc8338c3a42c0e5fb277d992  $base/pages/role-superhero-hype-full-costume.png" | sha256sum -c -
+          echo "ba0e9042f29722b0b2c63245c4a6cd81a15a8527dc8fd2368531b57a4238582b  $base/pages/role-superhero-hype-pigeon.png" | sha256sum -c -
+      - name: Render exact candidate and evidence packet
+        env:
+          SOURCE_ROOT: ${{ runner.temp }}/card-backfill-uc-088-render/source/card-backfill-uc-088-targeted
+          OUT: ${{ runner.temp }}/card-backfill-uc-088-render/output
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node --check scripts/card-backfill-uc-088-render.mjs
+          node scripts/card-backfill-uc-088-render.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-088-render-run.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Compact transport staging
+        if: always()
+        run: |
+          root="$RUNNER_TEMP/card-backfill-uc-088-render"
+          rm -rf "$root/source" "$root/targeted.zip"
+      - name: Upload exact source, custody, render, crop, and hashes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-088-render-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-088-render/output
+            ${{ runner.temp }}/card-backfill-uc-088-render-run.log
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
