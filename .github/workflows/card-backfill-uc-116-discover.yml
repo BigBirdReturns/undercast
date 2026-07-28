@@ -62,15 +62,15 @@ jobs:
           const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_c5dde833a2fc5b51f783437b');
           if(row.version!==1||row.record_id!=='UC-116'||row.actor!=='June Foray'||row.character!=='Rocky, Natasha & Granny'||row.production!=='Rocky & Bullwinkle / Looney Tunes'||row.year!==1959||row.side!=='still')throw new Error('UC-116 discovery authorization drift');
           if(row.selector_artifact?.artifact_id!==8677539993||row.scope_artifact?.artifact_id!==8677615874||row.scope_artifact?.scope_sha256!=='30bae168273637304a0a57656c888d405a24261ff9e51b3b17cf1aa4764f5e10')throw new Error('UC-116 discovery custody drift');
-          if(failures.version!==1||failures.record_id!=='UC-116'||failures.failed_discovery_checkpoints?.length!==1||failures.failed_discovery_checkpoints[0]?.artifact_id!==8677751571||failures.failed_discovery_checkpoints[0]?.head_sha!=='6f9b28f4bebade96d0e0a6ad114078109e68409b')throw new Error('UC-116 failed discovery custody drift');
+          if(failures.version!==1||failures.record_id!=='UC-116'||failures.failed_discovery_checkpoints?.length!==2||failures.failed_discovery_checkpoints[0]?.artifact_id!==8677751571||failures.failed_discovery_checkpoints[1]?.artifact_id!==8677841001)throw new Error('UC-116 failed discovery custody drift');
           if(row.role_pages?.length!==3||row.role_pages.filter(role=>role.strict).length!==3||row.selection_contract?.required_role_keys?.length!==3||row.minimum_candidates_per_role!==1||row.maximum_candidates_per_role!==16)throw new Error('UC-116 discovery denominator drift');
           if(row.selection_contract?.exact_three_role_composite_required!==true||row.selection_contract?.television_academy_actor_role_binding_required!==true||row.selection_contract?.original_foray_era_visual_selection_required!==true||row.selection_contract?.all_three_panels_required!==true||row.selection_contract?.canonical_mutation!==false)throw new Error('UC-116 selection contract drift');
           if(!specimen||specimen.actor!=='June Foray'||specimen.character!=='Rocky, Natasha & Granny'||specimen.production!=='Rocky & Bullwinkle / Looney Tunes'||specimen.years!=='1959'||specimen.still)throw new Error('UC-116 specimen boundary drift');
           if(source?.still)throw new Error('UC-116 source-ledger boundary drift');
           if(!audit||audit.wall_id!=='UC-116'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-116 audit boundary drift');
-          console.log('PASS — exact UC-116 API-first three-role discovery repair authorized');
+          console.log('PASS — exact UC-116 raw-revision three-role discovery repair authorized');
           NODE
-      - name: Repair Fandom challenge handling in isolated working copy
+      - name: Repair Fandom raw-revision evidence in isolated working copy
         run: |
           set -euo pipefail
           cp scripts/card-backfill-uc-116-discover.mjs scripts/.card-backfill-uc-116-discover-run.mjs
@@ -78,37 +78,60 @@ jobs:
           from pathlib import Path
           path=Path('scripts/.card-backfill-uc-116-discover-run.mjs')
           text=path.read_text()
-          old_control="""const control = await readJson(CONTROL);
-          assert(control.version === 1 && control.lane === 'card-backfill' && control.record_id === 'UC-116', 'UC-116 discovery scope drift');"""
-          new_control="""const control = await readJson(CONTROL);
+          replacements=[]
+          replacements.append(("""const control = await readJson(CONTROL);
+          assert(control.version === 1 && control.lane === 'card-backfill' && control.record_id === 'UC-116', 'UC-116 discovery scope drift');""","""const control = await readJson(CONTROL);
           const failureLedger = await readJson('.github/CARD-BACKFILL-UC-116-DISCOVER-FAILURES.json');
-          assert(failureLedger.version === 1 && failureLedger.record_id === 'UC-116' && failureLedger.failed_discovery_checkpoints?.length === 1 && failureLedger.failed_discovery_checkpoints[0]?.artifact_id === 8677751571, 'UC-116 failed discovery custody drift');
-          assert(control.version === 1 && control.lane === 'card-backfill' && control.record_id === 'UC-116', 'UC-116 discovery scope drift');"""
-          old_loop="""    const evidence = await inspectPage(context, role, api.extract);
+          assert(failureLedger.version === 1 && failureLedger.record_id === 'UC-116' && failureLedger.failed_discovery_checkpoints?.length === 2 && failureLedger.failed_discovery_checkpoints[0]?.artifact_id === 8677751571 && failureLedger.failed_discovery_checkpoints[1]?.artifact_id === 8677841001, 'UC-116 failed discovery custody drift');
+          assert(control.version === 1 && control.lane === 'card-backfill' && control.record_id === 'UC-116', 'UC-116 discovery scope drift');""",'control'))
+          replacements.append(("prop: 'extracts|pageimages|images',","prop: 'extracts|pageimages|images|revisions',",'revision prop'))
+          replacements.append(("""    exlimit: 1,
+              piprop: 'name|original|thumbnail',""","""    exlimit: 1,
+              rvprop: 'content',
+              rvslots: 'main',
+              rvlimit: 1,
+              piprop: 'name|original|thumbnail',""",'revision params'))
+          replacements.append(("""  const page = primary?.query?.pages?.[0];
+            assert(page && !page.missing, `${role.key} API page missing`);
+            const imageTitles = [...new Set([""","""  const page = primary?.query?.pages?.[0];
+            assert(page && !page.missing, `${role.key} API page missing`);
+            const wikitext = page.revisions?.[0]?.slots?.main?.content || page.revisions?.[0]?.content || '';
+            const imageTitles = [...new Set([""",'wikitext extraction'))
+          replacements.append(("""    extract: page.extract || '',
+              extract_sha256: sha(Buffer.from(page.extract || '', 'utf8')),
+              pageimage: page.pageimage || null,""","""    extract: page.extract || '',
+              extract_sha256: sha(Buffer.from(page.extract || '', 'utf8')),
+              wikitext,
+              wikitext_sha256: sha(Buffer.from(wikitext, 'utf8')),
+              pageimage: page.pageimage || null,""",'wikitext return'))
+          replacements.append(("""      extract_sha256: api.extract_sha256,
+                pageimage: api.pageimage,""","""      extract_sha256: api.extract_sha256,
+                wikitext_sha256: api.wikitext_sha256,
+                pageimage: api.pageimage,""",'wikitext evidence'))
+          replacements.append(("""    const evidence = await inspectPage(context, role, api.extract);
               page_evidence[role.key] = evidence;
               assert(evidence.status === 'loaded' && evidence.http_status >= 200 && evidence.http_status < 400, `${role.key} source page transport failed`);
               assert(evidence.required_terms_missing.length === 0, `${role.key} source terms missing: ${evidence.required_terms_missing.join(', ')}`);
-              page_screenshots.push({ key: role.key, provider: role.provider, path: evidence.screenshot, sha256: evidence.screenshot_sha256, bytes: evidence.screenshot_bytes, ...evidence.screenshot_geometry });"""
-          new_loop="""    await mkdir(join(OUT, 'api-extracts'), { recursive: true });
-              const extractPath = `api-extracts/${role.key}.txt`;
-              await writeFile(join(OUT, extractPath), api.extract + '\\n');
-              api_evidence[role.key].extract_path = extractPath;
+              page_screenshots.push({ key: role.key, provider: role.provider, path: evidence.screenshot, sha256: evidence.screenshot_sha256, bytes: evidence.screenshot_bytes, ...evidence.screenshot_geometry });""","""    await mkdir(join(OUT, 'api-wikitext'), { recursive: true });
+              const strictText = api.wikitext || api.extract;
+              const wikitextPath = `api-wikitext/${role.key}.txt`;
+              await writeFile(join(OUT, wikitextPath), strictText + '\\n');
+              api_evidence[role.key].wikitext_path = wikitextPath;
               api_evidence[role.key].strict_api_terms = role.required_terms;
-              api_evidence[role.key].strict_api_terms_missing = role.required_terms.filter(term => !norm(api.extract).includes(norm(term)));
-              const evidence = await inspectPage(context, role, api.extract);
+              api_evidence[role.key].strict_api_terms_missing = role.required_terms.filter(term => !norm(strictText).includes(norm(term)));
+              const evidence = await inspectPage(context, role, strictText);
               page_evidence[role.key] = evidence;
-              assert(api.extract.length > 100, `${role.key} API extract missing`);
-              assert(api_evidence[role.key].strict_api_terms_missing.length === 0, `${role.key} API terms missing: ${api_evidence[role.key].strict_api_terms_missing.join(', ')}`);
-              if (evidence.screenshot_sha256) page_screenshots.push({ key: role.key, provider: role.provider, path: evidence.screenshot, sha256: evidence.screenshot_sha256, bytes: evidence.screenshot_bytes, ...evidence.screenshot_geometry, transport_status: evidence.http_status, browser_required_terms_missing: evidence.required_terms_missing });"""
-          old_manifest="""    scope_artifact: control.scope_artifact,
-              repository_hash_count: repository.size,"""
-          new_manifest="""    scope_artifact: control.scope_artifact,
+              assert(strictText.length > 100, `${role.key} API revision wikitext missing`);
+              assert(api_evidence[role.key].strict_api_terms_missing.length === 0, `${role.key} API revision terms missing: ${api_evidence[role.key].strict_api_terms_missing.join(', ')}`);
+              if (evidence.screenshot_sha256) page_screenshots.push({ key: role.key, provider: role.provider, path: evidence.screenshot, sha256: evidence.screenshot_sha256, bytes: evidence.screenshot_bytes, ...evidence.screenshot_geometry, transport_status: evidence.http_status, browser_required_terms_missing: evidence.required_terms_missing });""",'role loop'))
+          replacements.append(("""    scope_artifact: control.scope_artifact,
+              repository_hash_count: repository.size,""","""    scope_artifact: control.scope_artifact,
               failed_discovery_checkpoints: failureLedger.failed_discovery_checkpoints,
               repair_boundary: failureLedger.repair_boundary,
-              repository_hash_count: repository.size,"""
-          for old,new,name in [(old_control,new_control,'control'),(old_loop,new_loop,'role loop'),(old_manifest,new_manifest,'manifest')]:
+              repository_hash_count: repository.size,""",'manifest'))
+          for old,new,name in replacements:
               if old not in text:
-                  raise SystemExit(f'UC-116 API-first repair anchor missing: {name}')
+                  raise SystemExit(f'UC-116 raw-revision repair anchor missing: {name}')
               text=text.replace(old,new,1)
           path.write_text(text)
           PY
@@ -123,7 +146,7 @@ jobs:
           rm scripts/.card-backfill-uc-116-discover-run.mjs
           git status --short
           test -z "$(git status --porcelain)"
-      - name: Upload role pages, API extracts, candidates, hashes, and contact sheets
+      - name: Upload role pages, raw revisions, candidates, hashes, and contact sheets
         if: always()
         uses: actions/upload-artifact@v4
         with:
