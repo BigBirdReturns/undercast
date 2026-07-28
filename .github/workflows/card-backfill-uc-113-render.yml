@@ -1,0 +1,128 @@
+name: card-backfill-uc-113-render
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-113-RENDER.json"
+      - "scripts/card-backfill-uc-113-render.mjs"
+      - ".github/workflows/card-backfill-uc-113-render.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: card-backfill-uc-113-render-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-025'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-025
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Install deterministic renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify exact UC-113 render authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-113-RENDER.json','utf8'));
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(item=>item.id==='UC-113');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(item=>item.id==='UC-113');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_1d34489d543c01ca6616d57a');
+          if(row.version!==1||row.record_id!=='UC-113'||row.actor!=='Taika Waititi'||row.character!=='Korg'||row.production!=='Thor: Ragnarok'||row.year!==2017||row.side!=='still'||row.reviewed_role!=='second-desk')throw new Error('UC-113 render authorization drift');
+          if(row.discovery_artifact?.artifact_id!==8676847359||row.frame_artifact?.artifact_id!==8677207332||row.frame_artifact?.head_sha!=='4cbeb0bebcbb5bc474eb22efa43c27122bdd86e7')throw new Error('UC-113 render custody drift');
+          if(row.failed_video_orbit_checkpoints?.length!==3||row.failed_video_orbit_checkpoints[0]?.artifact_id!==8676934325||row.failed_video_orbit_checkpoints[1]?.artifact_id!==8676993291||row.failed_video_orbit_checkpoints[2]?.artifact_id!==8677055263)throw new Error('UC-113 failed video-orbit custody drift');
+          if(row.selected_source?.sha256!=='bf640376328e03e9e7930d83182dc1e3b82746f1533bec15feb9ee17419880eb'||row.selected_source?.timestamp_seconds!==33.62111||row.selected_source?.width!==960||row.selected_source?.height!==540)throw new Error('UC-113 source authorization drift');
+          if(row.render?.candidate_width!==1260||row.render?.candidate_height!==1000||row.render?.crop_x!==170||row.render?.wall_width!==1246||row.render?.wall_height!==1000)throw new Error('UC-113 render denominator drift');
+          if(!specimen||specimen.actor!=='Taika Waititi'||specimen.character!=='Korg'||specimen.production!=='Thor: Ragnarok'||specimen.years!=='2017'||specimen.still)throw new Error('UC-113 specimen boundary drift');
+          if(source?.still)throw new Error('UC-113 source-ledger boundary drift');
+          if(!audit||audit.wall_id!=='UC-113'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-113 audit boundary drift');
+          console.log('PASS — exact UC-113 official Korg render authorized');
+          NODE
+      - name: Retrieve and verify discovery and raw-frame artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-113-render"
+          mkdir -p "$root/discovery" "$root/frame"
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8676847359/zip" > "$root/discovery.zip"
+          echo "0d69bece10daec5badd03bb978d619ad3b116f1cbcbc190b9697f98f6927b2e1  $root/discovery.zip" | sha256sum -c -
+          unzip -q "$root/discovery.zip" -d "$root/discovery"
+          discovery="$root/discovery/card-backfill-uc-113-discover"
+          echo "3296001b00df6b32408d01e817ec2c7f6b171f14ca2d0bb15d78d02254acdd66  $discovery/manifest.json" | sha256sum -c -
+          echo "6bde4f604ba94824a76f747233eaa5c702f9cee028b87b04e32ee3acef21f778  $discovery/summary.json" | sha256sum -c -
+          echo "8eebd0069e8339e503ee30b88a542f491a9dedd3b6a2f6b1183d3f4ba9d95e78  $discovery/contact-sheet-final.jpg" | sha256sum -c -
+          echo "c53983eb193bae23bb37d440224fe2e6e38a5cefea23a820d58794c2b3acbc16  $discovery/candidates/001-finding-korg-final-frame-declared-delivery.jpg" | sha256sum -c -
+          echo "8c862f436f29de7ed9b5e9fdaddb4028b228f67cfe9a543e403b8a46219818ce  $discovery/pages/marvel-ragnarok-film.png" | sha256sum -c -
+          echo "f4cd2a12ccf55f7151a54ba4f291bc019abc236fe066e33ea9cb163e21755877  $discovery/pages/marvel-waititi-korg-performance.png" | sha256sum -c -
+          echo "21de1bb4536699285c31c71e9c9a223f671a462cf2b01dee8420e66a56870bca  $discovery/pages/marvel-finding-korg-design.png" | sha256sum -c -
+
+          gh api "/repos/BigBirdReturns/undercast/actions/artifacts/8677207332/zip" > "$root/frame.zip"
+          echo "c5c933b1933b7544ba98499dbc2eff05ab8afaffececc4e1e2606a93302e731c  $root/frame.zip" | sha256sum -c -
+          unzip -q "$root/frame.zip" -d "$root/frame"
+          frame="$root/frame/output"
+          echo "ac5e3ae71c303ca89f70aecb20686f0824c41ff1d6569fccc5077cc4ebbbec8c  $frame/manifest.json" | sha256sum -c -
+          echo "32e3ee532ddeedb55b33abd7ab5139d0a54f79c3637273270ab97e8ee15feb56  $frame/summary.json" | sha256sum -c -
+          echo "6b0933ede970717ff724c84a4b4cd0ea244c9e80e49fba54406296b91cafb316  $frame/SHA256SUMS" | sha256sum -c -
+          echo "bf640376328e03e9e7930d83182dc1e3b82746f1533bec15feb9ee17419880eb  $frame/korg-official-video-frame.png" | sha256sum -c -
+          echo "8facccba89fb4403e9c3fe798e1602cac9b7ea62a0932d950f0ada7a930e7eb9  $frame/source-page-marvel-finding-korg.png" | sha256sum -c -
+          echo "74e104696d9c58274171f745340afd38c3499e9d69aeb0861baefee30ec3b42d  $frame/selected-orbit-reference-with-controls.png" | sha256sum -c -
+          (cd "$frame" && sha256sum -c SHA256SUMS)
+      - name: Render exact candidate and evidence packet
+        env:
+          DISCOVERY_ROOT: ${{ runner.temp }}/card-backfill-uc-113-render/discovery/card-backfill-uc-113-discover
+          FRAME_ROOT: ${{ runner.temp }}/card-backfill-uc-113-render/frame/output
+          OUT: ${{ runner.temp }}/card-backfill-uc-113-render/output
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-uc-113-render"
+          node --check scripts/card-backfill-uc-113-render.mjs
+          node scripts/card-backfill-uc-113-render.mjs 2>&1 | tee "$root/run.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Compact transport staging
+        if: always()
+        run: |
+          root="$RUNNER_TEMP/card-backfill-uc-113-render"
+          rm -rf "$root/discovery" "$root/frame" "$root/discovery.zip" "$root/frame.zip"
+      - name: Upload exact source, custody, render, crop, and hashes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-113-render-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-113-render/output
+            ${{ runner.temp }}/card-backfill-uc-113-render/run.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
