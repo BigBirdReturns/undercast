@@ -5,6 +5,7 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - ".github/CARD-BACKFILL-UC-116-APPLY.json"
+      - ".github/CARD-BACKFILL-UC-116-APPLY-FAILURES.json"
       - "scripts/card-backfill-uc-116-apply.mjs"
       - ".github/workflows/card-backfill-uc-116-apply.yml"
 
@@ -41,10 +42,13 @@ jobs:
           const path='.github/CARD-BACKFILL-UC-116-APPLY.json';
           const bytes=fs.readFileSync(path);
           const row=JSON.parse(bytes);
+          const failures=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-116-APPLY-FAILURES.json','utf8'));
           const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(item=>item.id==='UC-116');
           const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(item=>item.id==='UC-116');
           const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_c5dde833a2fc5b51f783437b');
           if(row.version!==1||row.record_id!=='UC-116'||row.actor!=='June Foray'||row.character!=='Rocky, Natasha & Granny'||row.production!=='Rocky & Bullwinkle / Looney Tunes'||row.year!==1959||row.side!=='still'||row.reviewed_role!=='second-desk')throw new Error('UC-116 apply authorization drift');
+          if(failures.version!==1||failures.record_id!=='UC-116'||failures.failed_apply_checkpoints?.length!==1||failures.failed_apply_checkpoints[0]?.artifact_id!==8678607883||failures.failed_apply_checkpoints[0]?.head_sha!=='e5d1899d37e1559c95fa92d59cfdf14cd2f9d01a'||failures.failed_apply_checkpoints[0]?.artifact_digest_sha256!=='a03aef408849c008247e49a170edf6774d7faac9f2286baa56cfecaad27bb637')throw new Error('UC-116 failed apply custody drift');
+          if(failures.source_transcript_exception?.path!=='data/review/card-backfill/UC-116/source-wikitext-granny.txt'||failures.source_transcript_exception?.sha256!=='0b7cb802b624da967931f0074c66b4006a77a6d8f0a25575ccaf263ab40dfaf3'||JSON.stringify(failures.source_transcript_exception?.trailing_whitespace_lines)!=='[5,33,36,45]')throw new Error('UC-116 transcript exception drift');
           if(row.render_artifact?.artifact_id!==8678505225||row.render_artifact?.head_sha!=='8ef2ff1b0c69761fefe288d42ba3c0378d933485'||row.render_artifact?.zip_sha256!=='96e345ec001c0be55b5277f0d7c221e19407ad08dc1403f88d6d75929b4d2219')throw new Error('UC-116 render custody drift');
           if(row.expected?.rocky_source_sha256!=='ac213497bdafb607acc648942c2067556303f32a49f348577d4af5e955773de7'||row.expected?.natasha_source_sha256!=='25cd4afa815979304c72a7b3ecf733c03bdf51e910b5377fc34f0925a8a195ca'||row.expected?.granny_source_sha256!=='3e7869099835fe0d82c0cdb93238e36818595343ab9b0d127e495428ce583280')throw new Error('UC-116 source authorization drift');
           if(row.expected?.exact_role_record_sha256!=='2459cd687c15ccf361eb2e12069cc3941329482dd65a0e301838a16f618459d4'||row.expected?.candidate_sha256!=='dcf3ccd535be9dc4174db7b35c069df51f8006136da7d8e089f8caf956665be1'||row.expected?.crop_preview_sha256!=='446b488df7bc06d239e81d84cff166ff7c19cf336286244357b4b88424ff7989')throw new Error('UC-116 candidate or role authorization drift');
@@ -53,7 +57,7 @@ jobs:
           if(!specimen||specimen.actor!=='June Foray'||specimen.character!=='Rocky, Natasha & Granny'||specimen.production!=='Rocky & Bullwinkle / Looney Tunes'||specimen.still)throw new Error('UC-116 specimen boundary drift');
           if(source?.still)throw new Error('UC-116 source-ledger boundary drift');
           if(!audit||audit.wall_id!=='UC-116'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-116 audit boundary drift');
-          console.log(`PASS — UC-116 apply control ${crypto.createHash('sha256').update(bytes).digest('hex')}`);
+          console.log(`PASS — UC-116 apply repair control ${crypto.createHash('sha256').update(bytes).digest('hex')}`);
           NODE
       - name: Retrieve and verify the exact render artifact
         env:
@@ -95,15 +99,54 @@ jobs:
           source_manifest_sha256=77a95b46a64822ebed4a3c17cf7857e9b962303d88c8f7862644313a1c282cfc
           source_sums_sha256=921ebc169f63401f2b50ecdb85ae2560a859dea23d6a02daf99ddc68bd533b11
           EOF
+      - name: Repair failed apply custody in isolated working copy
+        run: |
+          set -euo pipefail
+          cp scripts/card-backfill-uc-116-apply.mjs scripts/.card-backfill-uc-116-apply-run.mjs
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('scripts/.card-backfill-uc-116-apply-run.mjs')
+          text=path.read_text()
+          old_control="""async function loadControl() {
+            const control = await readJson(CONTROL);"""
+          new_control="""const applyFailureLedger = await readJson('.github/CARD-BACKFILL-UC-116-APPLY-FAILURES.json');
+
+          async function loadControl() {
+            const control = await readJson(CONTROL);
+            assert(applyFailureLedger.version === 1 && applyFailureLedger.record_id === 'UC-116' && applyFailureLedger.failed_apply_checkpoints?.length === 1 && applyFailureLedger.failed_apply_checkpoints[0]?.artifact_id === 8678607883 && applyFailureLedger.failed_apply_checkpoints[0]?.artifact_digest_sha256 === 'a03aef408849c008247e49a170edf6774d7faac9f2286baa56cfecaad27bb637', 'UC-116 failed apply custody drift');"""
+          old_notes="""  await writeJson(join(DEST, 'duplicate-scan.json'), duplicateScan);
+            const manifest = {"""
+          new_notes="""  await writeJson(join(DEST, 'duplicate-scan.json'), duplicateScan);
+            const permanentNotes = [applyFailureLedger.failed_apply_checkpoints[0].ruling, ...control.ruling.notes];
+            const manifest = {"""
+          old_custody="""      source_manifest_sha256: control.expected.source_manifest_sha256,
+                source_sums_sha256: control.expected.source_sums_sha256
+              },"""
+          new_custody="""      source_manifest_sha256: control.expected.source_manifest_sha256,
+                source_sums_sha256: control.expected.source_sums_sha256,
+                failed_apply_checkpoints: applyFailureLedger.failed_apply_checkpoints,
+                apply_repair_boundary: applyFailureLedger.source_transcript_exception
+              },"""
+          old_validate="""  assert(manifest.custody?.failed_discovery_checkpoints?.length === 3 && manifest.custody?.failed_render_checkpoints?.length === 1, 'permanent failed checkpoint custody drift');"""
+          new_validate="""  assert(manifest.custody?.failed_discovery_checkpoints?.length === 3 && manifest.custody?.failed_render_checkpoints?.length === 1 && manifest.custody?.failed_apply_checkpoints?.length === 1, 'permanent failed checkpoint custody drift');
+            assert(manifest.custody.failed_apply_checkpoints[0]?.artifact_id === 8678607883 && manifest.custody.failed_apply_checkpoints[0]?.artifact_digest_sha256 === 'a03aef408849c008247e49a170edf6774d7faac9f2286baa56cfecaad27bb637', 'permanent failed apply receipt drift');
+            assert(manifest.custody.apply_repair_boundary?.sha256 === '0b7cb802b624da967931f0074c66b4006a77a6d8f0a25575ccaf263ab40dfaf3' && JSON.stringify(manifest.custody.apply_repair_boundary?.trailing_whitespace_lines) === '[5,33,36,45]', 'permanent transcript exception drift');"""
+          for old,new,name in [(old_control,new_control,'control'),(old_notes,new_notes,'notes'),(old_custody,new_custody,'custody'),(old_validate,new_validate,'validate')]:
+              if old not in text:
+                  raise SystemExit(f'UC-116 apply repair anchor missing: {name}')
+              text=text.replace(old,new,1)
+          text=text.replace('notes: control.ruling.notes', 'notes: permanentNotes', 2)
+          path.write_text(text)
+          PY
+          node --check scripts/.card-backfill-uc-116-apply-run.mjs
       - name: Materialize and independently validate the evidence-only packet
         env:
           SOURCE_ROOT: ${{ runner.temp }}/card-backfill-uc-116-apply/source/output/UC-116
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/card-backfill-uc-116-apply"
-          node --check scripts/card-backfill-uc-116-apply.mjs
-          node scripts/card-backfill-uc-116-apply.mjs materialize 2>&1 | tee "$root/materialize.log"
-          node scripts/card-backfill-uc-116-apply.mjs validate 2>&1 | tee "$root/validate.log"
+          node scripts/.card-backfill-uc-116-apply-run.mjs materialize 2>&1 | tee "$root/materialize.log"
+          node scripts/.card-backfill-uc-116-apply-run.mjs validate 2>&1 | tee "$root/validate.log"
           node --input-type=module - <<'NODE' | tee "$root/no-canonical-mutation.log"
           import fs from 'node:fs';
           const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(row=>row.id==='UC-116');
@@ -127,6 +170,7 @@ jobs:
             .github/CARD-BACKFILL-UC-116-RENDER.json \
             .github/CARD-BACKFILL-UC-116-RENDER-FAILURES.json \
             .github/CARD-BACKFILL-UC-116-APPLY.json \
+            .github/CARD-BACKFILL-UC-116-APPLY-FAILURES.json \
             .github/workflows/card-backfill-next-selection.yml \
             .github/workflows/card-backfill-uc-116-scope.yml \
             .github/workflows/card-backfill-uc-116-discover.yml \
@@ -136,9 +180,28 @@ jobs:
             scripts/card-backfill-uc-116-scope.mjs \
             scripts/card-backfill-uc-116-discover.mjs \
             scripts/card-backfill-uc-116-render.mjs \
-            scripts/card-backfill-uc-116-apply.mjs
+            scripts/card-backfill-uc-116-apply.mjs \
+            scripts/.card-backfill-uc-116-apply-run.mjs
           git add -A
-          git diff --cached --check
+          git diff --cached --check -- . ':(exclude)data/review/card-backfill/UC-116/source-wikitext-*.txt'
+          python3 - <<'PY' | tee "$root/source-transcript-whitespace.log"
+          from pathlib import Path
+          import hashlib
+          root=Path('data/review/card-backfill/UC-116')
+          expected={
+              'source-wikitext-rocky.txt':('e07ba311ee6c8b39f0a2e834b2b6c5cf0808dc4a626334a3daada5c8288567a9',[]),
+              'source-wikitext-natasha.txt':('97be1af631bc79e2a8c5a275e2683c30f5006f80f5617b3b8af19f79ff0c7f52',[]),
+              'source-wikitext-granny.txt':('0b7cb802b624da967931f0074c66b4006a77a6d8f0a25575ccaf263ab40dfaf3',[5,33,36,45]),
+          }
+          for name,(digest,allowed) in expected.items():
+              data=(root/name).read_bytes()
+              actual=hashlib.sha256(data).hexdigest()
+              if actual!=digest: raise SystemExit(f'{name} hash drift {actual}')
+              lines=data.decode('utf-8').splitlines()
+              trailing=[i for i,line in enumerate(lines,1) if line.endswith(' ') or line.endswith('\t')]
+              if trailing!=allowed: raise SystemExit(f'{name} trailing-whitespace set drift {trailing}')
+              print(f'PASS {name} {actual} trailing={trailing}')
+          PY
           git commit -m 'Card backfill: retain UC-116 June Foray three-role still'
           git fetch --no-tags --depth=1 origin agent/card-backfill-next-025
           mapfile -t changed < <(git diff --name-only origin/agent/card-backfill-next-025 HEAD)
