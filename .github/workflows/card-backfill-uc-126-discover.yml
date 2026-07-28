@@ -1,0 +1,91 @@
+name: card-backfill-uc-126-discover
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-126-DISCOVER.json"
+      - "scripts/card-backfill-uc-126-discover.mjs"
+      - ".github/workflows/card-backfill-uc-126-discover.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: card-backfill-uc-126-discover-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  discover:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-031'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-031
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical and browser runtime
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Install deterministic review renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify exact UC-126 four-role discovery authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-126-DISCOVER.json','utf8'));
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(item=>item.id==='UC-126');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(item=>item.id==='UC-126');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_90375b50fca2bd3603ba9946');
+          if(row.version!==1||row.record_id!=='UC-126'||row.actor!=='Tara Strong'||row.character!=='Bubbles, Timmy, Harley & Twilight'||row.production!=='Powerpuff Girls / Fairly OddParents / etc.'||row.year!==1998||row.side!=='still')throw new Error('UC-126 discovery authorization drift');
+          if(row.selector_artifact?.artifact_id!==8706098863||row.selector_artifact?.head_sha!=='151b37ee114f8e262b284a718556355cd542f3d0'||row.selector_artifact?.zip_sha256!=='7e2ca734ac74cb3a4b4f9f7ea87d0e8ea7be34f1eda7936bccf6992966b5bf7c')throw new Error('UC-126 selector custody drift');
+          if(row.scope_artifact?.artifact_id!==8706377703||row.scope_artifact?.head_sha!=='e55246b62a2c3a4a4bee232e80521a3629b71226'||row.scope_artifact?.scope_sha256!=='231d0799b8cd0d980fb7d406258eb9bd79b021d0ec9b70fad9d893f0070c35f4')throw new Error('UC-126 scope custody drift');
+          if(row.actor_role_pages?.length!==5||row.actor_role_pages.filter(page=>page.strict).length!==3||row.actor_role_pages.filter(page=>page.reference_only).length!==2||row.role_pages?.length!==4||row.role_pages.some(role=>role.strict!==true)||row.minimum_candidates_per_role!==1||row.maximum_candidates_per_role!==20)throw new Error('UC-126 discovery denominator drift');
+          if(JSON.stringify(row.selection_contract?.required_role_keys)!==JSON.stringify(['bubbles','timmy','harley','twilight'])||row.selection_contract?.exact_four_role_composite_required!==true||row.selection_contract?.original_1998_bubbles_required!==true||row.selection_contract?.tara_strong_timmy_main_series_required!==true||row.selection_contract?.named_dc_super_hero_girls_harley_continuity_required!==true||row.selection_contract?.friendship_is_magic_twilight_required!==true||row.selection_contract?.canonical_1998_is_bubbles_chronology_only!==true||row.selection_contract?.all_four_panels_required!==true||row.selection_contract?.canonical_mutation!==false)throw new Error('UC-126 selection contract drift');
+          if(!specimen||specimen.actor!=='Tara Strong'||specimen.character!=='Bubbles, Timmy, Harley & Twilight'||specimen.production!=='Powerpuff Girls / Fairly OddParents / etc.'||specimen.years!=='1998'||specimen.still)throw new Error('UC-126 specimen boundary drift');
+          if(source?.still)throw new Error('UC-126 source-ledger boundary drift');
+          if(!audit||audit.wall_id!=='UC-126'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-126 audit boundary drift');
+          console.log('PASS — exact UC-126 Tara Strong four-role discovery authorized');
+          NODE
+      - name: Gather exact role revisions, image candidates, and actor-role custody
+        env:
+          OUT: ${{ runner.temp }}/card-backfill-uc-126-discover
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node --check scripts/card-backfill-uc-126-discover.mjs
+          node scripts/card-backfill-uc-126-discover.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-126-discover-run.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload actor-role pages, raw revisions, candidates, hashes, and contact sheets
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-126-discover-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-126-discover
+            ${{ runner.temp }}/card-backfill-uc-126-discover-run.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
