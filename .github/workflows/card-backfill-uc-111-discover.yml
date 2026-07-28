@@ -1,0 +1,90 @@
+name: card-backfill-uc-111-discover
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-111-DISCOVER.json"
+      - "scripts/card-backfill-uc-111-discover.mjs"
+      - ".github/workflows/card-backfill-uc-111-discover.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: card-backfill-uc-111-discover-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  discover:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-024'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-024
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical and browser runtime
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Install deterministic review renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify exact UC-111 collective discovery authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-111-DISCOVER.json','utf8'));
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(item=>item.id==='UC-111');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(item=>item.id==='UC-111');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_42a10c0cb46ab2d8dbdc0bff');
+          if(row.version!==1||row.record_id!=='UC-111'||row.actor!=='Deep Roy'||row.character!=='The Oompa Loompas'||row.production!=='Charlie and the Chocolate Factory'||row.year!==2005||row.side!=='still')throw new Error('UC-111 discovery authorization drift');
+          if(row.selector_artifact?.artifact_id!==8675638059||row.scope_artifact?.artifact_id!==8675683603||row.scope_artifact?.scope_sha256!=='93489a320c4334a279dedd2ca02e5b03b9a3a85e8b99b50550a7d237b67cd57f')throw new Error('UC-111 discovery custody drift');
+          if(row.pages?.length!==3||row.pages.filter(page=>page.strict).length!==3||row.pages.filter(page=>page.admission_lane==='collective-final-frame').length!==1||row.minimum_collective_candidates!==1)throw new Error('UC-111 page denominator drift');
+          if(row.selection_contract?.collective_many_body_frame_required!==true||row.selection_contract?.deep_roy_entire_population_binding_required!==true||row.selection_contract?.single_isolated_body_insufficient_for_final_candidate!==true||row.selection_contract?.warner_production_mechanism_receipt_required!==true||row.selection_contract?.canonical_mutation!==false)throw new Error('UC-111 selection contract drift');
+          if(!specimen||specimen.actor!=='Deep Roy'||specimen.character!=='The Oompa Loompas'||specimen.production!=='Charlie and the Chocolate Factory'||specimen.years!=='2005'||specimen.still)throw new Error('UC-111 specimen boundary drift');
+          if(source?.still)throw new Error('UC-111 source-ledger boundary drift');
+          if(!audit||audit.wall_id!=='UC-111'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-111 audit boundary drift');
+          console.log('PASS — exact UC-111 collective Oompa Loompa discovery authorized');
+          NODE
+      - name: Gather caption-local collective candidates and custody receipts
+        env:
+          OUT: ${{ runner.temp }}/card-backfill-uc-111-discover
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node --check scripts/card-backfill-uc-111-discover.mjs
+          node scripts/card-backfill-uc-111-discover.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-111-discover-run.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload source pages, collective candidates, hashes, and contact sheet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-111-discover-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-111-discover
+            ${{ runner.temp }}/card-backfill-uc-111-discover-run.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
