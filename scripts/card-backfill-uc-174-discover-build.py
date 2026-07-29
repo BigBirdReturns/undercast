@@ -2,10 +2,12 @@
 """Build the UC-174 discoverer from the pinned, gate-proven UC-171 implementation."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 SOURCE = Path("scripts/.card-backfill-uc-171-discover-source.mjs")
 DEST = Path("scripts/.card-backfill-uc-174-discover-run.mjs")
+FAILURES = Path(".github/CARD-BACKFILL-UC-174-DISCOVER-FAILURES.json")
 
 
 def replace_once(text: str, old: str, new: str, name: str) -> str:
@@ -21,6 +23,18 @@ def replace_all_required(text: str, old: str, new: str, name: str) -> str:
         raise SystemExit(f"UC-174 discovery build anchor missing {name}")
     return text.replace(old, new)
 
+
+failure_ledger = json.loads(FAILURES.read_text(encoding="utf-8"))
+rows = failure_ledger.get("failed_discovery_checkpoints", [])
+if (
+    failure_ledger.get("version") != 1
+    or failure_ledger.get("record_id") != "UC-174"
+    or len(rows) != 1
+    or rows[0].get("run_id") != 30476509028
+    or rows[0].get("artifact_id") != 8733847623
+    or rows[0].get("head_sha") != "1c02db8ceef0af383e65e96be561f6a566d46cd8"
+):
+    raise SystemExit("UC-174 failed discovery custody drift")
 
 text = SOURCE.read_text(encoding="utf-8")
 for old, new, name in [
@@ -65,6 +79,24 @@ text = replace_once(
     "Yakko, Pinky, and 1987 animated Raphael each require exact role and chronology custody. Other Warner siblings, Brain, later Donatello, other turtles, live action, toys, games, posters, and incomplete composites are forbidden.",
     "Bender, Jake the Dog, and Marcus Fenix each require exact John DiMaggio role, production, medium, and chronology custody. Other robots, other Adventure Time characters, other COG soldiers, replacement performers, live action, costumes, toys, cosplay, posters, and incomplete composites are forbidden.",
     "review boundary",
+)
+text = replace_once(
+    text,
+    "const control=await readJson(CONTROL);\nassert(control.version===1&&control.lane==='card-backfill'&&control.record_id==='UC-174','UC-174 discovery scope drift');",
+    "const control=await readJson(CONTROL);\nconst failureLedger=await readJson('.github/CARD-BACKFILL-UC-174-DISCOVER-FAILURES.json');\nassert(failureLedger.version===1&&failureLedger.record_id==='UC-174'&&failureLedger.failed_discovery_checkpoints?.length===1&&failureLedger.failed_discovery_checkpoints[0]?.artifact_id===8733847623,'UC-174 failed discovery custody drift');\nassert(control.version===1&&control.lane==='card-backfill'&&control.record_id==='UC-174','UC-174 discovery scope drift');",
+    "runtime failure custody",
+)
+text = replace_once(
+    text,
+    "generated_at:new Date().toISOString(),control_sha256:sha(await readFile(CONTROL)),selector_artifact:control.selector_artifact,scope_artifact:control.scope_artifact,repository_hash_count:repository.size,",
+    "generated_at:new Date().toISOString(),control_sha256:sha(await readFile(CONTROL)),failure_ledger_sha256:sha(await readFile('.github/CARD-BACKFILL-UC-174-DISCOVER-FAILURES.json')),selector_artifact:control.selector_artifact,scope_artifact:control.scope_artifact,failed_discovery_checkpoints:failureLedger.failed_discovery_checkpoints,discovery_repair_boundary:failureLedger.repair_boundary,repository_hash_count:repository.size,",
+    "manifest failure custody",
+)
+text = replace_once(
+    text,
+    "years:'1990s–',candidate_count:candidates.length,role_counts:roleCounts,",
+    "years:'1990s–',failed_discovery_checkpoints:failureLedger.failed_discovery_checkpoints,candidate_count:candidates.length,role_counts:roleCounts,",
+    "summary failure custody",
 )
 DEST.write_text(text, encoding="utf-8")
 print(f"PASS — wrote isolated UC-174 discoverer to {DEST}")
