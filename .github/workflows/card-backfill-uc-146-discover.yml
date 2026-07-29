@@ -1,0 +1,91 @@
+name: card-backfill-uc-146-discover
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-146-DISCOVER.json"
+      - "scripts/card-backfill-uc-146-discover.mjs"
+      - ".github/workflows/card-backfill-uc-146-discover.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: card-backfill-uc-146-discover-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  discover:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-032'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-032
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical and browser runtime
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Install deterministic review renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify exact UC-146 portrait discovery authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-146-DISCOVER.json','utf8'));
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(item=>item.id==='UC-146');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(item=>item.id==='UC-146');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_c4167741dd920f9d90aad34a');
+          if(row.version!==1||row.record_id!=='UC-146'||row.actor!=='Tim Rose'||row.character!=='Admiral Ackbar / Salacious B. Crumb'||row.production!=='Return of the Jedi'||row.years!=='1983–2019'||row.side!=='portrait')throw new Error('UC-146 discovery authorization drift');
+          if(row.selector_artifact?.artifact_id!==8709311632||row.selector_artifact?.head_sha!=='af26ce51017999fe011632ecde8152717f3932dc'||row.selector_artifact?.zip_sha256!=='516e3a32b335de4989f017471f697dfb546108c8e887571954418854ea7fa65f')throw new Error('UC-146 selector custody drift');
+          if(row.scope_artifact?.artifact_id!==8709403357||row.scope_artifact?.head_sha!=='fe2be685fd1c3507c83fd7a3134842969cbd4aca'||row.scope_artifact?.scope_sha256!=='c3827439f67776cff078fd431173b1a5820a9637effc89d84efa9f79a5052c5d')throw new Error('UC-146 scope custody drift');
+          if(row.actor_identity_pages?.length!==2||row.actor_identity_pages.some(page=>page.strict!==true)||row.commons?.files?.length!==2||row.commons.files[0]?.title!=='File:Tim Rose by Gage Skidmore.jpg'||row.commons.files[1]?.title!=='File:Timothy Rose Celebration Europe II.jpg')throw new Error('UC-146 discovery denominator drift');
+          if(row.selection_contract?.exact_untransformed_tim_rose_portrait_required!==true||row.selection_contract?.required_candidate_count!==2||row.selection_contract?.strict_actor_identity_pages_required!==2||row.selection_contract?.commons_file_metadata_required!==true||row.selection_contract?.commons_license_metadata_required!==true||row.selection_contract?.other_tim_rose_people_forbidden!==true||row.selection_contract?.admiral_ackbar_or_salacious_crumb_character_image_forbidden!==true||row.selection_contract?.existing_character_still_must_remain_unchanged!==true||row.selection_contract?.canonical_mutation!==false)throw new Error('UC-146 selection contract drift');
+          if(!specimen||specimen.actor!=='Tim Rose'||specimen.character!=='Admiral Ackbar / Salacious B. Crumb'||specimen.production!=='Return of the Jedi'||specimen.years!=='1983–2019'||specimen.portrait||specimen.still?.src!=='images/uc-146-still.jpg')throw new Error('UC-146 specimen boundary drift');
+          if(source?.portrait)throw new Error('UC-146 source-ledger portrait boundary drift');
+          if(!audit||audit.wall_id!=='UC-146'||audit.side!=='portrait'||audit.status!=='absent'||audit.asset)throw new Error('UC-146 audit boundary drift');
+          console.log('PASS — exact UC-146 Tim Rose two-candidate portrait discovery authorized');
+          NODE
+      - name: Gather captioned Tim Rose portrait candidates and identity custody
+        env:
+          OUT: ${{ runner.temp }}/card-backfill-uc-146-discover
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node --check scripts/card-backfill-uc-146-discover.mjs
+          node scripts/card-backfill-uc-146-discover.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-146-discover-run.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload identity pages, Commons metadata, candidates, hashes, and contact sheet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-146-discover-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-146-discover
+            ${{ runner.temp }}/card-backfill-uc-146-discover-run.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
