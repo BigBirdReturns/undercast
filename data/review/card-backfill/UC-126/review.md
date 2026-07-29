@@ -1,0 +1,30 @@
+# UC-126 reviewed Tara Strong four-role still candidate
+
+- **Record:** UC-126
+- **Performer:** Tara Strong
+- **Displayed roles:** Bubbles, Timmy Turner, Harley Quinn, and Twilight Sparkle
+- **Bubbles source:** `49ccbfd588c6f7b4154bab7b10126713ed24b4910efc891f82b96722de0ddc09`
+- **Timmy source:** `379dfe165e928bbbce5e6fccbe0f7c3555dd1a52c530c06150a4cc577f68f7b8`
+- **Harley source:** `7e9604384f8f6ba67c4ddf9ee3e88699e5aebb2379825e470972e6df6cf2b5ca`
+- **Twilight source:** `7c7b3818f1a04f84daacf4b31d382289b158213b15958697f65c85be1e5765db`
+- **Exact role record:** `612f17fe83c6a54c16cbdb6a4efdb88d41af213556ee9b193be90dbf82818536`
+- **Candidate:** `9be5a99132a38ca17394e948f84186e26a82efc85454b0f78a6c4cb091585df3`
+- **Wall-crop preview:** `3bc037858137a15145f6cfd891e156e71e0c74ffabc9d8b537d5db6b38343e9e`
+- **Identity ruling:** all four expected subjects
+- **Presentation ruling:** four-role character composite
+- **Crop ruling:** pass, two-by-two role grid
+- **Chronology ruling:** 1998 Bubbles chronology separated from Timmy, Harley, and Twilight
+- **Resolution ruling:** controlled Bubbles historical-source enlargement
+- **Canonical mutation:** none
+
+## Visual and custody ruling
+
+- Tara Strong directly identifies Bubbles, Timmy Turner, Harley Quinn, and Twilight Sparkle among her performed voices. DC independently fixes Harley to the 2019 DC Super Hero Girls continuity; Paramount, AWN, and Hasbro remain separately retained corroboration.
+- The canonical 1998 field remains original Powerpuff Girls and Bubbles chronology only. Timmy, Harley, and Twilight carry independent production and role custody.
+- Bubbles uses a 185x185 original-series action image from the hash-pinned Bubbles probe. Its crisp flat-color line art remains legible after controlled Lanczos enlargement; no claim of newly recovered detail is made.
+- Timmy uses a clean main-series character stock image. Harley uses a named 2019 DC Super Hero Girls S01E09 frame. Twilight uses a Friendship is Magic S4E26 identity frame.
+- The 1260x1000 layout uses four 624x494 role panels separated by twelve-pixel neutral dividers. All four faces and body silhouettes remain independently legible.
+- The 1246x1000 wall simulation removes seven pixels from each outside edge without changing any role, chronology, or continuity ruling.
+- Exact-byte duplicate screening passes against 2,070 canonical repository hashes.
+
+The selected source bytes, two strict actor-role receipts, three reference-only corroborations, four raw revisions, four browser transport receipts, deterministic composite, wall simulation, duplicate receipt, and exact-role record remain evidence-only pending independent canonical acceptance.
