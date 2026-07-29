@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build an isolated UC-171 discoverer with retained Paramount checkpoint custody."""
+"""Build an isolated UC-171 discoverer with retained source checkpoint custody."""
 from __future__ import annotations
 
 import json
@@ -20,11 +20,13 @@ rows=ledger.get('failed_discovery_checkpoints',[])
 if (
     ledger.get('version')!=1
     or ledger.get('record_id')!='UC-171'
-    or len(rows)!=2
+    or len(rows)!=3
     or rows[0].get('artifact_id')!=8714143001
     or rows[0].get('head_sha')!='df713297cd4f964bfe5e1e5e886cd4168b7d6b44'
     or rows[1].get('artifact_id')!=8714257248
     or rows[1].get('head_sha')!='226ee516656a719a45f9c9cc03d0ce8779543509'
+    or rows[2].get('artifact_id')!=8714375534
+    or rows[2].get('head_sha')!='1ccddd9521f38c7314f6fbbea4d53c302ffa35c6'
 ):
     raise SystemExit('UC-171 failed discovery custody drift')
 
@@ -32,8 +34,8 @@ text=SOURCE.read_text(encoding='utf-8')
 text=replace_once(
     text,
     "const control=await readJson(CONTROL);\nassert(control.version===1&&control.lane==='card-backfill'&&control.record_id==='UC-171','UC-171 discovery scope drift');",
-    "const control=await readJson(CONTROL);\nconst failureLedger=await readJson('.github/CARD-BACKFILL-UC-171-DISCOVER-FAILURES.json');\nassert(failureLedger.version===1&&failureLedger.record_id==='UC-171'&&failureLedger.failed_discovery_checkpoints?.length===2&&failureLedger.failed_discovery_checkpoints[0]?.artifact_id===8714143001&&failureLedger.failed_discovery_checkpoints[1]?.artifact_id===8714257248,'UC-171 failed discovery custody drift');\nconst paramountSeries=control.actor_role_pages.find(row=>row.key==='paramount-plus-tmnt-1987');\nassert(paramountSeries,'UC-171 Paramount+ series record missing');\nparamountSeries.required_terms=['Teenage Mutant Ninja Turtles (1987)','Episode Guide','Season 3','Beneath These Streets','Sep 25, 1989','Shredder'];\nparamountSeries.binding='The live Paramount+ episode guide identifies the animated series as Teenage Mutant Ninja Turtles (1987) and exposes its dated Season 3 television chronology; the Television Academy separately binds Rob Paulsen to original-series Raphael.';\nassert(control.version===1&&control.lane==='card-backfill'&&control.record_id==='UC-171','UC-171 discovery scope drift');",
-    'control custody and Paramount terms'
+    "const control=await readJson(CONTROL);\nconst failureLedger=await readJson('.github/CARD-BACKFILL-UC-171-DISCOVER-FAILURES.json');\nassert(failureLedger.version===1&&failureLedger.record_id==='UC-171'&&failureLedger.failed_discovery_checkpoints?.length===3&&failureLedger.failed_discovery_checkpoints[0]?.artifact_id===8714143001&&failureLedger.failed_discovery_checkpoints[1]?.artifact_id===8714257248&&failureLedger.failed_discovery_checkpoints[2]?.artifact_id===8714375534,'UC-171 failed discovery custody drift');\nconst paramountSeries=control.actor_role_pages.find(row=>row.key==='paramount-plus-tmnt-1987');\nassert(paramountSeries,'UC-171 Paramount+ series record missing');\nparamountSeries.required_terms=['Teenage Mutant Ninja Turtles (1987)','Episode Guide','Season 3','Beneath These Streets','Sep 25, 1989','Shredder'];\nparamountSeries.binding='The live Paramount+ episode guide identifies the animated series as Teenage Mutant Ninja Turtles (1987) and exposes its dated Season 3 television chronology; the Television Academy separately binds Rob Paulsen to original-series Raphael.';\nconst yakkoRole=control.roles.find(row=>row.key==='yakko');\nassert(yakkoRole,'UC-171 Yakko role record missing');\nyakkoRole.required_terms=['Yakko Warner','Rob Paulsen','Animaniacs','voiced','1993'];\nassert(control.version===1&&control.lane==='card-backfill'&&control.record_id==='UC-171','UC-171 discovery scope drift');",
+    'control custody, Paramount terms, and Yakko schema'
 )
 text=replace_once(
     text,
