@@ -5,7 +5,9 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - ".github/CARD-BACKFILL-UC-170-DISCOVER.json"
+      - ".github/CARD-BACKFILL-UC-170-DISCOVER-FAILURES.json"
       - "scripts/card-backfill-uc-170-discover.mjs"
+      - "scripts/card-backfill-uc-170-discover-repair.py"
       - ".github/workflows/card-backfill-uc-170-discover.yml"
 
 permissions:
@@ -49,16 +51,18 @@ jobs:
           SH
           chmod +x "$RUNNER_TEMP/bin/magick"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - name: Verify exact UC-170 three-role discovery authorization
+      - name: Verify repaired UC-170 three-role discovery authorization
         run: |
           set -euo pipefail
           node --input-type=module - <<'NODE'
           import fs from 'node:fs';
           const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-170-DISCOVER.json','utf8'));
+          const failures=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-170-DISCOVER-FAILURES.json','utf8'));
           const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(item=>item.id==='UC-170');
           const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(item=>item.id==='UC-170');
           const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_f1583034cfdddaa201e1bcc3');
           if(row.version!==1||row.record_id!=='UC-170'||row.kind!=='voice'||row.actor!=='Maurice LaMarche'||row.character!=='The Brain, Kif Kroker, Egon Spengler'||row.production!=='Animaniacs / Futurama'||row.years!=='1980s–'||row.side!=='still')throw new Error('UC-170 discovery authorization drift');
+          if(failures.version!==1||failures.record_id!=='UC-170'||failures.failed_discovery_checkpoints?.length!==1||failures.failed_discovery_checkpoints[0]?.run_id!==30422811904||failures.failed_discovery_checkpoints[0]?.artifact_id!==8712519412||failures.failed_discovery_checkpoints[0]?.head_sha!=='820258a7f3ad3a9c9b6c3d112e32f52813d704f7'||failures.failed_discovery_checkpoints[0]?.artifact_digest_sha256!=='f6972bf7b27a29f2ef7878c342aeb27f5d379afc87c664ed1e5c5c4e840a6cec')throw new Error('UC-170 failed discovery custody drift');
           if(row.selector_artifact?.artifact_id!==8712290331||row.selector_artifact?.head_sha!=='a0258de5785cf6959e198077d63e3e51e1853411'||row.selector_artifact?.zip_sha256!=='74e795444342ff84537688c6e17edea7e2c86d7ea9e3d3ee854e79061dfe4b68'||row.selector_artifact?.selected_sha256!=='3e1f2a8607450c460b38b220812104e84af1bb0069286080618b98b43838b423')throw new Error('UC-170 selector custody drift');
           if(row.scope_artifact?.artifact_id!==8712363186||row.scope_artifact?.head_sha!=='a5869e6fac8bfb55427b6786c248a6f3d7de7bcb'||row.scope_artifact?.zip_sha256!=='fcf6380b316db41775a294c6798a5995ecb7f2744cd3ac62cf0642fce4f42c77'||row.scope_artifact?.scope_sha256!=='34a98dd77320a26cc03f156375a35a11a3eaec8fd8cbefd8746aa27bf58e56ec')throw new Error('UC-170 scope custody drift');
           if(row.actor_role_pages?.length!==4||row.actor_role_pages.some(page=>page.strict!==true)||row.roles?.length!==3||row.roles[0]?.key!=='brain'||row.roles[1]?.key!=='kif'||row.roles[2]?.key!=='egon')throw new Error('UC-170 discovery denominator drift');
@@ -66,19 +70,24 @@ jobs:
           if(!specimen||specimen.kind!=='voice'||specimen.actor!=='Maurice LaMarche'||specimen.character!=='The Brain, Kif Kroker, Egon Spengler'||specimen.production!=='Animaniacs / Futurama'||specimen.years!=='1980s–'||specimen.still||specimen.portrait?.src!=='images/uc-170-portrait.jpg')throw new Error('UC-170 specimen boundary drift');
           if(source?.still||source?.portrait?.src!=='images/uc-170-portrait.jpg')throw new Error('UC-170 source-ledger boundary drift');
           if(!audit||audit.wall_id!=='UC-170'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-170 audit boundary drift');
-          console.log('PASS — exact UC-170 Maurice LaMarche three-role discovery authorized');
+          console.log('PASS — exact UC-170 failed-checkpoint custody and candidate receipt repair authorized');
           NODE
+      - name: Build isolated repaired discoverer
+        run: |
+          set -euo pipefail
+          python3 scripts/card-backfill-uc-170-discover-repair.py
+          node --check scripts/.card-backfill-uc-170-discover-run.mjs
       - name: Gather institutional role receipts, raw revisions, and character candidates
         env:
           OUT: ${{ runner.temp }}/card-backfill-uc-170-discover
           MAGICK_CMD: magick
         run: |
           set -euo pipefail
-          node --check scripts/card-backfill-uc-170-discover.mjs
-          node scripts/card-backfill-uc-170-discover.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-170-discover-run.log"
+          node scripts/.card-backfill-uc-170-discover-run.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-170-discover-run.log"
+          rm scripts/.card-backfill-uc-170-discover-run.mjs
           git status --short
           test -z "$(git status --porcelain)"
-      - name: Upload institutional pages, raw revisions, character candidates, hashes, and contact sheets
+      - name: Upload failure custody, institutional pages, raw revisions, character candidates, hashes, and contact sheets
         if: always()
         uses: actions/upload-artifact@v4
         with:
