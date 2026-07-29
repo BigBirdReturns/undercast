@@ -22,9 +22,11 @@ rows = failure_ledger.get("failed_discovery_checkpoints", [])
 if (
     failure_ledger.get("version") != 1
     or failure_ledger.get("record_id") != "UC-146"
-    or len(rows) != 1
+    or len(rows) != 2
     or rows[0].get("artifact_id") != 8709557095
     or rows[0].get("head_sha") != "467330424b785612be368398b6c7145e0a6f379e"
+    or rows[1].get("artifact_id") != 8709666865
+    or rows[1].get("head_sha") != "f64cd601b26dd78cc62a3b5f081215ddb72a1227"
 ):
     raise SystemExit("UC-146 failed discovery custody drift")
 
@@ -32,13 +34,13 @@ text = SOURCE.read_text(encoding="utf-8")
 text = replace_once(
     text,
     "const control = await readJson(CONTROL);\nassert(control.version === 1 && control.lane === 'card-backfill' && control.record_id === 'UC-146', 'UC-146 discovery scope drift');",
-    "const control = await readJson(CONTROL);\nconst failureLedger = await readJson('.github/CARD-BACKFILL-UC-146-DISCOVER-FAILURES.json');\nassert(failureLedger.version === 1 && failureLedger.record_id === 'UC-146' && failureLedger.failed_discovery_checkpoints?.length === 1 && failureLedger.failed_discovery_checkpoints[0]?.artifact_id === 8709557095, 'UC-146 failed discovery custody drift');\nassert(control.version === 1 && control.lane === 'card-backfill' && control.record_id === 'UC-146', 'UC-146 discovery scope drift');",
+    "const control = await readJson(CONTROL);\nconst failureLedger = await readJson('.github/CARD-BACKFILL-UC-146-DISCOVER-FAILURES.json');\nassert(failureLedger.version === 1 && failureLedger.record_id === 'UC-146' && failureLedger.failed_discovery_checkpoints?.length === 2 && failureLedger.failed_discovery_checkpoints[0]?.artifact_id === 8709557095 && failureLedger.failed_discovery_checkpoints[1]?.artifact_id === 8709666865, 'UC-146 failed discovery custody drift');\nassert(control.version === 1 && control.lane === 'card-backfill' && control.record_id === 'UC-146', 'UC-146 discovery scope drift');",
     "control",
 )
 text = replace_once(
     text,
     "assert(control.actor_identity_pages?.length === 2 && control.actor_identity_pages.every(row => row.strict) && control.commons?.files?.length === 2 && control.selection_contract?.required_candidate_count === 2, 'UC-146 discovery denominator drift');",
-    "assert(control.actor_identity_pages?.length === 3 && control.actor_identity_pages.filter(row => row.strict).length === 2 && control.actor_identity_pages.filter(row => row.reference_only).length === 1 && control.commons?.files?.length === 2 && control.selection_contract?.required_candidate_count === 2, 'UC-146 discovery denominator drift');",
+    "assert(control.actor_identity_pages?.length === 4 && control.actor_identity_pages.filter(row => row.strict).length === 2 && control.actor_identity_pages.filter(row => row.reference_only).length === 2 && control.commons?.files?.length === 2 && control.selection_contract?.required_candidate_count === 2, 'UC-146 discovery denominator drift');",
     "denominator",
 )
 text = replace_once(
