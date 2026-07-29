@@ -1,0 +1,116 @@
+name: card-backfill-uc-175-render
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-175-RENDER.json"
+      - ".github/CARD-BACKFILL-UC-175-DISCOVER-FAILURES.json"
+      - "scripts/card-backfill-uc-175-render.mjs"
+      - ".github/workflows/card-backfill-uc-175-render.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: card-backfill-uc-175-render-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-039'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-039
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical runtime
+        run: npm ci
+      - name: Install deterministic review renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify exact render authorization and artifact metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const c=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-175-RENDER.json','utf8'));
+          const f=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-175-DISCOVER-FAILURES.json','utf8'));
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(x=>x.id==='UC-175');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(x=>x.id==='UC-175');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(x=>x.id==='ma_4f6f8c344e4fe375194d8f22');
+          if(c.version!==1||c.record_id!=='UC-175'||c.actor!=='Ben Burtt'||c.character!=='The voices of R2-D2 & WALL·E'||c.production!=='Star Wars / WALL·E'||c.years!=='1977–'||c.side!=='still')throw new Error('UC-175 render authorization drift');
+          if(c.failed_visual_discovery?.artifact_id!==8735470319||c.failed_visual_discovery?.artifact_digest_sha256!=='e8f682cf8747ea805047e1c392c08ac2d3ac0b5d96d6d46b339aa37b50567ab1'||c.r2_gallery_artifact?.artifact_id!==8742116020||c.r2_gallery_artifact?.artifact_digest_sha256!=='59773fea2e287cc05de09a4e1e2cbd6ee3b8ca5f4fbcb59f39531f45b97af4cc')throw new Error('UC-175 artifact custody drift');
+          if(c.selected_sources?.r2d2?.sha256!=='e87e81781b33a2009d4b776feced42d30e96bff8c58e2f5ba18d4d0cfbb5356d'||c.selected_sources?.r2d2?.gallery_display_index!==41||c.selected_sources?.walle?.sha256!=='d93d4066c4b72e0e2323ca7e9f294bd349a9142d6e356950a115c35471109c15')throw new Error('UC-175 selected source drift');
+          if(f.failed_discovery_checkpoints?.length!==1||f.failed_discovery_checkpoints[0]?.artifact_id!==8735470319||f.failed_discovery_checkpoints[0]?.selected_r2d2_sha256!==c.failed_visual_discovery.rejected_r2d2_sha256||f.failed_discovery_checkpoints[0]?.accepted_walle_sha256!==c.selected_sources.walle.sha256)throw new Error('UC-175 failed checkpoint drift');
+          if(!specimen||specimen.still||specimen.portrait?.src!=='images/uc-175-portrait.jpg'||!source||source.still||source.portrait?.src!=='images/uc-175-portrait.jpg'||!audit||audit.status!=='absent'||audit.asset)throw new Error('UC-175 canonical boundary drift');
+          const headers={Accept:'application/vnd.github+json',Authorization:`Bearer ${process.env.GH_TOKEN}`,'X-GitHub-Api-Version':'2022-11-28'};
+          for(const a of [c.failed_visual_discovery,c.r2_gallery_artifact]){
+            const response=await fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/actions/artifacts/${a.artifact_id}`,{headers});
+            if(!response.ok)throw new Error(`artifact metadata HTTP ${response.status}`);
+            const metadata=await response.json();
+            if(metadata.expired||metadata.workflow_run?.head_sha!==a.head_sha||metadata.digest!==`sha256:${a.artifact_digest_sha256}`)throw new Error(`artifact metadata drift ${a.artifact_id}`);
+          }
+          console.log('PASS — exact UC-175 two-role render and upstream artifact custody authorized');
+          NODE
+      - name: Download retained failed discovery artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: card-backfill-uc-175-discover-30480498637
+          path: ${{ runner.temp }}/uc175-discovery
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 30480498637
+      - name: Download successful official R2-D2 gallery artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: card-backfill-uc-175-r2-gallery-30497245649
+          path: ${{ runner.temp }}/uc175-gallery
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 30497245649
+      - name: Render exact two-role candidate and wall simulation
+        env:
+          DISCOVERY_ROOT: ${{ runner.temp }}/uc175-discovery/card-backfill-uc-175-discover
+          GALLERY_ROOT: ${{ runner.temp }}/uc175-gallery/card-backfill-uc-175-r2-gallery
+          OUT: ${{ runner.temp }}/card-backfill-uc-175-render
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node --check scripts/card-backfill-uc-175-render.mjs
+          node scripts/card-backfill-uc-175-render.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-175-render-run.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload selected sources, page receipts, candidate, wall crop, and render ledger
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-175-render-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-175-render
+            ${{ runner.temp }}/card-backfill-uc-175-render-run.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
