@@ -79,7 +79,7 @@ new = """    const title = await page.title();
       validationSurfaces.push('exact-same-article-transport-mirror');
       for (const row of usableTransportMirrors) bodyParts.push(`--- ASC SAME-ARTICLE MIRROR ${row.requested_url} ---\n\n${row.text}`);
     }
-    const body = bodyParts.join('\n\n');
+    const body = bodyParts.join(String.fromCharCode(10, 10));
     const normalizedBody = normalized(body);
     const missing = source.required_terms.filter(term => !normalizedBody.toLowerCase().includes(normalized(term).toLowerCase()));
 """
