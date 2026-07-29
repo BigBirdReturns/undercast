@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build an isolated UC-171 discoverer with retained Paramount transport custody."""
+"""Build an isolated UC-171 discoverer with retained Paramount checkpoint custody."""
 from __future__ import annotations
 
 import json
@@ -17,15 +17,23 @@ def replace_once(text:str,old:str,new:str,name:str)->str:
 
 ledger=json.loads(FAILURES.read_text(encoding='utf-8'))
 rows=ledger.get('failed_discovery_checkpoints',[])
-if ledger.get('version')!=1 or ledger.get('record_id')!='UC-171' or len(rows)!=1 or rows[0].get('artifact_id')!=8714143001 or rows[0].get('head_sha')!='df713297cd4f964bfe5e1e5e886cd4168b7d6b44':
+if (
+    ledger.get('version')!=1
+    or ledger.get('record_id')!='UC-171'
+    or len(rows)!=2
+    or rows[0].get('artifact_id')!=8714143001
+    or rows[0].get('head_sha')!='df713297cd4f964bfe5e1e5e886cd4168b7d6b44'
+    or rows[1].get('artifact_id')!=8714257248
+    or rows[1].get('head_sha')!='226ee516656a719a45f9c9cc03d0ce8779543509'
+):
     raise SystemExit('UC-171 failed discovery custody drift')
 
 text=SOURCE.read_text(encoding='utf-8')
 text=replace_once(
     text,
     "const control=await readJson(CONTROL);\nassert(control.version===1&&control.lane==='card-backfill'&&control.record_id==='UC-171','UC-171 discovery scope drift');",
-    "const control=await readJson(CONTROL);\nconst failureLedger=await readJson('.github/CARD-BACKFILL-UC-171-DISCOVER-FAILURES.json');\nassert(failureLedger.version===1&&failureLedger.record_id==='UC-171'&&failureLedger.failed_discovery_checkpoints?.length===1&&failureLedger.failed_discovery_checkpoints[0]?.artifact_id===8714143001,'UC-171 failed discovery custody drift');\nassert(control.version===1&&control.lane==='card-backfill'&&control.record_id==='UC-171','UC-171 discovery scope drift');",
-    'control custody'
+    "const control=await readJson(CONTROL);\nconst failureLedger=await readJson('.github/CARD-BACKFILL-UC-171-DISCOVER-FAILURES.json');\nassert(failureLedger.version===1&&failureLedger.record_id==='UC-171'&&failureLedger.failed_discovery_checkpoints?.length===2&&failureLedger.failed_discovery_checkpoints[0]?.artifact_id===8714143001&&failureLedger.failed_discovery_checkpoints[1]?.artifact_id===8714257248,'UC-171 failed discovery custody drift');\nconst paramountSeries=control.actor_role_pages.find(row=>row.key==='paramount-plus-tmnt-1987');\nassert(paramountSeries,'UC-171 Paramount+ series record missing');\nparamountSeries.required_terms=['Teenage Mutant Ninja Turtles (1987)','Episode Guide','Season 3','Beneath These Streets','Sep 25, 1989','Shredder'];\nparamountSeries.binding='The live Paramount+ episode guide identifies the animated series as Teenage Mutant Ninja Turtles (1987) and exposes its dated Season 3 television chronology; the Television Academy separately binds Rob Paulsen to original-series Raphael.';\nassert(control.version===1&&control.lane==='card-backfill'&&control.record_id==='UC-171','UC-171 discovery scope drift');",
+    'control custody and Paramount terms'
 )
 text=replace_once(
     text,
