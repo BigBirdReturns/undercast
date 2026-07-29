@@ -1,0 +1,91 @@
+name: card-backfill-uc-171-discover
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-171-DISCOVER.json"
+      - "scripts/card-backfill-uc-171-discover.mjs"
+      - ".github/workflows/card-backfill-uc-171-discover.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: card-backfill-uc-171-discover-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  discover:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-036'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-036
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical and browser runtime
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Install deterministic review renderer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          if [ "${1:-}" = "identify" ]; then
+            shift
+            exec identify "$@"
+          fi
+          exec convert "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify exact UC-171 three-role discovery authorization
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const row=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-UC-171-DISCOVER.json','utf8'));
+          const specimen=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(item=>item.id==='UC-171');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(item=>item.id==='UC-171');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.find(item=>item.id==='ma_0463aa68c783b67dbfb3a9bc');
+          if(row.version!==1||row.record_id!=='UC-171'||row.kind!=='voice'||row.actor!=='Rob Paulsen'||row.character!=='Yakko Warner, Pinky, Raphael'||row.production!=='Animaniacs / TMNT'||row.years!=='1980s–'||row.side!=='still')throw new Error('UC-171 discovery authorization drift');
+          if(row.selector_artifact?.artifact_id!==8713888323||row.selector_artifact?.head_sha!=='8196b7230d0fa8b501f3a4a2b7efe265b1b7dd54'||row.selector_artifact?.zip_sha256!=='59360aea7cf1da766400d56f586f4b9e616ab764429e56cc781b60a201d4a752'||row.selector_artifact?.selected_sha256!=='a2e9376fabb519cb7ddcfacf5a0e48a8e177c1cf658dd8a99a133b846e45d74f')throw new Error('UC-171 selector custody drift');
+          if(row.scope_artifact?.artifact_id!==8713979812||row.scope_artifact?.head_sha!=='0966b64598f1a573d71c9b6a99001df22910a7ce'||row.scope_artifact?.scope_sha256!=='2b210adfa18f23e806fd08411cf13ea967362079ed3072e38a2ce1e49978795c')throw new Error('UC-171 scope custody drift');
+          if(row.actor_role_pages?.length!==4||row.actor_role_pages.some(page=>page.strict!==true)||row.roles?.length!==3||row.roles[0]?.key!=='yakko'||row.roles[1]?.key!=='pinky'||row.roles[2]?.key!=='raphael')throw new Error('UC-171 discovery denominator drift');
+          if(row.selection_contract?.exact_three_role_animated_character_composite_required!==true||JSON.stringify(row.selection_contract?.required_roles)!==JSON.stringify(['yakko','pinky','raphael'])||row.selection_contract?.minimum_candidates_per_role!==1||row.selection_contract?.maximum_candidates_per_role!==24||row.selection_contract?.rob_paulsen_voice_performance_required_for_all_three_roles!==true||row.selection_contract?.raphael_1987_original_series_required!==true||row.selection_contract?.later_donatello_and_2012_tmnt_substitute_for_raphael_forbidden!==true||row.selection_contract?.existing_performer_portrait_must_remain_unchanged!==true||row.selection_contract?.canonical_mutation!==false)throw new Error('UC-171 selection contract drift');
+          if(!specimen||specimen.kind!=='voice'||specimen.actor!=='Rob Paulsen'||specimen.character!=='Yakko Warner, Pinky, Raphael'||specimen.production!=='Animaniacs / TMNT'||specimen.years!=='1980s–'||specimen.still||specimen.portrait?.src!=='images/uc-171-portrait.jpg')throw new Error('UC-171 specimen boundary drift');
+          if(source?.still||source?.portrait?.src!=='images/uc-171-portrait.jpg')throw new Error('UC-171 source-ledger boundary drift');
+          if(!audit||audit.wall_id!=='UC-171'||audit.side!=='still'||audit.status!=='absent'||audit.asset)throw new Error('UC-171 audit boundary drift');
+          console.log('PASS — exact UC-171 Rob Paulsen three-role discovery authorized');
+          NODE
+      - name: Gather institutional role receipts, raw revisions, and character candidates
+        env:
+          OUT: ${{ runner.temp }}/card-backfill-uc-171-discover
+          MAGICK_CMD: magick
+        run: |
+          set -euo pipefail
+          node --check scripts/card-backfill-uc-171-discover.mjs
+          node scripts/card-backfill-uc-171-discover.mjs 2>&1 | tee "$RUNNER_TEMP/card-backfill-uc-171-discover-run.log"
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload institutional pages, raw revisions, candidates, hashes, and contact sheets
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-171-discover-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-uc-171-discover
+            ${{ runner.temp }}/card-backfill-uc-171-discover-run.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
