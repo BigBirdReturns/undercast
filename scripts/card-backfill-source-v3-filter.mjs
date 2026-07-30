@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { isCompositeRequiredSubject } from "./lib/card-backfill-source-policy-v3.mjs";
 
 const STOPWORDS = new Set(["a", "an", "and", "as", "at", "by", "for", "from", "in", "of", "on", "the", "to", "with"]);
-const FORBIDDEN_DERIVATIVE = /\b(?:street\s+sign|road\s+sign|building|facade|theme\s+park|attraction|statue|sculpture|toy|action\s+figure|figurine|plush|cosplay|cosplayer|costume\s+(?:display|exhibit|replica)|mascot|logo|poster|book\s+cover|album\s+cover|dvd\s+cover|cover\s+art|comic(?:\s+book)?|mural|graffiti|tattoo|license\s+plate|wax\s+figure|fan\s+art|concept\s+art|promotional\s+art|character\s+art|merchandise)\b/i;
+const FORBIDDEN_DERIVATIVE = /\b(?:street\s+sign|road\s+sign|building|facade|theme\s+park|attraction|statue|sculpture|toy|action\s+figure|figurine|plush|cosplay|cosplayer|costume\s+(?:display|exhibit|replica)|mascot|logo|poster|book\s+cover|album\s+cover|dvd\s+cover|cover\s+art|comic(?:\s+book)?|mural|graffiti|tattoo|license\s+plate|wax\s+figure|fan\s+art|concept\s+art|promotional\s+art|character\s+art|lithograph|illustration|painting|merchandise)\b/i;
 const HUMAN_EVENT_PHOTO = /\b(?:voice\s+actor|actor|actress|director|filmmaker|composer|producer|fan\s+expo|comic[- ]?con|red\s+carpet|publicity\s+photo|portrait\s+of|headshot|panel\s+discussion|men\s+with\s+microphones|women\s+with\s+microphones|personality\s+rights|at\s+(?:an?\s+)?(?:expo|convention|festival|premiere|panel|show))\b/i;
 
 function normalize(value) {
@@ -18,14 +18,20 @@ function normalize(value) {
     .trim();
 }
 
-function words(value) {
-  return normalize(value).split(" ").filter((word) => word && !STOPWORDS.has(word));
-}
-
 function phraseIn(text, phrase) {
   const hay = ` ${normalize(text)} `;
   const needle = ` ${normalize(phrase)} `;
   return needle.trim().length > 1 && hay.includes(needle);
+}
+
+function productionTokens(value) {
+  const raw = String(value || "").match(/[A-Za-z0-9]+/g) || [];
+  const retained = raw.filter((token) => {
+    const lower = token.toLowerCase();
+    if (STOPWORDS.has(lower)) return false;
+    return token.length >= 3 || /^[A-Z0-9]{1,3}$/.test(token);
+  }).map(normalize).filter(Boolean);
+  return [...new Set(retained)];
 }
 
 function subjectAliases(row) {
@@ -53,11 +59,10 @@ function selectedMetadata(row) {
 function productionIsBound(production, bindingText) {
   if (!production) return false;
   if (phraseIn(bindingText, production)) return true;
-  const tokens = [...new Set(words(production).filter((word) => word.length >= 3))];
-  if (!tokens.length) return phraseIn(bindingText, production);
-  const normalized = normalize(bindingText);
-  const matches = tokens.filter((token) => ` ${normalized} `.includes(` ${token} `)).length;
-  return matches >= Math.min(2, tokens.length);
+  const tokens = productionTokens(production);
+  if (!tokens.length) return false;
+  const normalized = ` ${normalize(bindingText)} `;
+  return tokens.every((token) => normalized.includes(` ${token} `));
 }
 
 function actorPageSelected(selected, actorRole) {
@@ -98,6 +103,7 @@ export function evaluateV3Candidate(row, { minimumWidth = 240, minimumHeight = 2
     page_subject_bound: pageSubjectBound,
     file_subject_bound: fileSubjectBound,
     explicit_subject_binding: subjectBound,
+    production_tokens_required: productionTokens(production),
     explicit_production_binding: productionBound,
     actor_page_selected_for_still: selectedActorPage,
     actor_name_in_file_metadata: actorNameInFile,
