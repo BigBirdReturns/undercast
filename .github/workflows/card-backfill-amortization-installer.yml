@@ -38,10 +38,11 @@ jobs:
         id: head
         run: echo "source_head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Validate, expand, and retire the exact amortization payload
+      - name: Validate and expand the exact amortization payload
         run: |
           set -euo pipefail
           root='.github/card-backfill/amortization-payload'
+          mirror='.github/card-backfill/amortization-workflow-mirrors'
           cat "$root"/part-* | base64 -d > "$RUNNER_TEMP/card-backfill-amortization.tar.gz"
           echo '0c6913b9ed5a57e54cb1a83a19fe286f5d9211fad0672a31d0f18fe033049c20  '"$RUNNER_TEMP/card-backfill-amortization.tar.gz" | sha256sum -c -
           if tar -tzf "$RUNNER_TEMP/card-backfill-amortization.tar.gz" | grep -E '(^/|(^|/)\.\.(/|$))'; then
@@ -49,10 +50,13 @@ jobs:
             exit 1
           fi
           tar -xzf "$RUNNER_TEMP/card-backfill-amortization.tar.gz" -C .
-          rm -rf "$root"
-          rm .github/workflows/card-backfill-amortization-installer.yml
 
-          find scripts -maxdepth 2 -type f -name 'card-backfill-*amortiz*.mjs' -o -name 'card-backfill-source-v2-cached.mjs' -o -name 'card-backfill-rebalance-wave.mjs' -o -name 'card-backfill-ready-decision-barrier.mjs' -o -name 'card-backfill-source-cache-merge.mjs' | sort | while read -r file; do
+          mkdir -p "$mirror"
+          cp .github/workflows/card-backfill-amortized-wave.yml "$mirror/card-backfill-amortized-wave.yml"
+          cp .github/workflows/card-backfill-amortized-resume-after-staging.yml "$mirror/card-backfill-amortized-resume-after-staging.yml"
+          cp .github/workflows/card-backfill-source-v2-resume.yml "$mirror/card-backfill-source-v2-resume.yml"
+
+          find scripts -maxdepth 2 -type f \( -name 'card-backfill-*amortiz*.mjs' -o -name 'card-backfill-source-v2-cached.mjs' -o -name 'card-backfill-rebalance-wave.mjs' -o -name 'card-backfill-ready-decision-barrier.mjs' -o -name 'card-backfill-source-cache-merge.mjs' \) | sort | while read -r file; do
             node --check "$file"
           done
           node --check scripts/gate.mjs
@@ -60,29 +64,46 @@ jobs:
           node -e "for (const f of ['.github/CARD-BACKFILL-AMORTIZATION.json','.github/CARD-BACKFILL-AMORTIZATION-ACTIVE.json']) JSON.parse(require('fs').readFileSync(f,'utf8'))"
           ruby -e "require 'yaml'; ARGV.each { |f| YAML.load_file(f, aliases: true) }" \
             .github/actions/card-backfill-runtime/action.yml \
-            .github/workflows/card-backfill-amortized-wave.yml \
-            .github/workflows/card-backfill-amortized-resume-after-staging.yml \
-            .github/workflows/card-backfill-source-v2-resume.yml
-          git add -A
-          git diff --cached --check
+            "$mirror/card-backfill-amortized-wave.yml" \
+            "$mirror/card-backfill-amortized-resume-after-staging.yml" \
+            "$mirror/card-backfill-source-v2-resume.yml"
 
-      - name: Commit the complete amortization system once
+          git show HEAD:.github/workflows/card-backfill-amortized-resume-after-staging.yml > .github/workflows/card-backfill-amortized-resume-after-staging.yml
+          git show HEAD:.github/workflows/card-backfill-source-v2-resume.yml > .github/workflows/card-backfill-source-v2-resume.yml
+          rm -f .github/workflows/card-backfill-amortized-wave.yml
+          rm -rf "$root"
+
+          git add -A -- \
+            .github/CARD-BACKFILL-AMORTIZATION-ACTIVE.json \
+            .github/CARD-BACKFILL-AMORTIZATION.json \
+            .github/actions/card-backfill-runtime \
+            .github/card-backfill/amortization-payload \
+            .github/card-backfill/amortization-workflow-mirrors \
+            docs/CARD-BACKFILL-AMORTIZATION.md \
+            scripts
+          git diff --cached --check
+          if git diff --cached --name-only | grep -q '^\.github/workflows/'; then
+            echo 'installer attempted a workflow mutation with a token that cannot authorize it'
+            exit 1
+          fi
+
+      - name: Commit the amortization core and exact workflow mirrors
         env:
           SOURCE_HEAD: ${{ steps.head.outputs.source_head }}
         run: |
           set -euo pipefail
           if git diff --cached --quiet; then
-            echo 'amortization system already installed; no duplicate commit required'
+            echo 'amortization core already installed; no duplicate commit required'
             exit 0
           fi
           git config user.name 'undercast-card-backfill-amortization-installer'
           git config user.email 'undercast-card-backfill-amortization-installer@users.noreply.github.com'
-          git commit -m 'Card backfill: amortize measured fan-out gains'
+          git commit -m 'Card backfill: install amortization core and workflow mirrors'
           remote_head=$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
           if [ "$remote_head" != "$SOURCE_HEAD" ]; then
             echo "branch moved from installation head $SOURCE_HEAD to $remote_head; refusing stale amortization push"
             exit 1
           fi
           git push origin "HEAD:${TARGET_BRANCH}"
-          echo 'PASS — amortization payload installed and installer retired'
+          echo 'PASS — amortization core installed; exact workflow mirrors await connector promotion'
           echo 'canonical_mutation=false'
