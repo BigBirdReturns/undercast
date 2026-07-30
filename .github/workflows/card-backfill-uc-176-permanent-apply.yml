@@ -46,6 +46,9 @@ jobs:
           import fs from 'node:fs';
           import { createHash } from 'node:crypto';
           const c=JSON.parse(fs.readFileSync(process.env.CONTROL,'utf8'));
+          const failed=c.failed_apply_checkpoints?.[0];
+          if(c.failed_apply_checkpoints?.length!==1||failed?.run_id!==30505760356||failed?.artifact_id!==8745247314||failed?.artifact_digest_sha256!=='20439cca4f71bfb782f57725238d04e66afd6cdf41ea622282d624f96dc2d86a'||failed?.materialization_passed!==true||failed?.final_evidence_only_denominator_passed!==true||failed?.canonical_gate_started!==false||failed?.permanent_commit_created!==false||failed?.branch_pushed!==false)throw new Error('UC-176 failed apply custody drift');
+          if(c.apply_repair_boundary?.source_receipt_trailing_whitespace_must_remain_byte_exact!==true||c.apply_repair_boundary?.cached_diff_source_code_whitespace_check_must_not_normalize_evidence_payload!==true||c.apply_repair_boundary?.full_canonical_gate_including_rendered_browser_tests_required!==true||c.expected_permanent_packet?.file_count!==25||c.canonical_mutation!==false)throw new Error('UC-176 apply repair boundary drift');
           const url=`https://api.github.com/repos/BigBirdReturns/undercast/actions/artifacts/${c.render_artifact.artifact_id}`;
           const response=await fetch(url,{headers:{Accept:'application/vnd.github+json',Authorization:`Bearer ${process.env.GITHUB_TOKEN}`,'X-GitHub-Api-Version':'2022-11-28','User-Agent':'undercast-uc176-permanent-apply'}});
           const raw=await response.text();
@@ -63,7 +66,7 @@ jobs:
           github-token: ${{ github.token }}
           repository: BigBirdReturns/undercast
           run-id: 30505241214
-      - name: Materialize 25 evidence files and retire all UC-176 production machinery
+      - name: Materialize 25 evidence files, retain failed-apply custody, and retire production machinery
         env:
           CONTROL: .github/CARD-BACKFILL-UC-176-PERMANENT-APPLY.json
           PACKET: ${{ runner.temp }}/uc-176-render-artifact/card-backfill-uc-176-render
@@ -74,7 +77,7 @@ jobs:
           node --check scripts/card-backfill-uc-176-permanent-apply.mjs
           node scripts/card-backfill-uc-176-permanent-apply.mjs 2>&1 | tee "$RECEIPTS/materialize.log"
           git status --short > "$RECEIPTS/status-after-materialize.txt"
-      - name: Stage exact evidence-only tree
+      - name: Stage exact evidence-only tree without normalizing source receipts
         env:
           BASE_SHA: 9f670c1dde20580f9674b590bcab52aefb572048
           RECEIPTS: ${{ runner.temp }}/uc-176-permanent-apply-receipts
@@ -90,10 +93,10 @@ jobs:
             esac
           done
           printf '%s\n' "${staged[@]}" > "$RECEIPTS/changed-files.txt"
-          git diff --cached --check
+          git diff --cached --check -- . ':(exclude)data/review/card-backfill/UC-176/source-*'
           test -z "$(git diff --name-only)"
           git status --short > "$RECEIPTS/status-after-stage.txt"
-          echo "PASS — staged exact 25-file UC-176 evidence-only tree"
+          echo "PASS — staged exact 25-file UC-176 evidence-only tree; source receipts remain byte-exact"
       - name: Run complete canonical gate including rendered browser tests
         env:
           RECEIPTS: ${{ runner.temp }}/uc-176-permanent-apply-receipts
@@ -101,7 +104,7 @@ jobs:
           set -euo pipefail
           npm run gate 2>&1 | tee "$RECEIPTS/canonical-gate.log"
           test -z "$(git diff --name-only)"
-          git diff --cached --check
+          git diff --cached --check -- . ':(exclude)data/review/card-backfill/UC-176/source-*'
           git status --short > "$RECEIPTS/status-after-gate.txt"
       - name: Commit and publish permanent UC-176 evidence head
         env:
