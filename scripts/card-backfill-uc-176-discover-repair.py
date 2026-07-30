@@ -108,5 +108,49 @@ if text.count(old_return) != 1:
     raise SystemExit("UC-176 source receipt surface anchor drift")
 text = text.replace(old_return, new_return, 1)
 
+old_commons = """  const response = await context.request.get(apiUrl, {
+    headers: { 'User-Agent': UA, Accept: 'application/json' },
+    timeout: control.transport_timeout_ms,
+    failOnStatusCode: false
+  });
+  assert(response.ok(), `Commons API HTTP ${response.status()}`);
+  const payload = await response.json();
+"""
+new_commons = """  let response = null;
+  const apiAttempts = [];
+  const fallbackDelays = [2000, 4000, 8000, 16000];
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    response = await context.request.get(apiUrl, {
+      headers: { 'User-Agent': UA, Accept: 'application/json' },
+      timeout: control.transport_timeout_ms,
+      failOnStatusCode: false
+    });
+    const headers = response.headers();
+    const row = { attempt, http_status: response.status(), resolved_url: response.url() || apiUrl, retry_after_header: headers['retry-after'] || null };
+    apiAttempts.push(row);
+    if (response.ok()) break;
+    if (![429, 503].includes(response.status()) || attempt === 5) break;
+    const retryAfterSeconds = Number(headers['retry-after']);
+    const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+      ? Math.max(1000, Math.min(retryAfterSeconds * 1000, 30000))
+      : fallbackDelays[Math.min(attempt - 1, fallbackDelays.length - 1)];
+    row.delay_ms = delayMs;
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+  assert(response?.ok(), `Commons API HTTP ${response?.status() ?? 'none'} after ${apiAttempts.length} attempt(s)`);
+  const payload = await response.json();
+"""
+if text.count(old_commons) != 1:
+    raise SystemExit("UC-176 Commons request anchor drift")
+text = text.replace(old_commons, new_commons, 1)
+
+old_commons_return = """  return { api_url: apiUrl, query: source.query, category_count: categoryMembers.length, attempts, candidates };
+"""
+new_commons_return = """  return { api_url: apiUrl, query: source.query, api_attempts: apiAttempts, category_count: categoryMembers.length, attempts, candidates };
+"""
+if text.count(old_commons_return) != 1:
+    raise SystemExit("UC-176 Commons receipt anchor drift")
+text = text.replace(old_commons_return, new_commons_return, 1)
+
 OUTPUT.write_text(text, encoding="utf-8")
-print(f"PASS — materialized exact-blob UC-176 AFI DOM and ASC same-article mirror repair at {OUTPUT}")
+print(f"PASS — materialized exact-blob UC-176 source mirror and bounded Commons retry repair at {OUTPUT}")
