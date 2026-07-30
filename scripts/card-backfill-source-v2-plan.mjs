@@ -10,7 +10,8 @@ import {
   selectBatch,
   sha256,
 } from "./lib/card-backfill-cohort.mjs";
-import { readAdjudicationAttemptIndex, validateStaging } from "./lib/card-backfill-staging.mjs";
+import { validateStaging } from "./lib/card-backfill-staging.mjs";
+import { readPolicyAwareAdjudicationAttemptIndex } from "./lib/card-backfill-attempt-index.mjs";
 import { buildSourcePolicyV2Estate, CARD_BACKFILL_SOURCE_POLICY_V2 } from "./lib/card-backfill-source-policy-v2.mjs";
 
 const args = process.argv.slice(2);
@@ -52,7 +53,7 @@ async function main() {
     readJson("data/MEDIA-AUDIT.json"),
     readCompletedPackets(completedRoot),
     validateStaging({ root: stagingRoot, permanentRoot: completedRoot }),
-    readAdjudicationAttemptIndex(stagingRoot, control.campaign_id),
+    readPolicyAwareAdjudicationAttemptIndex(stagingRoot, control.campaign_id),
   ]);
   const publicationMinimum = Number(control.staging?.minimum_publication_batch ?? 2);
   if (!Number.isInteger(publicationMinimum) || publicationMinimum < 2) throw new Error(`invalid publication minimum ${publicationMinimum}`);
@@ -80,13 +81,19 @@ async function main() {
   batch.source_estate_sha256 = sourceEstate.estate_sha256;
   batch.exclusion_state_sha256 = sha256(canonicalJson(exclusionState));
   batch.source_policy = CARD_BACKFILL_SOURCE_POLICY_V2;
+  batch.source_policy_id = CARD_BACKFILL_SOURCE_POLICY_V2.policy_id;
   batch.source_policy_version = CARD_BACKFILL_SOURCE_POLICY_V2.version;
+  batch.source_policy_revision = CARD_BACKFILL_SOURCE_POLICY_V2.revision;
+  batch.lessons_contract_sha256 = CARD_BACKFILL_SOURCE_POLICY_V2.lessons_contract_sha256;
   batch.batch_sha256 = sha256(canonicalJson({
     campaign_id: batch.campaign_id,
     estate_sha256: batch.estate_sha256,
     source_estate_sha256: batch.source_estate_sha256,
     cohort_key: batch.cohort_key,
+    source_policy_id: batch.source_policy_id,
     source_policy_version: batch.source_policy_version,
+    source_policy_revision: batch.source_policy_revision,
+    lessons_contract_sha256: batch.lessons_contract_sha256,
     exclusion_state_sha256: batch.exclusion_state_sha256,
     obligations: batch.obligations.map((row) => ({ obligation_id: row.obligation_id, scope_sha256: row.scope_sha256 })),
   }));
@@ -114,10 +121,10 @@ async function main() {
     await writeFile(join(dir, "retrieval-facets.txt"), shard.obligations.map((row) => row.obligation_id).join(",") + "\n");
     matrix.include.push({ id: shard.id, count: shard.count, plan_path: `shards/shard-${shard.id}/retrieval-plan.json`, facets_path: `shards/shard-${shard.id}/retrieval-facets.txt` });
   }
-  await writeJson(join(out, "shards.json"), { version: 1, campaign_id: batch.campaign_id, batch_sha256: batch.batch_sha256, source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version, workers: shards.length, matrix });
+  await writeJson(join(out, "shards.json"), { version: 1, campaign_id: batch.campaign_id, batch_sha256: batch.batch_sha256, source_policy_id: batch.source_policy_id, source_policy_version: batch.source_policy_version, source_policy_revision: batch.source_policy_revision, lessons_contract_sha256: batch.lessons_contract_sha256, workers: shards.length, matrix });
   for (const row of batch.obligations) {
     const scope = buildScopeReceipt(row, { campaignId: batch.campaign_id, estateSha256: batch.estate_sha256, batchSha256: batch.batch_sha256 });
-    await writeJson(join(out, "batch-scopes", `${scope.record_id}-${scope.side}.json`), { ...scope, source_policy: CARD_BACKFILL_SOURCE_POLICY_V2, source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version });
+    await writeJson(join(out, "batch-scopes", `${scope.record_id}-${scope.side}.json`), { ...scope, source_policy: CARD_BACKFILL_SOURCE_POLICY_V2, source_policy_id: batch.source_policy_id, source_policy_version: batch.source_policy_version, source_policy_revision: batch.source_policy_revision, lessons_contract_sha256: batch.lessons_contract_sha256 });
   }
   await writeFile(join(out, "summary.txt"), [
     `campaign=${batch.campaign_id}`,
@@ -131,11 +138,15 @@ async function main() {
     `selected_cohort=${batch.cohort_key}`,
     `selected_count=${batch.selected_count}`,
     `parallel_workers=${shards.length}`,
+    `source_policy_id=${batch.source_policy_id}`,
+    `source_policy_revision=${batch.source_policy_revision}`,
+    `lessons_contract_sha256=${batch.lessons_contract_sha256}`,
     `batch_sha256=${batch.batch_sha256}`,
     `canonical_mutation=false`,
   ].join("\n") + "\n");
   console.log(`PASS — source policy v3 admits ${retryEstate.counts.ready} previously attempted obligation(s) across ${retryEstate.counts.cohorts} cohort(s)`);
   console.log(`SELECTED — ${batch.selected_count} obligations from ${batch.cohort_key} across ${shards.length} shard(s)`);
+  console.log(`POLICY — ${batch.source_policy_id} lessons=${batch.lessons_contract_sha256}`);
   console.log(`OUTPUT — ${out}`);
 }
 
