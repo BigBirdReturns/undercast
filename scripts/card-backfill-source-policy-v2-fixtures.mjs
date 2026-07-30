@@ -46,11 +46,11 @@ assert(!first.obligations.some((row) => row.obligation_id === "UC-004/still"));
 
 const secondAttemptIndex = {
   entries: attemptIndex.entries.map((row) => row.obligation_id === "UC-001/still"
-    ? { ...row, attempts: [...row.attempts, { cohort_key: `still::physical-or-live-action::${CARD_BACKFILL_SOURCE_POLICY_V2.still_route}::canonical-link-only::character-depiction`, source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version, final_disposition: "quarantine" }] }
+    ? { ...row, attempts: [...row.attempts, { cohort_key: `still::physical-or-live-action::${CARD_BACKFILL_SOURCE_POLICY_V2.still_route}::canonical-link-only::character-depiction`, final_disposition: "quarantine" }] }
     : row),
 };
 const second = buildSourcePolicyV2Estate({ estate, attemptIndex: secondAttemptIndex, stagedObligationIds: ["UC-002/portrait"] });
-assert(!second.obligations.some((row) => row.obligation_id === "UC-001/still"), "policy v2 may not repeat itself silently");
+assert(!second.obligations.some((row) => row.obligation_id === "UC-001/still"), "policy v3 route encoding must prevent silent replay even when the attempt index lacks an explicit version field");
 assert(!second.obligations.some((row) => row.obligation_id === "UC-002/portrait"), "staged obligations remain excluded");
 assert(second.obligations.some((row) => row.obligation_id === "UC-003/still"));
-console.log("card-backfill source-policy v2 fixtures: PASS");
+console.log("card-backfill source-policy v3 replay fixtures: PASS");
