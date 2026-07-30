@@ -45,7 +45,10 @@ function cohortRows(obligations) {
 function priorPolicyVersion(attempt) {
   const explicit = Number(attempt?.source_policy_version || attempt?.source_policy?.version || 0);
   if (Number.isFinite(explicit) && explicit > 0) return explicit;
-  return /(?:mediawiki|commons)-multicandidate-v2/.test(String(attempt?.cohort_key || "")) ? 2 : 1;
+  const cohortKey = String(attempt?.cohort_key || "");
+  const encoded = Number(cohortKey.match(/\bv(\d+)\b/i)?.[1] || 0);
+  if (Number.isFinite(encoded) && encoded > 0) return encoded;
+  return 1;
 }
 
 export function buildSourcePolicyV2Estate({ estate, attemptIndex, stagedObligationIds = [] }) {
