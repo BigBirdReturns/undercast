@@ -76,4 +76,33 @@ const wrongAdaptation = evaluateV3Candidate(row({
 assert.equal(wrongAdaptation.accepted, false);
 assert.equal(wrongAdaptation.reason, "no-explicit-production-binding");
 
+const partialProduction = evaluateV3Candidate(row({
+  expected: "Raiden",
+  production: "Metal Gear Solid",
+  pageTitle: "Raiden (Metal Gear)",
+  file: "RaidenRisingMetalGear.png",
+  description: "Raiden from Metal Gear Rising",
+  categories: "Screenshots of video games",
+  actor: "Quinton Flynn",
+  width: 416,
+  height: 240,
+}));
+assert.equal(partialProduction.accepted, false);
+assert.equal(partialProduction.reason, "no-explicit-production-binding");
+assert.deepEqual(partialProduction.checks.production_tokens_required, ["metal", "gear", "solid"]);
+
+const lithograph = evaluateV3Candidate(row({
+  expected: "Cell",
+  production: "Dragon Ball Z",
+  pageTitle: "Cell (Dragon Ball Z)",
+  file: "Cell_lithograph.png",
+  description: "Lithograph of Cell",
+  categories: "Dragon Ball Z illustrations",
+  actor: "Norio Wakamoto",
+  width: 254,
+  height: 392,
+}));
+assert.equal(lithograph.accepted, false);
+assert.equal(lithograph.reason, "derivative-object-or-namesake-presentation");
+
 console.log("card-backfill source-v3 prescreen fixtures: PASS");
