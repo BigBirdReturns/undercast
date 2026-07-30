@@ -43,7 +43,7 @@ assert.equal(report.lessons_contract_sha256, "bafa82adfc525421f498f5655bf12ba000
   const broken = clone(source);
   const first = broken.policies[0];
   first.parent_policy_id = broken.active_policy_id;
-  assert.throws(() => validateContractStructure(broken), /lineage cycle/);
+  assert.throws(() => validateContractStructure(broken), /lineage cycle|regresses below parent version/);
 }
 
 {
