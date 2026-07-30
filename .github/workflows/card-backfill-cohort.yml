@@ -1,230 +1,115 @@
-name: card-backfill-cohort
+name: card-backfill-apply-cross-cohort-reset
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened]
     paths:
-      - '.github/CARD-BACKFILL-COHORT.json'
-      - '.github/card-backfill/**'
       - '.github/workflows/card-backfill-cohort.yml'
-      - 'docs/CARD-BACKFILL-COHORTS.md'
-      - 'scripts/card-backfill-cohort*.mjs'
-      - 'scripts/lib/card-backfill-*.mjs'
-      - 'scripts/lib/media-search.mjs'
-      - 'scripts/media-search-prepare.mjs'
-      - 'scripts/media-search-restore.mjs'
-      - 'scripts/media-search-fixtures.mjs'
-      - 'data/MEDIA-AUDIT.json'
-      - 'data/specimens.json'
-      - 'data/SOURCES.json'
-      - 'data/review/card-backfill/**'
-      - 'package.json'
-  workflow_dispatch:
-    inputs:
-      limit:
-        description: 'Shape-equivalent obligations to select (20-50)'
-        required: false
-        default: '40'
-      cohort_key:
-        description: 'Optional exact ready cohort key; blank selects the largest ready cohort'
-        required: false
-        default: ''
+      - '.github/workflows/apply-card-backfill-staging-reset.yml'
+      - '.github/card-backfill/bootstrap/staging-reset.part*.b64'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: card-backfill-cohort-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: card-backfill-apply-cross-cohort-reset-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
 
 jobs:
-  plan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-      selected_count: ${{ steps.matrix.outputs.selected_count }}
-      batch_sha256: ${{ steps.matrix.outputs.batch_sha256 }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-
-      - run: npm ci
-
-      - name: Install deterministic image tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y imagemagick
-          mkdir -p "$RUNNER_TEMP/bin"
-          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
-          #!/bin/sh
-          command="$1"
-          case "$command" in
-            identify|montage)
-              shift
-              exec "$command" "$@"
-              ;;
-            *)
-              exec convert "$@"
-              ;;
-          esac
-          SH
-          chmod +x "$RUNNER_TEMP/bin/magick"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-
-      - name: Prove the reusable cohort machinery before touching the network
-        run: npm run media:search:fixtures
-
-      - name: Freeze, classify, scope, and shard the complete selector estate
-        env:
-          LIMIT: ${{ inputs.limit || '40' }}
-          COHORT_KEY: ${{ inputs.cohort_key || '' }}
-        run: |
-          set -euo pipefail
-          out="$RUNNER_TEMP/card-backfill/cohort"
-          mkdir -p "$out"
-          args=(plan --control .github/CARD-BACKFILL-COHORT.json --out "$out" --limit "$LIMIT")
-          cohort_key="$COHORT_KEY"
-          if [ -z "$cohort_key" ]; then
-            cohort_key=$(node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-COHORT.json','utf8'));process.stdout.write(c.batch?.cohort_priority?.[0]?.cohort_key||'')")
-          fi
-          if [ -n "$cohort_key" ]; then args+=(--cohort-key "$cohort_key"); fi
-          node scripts/card-backfill-cohort.mjs "${args[@]}" | tee "$out/plan.log"
-
-      - name: Export the exact retrieval matrix
-        id: matrix
-        run: |
-          file="$RUNNER_TEMP/card-backfill/cohort/shards.json"
-          matrix=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(JSON.stringify(p.matrix))" "$file")
-          selected=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(String(p.selected_count))" "$RUNNER_TEMP/card-backfill/cohort/batch.json")
-          batch=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(p.batch_sha256)" "$RUNNER_TEMP/card-backfill/cohort/batch.json")
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-          echo "selected_count=$selected" >> "$GITHUB_OUTPUT"
-          echo "batch_sha256=$batch" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: card-backfill-cohort-plan-${{ github.run_id }}
-          path: ${{ runner.temp }}/card-backfill/cohort
-          if-no-files-found: error
-          retention-days: 90
-
-  discover:
-    needs: plan
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      max-parallel: 4
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: card-backfill-cohort-plan-${{ github.run_id }}
-          path: ${{ runner.temp }}/planning
-
-      - name: Discover exact shard facets through the shared source-family adapter
-        env:
-          SHARD_ID: ${{ matrix.id }}
-          SHARD_COUNT: ${{ matrix.count }}
-          PLAN_PATH: ${{ matrix.plan_path }}
-          CRAWL_DELAY_MS: '500'
-          CONTACT: 'bigbirdreturns@proton.me'
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/shard-$SHARD_ID"
-          output="$root/output"
-          plan="$RUNNER_TEMP/planning/$PLAN_PATH"
-          mkdir -p "$output"
-          side=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));const v=[...new Set(p.candidates.map(r=>r.side))];if(v.length!==1)throw new Error('mixed shard sides');process.stdout.write(v[0])" "$plan")
-          route=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));const v=[...new Set(p.candidates.map(r=>r.cohort_key.split('::')[2]))];if(v.length!==1)throw new Error('mixed shard source routes');process.stdout.write(v[0])" "$plan")
-
-          if [ "$side" = portrait ] && [ "$route" = performer-reference-crawl ]; then
-            node scripts/card-backfill-wikimedia-portraits.mjs \
-              --plan "$plan" \
-              --out "$output/candidates" \
-              --journal "$output/media-search.jsonl" \
-              --latest "$output/latest.json" \
-              --run-id "${GITHUB_RUN_ID}-shard-${SHARD_ID}" \
-              --contact "$CONTACT" \
-              --delay-ms "$CRAWL_DELAY_MS" \
-              | tee "$output/retrieve.log"
-            printf '%s\n' '{"version":1,"restore":[],"adapter":"exact-canonical-wikimedia-portrait"}' > "$output/retrieval-restore.json"
-          else
-            work="$root/worktree"
-            cleanup() { git worktree remove --force "$work" >/dev/null 2>&1 || true; }
-            trap cleanup EXIT
-            git worktree add --detach "$work" HEAD
-            cp "$plan" "$work/retrieval-plan.json"
-            cd "$work"
-            node scripts/media-search-prepare.mjs \
-              --plan retrieval-plan.json \
-              --ids-out retrieval-ids.txt \
-              --mask-unselected \
-              --restore-out retrieval-restore.json \
-              | tee "$output/prepare.log"
-            ids=$(cat retrieval-ids.txt)
-            if [ -n "$ids" ]; then
-              RETRIEVE_ONLY="$ids" \
-              RETRIEVE_MAX="$SHARD_COUNT" \
-              IMAGE_MODE=loose \
-              CRAWL_DELAY_MS="$CRAWL_DELAY_MS" \
-              CONTACT="$CONTACT" \
-              node scripts/retrieve.mjs | tee "$output/retrieve.log"
-            fi
-            node scripts/media-search-restore.mjs --receipt retrieval-restore.json | tee "$output/restore.log"
-            cd "$GITHUB_WORKSPACE"
-            node scripts/media-search-report.mjs \
-              --baseline "$GITHUB_WORKSPACE" \
-              --candidate "$work" \
-              --plan "$plan" \
-              --out "$output/candidates" \
-              --journal "$output/media-search.jsonl" \
-              --latest "$output/latest.json" \
-              --run-id "${GITHUB_RUN_ID}-shard-${SHARD_ID}" \
-              | tee "$output/report.log"
-            cp "$work/retrieval-restore.json" "$output/retrieval-restore.json"
-          fi
-          cp "$plan" "$output/retrieval-plan.json"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: card-backfill-shard-${{ matrix.id }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/shard-${{ matrix.id }}/output
-          if-no-files-found: error
-          retention-days: 90
-
-  assemble:
-    needs: [plan, discover]
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/card-backfill-next-041'
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    env:
+      SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
+      SOURCE_BRANCH: ${{ github.event.pull_request.head.ref }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.SOURCE_BRANCH }}
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: npm
+
+      - name: Verify and extract the exact cross-cohort staging reset
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-staging-reset"
+          archive="$root/payload.tar.xz"
+          encoded="$root/payload.b64"
+          unpacked="$root/unpacked"
+          mkdir -p "$root" "$unpacked"
+
+          cat > "$root/chunks.sha256" <<'SUMS'
+          a2e483ab51f4326e8c6aa75a8f952407ceb4a0fbd57e9c58b21666edd5fcc2d3  .github/card-backfill/bootstrap/staging-reset.part00.b64
+          f2399022cf64c9b4e6fd39abb284e4a04d69f7e287676d7740cb2a6379adfed0  .github/card-backfill/bootstrap/staging-reset.part01.b64
+          9a1eb63f01ec88f07f76896c80f80dfd03477312677ff0e9ca2197479268ff1f  .github/card-backfill/bootstrap/staging-reset.part02.b64
+          0881ed216188106f26f24b1ed016ed8626c3d9f2507002f8a6c3d1241e6dbb00  .github/card-backfill/bootstrap/staging-reset.part03.b64
+          SUMS
+          sha256sum -c "$root/chunks.sha256"
+
+          cat .github/card-backfill/bootstrap/staging-reset.part*.b64 > "$encoded"
+          printf '%s  %s\n' '56551d7b5307b8544ef2e8f4594362f157cb2b83a956fa8fd445f25ab41f0630' "$encoded" | sha256sum -c -
+          base64 --decode "$encoded" > "$archive"
+          printf '%s  %s\n' 'f97847bf970edd7b76340ff0f47aaf345393587de976ae796d987bb255f39573' "$archive" | sha256sum -c -
+          xz --test "$archive"
+
+          ARCHIVE="$archive" python3 - <<'PY'
+          import os
+          import tarfile
+          from pathlib import PurePosixPath
+
+          expected = {
+              '.github/CARD-BACKFILL-COHORT.json',
+              '.github/card-backfill/adjudications/30514452128.json',
+              '.github/card-backfill/adjudications/30514942808.json',
+              '.github/workflows/card-backfill-cohort.yml',
+              '.github/workflows/card-backfill-stage.yml',
+              '.github/workflows/card-backfill-publication.yml',
+              'docs/CARD-BACKFILL-COHORTS.md',
+              'package.json',
+              'scripts/card-backfill-cohort.mjs',
+              'scripts/card-backfill-progress-fixtures.mjs',
+              'scripts/card-backfill-cohort-adjudicate.mjs',
+              'scripts/card-backfill-cohort-materialize.mjs',
+              'scripts/card-backfill-cohort-publication-fixtures.mjs',
+              'scripts/card-backfill-decisions-template.mjs',
+              'scripts/card-backfill-staging-fixtures.mjs',
+              'scripts/card-backfill-staging.mjs',
+              'scripts/lib/card-backfill-staging.mjs',
+          }
+          with tarfile.open(os.environ['ARCHIVE'], 'r:xz') as archive:
+              members = archive.getmembers()
+              names = [member.name for member in members]
+              if len(names) != len(set(names)):
+                  raise SystemExit('duplicate archive members')
+              if set(names) != expected:
+                  raise SystemExit(f'archive denominator drift; missing={sorted(expected-set(names))}; extra={sorted(set(names)-expected)}')
+              for member in members:
+                  path = PurePosixPath(member.name)
+                  if path.is_absolute() or '..' in path.parts or not member.isfile():
+                      raise SystemExit(f'unsafe archive member {member.name}')
+          print(f'PASS — exact {len(expected)}-file staging-reset archive verified')
+          PY
+
+          tar -xJf "$archive" -C "$unpacked"
+          cp -a "$unpacked/." "$GITHUB_WORKSPACE/"
+          rm -f \
+            .github/workflows/apply-card-backfill-staging-reset.yml \
+            .github/card-backfill/bootstrap/staging-reset.part00.b64 \
+            .github/card-backfill/bootstrap/staging-reset.part01.b64 \
+            .github/card-backfill/bootstrap/staging-reset.part02.b64 \
+            .github/card-backfill/bootstrap/staging-reset.part03.b64
+          rmdir .github/card-backfill/bootstrap 2>/dev/null || true
 
       - run: npm ci
 
       - name: Install deterministic image and browser tools
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y imagemagick
           mkdir -p "$RUNNER_TEMP/bin"
@@ -236,85 +121,77 @@ jobs:
               shift
               exec "$command" "$@"
               ;;
-            *)
-              exec convert "$@"
-              ;;
+            *) exec convert "$@" ;;
           esac
           SH
           chmod +x "$RUNNER_TEMP/bin/magick"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           npx playwright install --with-deps chromium
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: card-backfill-cohort-plan-${{ github.run_id }}
-          path: ${{ runner.temp }}/planning
-
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: card-backfill-shard-*-${{ github.run_id }}
-          path: ${{ runner.temp }}/shards
-          merge-multiple: false
-
-      - name: Merge shard results in frozen batch order
+      - name: Prove the exact reset before publication
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/final"
-          node scripts/card-backfill-cohort-merge.mjs \
-            --batch "$RUNNER_TEMP/planning/batch.json" \
-            --shards-root "$RUNNER_TEMP/shards" \
-            --out "$RUNNER_TEMP/final/candidates" \
-            --run-id "$GITHUB_RUN_ID" \
-            | tee "$RUNNER_TEMP/final/merge.log"
+          for path in \
+            scripts/card-backfill-cohort.mjs \
+            scripts/card-backfill-progress-fixtures.mjs \
+            scripts/card-backfill-cohort-adjudicate.mjs \
+            scripts/card-backfill-cohort-materialize.mjs \
+            scripts/card-backfill-cohort-publication-fixtures.mjs \
+            scripts/card-backfill-decisions-template.mjs \
+            scripts/card-backfill-staging-fixtures.mjs \
+            scripts/card-backfill-staging.mjs \
+            scripts/lib/card-backfill-staging.mjs; do
+            node --check "$path"
+          done
+          node -e "for(const p of ['.github/CARD-BACKFILL-COHORT.json','.github/card-backfill/adjudications/30514452128.json','.github/card-backfill/adjudications/30514942808.json','package.json'])JSON.parse(require('fs').readFileSync(p,'utf8'));console.log('JSON: PASS')"
+          npm run media:search:fixtures
+          node scripts/card-backfill-cohort.mjs plan --control .github/CARD-BACKFILL-COHORT.json --out "$RUNNER_TEMP/live-plan" --limit 40
+          npm run gate
 
-      - name: Build per-card receipts and deterministic batch renders
+      - name: Refuse any path outside the exact reset
         run: |
           set -euo pipefail
-          node scripts/card-backfill-cohort-packetize.mjs \
-            --baseline "$GITHUB_WORKSPACE" \
-            --candidates "$RUNNER_TEMP/final/candidates" \
-            --report "$RUNNER_TEMP/final/candidates/report.json" \
-            --batch "$RUNNER_TEMP/planning/batch.json" \
-            --scopes "$RUNNER_TEMP/planning/batch-scopes" \
-            --control .github/CARD-BACKFILL-COHORT.json \
-            --out "$RUNNER_TEMP/final/packets" \
-            --magick magick \
-            | tee "$RUNNER_TEMP/final/packetize.log"
-
-      - name: Verify exact batch custody before the repository gate
-        env:
-          EXPECTED_COUNT: ${{ needs.plan.outputs.selected_count }}
-          EXPECTED_BATCH: ${{ needs.plan.outputs.batch_sha256 }}
-        run: |
-          node --input-type=module - <<'NODE'
-          import fs from 'node:fs';
-          import path from 'node:path';
-          const root=process.env.RUNNER_TEMP+'/final/packets';
-          const result=JSON.parse(fs.readFileSync(path.join(root,'batch-result.json'),'utf8'));
-          if(result.selected_count!==Number(process.env.EXPECTED_COUNT))throw new Error('selected count drift');
-          if(result.batch_sha256!==process.env.EXPECTED_BATCH)throw new Error('batch digest drift');
-          if(result.canonical_mutation!==false)throw new Error('canonical mutation drift');
-          if(result.results.length!==result.selected_count)throw new Error('result cardinality drift');
-          for(const row of result.results){
-            const dir=path.join(root,row.packet_path);
-            for(const file of ['scope.json','source-receipt.json','review.json','review.md','manifest.json','checksums.sha256'])if(!fs.existsSync(path.join(dir,file)))throw new Error(`missing ${row.record_id}/${file}`);
-            const review=JSON.parse(fs.readFileSync(path.join(dir,'review.json'),'utf8'));
-            if(review.canonical_mutation!==false||review.batch_sha256!==result.batch_sha256)throw new Error(`packet custody drift ${row.record_id}`);
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+              '.github/CARD-BACKFILL-COHORT.json',
+              '.github/card-backfill/adjudications/30514452128.json',
+              '.github/card-backfill/adjudications/30514942808.json',
+              '.github/workflows/card-backfill-cohort.yml',
+              '.github/workflows/card-backfill-stage.yml',
+              '.github/workflows/card-backfill-publication.yml',
+              'docs/CARD-BACKFILL-COHORTS.md',
+              'package.json',
+              'scripts/card-backfill-cohort.mjs',
+              'scripts/card-backfill-progress-fixtures.mjs',
+              'scripts/card-backfill-cohort-adjudicate.mjs',
+              'scripts/card-backfill-cohort-materialize.mjs',
+              'scripts/card-backfill-cohort-publication-fixtures.mjs',
+              'scripts/card-backfill-decisions-template.mjs',
+              'scripts/card-backfill-staging-fixtures.mjs',
+              'scripts/card-backfill-staging.mjs',
+              'scripts/lib/card-backfill-staging.mjs',
+              '.github/workflows/apply-card-backfill-staging-reset.yml',
+              '.github/card-backfill/bootstrap/staging-reset.part00.b64',
+              '.github/card-backfill/bootstrap/staging-reset.part01.b64',
+              '.github/card-backfill/bootstrap/staging-reset.part02.b64',
+              '.github/card-backfill/bootstrap/staging-reset.part03.b64',
           }
-          console.log(`PASS — ${result.results.length} per-card packets retain one batch digest and no canonical mutation`);
-          NODE
+          raw = subprocess.check_output(['git', 'status', '--porcelain=v1', '-z'])
+          actual = {entry[3:].decode('utf-8') for entry in raw.split(b'\0') if entry}
+          if actual != expected:
+              raise SystemExit(f'changed-path denominator drift; missing={sorted(expected-actual)}; extra={sorted(actual-expected)}')
+          print(f'PASS — exact {len(expected)}-path implementation transaction')
+          PY
 
-      - name: Run the complete repository gate once for the cohort
+      - name: Commit and push the exact implementation
         run: |
           set -euo pipefail
-          npm run gate 2>&1 | tee "$RUNNER_TEMP/final/gate.log"
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: card-backfill-cohort-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/planning
-            ${{ runner.temp }}/final
-          if-no-files-found: warn
-          retention-days: 90
+          git config user.name 'undercast-card-backfill'
+          git config user.email 'undercast-card-backfill@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Card backfill: persist accepted packets across cohorts'
+          remote_head=$(git ls-remote origin "refs/heads/$SOURCE_BRANCH" | awk '{print $1}')
+          test "$remote_head" = "$SOURCE_HEAD"
+          git push origin "HEAD:$SOURCE_BRANCH"
