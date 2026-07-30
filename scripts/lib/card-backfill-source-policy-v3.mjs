@@ -4,6 +4,8 @@ const MULTI_SEPARATOR = /\s*(?:\/|&|,|;|\band\b)\s*/i;
 const STOP_WORDS = new Set(["the", "and", "from", "with", "into", "for", "voice", "actor", "film", "series", "character", "role"]);
 const PAGE_KIND_MISMATCH = /\b(?:episode|film|movie|novel|comic|soundtrack|attraction|exhibition|museum|list of|franchise|video game|television series)\b/i;
 const FOREIGN_ADAPTATION = /\b(?:multiversus|lego|fortnite|comic|manga|novel|statue|sculpture|cosplay|merchandise|toy|figure|float|theme park|attraction|grauman|handprints?|waxwork|fan art|fanart)\b/i;
+const ALWAYS_NON_ROLE_PRESENTATION = /\b(?:statue|sculpture|cosplay|merchandise|toy|action figure|figurine|float|waxwork|fan art|fanart)\b/i;
+const HUMAN_EVENT_PHOTO = /\b(?:voice actor|actor|actress|fan expo|wondercon|comic[- ]?con|panel discussion|red carpet|premiere|headshot|portrait|convention|festival)\b/i;
 const GENERIC_NON_DEPICTION = /\b(?:building|entrance|street|road|sign|logo|poster|cover|bottle|potion|skull|weapon|gun|vehicle|store|cafe|ride|trophy|plaque|interface|screenshot of text|title card)\b/i;
 const PORTRAIT_COSTUME = /\b(?:cosplay|costume|masked|mask|character makeup|prosthetic|in character|as [A-Z])\b/i;
 const GROUP = /\b(?:and|with|cast|group|panel|crew|ensemble|family|team)\b|[,;&]/i;
@@ -34,6 +36,8 @@ function aliasVariants(value) {
   const variants = new Set([clean]);
   const noArticle = clean.replace(/^(?:the|a|an)\s+/i, "").trim();
   if (noArticle) variants.add(noArticle);
+  const epithetBase = clean.match(/^([A-Za-z0-9][A-Za-z0-9'’-]*)\s+(?:the|of the)\s+/i)?.[1] || null;
+  if (epithetBase && !/^(?:the|a|an)$/i.test(epithetBase)) variants.add(epithetBase);
   for (const item of [...variants]) {
     const parts = item.split(/\s+/);
     const last = parts.at(-1) || "";
@@ -77,11 +81,23 @@ function titleBase(value) {
   return normalizeSourceText(String(value || "").replace(/\s*\([^)]*\)\s*$/, ""));
 }
 
+function textEquivalent(left, right) {
+  const a = normalizeSourceText(left);
+  const b = normalizeSourceText(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (/\d/.test(a) || /\d/.test(b)) return a.replace(/\s+/g, "") === b.replace(/\s+/g, "");
+  return false;
+}
+
 function containsAlias(text, aliases) {
   const hay = normalizeSourceText(text);
+  const compactHay = hay.replace(/\s+/g, "");
   return aliases.some((alias) => {
     const needle = normalizeSourceText(alias);
-    return needle.length >= 2 && (hay === needle || hay.includes(needle));
+    if (needle.length < 2) return false;
+    if (hay === needle || hay.includes(needle)) return true;
+    return /\d/.test(needle) && compactHay.includes(needle.replace(/\s+/g, ""));
   });
 }
 
@@ -104,6 +120,7 @@ function actorRoleBound(actorEvidence, aliases, production) {
 
 export function evaluateSourceCandidate({ side, expectedSubject, actor, production, performanceMode, candidate, actorEvidence = null }) {
   const aliases = sourceSubjectAliases(expectedSubject);
+  const actorAliases = sourceSubjectAliases(actor);
   const pageTitle = candidate?.page?.title || "";
   const pageWindows = candidate?.page?.extract_windows || [];
   const source = candidate?.source || {};
@@ -111,15 +128,19 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
   const pageText = [pageTitle, ...pageWindows].join(" ");
   const fileText = [file, source.description || "", source.categories || ""].join(" ");
   const combined = `${pageText} ${fileText}`;
-  const exactPage = aliases.some((alias) => titleBase(pageTitle) === normalizeSourceText(alias));
+  const exactPage = aliases.some((alias) => textEquivalent(titleBase(pageTitle), alias));
   const pageHasAlias = containsAlias(pageText, aliases);
   const fileHasAlias = containsAlias(fileText, aliases);
+  const pageHasActor = actorAliases.length > 0 && containsAlias(pageText, actorAliases);
   const pageHasProduction = productionMatch(pageText, production);
   const fileHasProduction = productionMatch(fileText, production);
-  const roleBound = actorRoleBound(actorEvidence, aliases, production);
-  const pageLooksLikeActor = actor && titleBase(pageTitle) === normalizeSourceText(actor);
+  const actorEvidenceBound = actorRoleBound(actorEvidence, aliases, production);
+  const characterPageRoleBound = Boolean((exactPage || pageHasAlias) && pageHasActor && pageHasProduction);
+  const roleBound = actorEvidenceBound || characterPageRoleBound;
+  const pageLooksLikeActor = actor && textEquivalent(titleBase(pageTitle), actor);
   const pageKindMismatch = PAGE_KIND_MISMATCH.test(pageTitle) && !productionMatch(pageTitle, production);
-  const foreignAdaptation = FOREIGN_ADAPTATION.test(fileText) && !fileHasProduction;
+  const foreignAdaptation = ALWAYS_NON_ROLE_PRESENTATION.test(fileText) || (FOREIGN_ADAPTATION.test(fileText) && !fileHasProduction);
+  const humanEventPhoto = HUMAN_EVENT_PHOTO.test(fileText) && !fileHasAlias;
   const genericNonDepiction = GENERIC_NON_DEPICTION.test(fileText) && !fileHasAlias;
   const multi = isMultiSubject(expectedSubject);
   const voiceLike = /voice|animation/i.test(String(performanceMode || ""));
@@ -128,6 +149,7 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
   if (side === "still") {
     if (multi) reasons.push("requires-multi-subject-composite");
     if (pageLooksLikeActor) reasons.push("actor-page-is-not-character-still");
+    if (humanEventPhoto) reasons.push("human-event-photo-for-character-still");
     if (!exactPage && !fileHasAlias) reasons.push("candidate-not-bound-to-subject-page-or-file");
     if (!pageHasProduction && !fileHasProduction) reasons.push("candidate-lacks-filed-production-context");
     if (pageKindMismatch) reasons.push("page-kind-does-not-match-character-claim");
@@ -135,8 +157,7 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
     if (genericNonDepiction) reasons.push("generic-non-depiction-asset");
     if (voiceLike && !roleBound) reasons.push("actor-role-chain-not-explicit");
   } else if (side === "portrait") {
-    const actorAliases = sourceSubjectAliases(actor || expectedSubject);
-    const exactActorPage = actorAliases.some((alias) => titleBase(pageTitle) === normalizeSourceText(alias));
+    const exactActorPage = actorAliases.some((alias) => textEquivalent(titleBase(pageTitle), alias));
     const fileHasActor = containsAlias(fileText, actorAliases);
     if (!exactActorPage && !fileHasActor) reasons.push("portrait-not-explicitly-bound-to-actor");
     if (GROUP.test(file) && !fileHasActor) reasons.push("group-or-ambiguous-portrait");
@@ -164,10 +185,14 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
       exact_subject_page: exactPage,
       page_has_subject: pageHasAlias,
       file_has_subject: fileHasAlias,
+      page_has_actor: pageHasActor,
       page_has_production: pageHasProduction,
       file_has_production: fileHasProduction,
+      actor_evidence_bound: actorEvidenceBound,
+      character_page_role_bound: characterPageRoleBound,
       actor_role_bound: roleBound,
       page_looks_like_actor: pageLooksLikeActor,
+      human_event_photo: humanEventPhoto,
       multi_subject: multi,
     },
   };
