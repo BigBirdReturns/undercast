@@ -46,10 +46,16 @@ jobs:
       ready: ${{ steps.plan.outputs.ready }}
       publication_batch_sha256: ${{ steps.plan.outputs.publication_batch_sha256 }}
       selected_count: ${{ steps.plan.outputs.selected_count }}
+      branch_head: ${{ steps.head.outputs.branch_head }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
+
+      - name: Bind publication planning to the exact current branch head
+        id: head
+        run: echo "branch_head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
@@ -98,6 +104,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.plan.outputs.branch_head }}
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
@@ -160,6 +167,7 @@ jobs:
         env:
           PUBLICATION_BATCH: ${{ needs.plan.outputs.publication_batch_sha256 }}
           SELECTED_COUNT: ${{ needs.plan.outputs.selected_count }}
+          PLANNED_HEAD: ${{ needs.plan.outputs.branch_head }}
         run: |
           set -euo pipefail
           git diff --cached --check
@@ -167,8 +175,8 @@ jobs:
           git config user.email 'undercast-card-backfill-publication@users.noreply.github.com'
           git commit -m "Card backfill: publish ${SELECTED_COUNT} staged evidence packets"
           remote_head=$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | awk '{print $1}')
-          if [ "$remote_head" != "$GITHUB_SHA" ]; then
-            echo "branch moved from $GITHUB_SHA to $remote_head; refusing stale permanent publication push"
+          if [ "$remote_head" != "$PLANNED_HEAD" ]; then
+            echo "branch moved from planned head $PLANNED_HEAD to $remote_head; refusing stale permanent publication push"
             exit 1
           fi
           git push origin "HEAD:$GITHUB_REF_NAME"
