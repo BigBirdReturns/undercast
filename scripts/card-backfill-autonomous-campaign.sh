@@ -104,7 +104,9 @@ NODE
 
 run_portrait_shard() {
   local cycle_root="$1" planning="$2" id="$3" count="$4" plan_path="$5"
-  local shard_root="$cycle_root/shards/shard-$id" output="$shard_root/output" plan="$planning/$plan_path"
+  local shard_root="$cycle_root/shards/shard-$id"
+  local output="$shard_root/output"
+  local plan="$planning/$plan_path"
   mkdir -p "$output"
   node scripts/card-backfill-wikimedia-portraits.mjs \
     --plan "$plan" \
@@ -120,7 +122,9 @@ run_portrait_shard() {
 
 run_worktree_shard() {
   local cycle_root="$1" planning="$2" id="$3" count="$4" plan_path="$5" work="$6"
-  local shard_root="$cycle_root/shards/shard-$id" output="$shard_root/output" plan="$planning/$plan_path"
+  local shard_root="$cycle_root/shards/shard-$id"
+  local output="$shard_root/output"
+  local plan="$planning/$plan_path"
   mkdir -p "$output"
   cp "$plan" "$work/retrieval-plan.json"
   (
