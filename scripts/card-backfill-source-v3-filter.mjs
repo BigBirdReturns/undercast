@@ -5,7 +5,8 @@ import { resolve } from "node:path";
 import { isCompositeRequiredSubject } from "./lib/card-backfill-source-policy-v3.mjs";
 
 const STOPWORDS = new Set(["a", "an", "and", "as", "at", "by", "for", "from", "in", "of", "on", "the", "to", "with"]);
-const FORBIDDEN_DERIVATIVE = /\b(?:street\s+sign|road\s+sign|building|facade|theme\s+park|attraction|statue|sculpture|toy|action\s+figure|figurine|plush|cosplay|cosplayer|costume\s+(?:display|exhibit|replica)|mascot|logo|poster|book\s+cover|album\s+cover|dvd\s+cover|cover\s+art|comic(?:\s+book)?|mural|graffiti|tattoo|license\s+plate|wax\s+figure|fan\s+art|concept\s+art|artwork|merchandise)\b/i;
+const FORBIDDEN_DERIVATIVE = /\b(?:street\s+sign|road\s+sign|building|facade|theme\s+park|attraction|statue|sculpture|toy|action\s+figure|figurine|plush|cosplay|cosplayer|costume\s+(?:display|exhibit|replica)|mascot|logo|poster|book\s+cover|album\s+cover|dvd\s+cover|cover\s+art|comic(?:\s+book)?|mural|graffiti|tattoo|license\s+plate|wax\s+figure|fan\s+art|concept\s+art|promotional\s+art|character\s+art|merchandise)\b/i;
+const HUMAN_EVENT_PHOTO = /\b(?:voice\s+actor|actor|actress|director|filmmaker|composer|producer|fan\s+expo|comic[- ]?con|red\s+carpet|publicity\s+photo|portrait\s+of|headshot|panel\s+discussion|men\s+with\s+microphones|women\s+with\s+microphones|personality\s+rights|at\s+(?:an?\s+)?(?:expo|convention|festival|premiere|panel|show))\b/i;
 
 function normalize(value) {
   return String(value || "")
@@ -30,7 +31,7 @@ function phraseIn(text, phrase) {
 function subjectAliases(row) {
   const evidenceAliases = row?.discovery?.source_evidence?.expected_subject_aliases || [];
   const expected = String(row?.expected_subject || "")
-    .replace(/\((?:voice|voice role|vocal performance|uncredited)[^)]*\)/gi, " ")
+    .replace(/\((?:voice|the voice|voice role|vocal performance|uncredited)[^)]*\)/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
   const values = [...evidenceAliases, expected]
@@ -43,23 +44,18 @@ function selectedMetadata(row) {
   const selected = row?.discovery?.selected_candidate || {};
   const evidence = row?.discovery?.source_evidence || {};
   const windows = Array.isArray(selected.page_extract_windows) ? selected.page_extract_windows : [];
-  const text = [
-    selected.file,
-    selected.page_title,
-    selected.description,
-    selected.categories,
-    ...windows,
-  ].filter(Boolean).join(" ");
-  return { selected, evidence, text };
+  const fileText = [selected.file, selected.description, selected.categories].filter(Boolean).join(" ");
+  const bindingText = [selected.page_title, fileText].filter(Boolean).join(" ");
+  const contextText = [bindingText, ...windows].filter(Boolean).join(" ");
+  return { selected, evidence, fileText, bindingText, contextText };
 }
 
-function productionIsBound(production, text, actorRole) {
-  if (actorRole?.explicit_character_and_production === true) return true;
+function productionIsBound(production, bindingText) {
   if (!production) return false;
-  if (phraseIn(text, production)) return true;
+  if (phraseIn(bindingText, production)) return true;
   const tokens = [...new Set(words(production).filter((word) => word.length >= 3))];
-  if (!tokens.length) return phraseIn(text, production);
-  const normalized = normalize(text);
+  if (!tokens.length) return phraseIn(bindingText, production);
+  const normalized = normalize(bindingText);
   const matches = tokens.filter((token) => ` ${normalized} `.includes(` ${token} `)).length;
   return matches >= Math.min(2, tokens.length);
 }
@@ -82,17 +78,18 @@ export function evaluateV3Candidate(row, { minimumWidth = 240, minimumHeight = 2
   if (isCompositeRequiredSubject(row.expected_subject)) return { accepted: false, reason: "multi-subject-composite-required", checks: {} };
 
   const aliases = subjectAliases(row);
-  const { selected, evidence, text } = selectedMetadata(row);
+  const { selected, evidence, fileText, bindingText, contextText } = selectedMetadata(row);
   const actorRole = evidence.actor_role || null;
   const pageTitle = selected.page_title || row.candidate.source_page_title || "";
-  const fileAndDescription = [selected.file, selected.description, selected.categories].filter(Boolean).join(" ");
   const pageSubjectBound = aliases.some((alias) => phraseIn(pageTitle, alias));
-  const fileSubjectBound = aliases.some((alias) => phraseIn(fileAndDescription, alias));
-  const subjectBound = pageSubjectBound || fileSubjectBound;
+  const fileSubjectBound = aliases.some((alias) => phraseIn(fileText, alias));
+  const actorNameInFile = Boolean(actorRole?.title && phraseIn(fileText, actorRole.title));
+  const humanPresentationMatch = fileText.match(HUMAN_EVENT_PHOTO)?.[0] || (actorNameInFile ? actorRole.title : null);
+  const subjectBound = fileSubjectBound || (pageSubjectBound && !humanPresentationMatch);
   const production = evidence.production || "";
-  const productionBound = productionIsBound(production, text, actorRole);
+  const productionBound = productionIsBound(production, bindingText);
   const selectedActorPage = actorPageSelected(selected, actorRole);
-  const forbiddenMatch = text.match(FORBIDDEN_DERIVATIVE)?.[0] || null;
+  const forbiddenMatch = contextText.match(FORBIDDEN_DERIVATIVE)?.[0] || null;
   const width = Number(row.candidate.width || selected.width || 0);
   const height = Number(row.candidate.height || selected.height || 0);
   const dimensionsPass = width >= minimumWidth && height >= minimumHeight;
@@ -103,6 +100,8 @@ export function evaluateV3Candidate(row, { minimumWidth = 240, minimumHeight = 2
     explicit_subject_binding: subjectBound,
     explicit_production_binding: productionBound,
     actor_page_selected_for_still: selectedActorPage,
+    actor_name_in_file_metadata: actorNameInFile,
+    human_event_photo_match: humanPresentationMatch,
     forbidden_derivative_match: forbiddenMatch,
     width,
     height,
@@ -115,6 +114,7 @@ export function evaluateV3Candidate(row, { minimumWidth = 240, minimumHeight = 2
   if (!dimensionsPass) return { accepted: false, reason: "below-v3-minimum-dimensions", checks };
   if (selectedActorPage) return { accepted: false, reason: "actor-page-image-for-character-still", checks };
   if (forbiddenMatch) return { accepted: false, reason: "derivative-object-or-namesake-presentation", checks };
+  if (humanPresentationMatch) return { accepted: false, reason: "human-event-photo-for-character-still", checks };
   if (!subjectBound) return { accepted: false, reason: "no-explicit-subject-binding", checks };
   if (!productionBound) return { accepted: false, reason: "no-explicit-production-binding", checks };
   return { accepted: true, reason: null, checks };
