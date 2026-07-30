@@ -1,0 +1,181 @@
+const ROLE_PARENTHETICAL = /\s*\((?:[^)]*\b(?:voice|vocal|after|narrat|puppet|capture|dub|radio)\b[^)]*)\)\s*/gi;
+const GENERIC_TAIL = /\s+(?:&|and)\s+(?:many|others|more|a bestiary of monsters|the rest|the cast)$/i;
+const MULTI_SEPARATOR = /\s*(?:\/|&|,|;|\band\b)\s*/i;
+const STOP_WORDS = new Set(["the", "and", "from", "with", "into", "for", "voice", "actor", "film", "series", "character", "role"]);
+const PAGE_KIND_MISMATCH = /\b(?:episode|film|movie|novel|comic|soundtrack|attraction|exhibition|museum|list of|franchise|video game|television series)\b/i;
+const FOREIGN_ADAPTATION = /\b(?:multiversus|lego|fortnite|comic|manga|novel|statue|sculpture|cosplay|merchandise|toy|figure|float|theme park|attraction|grauman|handprints?|waxwork|fan art|fanart)\b/i;
+const GENERIC_NON_DEPICTION = /\b(?:building|entrance|street|road|sign|logo|poster|cover|bottle|potion|skull|weapon|gun|vehicle|store|cafe|ride|trophy|plaque|interface|screenshot of text|title card)\b/i;
+const PORTRAIT_COSTUME = /\b(?:cosplay|costume|masked|mask|character makeup|prosthetic|in character|as [A-Z])\b/i;
+const GROUP = /\b(?:and|with|cast|group|panel|crew|ensemble|family|team)\b|[,;&]/i;
+
+export function normalizeSourceText(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&(?:nbsp|amp|quot|apos|#39);/gi, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanFiledLabel(value) {
+  return String(value || "")
+    .replace(ROLE_PARENTHETICAL, " ")
+    .replace(GENERIC_TAIL, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function aliasVariants(value) {
+  const clean = cleanFiledLabel(value);
+  if (!clean) return [];
+  const variants = new Set([clean]);
+  const noArticle = clean.replace(/^(?:the|a|an)\s+/i, "").trim();
+  if (noArticle) variants.add(noArticle);
+  for (const item of [...variants]) {
+    const parts = item.split(/\s+/);
+    const last = parts.at(-1) || "";
+    if (/^[a-z]+$/i.test(last) && last.length >= 4 && !/(?:ss|us|is|ous|y)$/i.test(last)) {
+      const copy = [...parts];
+      copy[copy.length - 1] = /s$/i.test(last) ? last.slice(0, -1) : `${last}s`;
+      variants.add(copy.join(" "));
+    }
+  }
+  return [...variants];
+}
+
+export function sourceSubjectAliases(value) {
+  const cleaned = cleanFiledLabel(value);
+  if (!cleaned) return [];
+  const parts = cleaned
+    .split(MULTI_SEPARATOR)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 2 && !/^(?:many|others|more)$/i.test(part));
+  return [...new Set([cleaned, ...parts].flatMap(aliasVariants).filter(Boolean))].slice(0, 24);
+}
+
+export function isMultiSubject(value) {
+  const cleaned = cleanFiledLabel(value);
+  const parts = cleaned.split(MULTI_SEPARATOR).map((part) => part.trim()).filter(Boolean);
+  return parts.length > 1;
+}
+
+function tokenSet(value, minimum = 3) {
+  return new Set(normalizeSourceText(value).split(/\s+/).filter((word) => word.length >= minimum && !STOP_WORDS.has(word)));
+}
+
+function countOverlap(text, tokens) {
+  const hay = normalizeSourceText(text);
+  let count = 0;
+  for (const token of tokens) if (hay.includes(token)) count += 1;
+  return count;
+}
+
+function titleBase(value) {
+  return normalizeSourceText(String(value || "").replace(/\s*\([^)]*\)\s*$/, ""));
+}
+
+function containsAlias(text, aliases) {
+  const hay = normalizeSourceText(text);
+  return aliases.some((alias) => {
+    const needle = normalizeSourceText(alias);
+    return needle.length >= 2 && (hay === needle || hay.includes(needle));
+  });
+}
+
+function productionMatch(text, production) {
+  const tokens = tokenSet(production);
+  if (!tokens.size) return false;
+  const needed = tokens.size >= 4 ? 2 : 1;
+  return countOverlap(text, tokens) >= needed;
+}
+
+function actorRoleBound(actorEvidence, aliases, production) {
+  if (!actorEvidence) return false;
+  if (actorEvidence.explicit_character_and_production === true) return true;
+  const text = [
+    ...(actorEvidence.character_windows || []),
+    ...(actorEvidence.production_windows || []),
+  ].join(" ");
+  return containsAlias(text, aliases) && productionMatch(text, production);
+}
+
+export function evaluateSourceCandidate({ side, expectedSubject, actor, production, performanceMode, candidate, actorEvidence = null }) {
+  const aliases = sourceSubjectAliases(expectedSubject);
+  const pageTitle = candidate?.page?.title || "";
+  const pageWindows = candidate?.page?.extract_windows || [];
+  const source = candidate?.source || {};
+  const file = candidate?.file || "";
+  const pageText = [pageTitle, ...pageWindows].join(" ");
+  const fileText = [file, source.description || "", source.categories || ""].join(" ");
+  const combined = `${pageText} ${fileText}`;
+  const exactPage = aliases.some((alias) => titleBase(pageTitle) === normalizeSourceText(alias));
+  const pageHasAlias = containsAlias(pageText, aliases);
+  const fileHasAlias = containsAlias(fileText, aliases);
+  const pageHasProduction = productionMatch(pageText, production);
+  const fileHasProduction = productionMatch(fileText, production);
+  const roleBound = actorRoleBound(actorEvidence, aliases, production);
+  const pageLooksLikeActor = actor && titleBase(pageTitle) === normalizeSourceText(actor);
+  const pageKindMismatch = PAGE_KIND_MISMATCH.test(pageTitle) && !productionMatch(pageTitle, production);
+  const foreignAdaptation = FOREIGN_ADAPTATION.test(fileText) && !fileHasProduction;
+  const genericNonDepiction = GENERIC_NON_DEPICTION.test(fileText) && !fileHasAlias;
+  const multi = isMultiSubject(expectedSubject);
+  const voiceLike = /voice|animation/i.test(String(performanceMode || ""));
+  const reasons = [];
+
+  if (side === "still") {
+    if (multi) reasons.push("requires-multi-subject-composite");
+    if (pageLooksLikeActor) reasons.push("actor-page-is-not-character-still");
+    if (!exactPage && !fileHasAlias) reasons.push("candidate-not-bound-to-subject-page-or-file");
+    if (!pageHasProduction && !fileHasProduction) reasons.push("candidate-lacks-filed-production-context");
+    if (pageKindMismatch) reasons.push("page-kind-does-not-match-character-claim");
+    if (foreignAdaptation) reasons.push("foreign-adaptation-or-merchandise");
+    if (genericNonDepiction) reasons.push("generic-non-depiction-asset");
+    if (voiceLike && !roleBound) reasons.push("actor-role-chain-not-explicit");
+  } else if (side === "portrait") {
+    const actorAliases = sourceSubjectAliases(actor || expectedSubject);
+    const exactActorPage = actorAliases.some((alias) => titleBase(pageTitle) === normalizeSourceText(alias));
+    const fileHasActor = containsAlias(fileText, actorAliases);
+    if (!exactActorPage && !fileHasActor) reasons.push("portrait-not-explicitly-bound-to-actor");
+    if (GROUP.test(file) && !fileHasActor) reasons.push("group-or-ambiguous-portrait");
+    if (PORTRAIT_COSTUME.test(combined)) reasons.push("role-costume-or-masked-portrait");
+    if (FOREIGN_ADAPTATION.test(fileText) && !fileHasActor) reasons.push("portrait-is-role-or-franchise-artifact");
+  } else {
+    reasons.push("unsupported-side");
+  }
+
+  const eligible = reasons.length === 0;
+  let adjustment = 0;
+  if (exactPage) adjustment += 180;
+  if (fileHasAlias) adjustment += 100;
+  if (pageHasProduction) adjustment += 80;
+  if (fileHasProduction) adjustment += 60;
+  if (roleBound) adjustment += 160;
+  if (!eligible) adjustment -= 1000;
+
+  return {
+    eligible,
+    reasons,
+    score_adjustment: adjustment,
+    explicit_chain: side === "still" ? Boolean((exactPage || fileHasAlias) && (pageHasProduction || fileHasProduction) && (!voiceLike || roleBound)) : eligible,
+    facts: {
+      exact_subject_page: exactPage,
+      page_has_subject: pageHasAlias,
+      file_has_subject: fileHasAlias,
+      page_has_production: pageHasProduction,
+      file_has_production: fileHasProduction,
+      actor_role_bound: roleBound,
+      page_looks_like_actor: pageLooksLikeActor,
+      multi_subject: multi,
+    },
+  };
+}
+
+export function rankBoundCandidates(candidates, context) {
+  return (candidates || []).map((candidate) => {
+    const binding = evaluateSourceCandidate({ ...context, candidate });
+    return { ...candidate, binding, score: Number(candidate.score || 0) + binding.score_adjustment };
+  }).sort((a, b) => Number(b.binding?.eligible) - Number(a.binding?.eligible) || Number(b.score || 0) - Number(a.score || 0));
+}
