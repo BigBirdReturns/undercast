@@ -1,0 +1,585 @@
+name: card-backfill-amortized-wave
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/card-backfill-amortized-wave.yml'
+      - '.github/CARD-BACKFILL-AMORTIZATION-ACTIVE.json'
+      - '.github/CARD-BACKFILL-AMORTIZATION.json'
+      - '.github/actions/card-backfill-runtime/action.yml'
+      - 'scripts/card-backfill-amortization-*.mjs'
+      - 'scripts/card-backfill-source-v2-cached.mjs'
+      - 'scripts/card-backfill-source-cache-merge.mjs'
+      - 'scripts/card-backfill-rebalance-wave.mjs'
+      - 'scripts/card-backfill-ready-decision-barrier.mjs'
+      - 'scripts/card-backfill-wave-reduce-amortized.mjs'
+      - 'scripts/lib/card-backfill-amortization.mjs'
+      - 'scripts/lib/card-backfill-performance.mjs'
+      - 'scripts/lib/card-backfill-source-cache.mjs'
+  workflow_dispatch:
+    inputs:
+      cohort_limit:
+        description: 'Obligations per immutable batch (1-50)'
+        required: false
+        default: '40'
+      wave_batches:
+        description: 'Parallel immutable batches per wave (1-4)'
+        required: false
+        default: '4'
+      workers_per_batch:
+        description: 'Cost-balanced source shards per batch (1-8)'
+        required: false
+        default: '4'
+      model:
+        description: 'Independent second-desk GitHub Model'
+        required: false
+        default: 'openai/gpt-4.1-mini'
+
+permissions:
+  contents: write
+  actions: write
+  models: read
+  statuses: write
+
+concurrency:
+  group: card-backfill-amortized-wave-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      ready: ${{ steps.plan.outputs.ready || 'false' }}
+      blocked: ${{ steps.barrier.outputs.blocked || 'false' }}
+      source_head: ${{ steps.head.outputs.source_head }}
+      discover_matrix: ${{ steps.plan.outputs.discover_matrix || '{"include":[]}' }}
+      assemble_matrix: ${{ steps.plan.outputs.assemble_matrix || '{"include":[]}' }}
+      selected_count: ${{ steps.plan.outputs.selected_count || '0' }}
+      wave_batches: ${{ steps.plan.outputs.wave_batches || '0' }}
+      wave_sha256: ${{ steps.plan.outputs.wave_sha256 || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Bind source evidence to the exact triggering head
+        id: head
+        run: echo "source_head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Prove inherited rigor and amortization contracts before spending source transport
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-lessons-fixtures.mjs
+          node scripts/card-backfill-attempt-index-fixtures.mjs
+          node scripts/card-backfill-wave-fixtures.mjs
+          node scripts/card-backfill-source-policy-v2-fixtures.mjs
+          node scripts/card-backfill-source-policy-v3-fixtures.mjs
+          node scripts/card-backfill-amortization-fixtures.mjs
+          node scripts/card-backfill-lessons.mjs validate \
+            --out "$RUNNER_TEMP/lessons-validation.json"
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import { validateAmortizationContract } from './scripts/lib/card-backfill-amortization.mjs';
+          const contract=validateAmortizationContract(JSON.parse(fs.readFileSync('.github/CARD-BACKFILL-AMORTIZATION.json','utf8')));
+          console.log(`PASS — amortization contract v${contract.version}; canonical_mutation=false`);
+          NODE
+
+      - name: Refuse rediscovery while retained decisions await staging
+        id: barrier
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          set +e
+          node scripts/card-backfill-ready-decision-barrier.mjs \
+            --out "$RUNNER_TEMP/ready-decision-barrier.json"
+          status=$?
+          set -e
+          if [ "$status" -eq 75 ]; then
+            echo 'blocked=true' >> "$GITHUB_OUTPUT"
+            gh workflow run card-backfill-stage.yml --ref "$GITHUB_REF_NAME"
+            echo 'PASS — staging workflow dispatched; source rediscovery remains forbidden'
+            exit 0
+          fi
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
+          echo 'blocked=false' >> "$GITHUB_OUTPUT"
+
+      - name: Select and cost-balance the next disjoint wave
+        id: plan
+        if: steps.barrier.outputs.blocked != 'true'
+        env:
+          BATCH_LIMIT: ${{ inputs.cohort_limit || '40' }}
+          WAVE_BATCHES: ${{ inputs.wave_batches || '4' }}
+          WORKERS_PER_BATCH: ${{ inputs.workers_per_batch || '4' }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/card-backfill-amortized-plan"
+          mkdir -p "$out"
+          set +e
+          node scripts/card-backfill-source-v3-wave-plan.mjs \
+            --control .github/CARD-BACKFILL-COHORT.json \
+            --out "$out" \
+            --batch-limit "$BATCH_LIMIT" \
+            --wave-batches "$WAVE_BATCHES" \
+            --workers-per-batch "$WORKERS_PER_BATCH" > "$out/plan.log" 2>&1
+          status=$?
+          set -e
+          cat "$out/plan.log"
+          if [ "$status" -ne 0 ]; then
+            if grep -q 'no source-policy-v3 wave available' "$out/plan.log"; then
+              echo 'ready=false' >> "$GITHUB_OUTPUT"
+              echo 'discover_matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+              echo 'assemble_matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+              echo 'selected_count=0' >> "$GITHUB_OUTPUT"
+              echo 'wave_batches=0' >> "$GITHUB_OUTPUT"
+              echo 'wave_sha256=' >> "$GITHUB_OUTPUT"
+              echo 'PASS — current policy frontier is drained or yielding to publication'
+              exit 0
+            fi
+            exit "$status"
+          fi
+          node scripts/card-backfill-rebalance-wave.mjs \
+            --plan-root "$out" \
+            --workers-per-batch "$WORKERS_PER_BATCH" \
+            --model .github/card-backfill/performance/COST-MODEL.json | tee "$out/rebalance.log"
+          discover=$(node -e "const fs=require('fs');process.stdout.write(JSON.stringify(JSON.parse(fs.readFileSync(process.argv[1],'utf8'))))" "$out/discover-matrix.json")
+          assemble=$(node -e "const fs=require('fs');process.stdout.write(JSON.stringify(JSON.parse(fs.readFileSync(process.argv[1],'utf8'))))" "$out/assemble-matrix.json")
+          selected=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(String(p.selected_count))" "$out/wave.json")
+          batches=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(String(p.wave_batches))" "$out/wave.json")
+          wave=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(p.wave_sha256)" "$out/wave.json")
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+          echo "discover_matrix=$discover" >> "$GITHUB_OUTPUT"
+          echo "assemble_matrix=$assemble" >> "$GITHUB_OUTPUT"
+          echo "selected_count=$selected" >> "$GITHUB_OUTPUT"
+          echo "wave_batches=$batches" >> "$GITHUB_OUTPUT"
+          echo "wave_sha256=$wave" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.ready == 'true'
+        with:
+          name: card-backfill-amortized-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/card-backfill-amortized-plan
+          if-no-files-found: error
+          retention-days: 90
+
+  discover:
+    needs: plan
+    if: needs.plan.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix: ${{ fromJSON(needs.plan.outputs.discover_matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.source_head }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - uses: ./.github/actions/card-backfill-runtime
+
+      - name: Restore the latest policy-bounded source metadata cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/card-backfill-source-cache
+          key: card-backfill-source-meta-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}-restore
+          restore-keys: |
+            card-backfill-source-meta-${{ runner.os }}-${{ github.ref_name }}-
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: card-backfill-amortized-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/planning
+
+      - name: Search one immutable shard while caching reusable metadata
+        env:
+          BATCH: ${{ matrix.batch_sha256 }}
+          SHARD: ${{ matrix.shard_id }}
+          PLAN_PATH: ${{ matrix.plan_path }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/amortized-$BATCH-$SHARD"
+          output="$root/output"
+          plan="$RUNNER_TEMP/planning/$PLAN_PATH"
+          mkdir -p "$output"
+          node scripts/card-backfill-source-v2-cached.mjs \
+            --baseline "$GITHUB_WORKSPACE" \
+            --plan "$plan" \
+            --out "$output/candidates" \
+            --journal "$output/media-search.jsonl" \
+            --latest "$output/latest.json" \
+            --run-id "${GITHUB_RUN_ID}-amortized-${BATCH}-shard-${SHARD}" \
+            --contact 'bigbirdreturns@proton.me' \
+            --network-delay-ms 350 \
+            --cache-max-age-ms 86400000 \
+            --cache-root "$RUNNER_TEMP/card-backfill-source-cache" \
+            --cache-write-root "$output/source-cache-delta" \
+            --cache-stats-out "$output/source-cache-stats.json" \
+            --telemetry-out "$output/source-telemetry.json" \
+            --batch-sha "$BATCH" \
+            --shard-id "$SHARD" \
+            --magick magick | tee "$output/retrieve.log"
+          node scripts/card-backfill-source-v2-enrich-report.mjs \
+            --report "$output/candidates/report.json" | tee "$output/enrich.log"
+          cp "$plan" "$output/retrieval-plan.json"
+          echo 'PASS — immutable shard complete; branch mutation=false'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-amortized-shard-${{ matrix.batch_sha256 }}-${{ matrix.shard_id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/amortized-${{ matrix.batch_sha256 }}-${{ matrix.shard_id }}/output
+          if-no-files-found: error
+          retention-days: 90
+
+  cache-wave:
+    needs: [plan, discover]
+    if: needs.plan.outputs.ready == 'true' && needs.discover.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.source_head }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Restore the prior merged metadata cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/card-backfill-source-cache
+          key: card-backfill-source-meta-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}-restore
+          restore-keys: |
+            card-backfill-source-meta-${{ runner.os }}-${{ github.ref_name }}-
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: card-backfill-amortized-shard-*-${{ github.run_id }}
+          path: ${{ runner.temp }}/shards
+          merge-multiple: false
+
+      - name: Merge every shard delta once
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-source-cache-merge.mjs \
+            --input-root "$RUNNER_TEMP/shards" \
+            --out "$RUNNER_TEMP/card-backfill-source-cache" | tee "$RUNNER_TEMP/source-cache-merge.log"
+
+      - name: Save one cache generation for all later waves
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/card-backfill-source-cache
+          key: card-backfill-source-meta-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: card-backfill-amortized-cache-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-source-cache/INDEX.json
+            ${{ runner.temp }}/source-cache-merge.log
+          if-no-files-found: warn
+          retention-days: 90
+
+  assemble:
+    needs: [plan, discover]
+    if: needs.plan.outputs.ready == 'true' && needs.discover.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.assemble_matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.source_head }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - uses: ./.github/actions/card-backfill-runtime
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: card-backfill-amortized-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/planning
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: card-backfill-amortized-shard-${{ matrix.batch_sha256 }}-*-${{ github.run_id }}
+          path: ${{ runner.temp }}/shards
+          merge-multiple: false
+
+      - name: Merge, render, independently adjudicate, and retain amortization state
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODEL: ${{ inputs.model || 'openai/gpt-4.1-mini' }}
+          BATCH_SHA: ${{ matrix.batch_sha256 }}
+          BATCH_INDEX: ${{ matrix.batch_index }}
+          BATCH_PATH: ${{ matrix.batch_path }}
+          SCOPES_PATH: ${{ matrix.scopes_path }}
+          SOURCE_HEAD: ${{ needs.plan.outputs.source_head }}
+        run: |
+          set -euo pipefail
+          test -n "$GITHUB_TOKEN"
+          final="$RUNNER_TEMP/final-$BATCH_SHA"
+          batch="$RUNNER_TEMP/planning/$BATCH_PATH"
+          scopes="$RUNNER_TEMP/planning/$SCOPES_PATH"
+          wave="$RUNNER_TEMP/planning/wave.json"
+          mkdir -p "$final"
+          node scripts/card-backfill-cohort-merge.mjs \
+            --batch "$batch" \
+            --shards-root "$RUNNER_TEMP/shards" \
+            --out "$final/candidates" \
+            --run-id "$GITHUB_RUN_ID-amortized-$BATCH_SHA" | tee "$final/merge.log"
+          node scripts/card-backfill-cohort-packetize.mjs \
+            --baseline "$GITHUB_WORKSPACE" \
+            --candidates "$final/candidates" \
+            --report "$final/candidates/report.json" \
+            --batch "$batch" \
+            --scopes "$scopes" \
+            --control .github/CARD-BACKFILL-COHORT.json \
+            --out "$final/packets" \
+            --magick magick | tee "$final/packetize.log"
+          node scripts/card-backfill-amortization-collect.mjs \
+            --shards-root "$RUNNER_TEMP/shards" \
+            --out "$final/amortization" \
+            --batch-sha "$BATCH_SHA" | tee "$final/amortization-collect.log"
+          node scripts/card-backfill-machine-adjudicate.mjs \
+            --candidates "$final/packets" \
+            --out "$final/machine-decisions.json" \
+            --model "$MODEL" \
+            --fallback-model 'openai/gpt-4o-mini' \
+            --max-parallel 2 \
+            --cycle 1 \
+            --artifact-name "card-backfill-amortized-wave-${GITHUB_RUN_ID}-${BATCH_SHA}" \
+            --head-sha "$SOURCE_HEAD" | tee "$final/machine-adjudicate.log"
+          node scripts/card-backfill-cohort-adjudicate.mjs \
+            --candidates "$final/packets" \
+            --decisions "$final/machine-decisions.json" \
+            --control .github/CARD-BACKFILL-COHORT.json \
+            --out "$final/adjudicated" \
+            --source-run-id "$GITHUB_RUN_ID" | tee "$final/adjudicate.log"
+          cp "$batch" "$final/batch.json"
+          node --input-type=module - "$final" "$batch" "$wave" "$SOURCE_HEAD" "$BATCH_INDEX" <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const [final,batchPath,wavePath,sourceHead,batchIndex]=process.argv.slice(2);
+          const batch=JSON.parse(fs.readFileSync(batchPath,'utf8'));
+          const wave=JSON.parse(fs.readFileSync(wavePath,'utf8'));
+          const receipt=JSON.parse(fs.readFileSync(path.join(final,'adjudicated','adjudication-run-receipt.json'),'utf8'));
+          const result={version:1,lane:'card-backfill-source-v3-wave-result',source_head:sourceHead,wave_sha256:wave.wave_sha256,
+            batch_sha256:batch.batch_sha256,batch_index:Number(batchIndex),source_policy_id:wave.source_policy_id,
+            source_policy_version:wave.source_policy_version,source_policy_revision:wave.source_policy_revision,
+            lessons_contract_sha256:wave.lessons_contract_sha256,amortization_plan_sha256:wave.amortization_plan_sha256,
+            cost_model_sha256:wave.cost_model_sha256||null,selected_count:batch.selected_count,counts:receipt.counts,
+            adjudicated_path:'adjudicated',machine_decisions_path:'machine-decisions.json',amortization_path:'amortization',
+            artifact_only:true,rediscovery:false,canonical_mutation:false};
+          fs.writeFileSync(path.join(final,'wave-result.json'),JSON.stringify(result,null,2)+'\n');
+          NODE
+          echo 'PASS — immutable batch adjudicated; token injected; rediscovery=false'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: card-backfill-amortized-result-${{ matrix.batch_sha256 }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/final-${{ matrix.batch_sha256 }}
+          if-no-files-found: error
+          retention-days: 90
+
+  reduce-wave:
+    needs: [plan, assemble, cache-wave]
+    if: always() && needs.plan.outputs.ready == 'true' && needs.assemble.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: card-backfill-publication-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Bind the sole branch-mutation head after acquiring the publication lock
+        id: mutation
+        run: echo "mutation_head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Prove source-sensitive inputs did not drift while immutable work was running
+        env:
+          SOURCE_HEAD: ${{ needs.plan.outputs.source_head }}
+          MUTATION_HEAD: ${{ steps.mutation.outputs.mutation_head }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$SOURCE_HEAD" --depth=1
+          git diff --name-only "$SOURCE_HEAD..$MUTATION_HEAD" > "$RUNNER_TEMP/intervening-paths.txt"
+          if grep -E '^(data/(specimens\.json|SOURCES\.json|MEDIA-AUDIT\.json)|\.github/(CARD-BACKFILL-COHORT\.json|CARD-BACKFILL-LESSONS\.json|CARD-BACKFILL-AMORTIZATION\.json|actions/card-backfill-runtime/action\.yml|workflows/card-backfill-amortized-wave\.yml)|scripts/(card-backfill-(source-v2(-cached|-enrich-report)?|cohort-(merge|packetize|adjudicate)|machine-adjudicate|source-v3-wave-plan|rebalance-wave|amortization-collect|wave-reduce-amortized)\.mjs|lib/card-backfill-(source-policy-v2|source-policy-v3|cohort|packet|staging|amortization|source-cache|performance|wave)\.mjs))$' "$RUNNER_TEMP/intervening-paths.txt"; then
+            echo 'source-sensitive drift occurred after immutable planning; refusing reduction'
+            cat "$RUNNER_TEMP/intervening-paths.txt"
+            exit 1
+          fi
+          echo 'PASS — only source-insensitive branch progress occurred during fan-out'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: card-backfill-amortized-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/planning
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: card-backfill-amortized-result-*-${{ github.run_id }}
+          path: ${{ runner.temp }}/results
+          merge-multiple: false
+
+      - name: Re-prove inherited contracts at the only branch-mutation boundary
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-lessons-fixtures.mjs
+          node scripts/card-backfill-attempt-index-fixtures.mjs
+          node scripts/card-backfill-wave-fixtures.mjs
+          node scripts/card-backfill-amortization-fixtures.mjs
+          node scripts/card-backfill-lessons.mjs validate --out "$RUNNER_TEMP/lessons-validation.json"
+
+      - name: Reduce all results once and feed measured cost into the next wave
+        env:
+          SOURCE_HEAD: ${{ needs.plan.outputs.source_head }}
+          MUTATION_HEAD: ${{ steps.mutation.outputs.mutation_head }}
+        run: |
+          set -euo pipefail
+          observed_head=$(git rev-parse HEAD)
+          node scripts/card-backfill-wave-reduce-amortized.mjs \
+            --wave "$RUNNER_TEMP/planning/wave.json" \
+            --amortization-plan "$RUNNER_TEMP/planning/amortization-plan.json" \
+            --results-root "$RUNNER_TEMP/results" \
+            --staging-root data/review/card-backfill-staging \
+            --permanent-root data/review/card-backfill \
+            --adjudications-root .github/card-backfill/adjudications \
+            --wave-receipt-root .github/card-backfill/waves \
+            --performance-root .github/card-backfill/performance \
+            --source-head "$SOURCE_HEAD" \
+            --mutation-head "$MUTATION_HEAD" \
+            --observed-head "$observed_head" | tee "$RUNNER_TEMP/amortized-reduce.log"
+          node scripts/card-backfill-staging.mjs validate \
+            --root data/review/card-backfill-staging \
+            --permanent-root data/review/card-backfill
+
+      - name: Commit one exact amortized reduction
+        env:
+          MUTATION_HEAD: ${{ steps.mutation.outputs.mutation_head }}
+          SELECTED_COUNT: ${{ needs.plan.outputs.selected_count }}
+          WAVE_BATCHES: ${{ needs.plan.outputs.wave_batches }}
+        run: |
+          set -euo pipefail
+          git add -A -- \
+            .github/card-backfill/adjudications \
+            .github/card-backfill/waves \
+            .github/card-backfill/performance \
+            data/review/card-backfill-staging
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'amortized reduction was already present; no duplicate commit required'
+            exit 0
+          fi
+          git config user.name 'undercast-card-backfill-amortized-reducer'
+          git config user.email 'undercast-card-backfill-amortized-reducer@users.noreply.github.com'
+          git commit -m "Card backfill: amortize ${WAVE_BATCHES} batches (${SELECTED_COUNT} obligations)"
+          remote_head=$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')
+          if [ "$remote_head" != "$MUTATION_HEAD" ]; then
+            echo "branch moved from mutation head $MUTATION_HEAD to $remote_head; refusing stale push"
+            exit 1
+          fi
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo 'PASS — one reducer committed attempts, staging, and the next cost model'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: card-backfill-amortized-reduction-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/planning
+            ${{ runner.temp }}/lessons-validation.json
+            ${{ runner.temp }}/amortized-reduce.log
+            ${{ runner.temp }}/intervening-paths.txt
+          if-no-files-found: warn
+          retention-days: 90
+
+  continue:
+    needs: [plan, reduce-wave]
+    if: needs.plan.outputs.ready == 'true' && needs.reduce-wave.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-arm the next measured wave without a chat turn
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BATCH_LIMIT: ${{ inputs.cohort_limit || '40' }}
+          WAVE_BATCHES: ${{ inputs.wave_batches || '4' }}
+          WORKERS: ${{ inputs.workers_per_batch || '4' }}
+          MODEL: ${{ inputs.model || 'openai/gpt-4.1-mini' }}
+        run: |
+          set -euo pipefail
+          sleep 10
+          gh workflow run card-backfill-amortized-wave.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$GITHUB_REF_NAME" \
+            -f cohort_limit="$BATCH_LIMIT" \
+            -f wave_batches="$WAVE_BATCHES" \
+            -f workers_per_batch="$WORKERS" \
+            -f model="$MODEL"
+          echo 'PASS — next amortized wave dispatched; manual_continue_required=false'
+
+  report-status:
+    needs: [plan, discover, cache-wave, assemble, reduce-wave]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish observable amortized-wave status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_HEAD: ${{ needs.plan.outputs.source_head || github.sha }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+          DISCOVER_RESULT: ${{ needs.discover.result }}
+          ASSEMBLE_RESULT: ${{ needs.assemble.result }}
+          REDUCE_RESULT: ${{ needs.reduce-wave.result }}
+          SELECTED: ${{ needs.plan.outputs.selected_count || '0' }}
+        run: |
+          set -euo pipefail
+          state=success
+          description="run ${GITHUB_RUN_ID}: selected=${SELECTED}; discover=${DISCOVER_RESULT}; assemble=${ASSEMBLE_RESULT}; reduce=${REDUCE_RESULT}"
+          if [ "$PLAN_RESULT" = failure ] || [ "$DISCOVER_RESULT" = failure ] || [ "$ASSEMBLE_RESULT" = failure ] || [ "$REDUCE_RESULT" = failure ]; then state=failure; fi
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${SOURCE_HEAD}" \
+            -f state="$state" \
+            -f context='card-backfill/amortized-wave' \
+            -f description="${description:0:140}" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

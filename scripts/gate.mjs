@@ -86,11 +86,12 @@ async function runAutopilotSyncAssertion() {
 const stepDefinitions = [
   { id: "gate-fixtures", label: "Validate canonical gate fixtures", action: () => runNpmScript("Gate fixtures", "gate:fixtures") },
   { id: "lockfile", label: "Verify package-lock consistency", action: () => runCommand("Lockfile consistency", npmCommand, [...npmPrefixArgs, "ci", "--dry-run"], { cwd: ROOT }) },
-  { id: "card-backfill-lessons", label: "Validate card-backfill lesson inheritance and parallel wave custody", action: () => {
+  { id: "card-backfill-lessons", label: "Validate card-backfill lesson inheritance, parallel wave custody, and amortization", action: () => {
     runNpmScript("Card-backfill lesson fixtures", "card-backfill:lessons:fixtures");
     runNpmScript("Card-backfill attempt-index fixtures", "card-backfill:attempt-index:fixtures");
     runNpmScript("Card-backfill wave fixtures", "card-backfill:wave:fixtures");
     runNpmScript("Card-backfill lesson contract", "card-backfill:lessons", ["--", "validate"]);
+    runNodeScript("Card backfill amortization fixtures", "scripts/card-backfill-amortization-fixtures.mjs");
   } },
   { id: "projections", label: "Rebuild projection and refuse drift", action: runProjectedSteps },
   { id: "archive", label: "Validate archive invariants", action: () => runNodeScript("Archive invariants", "scripts/validate.mjs") },
