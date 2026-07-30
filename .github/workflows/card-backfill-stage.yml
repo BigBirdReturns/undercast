@@ -9,6 +9,8 @@ on:
       - '.github/workflows/card-backfill-stage.yml'
       - '.github/CARD-BACKFILL-COHORT.json'
       - 'scripts/card-backfill-cohort-adjudicate.mjs'
+      - 'scripts/card-backfill-stage-custody.mjs'
+      - 'scripts/card-backfill-stage-custody-fixtures.mjs'
       - 'scripts/card-backfill-staging.mjs'
       - 'scripts/card-backfill-staging-fixtures.mjs'
       - 'scripts/lib/card-backfill-staging.mjs'
@@ -44,8 +46,11 @@ jobs:
 
       - run: npm ci
 
-      - name: Prove staging transaction semantics
-        run: npm run card-backfill:staging:fixtures
+      - name: Prove staging transaction and retained-artifact custody semantics
+        run: |
+          set -euo pipefail
+          npm run card-backfill:staging:fixtures
+          node scripts/card-backfill-stage-custody-fixtures.mjs
 
       - name: Select ready adjudication decisions
         id: decisions
@@ -94,25 +99,20 @@ jobs:
             run_id=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(String(x.source.workflow_run_id))" "$decision")
             artifact_name=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(x.source.artifact_name)" "$decision")
             artifact_id=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(String(x.source.artifact_id))" "$decision")
-            artifact_digest=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(x.source.artifact_digest||'')" "$decision")
-            head_sha=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(x.source.head_sha||'')" "$decision")
             artifact_root="$RUNNER_TEMP/candidate-$run_id-$artifact_id"
             adjudicated="$RUNNER_TEMP/adjudicated-$run_id-$artifact_id"
+            metadata="$RUNNER_TEMP/artifact-$artifact_id.json"
             rm -rf "$artifact_root" "$adjudicated"
             mkdir -p "$artifact_root"
-            metadata="$RUNNER_TEMP/artifact-$artifact_id.json"
+
             gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id" > "$metadata"
-            node --input-type=module - "$decision" "$metadata" <<'NODE'
-            import fs from 'node:fs';
-            const decision=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-            const artifact=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
-            if(artifact.id!==decision.source.artifact_id||artifact.name!==decision.source.artifact_name)throw new Error('artifact identity mismatch');
-            if(artifact.expired)throw new Error('source artifact is expired');
-            if(artifact.workflow_run?.id!==decision.source.workflow_run_id||artifact.workflow_run?.head_sha!==decision.source.head_sha)throw new Error('artifact workflow custody mismatch');
-            if(decision.source.artifact_digest&&artifact.digest!==decision.source.artifact_digest)throw new Error('artifact digest mismatch');
-            console.log(`PASS — artifact ${artifact.id} retains exact run, head, name, and digest custody`);
-            NODE
-            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$artifact_name" --dir "$artifact_root"
+            node scripts/card-backfill-stage-custody.mjs artifact \
+              --decision "$decision" \
+              --metadata "$metadata"
+            gh run download "$run_id" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "$artifact_name" \
+              --dir "$artifact_root"
 
             candidate_root="$artifact_root/final/packets"
             if [ ! -f "$candidate_root/batch-result.json" ] && [ -f "$artifact_root/packets/batch-result.json" ]; then
@@ -122,17 +122,9 @@ jobs:
             test -f "$candidate_root/batch-result.json"
             test -d "$candidate_root/packets"
 
-            node --input-type=module - "$decision" "$candidate_root/batch-result.json" <<'NODE'
-            import fs from 'node:fs';
-            const decision=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-            const result=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
-            if(decision.batch_sha256!==result.batch_sha256)throw new Error('downloaded artifact batch mismatch');
-            if(decision.campaign_id!==result.campaign_id||decision.estate_sha256!==result.estate_sha256)throw new Error('downloaded artifact campaign mismatch');
-            if(decision.source.candidate_result_sha256&&decision.source.candidate_result_sha256!==result.result_sha256)throw new Error('downloaded artifact result digest mismatch');
-            const pending=result.results.filter(row=>row.disposition==='candidate-pending-independent-visual-adjudication');
-            if(pending.length!==decision.decisions.length)throw new Error(`decision cardinality mismatch: ${decision.decisions.length} vs ${pending.length}`);
-            console.log(`PASS — decision file binds ${pending.length} candidate(s) in workflow run ${decision.source.workflow_run_id}`);
-            NODE
+            node scripts/card-backfill-stage-custody.mjs batch \
+              --decision "$decision" \
+              --result "$candidate_root/batch-result.json"
 
             node scripts/card-backfill-cohort-adjudicate.mjs \
               --candidates "$candidate_root" \
