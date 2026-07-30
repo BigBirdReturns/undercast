@@ -1,23 +1,27 @@
 #!/usr/bin/env node
-import { cp, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
-const args=process.argv.slice(2);
-function option(name,fallback=null){const i=args.indexOf(name);if(i<0)return fallback;const value=args[i+1];if(!value||value.startsWith("--"))throw new Error(`${name} requires a value`);return value;}
-async function exists(path){try{await stat(path);return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}}
-async function main(){
-  const input=resolve(option('--input')),destination=resolve(option('--destination','data/review/card-backfill')),receipt=JSON.parse(await readFile(join(input,'batch-publication-receipt.json'),'utf8'));
-  const accepted=receipt.results.filter(row=>row.final_disposition==='reviewed-evidence-candidate');
-  if(accepted.length!==receipt.counts.accepted||accepted.length<20||accepted.length>50)throw new Error(`permanent batch count must remain 20-50; observed ${accepted.length}`);
-  const sourceRoot=join(input,'permanent');
-  const sourceDirs=(await readdir(sourceRoot,{withFileTypes:true})).filter(row=>row.isDirectory()).map(row=>row.name).sort();
-  if(sourceDirs.length!==accepted.length)throw new Error(`permanent directory count ${sourceDirs.length} does not match accepted count ${accepted.length}`);
-  for(const id of sourceDirs)if(await exists(join(destination,id)))throw new Error(`refusing to overwrite existing permanent packet ${id}`);
-  await mkdir(destination,{recursive:true});
-  for(const id of sourceDirs)await cp(join(sourceRoot,id),join(destination,id),{recursive:true,errorOnExist:true,force:false});
-  const batches=join(destination,'batches');await mkdir(batches,{recursive:true});
-  const batchPath=join(batches,`${receipt.batch_sha256}.json`);if(await exists(batchPath))throw new Error(`batch receipt already exists ${receipt.batch_sha256}`);
-  await writeFile(batchPath,JSON.stringify({...receipt,materialized_packet_ids:sourceDirs,canonical_mutation:false},null,2)+'\n');
-  console.log(`PASS — materialized ${sourceDirs.length} evidence-only packet directories and one batch receipt`);
-  console.log(`NEXT — run the complete repository gate once, then commit the exact batch`);
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { materializePublicationPlan } from "./lib/card-backfill-staging.mjs";
+
+const args = process.argv.slice(2);
+function option(name, fallback = null) {
+  const index = args.indexOf(name);
+  if (index < 0) return fallback;
+  const value = args[index + 1];
+  if (!value || value.startsWith("--")) throw new Error(`${name} requires a value`);
+  return value;
 }
-main().catch(error=>{console.error(`card-backfill materialize: ${error.message}`);process.exit(1);});
+
+async function main() {
+  if (option("--input", null)) throw new Error("direct same-cohort materialization is retired; stage accepted packets, build a mixed publication plan, then materialize that plan");
+  const planPath = resolve(option("--plan"));
+  const root = resolve(option("--staging", option("--root", "data/review/card-backfill-staging")));
+  const destination = resolve(option("--destination", "data/review/card-backfill"));
+  const plan = JSON.parse(await readFile(planPath, "utf8"));
+  const result = await materializePublicationPlan({ plan, root, destination, now: option("--now", new Date().toISOString()) });
+  console.log(`PASS — materialized ${result.permanent_receipt.counts.materialized} staged packet(s) across ${result.permanent_receipt.counts.cohorts} cohort(s)`);
+  console.log(`BATCH — ${result.permanent_receipt.publication_batch_sha256}`);
+  console.log("NEXT — run the complete repository gate once, then commit the exact publication transaction");
+}
+
+main().catch((error) => { console.error(`card-backfill materialize: ${error.message}`); process.exit(1); });

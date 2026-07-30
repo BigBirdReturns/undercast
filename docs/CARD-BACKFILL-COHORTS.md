@@ -1,22 +1,43 @@
-# Card-backfill cohort operation
+# Card-backfill cohort and staging operation
 
-The card-backfill lane is a mass-production evidence system. Its unit of execution is a cohort of shape-equivalent missing-media obligations, not one card.
+The card-backfill lane is a mass-production evidence system. Discovery runs in shape-equivalent cohorts. Permanent evidence publication runs from a separate, persistent staging ledger that may combine accepted packets from many discovery cohorts.
+
+The production equation is:
+
+```text
+shape-equivalent discovery cohorts
+        ↓
+independent per-candidate adjudication
+        ↓
+repository-native accepted-packet staging
+        ↓
+20–50 accepted packets accumulated across cohorts
+        ↓
+one evidence-only materialization transaction
+        ↓
+one complete repository gate
+        ↓
+one permanent batch commit
+```
+
+A low-yield source family can no longer strand two good packets merely because thirty-eight neighbors failed.
 
 ## What the serial lane proved
 
-The first forty permanent packets established the law that must survive scaling:
+The first forty permanent packets established the law that survives scaling:
 
 1. A source URL and a file hash do not prove that an image shows the filed person or role.
 2. Actor, character, production, chronology, maker credit, source publication, selected bytes, and visual judgment are separate claim types.
 3. The selected image never proves its own attribution.
 4. Existing opposite-side media stays immutable while a missing facet is researched.
-5. Candidate bytes are screened against the complete canonical media hash set.
+5. Candidate and rendered bytes are screened against the complete canonical media hash set.
 6. Renders are deterministic and preserve a full-source inset as well as the card crop.
 7. Failures stop before canonical mutation and remain receipted.
-8. Canonical acceptance is separate from evidence publication.
-9. A complete repository gate is required before a permanent publication batch.
+8. Discovery cannot approve its own result.
+9. Canonical website acceptance is separate from evidence publication.
+10. A complete repository gate is required before a permanent publication batch.
 
-Those are durable invariants. Card-specific selectors, scope extractors, transport scripts, Base64 materializers, renderers, apply scripts, and workflows were implementation accidents.
+Those are durable invariants. Card-specific selectors, scope extractors, transport scripts, encoded materializers, renderers, apply programs, workflows, and full gates were implementation accidents.
 
 ## Frozen campaign
 
@@ -29,11 +50,11 @@ selector-defined estate:          472
 completion:                      8.47%
 ```
 
-The freeze intentionally preserves the live selector's packet-per-record completion rule. It is a lower bound, not a claim that every weak asset, replacement candidate, unindexed role, unbuilt IP estate, or canonical-acceptance candidate is represented.
+The freeze preserves the live selector's packet-per-record completion rule. It remains a lower bound: weak existing assets, replacement candidates, unindexed roles, unbuilt IP estates, and candidates awaiting canonical website acceptance are not silently included.
 
-A campaign run refuses silent denominator drift. A changed denominator requires an explicit new freeze or an explicit diagnostic override; it is never absorbed accidentally.
+The freeze locks campaign membership and the selector total, not the counters at their opening values forever. Permanent publication must move the counters one-for-one: every new permanent packet increases completed by one, decreases open by one, and leaves the 472-item selector total unchanged. Regression, expansion, or a total that no longer closes fails the planner. Staged packets do not move either counter.
 
-## One-pass planning
+## One-pass discovery planning
 
 Run:
 
@@ -43,96 +64,199 @@ npm run card-backfill:cohort -- plan \
   --out .card-backfill-cohort
 ```
 
-The planner performs one canonical read and emits:
+The planner emits:
 
-- `estate.json`: every open selector obligation, canonical snapshots, classifications, and a deterministic estate hash;
-- `cohorts.json`: shape-equivalent source/evidence/render families and their counts;
-- `quarantine.json`: genuine exceptions that cannot enter routine production;
-- `scopes/`: one independent per-obligation scope receipt for the complete denominator;
-- `batch.json`: 20–50 obligations from one ready cohort, defaulting to forty;
-- `batch-scopes/`: batch-bound copies of the selected scope receipts;
-- `retrieval-plan.json` and `retrieval-facets.txt`: exact inputs for the existing candidate-only rolling media crawler.
+- `estate.json`: every open selector obligation, canonical snapshots, classifications, current permanent progress, and the deterministic estate hash;
+- `campaign-progress.json`: initial and current completed/open counters plus the one-for-one progress proof;
+- `cohorts.json`: shape-equivalent source, evidence, and render families still available in the current discovery pass;
+- `quarantine.json`: genuine exceptions outside routine production;
+- `adjudication-attempt-index.json`: every obligation already processed by a retained adjudication receipt;
+- `staging-exclusions.json`: accepted staged packets and already adjudicated obligations excluded from routine rediscovery;
+- `scopes/`: one independent scope receipt for every open obligation;
+- `batch.json`: one selected shape-equivalent discovery cohort;
+- `batch-scopes/`: batch-bound selected scope receipts;
+- `retrieval-plan.json`, `retrieval-facets.txt`, and shard plans: exact candidate-only discovery inputs.
 
-The cohort key includes facet, performance mode, source route, evidence tier, and render profile. The planner does not mix unlike source or adjudication shapes merely to fill a quota.
+A discovery cohort remains uniform because source transport, evidence expectations, and rendering benefit from uniformity. Its yield does **not** determine whether accepted packets survive.
+
+By default, the planner excludes two classes without calling either one complete:
+
+- accepted packets already in staging;
+- every obligation represented in a retained adjudication-run receipt, including source misses, dimension failures, and visual rejections.
+
+That suppression defines the current coverage pass and prevents the same source-family run from repeatedly paying for the same forty obligations. A retry sweep is explicit and source-policy-aware:
+
+```bash
+npm run card-backfill:cohort -- plan --include-attempted ...
+```
+
+Staged packets remain excluded even during a retry. The batch digest binds the staging-ledger digest, adjudication-attempt-index digest, exclusion state, and exact selected obligations.
 
 ## Candidate production
 
-The cohort workflow reuses the existing rolling-media worktree isolation:
+The cohort workflow:
 
-1. the permanent checkout remains untouched;
-2. only the exact selected `record/side` facets are cleared in a detached candidate worktree;
-3. `retrieve.mjs` receives the facet allowlist and cannot opportunistically fill an unselected opposite side;
-4. the existing report compares baseline and candidate worktrees;
-5. the packetizer screens all candidate bytes against canonical media, renders deterministically, and creates one receipt directory per record;
-6. failures and unsuitable results enter the batch quarantine without stopping unrelated obligations;
-7. one contact sheet and one batch result cover the cohort.
+1. leaves the permanent checkout untouched;
+2. clears only exact selected `record/side` facets in isolated worktrees or uses a typed source-family adapter;
+3. fans discovery across four deterministic shards;
+4. merges results in frozen order;
+5. screens candidate bytes against canonical media;
+6. renders deterministic candidate and wall simulations;
+7. creates one receipt directory per selected record;
+8. quarantines failures without stopping unrelated obligations;
+9. emits one contact sheet, batch result, and adjudication decision template.
 
-Candidate production never writes canonical facts.
+Candidate production never writes canonical facts. It runs the candidate-artifact fixtures and custody checks, not the complete repository gate. The complete gate belongs to permanent publication only.
 
-## Independent visual adjudication
+## Independent adjudication
 
-Discovery cannot approve its own result. A second desk may be a qualified machine or person; it is not a requirement for an unspecified future rescuer. It must independently decide both claims required by `docs/MEDIA-AUDIT.md`:
+Discovery cannot approve its own result. A qualified machine or person second desk must decide both claims required by `docs/MEDIA-AUDIT.md`:
 
-- exact filed identity;
-- correct presentation (`character-depiction` or `neutral-human`).
+- `identity = expected`, established from source-bound evidence rather than appearance;
+- the exact presentation value: `character-depiction` for stills or `neutral-human` for portraits.
 
-Ambiguity is quarantined. A failed item does not invalidate the rest of the cohort.
+The candidate artifact contains `decisions-template.json`. Complete it as a repository decision file under:
 
-## Permanent publication
+```text
+.github/card-backfill/adjudications/<workflow-run-id>.json
+```
 
-Record independent decisions in one batch-bound file, then run:
+The decision file binds the workflow run, artifact name and digest, candidate result digest, campaign, discovery batch, adjudicator, and every pending candidate. Ambiguity or wrong presentation is rejected and remains receipted.
+
+Adjudication no longer enforces a twenty-packet minimum:
 
 ```bash
 npm run card-backfill:cohort:adjudicate -- \
-  --candidates card-backfill-cohort-packets \
-  --decisions decisions.json \
-  --out card-backfill-cohort-adjudicated
+  --candidates card-backfill-cohort-artifact/final/packets \
+  --decisions .github/card-backfill/adjudications/<run>.json \
+  --out .card-backfill-adjudicated
+```
 
+Two accepted packets are valid output. Zero accepted packets are also valid when all candidates fail independent review.
+
+## Persistent accepted-packet staging
+
+Accepted packets enter `data/review/card-backfill-staging/` immediately:
+
+```bash
+npm run card-backfill:staging -- stage \
+  --input .card-backfill-adjudicated \
+  --root data/review/card-backfill-staging \
+  --permanent-root data/review/card-backfill
+```
+
+The staging transaction validates every packet before copying it. It verifies:
+
+- accepted independent adjudication;
+- exact record and facet identity across scope, source, review, adjudication, and manifest;
+- every manifest byte count and SHA-256 digest;
+- the packet digest;
+- the complete checksum ledger;
+- no collision with an existing staged or permanent record;
+- canonical mutation remains false.
+
+The staging estate contains:
+
+```text
+data/review/card-backfill-staging/
+  STAGING.json
+  packets/<record>/...
+  adjudications/<discovery-batch-sha>.json
+  events/<event-sha>.json
+  publications/<publication-batch-sha>.json
+```
+
+`STAGING.json` is the active accepted-packet inventory. Adjudication receipts and events preserve history. Staged packets are **not** counted as completed evidence packets until permanent materialization succeeds.
+
+The `card-backfill-stage` workflow verifies the exact artifact ID, workflow run, head SHA, name, and artifact digest before download. It then checks campaign, estate, discovery-batch, and result digests, runs adjudication, stages accepted packets, validates the ledger, and commits only staging paths. Reprocessing an identical packet is idempotent; a different packet for the same record fails closed.
+
+The full adjudication receipt is retained even when a run accepts zero packets. That receipt advances the current discovery pass by suppressing already attempted obligations without pretending that they are complete. A staging commit automatically wakes the candidate workflow, which selects the next unattempted priority cohort.
+
+## Cross-cohort publication planning
+
+Inspect staging:
+
+```bash
+npm run card-backfill:staging -- status --json
+```
+
+Build the next publication plan:
+
+```bash
+npm run card-backfill:staging -- plan \
+  --root data/review/card-backfill-staging \
+  --control .github/CARD-BACKFILL-COHORT.json \
+  --out .card-backfill-publication
+```
+
+The publication threshold is applied only here:
+
+```text
+minimum: 20
+ target: 40
+maximum: 50
+```
+
+When fewer than twenty accepted packets are staged, the plan is a truthful `ready: false` receipt. At twenty or more, the planner selects the oldest accepted packets in deterministic order, up to the target or explicit bounded limit. The selected packets may come from any number of discovery cohorts and discovery workflow runs.
+
+The publication batch digest binds:
+
+- the exact staging-ledger digest;
+- every selected obligation;
+- every selected packet digest;
+- every originating discovery-batch digest;
+- every originating cohort key.
+
+## Permanent evidence publication
+
+Materialize the exact ready plan:
+
+```bash
 npm run card-backfill:cohort:materialize -- \
-  --input card-backfill-cohort-adjudicated \
+  --plan .card-backfill-publication/publication-plan.json \
+  --staging data/review/card-backfill-staging \
   --destination data/review/card-backfill
 ```
 
-The decision file identifies the adjudicator as a machine or person, proves independence from discovery, and covers every pending candidate exactly once. Acceptance requires `identity = expected`, the exact facet presentation value, and a written reason. Discovery failures and rejected candidates remain in the batch quarantine.
+The transaction:
 
-Only accepted packets are materialized under `data/review/card-backfill/<record>/`. The materializer refuses overwrites and refuses a permanent batch outside twenty to fifty accepted packets. It also writes one batch receipt under `data/review/card-backfill/batches/`.
+1. revalidates the staging ledger and every selected packet;
+2. refuses ledger or plan drift;
+3. refuses permanent overwrites;
+4. copies exactly twenty to fifty packets to `data/review/card-backfill/<record>/`;
+5. writes one mixed-batch receipt under `data/review/card-backfill/batches/`;
+6. writes the matching staging publication receipt;
+7. removes only the selected packet directories from active staging;
+8. updates `STAGING.json` in the same worktree transaction;
+9. commits both permanent additions and the matching staging removals/receipts atomically.
 
-The complete repository gate then runs once against the exact permanent batch. Per-card manifests, checksums, scopes, source receipts, duplicate scans, render contracts, and adjudication receipts remain independently inspectable. No card receives its own workflow or apply program.
+Then, and only then, the complete repository gate runs once. A failed gate produces no commit or push. The `card-backfill-publication` workflow performs this transaction automatically on a card-backfill branch when staging reaches the publication minimum and refuses to push if the branch head moved.
 
 Canonical website acceptance remains a separate transaction on the current canonical head.
 
-## Throughput contract
-
-The lane is designed around the following fixed-cost allocation:
+## Fixed-cost allocation
 
 ```text
-selector freeze       once per campaign
-scope extraction      once for the full denominator
-source machinery      once per source family
-render machinery      once for every cohort
-visual review          one contact sheet per cohort
-permanent apply        once per 20–50 packets
-repository gate        once per permanent batch
-receipts               still per card
+selector membership      once per campaign; counters advance monotonically
+scope extraction         once for the full denominator
+source machinery         once per source family
+discovery fan-out         once per shape-equivalent cohort
+render machinery         once per discovery cohort
+visual review             one contact sheet per discovery cohort
+attempt suppression       once per retained adjudication run in the current pass
+accepted storage          once per accepted packet
+publication planning      once per staging-ledger state
+permanent materialize     once per 20–50 accepted packets
+complete repository gate  once per permanent publication batch
+receipts                  still per card
 ```
 
-Rigor stays local to the claim. Ceremony is amortized across the batch.
+Rigor stays local to each claim. Ceremony is paid at the frequency where it actually protects something.
 
-## First live cohort: source-family failure, not forty card failures
+## Live evidence behind the reset
 
-Workflow run `30513656297` exercised the complete forty-obligation lane at commit `a5220bb8d249ad5bb318b79eb55af2676cfd7cc2`. Planning, all four ten-card shards, packet custody, quarantine, and the complete repository gate passed. Candidate yield was zero: every selected portrait remained absent and all forty obligations were quarantined as `no-new-candidate` without canonical mutation.
+Workflow run `30513656297` turned forty apparent card failures into one shared portrait-retriever defect. The exact-page Wikimedia adapter repaired that source family once.
 
-The run exposed one shared defect in the inherited portrait retriever. It enumerated page images weakly, swallowed transport failures, and reported each record as “illustrated” because its pre-existing still was truthy even though the selected portrait facet remained absent. The durable receipt is `.github/card-backfill/cohort-runs/30513656297.json`.
+Workflow run `30514452128` produced two source-bound neutral-human portraits from forty voice/animation obligations. Both survive through independent adjudication and staging even though the discovery cohort yielded far fewer than twenty accepted packets.
 
-The promoted repair is `scripts/card-backfill-wikimedia-portraits.mjs`. For the `performer-reference-crawl` portrait family it now:
-
-- resolves the exact filed canonical Wikipedia page rather than searching by an unbounded name;
-- requests the lead page image and Wikidata item in one typed API call;
-- falls back to the filed entity's Wikidata `P18` image claim;
-- resolves local or Commons image metadata, dimensions, authorship, license, and description-page origin;
-- tries bounded media transports in a deterministic order;
-- records every HTTP status, content type, byte count, digest, response excerpt, timeout, and validation failure per obligation;
-- emits the same candidate/report contract consumed by the cohort merger;
-- never mutates canonical data and never treats the opposite facet as completion.
-
-This is the intended economics: one forty-card run found one source-family defect, and one shared repair replaces forty bespoke retries.
+Workflow run `30514942808` produced two renderable physical/live-action portrait candidates. Independent review rejected both because the visible subjects remained masked wrestlers, which fails the required `neutral-human` presentation. Those are two correct rejections, not two lost production slots.
