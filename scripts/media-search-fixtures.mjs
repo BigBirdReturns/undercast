@@ -1,10 +1,22 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { attemptsByFacet,buildMediaPlan } from "./lib/media-search.mjs";
+import { COHORT_SKIP_SENTINEL,attemptsByFacet,buildMediaPlan,facetRequested,facetSelectorIds,maskUnselectedFacets,parseFacetSelector,restoreMaskedFacets } from "./lib/media-search.mjs";
 const policy={missing_retry_days:30,attention_retry_days:7,nonfree_portrait_retry_days:180,verified_portrait_retry_days:365,verified_still_retry_days:730};
 const specimens=[{id:"UC-1",actor:"Actor One",character:"Role One",still:null,portrait:{src:"p.jpg",kind:"copyright",origin:"https://example.fandom.com/p"}},{id:"UC-2",actor:"Actor Two",character:"Role Two",still:{src:"s.jpg",kind:"still",origin:"https://example.test/s"},portrait:{src:"p2.jpg",kind:"free",origin:"https://commons.wikimedia.org/p2"}}];
 const plan=buildMediaPlan({specimens,sources:[],auditItems:[],attempts:new Map(),now:"2026-07-24T00:00:00.000Z",policy,limit:10});
 assert.equal(plan[0].wall_id,"UC-1");assert.equal(plan[0].side,"still");assert(plan.some(row=>row.reason==="portrait-source-upgrade"));
 const attempts=attemptsByFacet([JSON.stringify({op:"media-search.attempted",wall_id:"UC-1",side:"still",at:"2026-07-23T00:00:00.000Z"})]);
 const deferred=buildMediaPlan({specimens,sources:[],auditItems:[],attempts,now:"2026-07-24T00:00:00.000Z",policy,limit:10});assert(!deferred.some(row=>row.wall_id==="UC-1"&&row.side==="still"));
+const facets=parseFacetSelector("uc-001/still, UC-002/PORTRAIT");
+assert.deepEqual([...facets].sort(),["UC-001/still","UC-002/portrait"]);
+assert.deepEqual([...facetSelectorIds(facets)].sort(),["UC-001","UC-002"]);
+assert.equal(facetRequested(facets,"uc-001","still"),true);
+assert.equal(facetRequested(facets,"UC-001","portrait"),false);
+assert.throws(()=>parseFacetSelector("UC-001"),/invalid media facet selector/);
+const maskedSpecimens=[{id:"UC-9",still:null,portrait:null}],maskedSources=[{id:"UC-9",still:null,portrait:null}];
+const restore=maskUnselectedFacets({specimens:maskedSpecimens,sources:maskedSources,candidates:[{wall_id:"UC-9",side:"still"}]});
+assert.equal(maskedSpecimens[0].still,null);assert.equal(maskedSpecimens[0].portrait.src,COHORT_SKIP_SENTINEL);assert.equal(restore.length,1);
+maskedSpecimens[0].still={src:"candidate.jpg"};maskedSources[0].still={src:"candidate.jpg"};
+restoreMaskedFacets({specimens:maskedSpecimens,sources:maskedSources,restore});
+assert.equal(maskedSpecimens[0].still.src,"candidate.jpg");assert.equal(maskedSpecimens[0].portrait,null);assert.equal(maskedSources[0].portrait,null);
 console.log("media search fixtures: PASS");
