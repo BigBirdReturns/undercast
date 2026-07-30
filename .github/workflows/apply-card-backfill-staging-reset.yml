@@ -1,0 +1,219 @@
+name: apply-card-backfill-staging-reset
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/apply-card-backfill-staging-reset.yml'
+      - '.github/card-backfill/bootstrap/staging-reset.part*.b64'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-card-backfill-staging-reset
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.ref_name == 'agent/card-backfill-next-041'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Verify and extract the exact cross-cohort staging reset
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/card-backfill-staging-reset"
+          archive="$root/payload.tar.xz"
+          encoded="$root/payload.b64"
+          unpacked="$root/unpacked"
+          mkdir -p "$root" "$unpacked"
+
+          cat > "$root/chunks.sha256" <<'SUMS'
+          a2e483ab51f4326e8c6aa75a8f952407ceb4a0fbd57e9c58b21666edd5fcc2d3  .github/card-backfill/bootstrap/staging-reset.part00.b64
+          f2399022cf64c9b4e6fd39abb284e4a04d69f7e287676d7740cb2a6379adfed0  .github/card-backfill/bootstrap/staging-reset.part01.b64
+          9a1eb63f01ec88f07f76896c80f80dfd03477312677ff0e9ca2197479268ff1f  .github/card-backfill/bootstrap/staging-reset.part02.b64
+          0881ed216188106f26f24b1ed016ed8626c3d9f2507002f8a6c3d1241e6dbb00  .github/card-backfill/bootstrap/staging-reset.part03.b64
+          SUMS
+          sha256sum -c "$root/chunks.sha256"
+
+          cat \
+            .github/card-backfill/bootstrap/staging-reset.part00.b64 \
+            .github/card-backfill/bootstrap/staging-reset.part01.b64 \
+            .github/card-backfill/bootstrap/staging-reset.part02.b64 \
+            .github/card-backfill/bootstrap/staging-reset.part03.b64 \
+            > "$encoded"
+          printf '%s  %s\n' \
+            '56551d7b5307b8544ef2e8f4594362f157cb2b83a956fa8fd445f25ab41f0630' \
+            "$encoded" | sha256sum -c -
+
+          base64 --decode "$encoded" > "$archive"
+          printf '%s  %s\n' \
+            'f97847bf970edd7b76340ff0f47aaf345393587de976ae796d987bb255f39573' \
+            "$archive" | sha256sum -c -
+          xz --test "$archive"
+
+          ARCHIVE="$archive" python3 - <<'PY'
+          import os
+          import tarfile
+          from pathlib import PurePosixPath
+
+          expected = {
+              '.github/CARD-BACKFILL-COHORT.json',
+              '.github/card-backfill/adjudications/30514452128.json',
+              '.github/card-backfill/adjudications/30514942808.json',
+              '.github/workflows/card-backfill-cohort.yml',
+              '.github/workflows/card-backfill-stage.yml',
+              '.github/workflows/card-backfill-publication.yml',
+              'docs/CARD-BACKFILL-COHORTS.md',
+              'package.json',
+              'scripts/card-backfill-cohort.mjs',
+              'scripts/card-backfill-progress-fixtures.mjs',
+              'scripts/card-backfill-cohort-adjudicate.mjs',
+              'scripts/card-backfill-cohort-materialize.mjs',
+              'scripts/card-backfill-cohort-publication-fixtures.mjs',
+              'scripts/card-backfill-decisions-template.mjs',
+              'scripts/card-backfill-staging-fixtures.mjs',
+              'scripts/card-backfill-staging.mjs',
+              'scripts/lib/card-backfill-staging.mjs',
+          }
+          with tarfile.open(os.environ['ARCHIVE'], 'r:xz') as archive:
+              members = archive.getmembers()
+              names = [member.name for member in members]
+              if len(names) != len(set(names)):
+                  raise SystemExit('duplicate archive members')
+              if set(names) != expected:
+                  missing = sorted(expected - set(names))
+                  extra = sorted(set(names) - expected)
+                  raise SystemExit(f'archive denominator drift; missing={missing}; extra={extra}')
+              for member in members:
+                  path = PurePosixPath(member.name)
+                  if path.is_absolute() or '..' in path.parts:
+                      raise SystemExit(f'unsafe archive path {member.name}')
+                  if not member.isfile():
+                      raise SystemExit(f'non-regular archive member {member.name}')
+          print(f'PASS — exact {len(expected)}-file staging-reset archive verified')
+          PY
+
+          tar -xJf "$archive" -C "$unpacked"
+          cp -a "$unpacked/." "$GITHUB_WORKSPACE/"
+
+          rm -f \
+            .github/workflows/apply-card-backfill-staging-reset.yml \
+            .github/card-backfill/bootstrap/staging-reset.part00.b64 \
+            .github/card-backfill/bootstrap/staging-reset.part01.b64 \
+            .github/card-backfill/bootstrap/staging-reset.part02.b64 \
+            .github/card-backfill/bootstrap/staging-reset.part03.b64
+          rmdir .github/card-backfill/bootstrap 2>/dev/null || true
+
+      - run: npm ci
+
+      - name: Install deterministic image and browser tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          command="$1"
+          case "$command" in
+            identify|montage)
+              shift
+              exec "$command" "$@"
+              ;;
+            *)
+              exec convert "$@"
+              ;;
+          esac
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          npx playwright install --with-deps chromium
+
+      - name: Prove the exact reset before publication
+        run: |
+          set -euo pipefail
+          node --check scripts/card-backfill-cohort.mjs
+          node --check scripts/card-backfill-progress-fixtures.mjs
+          node --check scripts/card-backfill-cohort-adjudicate.mjs
+          node --check scripts/card-backfill-cohort-materialize.mjs
+          node --check scripts/card-backfill-cohort-publication-fixtures.mjs
+          node --check scripts/card-backfill-decisions-template.mjs
+          node --check scripts/card-backfill-staging-fixtures.mjs
+          node --check scripts/card-backfill-staging.mjs
+          node --check scripts/lib/card-backfill-staging.mjs
+          node -e "for(const p of ['.github/CARD-BACKFILL-COHORT.json','.github/card-backfill/adjudications/30514452128.json','.github/card-backfill/adjudications/30514942808.json','package.json'])JSON.parse(require('fs').readFileSync(p,'utf8'));console.log('JSON: PASS')"
+          npm run media:search:fixtures
+          node scripts/card-backfill-cohort.mjs plan \
+            --control .github/CARD-BACKFILL-COHORT.json \
+            --out "$RUNNER_TEMP/live-plan" \
+            --limit 40
+          npm run gate
+
+      - name: Refuse any path outside the exact reset
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess
+
+          expected = {
+              '.github/CARD-BACKFILL-COHORT.json',
+              '.github/card-backfill/adjudications/30514452128.json',
+              '.github/card-backfill/adjudications/30514942808.json',
+              '.github/workflows/card-backfill-cohort.yml',
+              '.github/workflows/card-backfill-stage.yml',
+              '.github/workflows/card-backfill-publication.yml',
+              'docs/CARD-BACKFILL-COHORTS.md',
+              'package.json',
+              'scripts/card-backfill-cohort.mjs',
+              'scripts/card-backfill-progress-fixtures.mjs',
+              'scripts/card-backfill-cohort-adjudicate.mjs',
+              'scripts/card-backfill-cohort-materialize.mjs',
+              'scripts/card-backfill-cohort-publication-fixtures.mjs',
+              'scripts/card-backfill-decisions-template.mjs',
+              'scripts/card-backfill-staging-fixtures.mjs',
+              'scripts/card-backfill-staging.mjs',
+              'scripts/lib/card-backfill-staging.mjs',
+              '.github/workflows/apply-card-backfill-staging-reset.yml',
+              '.github/card-backfill/bootstrap/staging-reset.part00.b64',
+              '.github/card-backfill/bootstrap/staging-reset.part01.b64',
+              '.github/card-backfill/bootstrap/staging-reset.part02.b64',
+              '.github/card-backfill/bootstrap/staging-reset.part03.b64',
+          }
+          raw = subprocess.check_output(['git', 'status', '--porcelain=v1', '-z'])
+          entries = [entry for entry in raw.split(b'\0') if entry]
+          actual = set()
+          for entry in entries:
+              if len(entry) < 4:
+                  raise SystemExit(f'malformed status entry {entry!r}')
+              actual.add(entry[3:].decode('utf-8'))
+          if actual != expected:
+              missing = sorted(expected - actual)
+              extra = sorted(actual - expected)
+              raise SystemExit(f'changed-path denominator drift; missing={missing}; extra={extra}')
+          print(f'PASS — exact {len(expected)}-path implementation transaction')
+          PY
+
+      - name: Commit and push the exact implementation
+        run: |
+          set -euo pipefail
+          git config user.name 'undercast-card-backfill'
+          git config user.email 'undercast-card-backfill@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Card backfill: persist accepted packets across cohorts'
+
+          remote_head=$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | awk '{print $1}')
+          test "$remote_head" = "$GITHUB_SHA"
+          git push origin "HEAD:$GITHUB_REF_NAME"
