@@ -6,22 +6,37 @@ on:
       - agent/card-backfill-amortization-build-20260730
     paths:
       - '.github/card-backfill/amortization-payload/MANIFEST.json'
+      - '.github/workflows/card-backfill-amortization-installer.yml'
+  pull_request:
+    branches:
+      - agent/card-backfill-next-040
+    paths:
+      - '.github/card-backfill/amortization-payload/**'
+      - '.github/workflows/card-backfill-amortization-installer.yml'
+      - '.github/CARD-BACKFILL-AMORTIZATION*.json'
 
 permissions:
   contents: write
 
 concurrency:
-  group: card-backfill-amortization-installer-${{ github.ref_name }}
+  group: card-backfill-amortization-installer-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   install:
+    if: github.event_name == 'push' || github.event.pull_request.head.ref == 'agent/card-backfill-next-041'
     runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 1
+
+      - name: Bind installation to the exact branch head
+        id: head
+        run: echo "source_head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Validate, expand, and retire the exact amortization payload
         run: |
@@ -36,17 +51,38 @@ jobs:
           tar -xzf "$RUNNER_TEMP/card-backfill-amortization.tar.gz" -C .
           rm -rf "$root"
           rm .github/workflows/card-backfill-amortization-installer.yml
-          node --check scripts/card-backfill-source-v2-cached.mjs
-          node --check scripts/card-backfill-wave-reduce-amortized.mjs
+
+          find scripts -maxdepth 2 -type f -name 'card-backfill-*amortiz*.mjs' -o -name 'card-backfill-source-v2-cached.mjs' -o -name 'card-backfill-rebalance-wave.mjs' -o -name 'card-backfill-ready-decision-barrier.mjs' -o -name 'card-backfill-source-cache-merge.mjs' | sort | while read -r file; do
+            node --check "$file"
+          done
+          node --check scripts/gate.mjs
           node scripts/card-backfill-amortization-fixtures.mjs
+          node -e "for (const f of ['.github/CARD-BACKFILL-AMORTIZATION.json','.github/CARD-BACKFILL-AMORTIZATION-ACTIVE.json']) JSON.parse(require('fs').readFileSync(f,'utf8'))"
+          ruby -e "require 'yaml'; ARGV.each { |f| YAML.load_file(f, aliases: true) }" \
+            .github/actions/card-backfill-runtime/action.yml \
+            .github/workflows/card-backfill-amortized-wave.yml \
+            .github/workflows/card-backfill-amortized-resume-after-staging.yml \
+            .github/workflows/card-backfill-source-v2-resume.yml
           git add -A
           git diff --cached --check
 
       - name: Commit the complete amortization system once
+        env:
+          SOURCE_HEAD: ${{ steps.head.outputs.source_head }}
         run: |
           set -euo pipefail
+          if git diff --cached --quiet; then
+            echo 'amortization system already installed; no duplicate commit required'
+            exit 0
+          fi
           git config user.name 'undercast-card-backfill-amortization-installer'
           git config user.email 'undercast-card-backfill-amortization-installer@users.noreply.github.com'
           git commit -m 'Card backfill: amortize measured fan-out gains'
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          remote_head=$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
+          if [ "$remote_head" != "$SOURCE_HEAD" ]; then
+            echo "branch moved from installation head $SOURCE_HEAD to $remote_head; refusing stale amortization push"
+            exit 1
+          fi
+          git push origin "HEAD:${TARGET_BRANCH}"
           echo 'PASS — amortization payload installed and installer retired'
+          echo 'canonical_mutation=false'
