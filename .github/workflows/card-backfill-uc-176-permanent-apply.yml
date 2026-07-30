@@ -1,0 +1,139 @@
+name: card-backfill-uc-176-permanent-apply
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/CARD-BACKFILL-UC-176-PERMANENT-APPLY.json"
+      - "scripts/card-backfill-uc-176-permanent-apply.mjs"
+      - ".github/workflows/card-backfill-uc-176-permanent-apply.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: card-backfill-uc-176-permanent-apply-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-040'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/card-backfill-next-040
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install canonical and browser runtime
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Verify exact successful render artifact metadata
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CONTROL: .github/CARD-BACKFILL-UC-176-PERMANENT-APPLY.json
+          RECEIPTS: ${{ runner.temp }}/uc-176-permanent-apply-receipts
+        run: |
+          set -euo pipefail
+          mkdir -p "$RECEIPTS"
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const c=JSON.parse(fs.readFileSync(process.env.CONTROL,'utf8'));
+          const url=`https://api.github.com/repos/BigBirdReturns/undercast/actions/artifacts/${c.render_artifact.artifact_id}`;
+          const response=await fetch(url,{headers:{Accept:'application/vnd.github+json',Authorization:`Bearer ${process.env.GITHUB_TOKEN}`,'X-GitHub-Api-Version':'2022-11-28','User-Agent':'undercast-uc176-permanent-apply'}});
+          const raw=await response.text();
+          if(!response.ok)throw new Error(`artifact metadata HTTP ${response.status}: ${raw.slice(0,300)}`);
+          const a=JSON.parse(raw);
+          if(a.id!==c.render_artifact.artifact_id||a.name!==c.render_artifact.name||a.size_in_bytes!==c.render_artifact.size_in_bytes||a.digest!==c.render_artifact.digest||a.expired!==false||a.workflow_run?.id!==c.render_run.run_id||a.workflow_run?.head_sha!==c.render_run.head_sha)throw new Error('UC-176 artifact metadata drift');
+          fs.writeFileSync(`${process.env.RECEIPTS}/artifact-metadata.json`,JSON.stringify({version:1,api_url:url,api_response_sha256:createHash('sha256').update(raw).digest('hex'),artifact:a,canonical_mutation:false},null,2)+'\n');
+          console.log('PASS — exact successful UC-176 render artifact metadata verified');
+          NODE
+      - name: Download exact successful UC-176 render artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: card-backfill-uc-176-render-30505241214
+          path: ${{ runner.temp }}/uc-176-render-artifact
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: 30505241214
+      - name: Materialize 25 evidence files and retire all UC-176 production machinery
+        env:
+          CONTROL: .github/CARD-BACKFILL-UC-176-PERMANENT-APPLY.json
+          PACKET: ${{ runner.temp }}/uc-176-render-artifact/card-backfill-uc-176-render
+          RECEIPTS: ${{ runner.temp }}/uc-176-permanent-apply-receipts
+        run: |
+          set -euo pipefail
+          test -f "$PACKET/manifest.json"
+          node --check scripts/card-backfill-uc-176-permanent-apply.mjs
+          node scripts/card-backfill-uc-176-permanent-apply.mjs 2>&1 | tee "$RECEIPTS/materialize.log"
+          git status --short > "$RECEIPTS/status-after-materialize.txt"
+      - name: Stage exact evidence-only tree
+        env:
+          BASE_SHA: 9f670c1dde20580f9674b590bcab52aefb572048
+          RECEIPTS: ${{ runner.temp }}/uc-176-permanent-apply-receipts
+        run: |
+          set -euo pipefail
+          git add -A
+          mapfile -t staged < <(git diff --cached --name-only "$BASE_SHA" | sort)
+          test "${#staged[@]}" -eq 25
+          for path in "${staged[@]}"; do
+            case "$path" in
+              data/review/card-backfill/UC-176/*) ;;
+              *) echo "non-evidence final path: $path" >&2; exit 1 ;;
+            esac
+          done
+          printf '%s\n' "${staged[@]}" > "$RECEIPTS/changed-files.txt"
+          git diff --cached --check
+          test -z "$(git diff --name-only)"
+          git status --short > "$RECEIPTS/status-after-stage.txt"
+          echo "PASS — staged exact 25-file UC-176 evidence-only tree"
+      - name: Run complete canonical gate including rendered browser tests
+        env:
+          RECEIPTS: ${{ runner.temp }}/uc-176-permanent-apply-receipts
+        run: |
+          set -euo pipefail
+          npm run gate 2>&1 | tee "$RECEIPTS/canonical-gate.log"
+          test -z "$(git diff --name-only)"
+          git diff --cached --check
+          git status --short > "$RECEIPTS/status-after-gate.txt"
+      - name: Commit and publish permanent UC-176 evidence head
+        env:
+          BASE_SHA: 9f670c1dde20580f9674b590bcab52aefb572048
+          BRANCH: agent/card-backfill-next-040
+          RECEIPTS: ${{ runner.temp }}/uc-176-permanent-apply-receipts
+          COMMIT_MESSAGE: "Card backfill: retain UC-176 Fredric March Mr. Hyde still"
+        run: |
+          set -euo pipefail
+          mapfile -t staged < <(git diff --cached --name-only "$BASE_SHA" | sort)
+          test "${#staged[@]}" -eq 25
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "$COMMIT_MESSAGE"
+          permanent_head=$(git rev-parse HEAD)
+          git push origin "HEAD:$BRANCH"
+          test -z "$(git status --porcelain)"
+          manifest_sha=$(sha256sum data/review/card-backfill/UC-176/manifest.json | awk '{print $1}')
+          sums_sha=$(sha256sum data/review/card-backfill/UC-176/SHA256SUMS | awk '{print $1}')
+          node --input-type=module - "$permanent_head" "$manifest_sha" "$sums_sha" <<'NODE'
+          import fs from 'node:fs';
+          const [head,manifest,sums]=process.argv.slice(2);
+          const changed=fs.readFileSync(`${process.env.RECEIPTS}/changed-files.txt`,'utf8').trim().split(/\r?\n/).filter(Boolean);
+          fs.writeFileSync(`${process.env.RECEIPTS}/permanent-result.json`,JSON.stringify({version:1,record_id:'UC-176',permanent_head:head,base_sha:process.env.BASE_SHA,branch:process.env.BRANCH,commit_message:process.env.COMMIT_MESSAGE,changed_file_count:changed.length,changed_files:changed,manifest_sha256:manifest,checksum_ledger_sha256:sums,gate:'PASS',worktree_clean:true,canonical_mutation:false},null,2)+'\n');
+          NODE
+          echo "PASS — published permanent UC-176 head $permanent_head"
+      - name: Upload UC-176 permanent apply, gate, and publication receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-uc-176-permanent-apply-${{ github.run_id }}
+          path: ${{ runner.temp }}/uc-176-permanent-apply-receipts
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
