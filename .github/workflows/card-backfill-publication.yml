@@ -1,0 +1,186 @@
+name: card-backfill-publication
+
+on:
+  push:
+    branches:
+      - 'agent/card-backfill-*'
+    paths:
+      - 'data/review/card-backfill-staging/**'
+      - '.github/CARD-BACKFILL-COHORT.json'
+      - '.github/workflows/card-backfill-publication.yml'
+      - 'scripts/card-backfill-staging.mjs'
+      - 'scripts/card-backfill-staging-fixtures.mjs'
+      - 'scripts/card-backfill-cohort-materialize.mjs'
+      - 'scripts/lib/card-backfill-staging.mjs'
+      - 'package.json'
+  pull_request:
+    paths:
+      - 'data/review/card-backfill-staging/**'
+      - '.github/CARD-BACKFILL-COHORT.json'
+      - '.github/workflows/card-backfill-publication.yml'
+      - 'scripts/card-backfill-staging.mjs'
+      - 'scripts/card-backfill-staging-fixtures.mjs'
+      - 'scripts/card-backfill-cohort-materialize.mjs'
+      - 'scripts/lib/card-backfill-staging.mjs'
+      - 'package.json'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Optional permanent publication size (20-50; blank uses target 40)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: card-backfill-publication-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      ready: ${{ steps.plan.outputs.ready }}
+      publication_batch_sha256: ${{ steps.plan.outputs.publication_batch_sha256 }}
+      selected_count: ${{ steps.plan.outputs.selected_count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Prove cross-cohort staging and materialization semantics
+        run: npm run card-backfill:staging:fixtures
+
+      - name: Validate active staging and build the exact next publication plan
+        id: plan
+        env:
+          LIMIT: ${{ inputs.limit || '' }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/card-backfill-publication"
+          mkdir -p "$out"
+          node scripts/card-backfill-staging.mjs validate \
+            --root data/review/card-backfill-staging \
+            --permanent-root data/review/card-backfill
+          args=(plan --root data/review/card-backfill-staging --permanent-root data/review/card-backfill --control .github/CARD-BACKFILL-COHORT.json --out "$out")
+          if [ -n "$LIMIT" ]; then args+=(--limit "$LIMIT"); fi
+          node scripts/card-backfill-staging.mjs "${args[@]}"
+          plan="$out/publication-plan.json"
+          ready=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(String(p.ready))" "$plan")
+          selected=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(String(p.selected_count))" "$plan")
+          batch=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(p.publication_batch_sha256||'')" "$plan")
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          echo "selected_count=$selected" >> "$GITHUB_OUTPUT"
+          echo "publication_batch_sha256=$batch" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-publication-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/card-backfill-publication
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    needs: plan
+    if: github.event_name == 'push' && needs.plan.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install complete canonical gate runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          command="$1"
+          case "$command" in
+            identify|montage)
+              shift
+              exec "$command" "$@"
+              ;;
+            *)
+              exec convert "$@"
+              ;;
+          esac
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          npx playwright install --with-deps chromium
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: card-backfill-publication-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/publication-plan
+
+      - name: Materialize the exact mixed staging batch
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-cohort-materialize.mjs \
+            --plan "$RUNNER_TEMP/publication-plan/publication-plan.json" \
+            --staging data/review/card-backfill-staging \
+            --destination data/review/card-backfill \
+            | tee "$RUNNER_TEMP/materialize.log"
+          git add -A -- data/review/card-backfill data/review/card-backfill-staging
+          node --input-type=module - <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          const paths=execFileSync('git',['diff','--cached','--name-only'],{encoding:'utf8'}).trim().split(/\r?\n/).filter(Boolean);
+          if(!paths.length)throw new Error('publication materialized no repository changes');
+          for(const path of paths)if(!path.startsWith('data/review/card-backfill/')&&!path.startsWith('data/review/card-backfill-staging/'))throw new Error(`publication path escaped evidence and staging estates: ${path}`);
+          console.log(`PASS — publication transaction is confined to ${paths.length} evidence/staging path(s)`);
+          NODE
+
+      - name: Run the complete repository gate exactly once for the permanent batch
+        run: |
+          set -euo pipefail
+          npm run gate 2>&1 | tee "$RUNNER_TEMP/permanent-batch-gate.log"
+
+      - name: Commit and push the exact permanent publication transaction
+        env:
+          PUBLICATION_BATCH: ${{ needs.plan.outputs.publication_batch_sha256 }}
+          SELECTED_COUNT: ${{ needs.plan.outputs.selected_count }}
+        run: |
+          set -euo pipefail
+          git diff --cached --check
+          git config user.name 'undercast-card-backfill-publication'
+          git config user.email 'undercast-card-backfill-publication@users.noreply.github.com'
+          git commit -m "Card backfill: publish ${SELECTED_COUNT} staged evidence packets"
+          remote_head=$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | awk '{print $1}')
+          if [ "$remote_head" != "$GITHUB_SHA" ]; then
+            echo "branch moved from $GITHUB_SHA to $remote_head; refusing stale permanent publication push"
+            exit 1
+          fi
+          git push origin "HEAD:$GITHUB_REF_NAME"
+          echo "published batch $PUBLICATION_BATCH"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: card-backfill-publication-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/publication-plan
+            ${{ runner.temp }}/materialize.log
+            ${{ runner.temp }}/permanent-batch-gate.log
+          if-no-files-found: warn
+          retention-days: 90
