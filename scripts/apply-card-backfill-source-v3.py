@@ -36,6 +36,9 @@ replace_exact(
 planner = Path("scripts/card-backfill-source-v2-plan.mjs")
 text = planner.read_text()
 text = text.replace("source-policy-v2", "source-policy-v3")
+# The active policy implementation remains in the v2-named compatibility module;
+# only its versioned contract advances. Do not redirect this import to the ranker.
+text = text.replace("./lib/card-backfill-source-policy-v3.mjs", "./lib/card-backfill-source-policy-v2.mjs")
 text = text.replace("source_policy_version: 2", "source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version")
 text = text.replace("source_policy_v2_ready=", "source_policy_v3_ready=")
 text = text.replace("source_policy_v2_cohorts=", "source_policy_v3_cohorts=")
