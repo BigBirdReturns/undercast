@@ -66,6 +66,13 @@ const sculpture = evaluateSourceCandidate({
 assert.equal(sculpture.eligible, false);
 assert(sculpture.reasons.includes("foreign-adaptation-or-merchandise"));
 
+const pluralDerivative = evaluateSourceCandidate({
+  side: "still", expectedSubject: "Buzz Lightyear (voice)", actor: "Tim Allen", production: "Toy Story", performanceMode: "voice-or-animation", actorEvidence: { character_windows: ["Tim Allen voices Buzz Lightyear in Toy Story"], production_windows: ["Toy Story"] },
+  candidate: { file: "Buzz Lightyear toys.jpg", page: { title: "Buzz Lightyear", extract_windows: ["Tim Allen voices Buzz Lightyear in Toy Story"] }, source: { description: "A collection of Buzz Lightyear toys", categories: "Toy Story|Action figures" } },
+});
+assert.equal(pluralDerivative.eligible, false);
+assert(pluralDerivative.reasons.includes("foreign-adaptation-or-merchandise"));
+
 const k9 = evaluateSourceCandidate({
   side: "still", expectedSubject: "K9 (voice)", actor: "John Leeson", production: "Doctor Who", performanceMode: "voice-or-animation", actorEvidence: { character_windows: ["John Leeson voiced K-9 in Doctor Who"], production_windows: ["Doctor Who"] },
   candidate: { file: "Doctor Who Experience 8105526993.jpg", page: { title: "K9 (Doctor Who)", extract_windows: ["K-9 is a robotic dog from Doctor Who"] }, source: { description: "K9 prop at Doctor Who Experience", categories: "K9 Doctor Who" } },
