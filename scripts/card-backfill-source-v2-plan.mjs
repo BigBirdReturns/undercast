@@ -54,6 +54,12 @@ async function main() {
     validateStaging({ root: stagingRoot, permanentRoot: completedRoot }),
     readAdjudicationAttemptIndex(stagingRoot, control.campaign_id),
   ]);
+  const publicationMinimum = Number(control.staging?.minimum_publication_batch ?? 2);
+  if (!Number.isInteger(publicationMinimum) || publicationMinimum < 2) throw new Error(`invalid publication minimum ${publicationMinimum}`);
+  if (stagingLedger.counts.staged >= publicationMinimum) {
+    throw new Error(`no source-policy-v2 cohort available: ${stagingLedger.counts.staged} staged packet(s) are publication-ready; discovery yields to the permanent publisher`);
+  }
+
   const sourceEstate = buildEstate({ specimens, sources, auditItems: auditRoot.items || [], completedPackets, control });
   sourceEstate.generated_at = now;
   const progress = validateProgress(control, completedPackets.size, sourceEstate.obligations.length);
