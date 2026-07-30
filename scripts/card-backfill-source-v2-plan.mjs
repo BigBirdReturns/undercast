@@ -57,7 +57,7 @@ async function main() {
   const publicationMinimum = Number(control.staging?.minimum_publication_batch ?? 2);
   if (!Number.isInteger(publicationMinimum) || publicationMinimum < 2) throw new Error(`invalid publication minimum ${publicationMinimum}`);
   if (stagingLedger.counts.staged >= publicationMinimum) {
-    throw new Error(`no source-policy-v2 cohort available: ${stagingLedger.counts.staged} staged packet(s) are publication-ready; discovery yields to the permanent publisher`);
+    throw new Error(`no source-policy-v3 cohort available: ${stagingLedger.counts.staged} staged packet(s) are publication-ready; discovery yields to the permanent publisher`);
   }
 
   const sourceEstate = buildEstate({ specimens, sources, auditItems: auditRoot.items || [], completedPackets, control });
@@ -68,7 +68,7 @@ async function main() {
     attemptIndex,
     stagedObligationIds: stagingLedger.entries.map((row) => row.obligation_id),
   });
-  if (!retryEstate.cohorts.length) throw new Error("no source-policy-v2 cohort available");
+  if (!retryEstate.cohorts.length) throw new Error("no source-policy-v3 cohort available");
 
   const batch = selectBatch({ estate: retryEstate, control, cohortKey: option("--cohort-key", null), limit });
   const exclusionState = {
@@ -114,29 +114,29 @@ async function main() {
     await writeFile(join(dir, "retrieval-facets.txt"), shard.obligations.map((row) => row.obligation_id).join(",") + "\n");
     matrix.include.push({ id: shard.id, count: shard.count, plan_path: `shards/shard-${shard.id}/retrieval-plan.json`, facets_path: `shards/shard-${shard.id}/retrieval-facets.txt` });
   }
-  await writeJson(join(out, "shards.json"), { version: 1, campaign_id: batch.campaign_id, batch_sha256: batch.batch_sha256, source_policy_version: 2, workers: shards.length, matrix });
+  await writeJson(join(out, "shards.json"), { version: 1, campaign_id: batch.campaign_id, batch_sha256: batch.batch_sha256, source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version, workers: shards.length, matrix });
   for (const row of batch.obligations) {
     const scope = buildScopeReceipt(row, { campaignId: batch.campaign_id, estateSha256: batch.estate_sha256, batchSha256: batch.batch_sha256 });
-    await writeJson(join(out, "batch-scopes", `${scope.record_id}-${scope.side}.json`), { ...scope, source_policy: CARD_BACKFILL_SOURCE_POLICY_V2, source_policy_version: 2 });
+    await writeJson(join(out, "batch-scopes", `${scope.record_id}-${scope.side}.json`), { ...scope, source_policy: CARD_BACKFILL_SOURCE_POLICY_V2, source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version });
   }
   await writeFile(join(out, "summary.txt"), [
     `campaign=${batch.campaign_id}`,
     `generated_at=${now}`,
-    `planner=source-policy-v2`,
+    `planner=source-policy-v3`,
     `current_completed_evidence_packets=${progress.current.completed}`,
     `current_open_source_declared_absences=${progress.current.open}`,
     `selector_defined_estate=${progress.current.total}`,
-    `source_policy_v2_ready=${retryEstate.counts.ready}`,
-    `source_policy_v2_cohorts=${retryEstate.counts.cohorts}`,
+    `source_policy_v3_ready=${retryEstate.counts.ready}`,
+    `source_policy_v3_cohorts=${retryEstate.counts.cohorts}`,
     `selected_cohort=${batch.cohort_key}`,
     `selected_count=${batch.selected_count}`,
     `parallel_workers=${shards.length}`,
     `batch_sha256=${batch.batch_sha256}`,
     `canonical_mutation=false`,
   ].join("\n") + "\n");
-  console.log(`PASS — source policy v2 admits ${retryEstate.counts.ready} previously attempted obligation(s) across ${retryEstate.counts.cohorts} cohort(s)`);
+  console.log(`PASS — source policy v3 admits ${retryEstate.counts.ready} previously attempted obligation(s) across ${retryEstate.counts.cohorts} cohort(s)`);
   console.log(`SELECTED — ${batch.selected_count} obligations from ${batch.cohort_key} across ${shards.length} shard(s)`);
   console.log(`OUTPUT — ${out}`);
 }
 
-main().catch((error) => { console.error(`card-backfill source-v2 plan: ${error.message}`); process.exit(1); });
+main().catch((error) => { console.error(`card-backfill source-v3 plan: ${error.message}`); process.exit(1); });

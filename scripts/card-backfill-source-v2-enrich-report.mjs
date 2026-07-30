@@ -22,6 +22,7 @@ for (const row of report.results || []) {
   if (evidence) {
     const compact = {
       selected_candidate: selected,
+      binding: evidence.binding || selected?.binding || null,
       actor_role: evidence.actor_role || null,
       expected_subject_aliases: evidence.expected_subject_aliases || [],
       production: evidence.production || null,

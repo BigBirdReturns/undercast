@@ -1,10 +1,10 @@
 import { canonicalJson, sha256 } from "./card-backfill-cohort.mjs";
 
 export const CARD_BACKFILL_SOURCE_POLICY_V2 = Object.freeze({
-  version: 2,
+  version: 3,
   lane: "card-backfill-source-policy",
-  still_route: "mediawiki-multicandidate-v2",
-  portrait_route: "commons-multicandidate-v2",
+  still_route: "mediawiki-bound-multicandidate-v3",
+  portrait_route: "commons-bound-multicandidate-v3",
   page_search_limit: 10,
   file_metadata_limit: 32,
   downloaded_candidate_limit: 8,
@@ -14,6 +14,9 @@ export const CARD_BACKFILL_SOURCE_POLICY_V2 = Object.freeze({
   repository_duplicate_prescreen: true,
   exact_subject_and_production_evidence: true,
   actor_role_extract_required_when_available: true,
+  predownload_textual_binding_gate: true,
+  wrong_adaptation_and_non_depiction_filter: true,
+  multi_subjects_require_composite_lane: true,
   selected_image_never_proves_identity_or_role: true,
   independent_machine_or_person_adjudication_required: true,
   one_attempt_per_obligation_per_policy_version: true,
@@ -71,7 +74,7 @@ export function buildSourcePolicyV2Estate({ estate, attemptIndex, stagedObligati
       continue;
     }
     if (attempts.some((attempt) => priorPolicyVersion(attempt) >= CARD_BACKFILL_SOURCE_POLICY_V2.version)) {
-      exclusions.push({ obligation_id: row.obligation_id, reason: "source-policy-v2-already-attempted" });
+      exclusions.push({ obligation_id: row.obligation_id, reason: "source-policy-v3-already-attempted" });
       continue;
     }
 
@@ -110,7 +113,7 @@ export function buildSourcePolicyV2Estate({ estate, attemptIndex, stagedObligati
   };
   return {
     version: 1,
-    lane: "card-backfill-source-policy-v2-estate",
+    lane: "card-backfill-source-policy-v3-estate",
     campaign_id: estate.campaign_id,
     source_estate_sha256: estate.estate_sha256,
     estate_sha256: sha256(canonicalJson(hashBody)),

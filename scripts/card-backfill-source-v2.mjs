@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { appendFile, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { buildRepositoryHashIndex, inspectImage } from "./lib/card-backfill-packet.mjs";
+import { CARD_BACKFILL_SOURCE_POLICY_V2 } from "./lib/card-backfill-source-policy-v2.mjs";
+import { rankBoundCandidates, sourceSubjectAliases } from "./lib/card-backfill-source-policy-v3.mjs";
 
 const args = process.argv.slice(2);
 function option(name, fallback = null) {
@@ -108,9 +110,7 @@ function words(value, minimum = 3) {
   return [...new Set(normalize(value).split(/\s+/).filter((word) => word.length >= minimum && !["the", "and", "from", "with", "into", "for", "voice", "actor", "film", "series"].includes(word)))];
 }
 function subjectAliases(value) {
-  const raw = String(value || "").trim();
-  const parts = raw.split(/\s*(?:\/|&|,|;|\band\b)\s*/i).map((part) => part.trim()).filter((part) => part.length >= 2);
-  return [...new Set([raw, ...parts].filter(Boolean))].slice(0, 8);
+  return sourceSubjectAliases(value);
 }
 function overlap(text, terms) {
   const hay = normalize(text);
@@ -395,17 +395,25 @@ async function stillPool({ record, item, transport, attempts, endpoints, limits,
         file,
         source,
         score,
-        method: "mediawiki-page-candidate-v2",
+        method: "mediawiki-page-candidate-v3",
         page: { title: page.title, url: origin, extract_windows: matchingWindows(page.extract || "", [...aliases, production, ...words(production)], 5) },
         api,
       });
     }
     if (page.original?.source || page.thumbnail?.source) {
       const source = { url: page.original?.source || page.thumbnail?.source, original_url: page.original?.source || null, origin, width: page.original?.width || page.thumbnail?.width || null, height: page.original?.height || page.thumbnail?.height || null, mime: null, author: "", license: "", year: null, description: "", categories: "" };
-      addCandidate(candidates, { file: page.pageimage || null, source, score: subjectScore({ file: page.pageimage || "", page, source, aliases, production, actorEvidence, side: "still", lead: true }), method: "mediawiki-pageimage-v2", page: { title: page.title, url: origin, extract_windows: matchingWindows(page.extract || "", [...aliases, production, ...words(production)], 5) }, api });
+      addCandidate(candidates, { file: page.pageimage || null, source, score: subjectScore({ file: page.pageimage || "", page, source, aliases, production, actorEvidence, side: "still", lead: true }), method: "mediawiki-pageimage-v3", page: { title: page.title, url: origin, extract_windows: matchingWindows(page.extract || "", [...aliases, production, ...words(production)], 5) }, api });
     }
   }
-  return { aliases, production, pages: [...pages.values()].map(({ api, page }) => ({ api, title: page.title, url: pageUrl(api, page) })), candidates: [...candidates.values()].sort((a, b) => b.score - a.score) };
+  const ranked = rankBoundCandidates([...candidates.values()], {
+    side: "still",
+    expectedSubject: item.expected_subject || record.character,
+    actor: record.actor,
+    production,
+    performanceMode: item.shape?.performance_mode || item.cohort_key?.split("::")[1],
+    actorEvidence,
+  });
+  return { aliases, production, pages: [...pages.values()].map(({ api, page }) => ({ api, title: page.title, url: pageUrl(api, page) })), candidates: ranked };
 }
 
 async function portraitPool({ record, item, transport, attempts, endpoints, limits }) {
@@ -438,21 +446,29 @@ async function portraitPool({ record, item, transport, attempts, endpoints, limi
     if (missing.length) infos = [...infos, ...await queryImageInfos(endpoints.commonsApi, missing, transport, attempts, "portrait-commons-imageinfo")];
     for (const { file, info } of infos) {
       const source = fileSource(info, origin);
-      addCandidate(candidates, { file, source, score: subjectScore({ file, page, source, aliases, production, actorEvidence: null, side: "portrait", lead: leadNames.includes(file) }), method: "exact-actor-page-image-v2", page: { title: page.title, url: origin, extract_windows: matchingWindows(page.extract || "", [expected, production], 4) }, api });
+      addCandidate(candidates, { file, source, score: subjectScore({ file, page, source, aliases, production, actorEvidence: null, side: "portrait", lead: leadNames.includes(file) }), method: "exact-actor-page-image-v3", page: { title: page.title, url: origin, extract_windows: matchingWindows(page.extract || "", [expected, production], 4) }, api });
     }
     if (page.original?.source || page.thumbnail?.source) {
       const source = { url: page.original?.source || page.thumbnail?.source, original_url: page.original?.source || null, origin, width: page.original?.width || page.thumbnail?.width || null, height: page.original?.height || page.thumbnail?.height || null, mime: null, author: "", license: "", year: null, description: "", categories: "" };
-      addCandidate(candidates, { file: page.pageimage || null, source, score: subjectScore({ file: page.pageimage || "", page, source, aliases, production, actorEvidence: null, side: "portrait", lead: true }), method: "exact-actor-pageimage-v2", page: { title: page.title, url: origin, extract_windows: matchingWindows(page.extract || "", [expected, production], 4) }, api });
+      addCandidate(candidates, { file: page.pageimage || null, source, score: subjectScore({ file: page.pageimage || "", page, source, aliases, production, actorEvidence: null, side: "portrait", lead: true }), method: "exact-actor-pageimage-v3", page: { title: page.title, url: origin, extract_windows: matchingWindows(page.extract || "", [expected, production], 4) }, api });
     }
   }
   for (const query of [`"${expected}"`, expected]) {
     for (const { file, info } of await commonsSearch(query, transport, attempts, endpoints, 20)) {
       const source = fileSource(info, info?.descriptionurl || null);
       const pseudoPage = { title: expected, extract: "" };
-      addCandidate(candidates, { file, source, score: subjectScore({ file, page: pseudoPage, source, aliases, production, actorEvidence: null, side: "portrait", lead: false }) - 10, method: "commons-name-search-v2", page: { title: "Wikimedia Commons search", url: source.origin, extract_windows: [] }, api: endpoints.commonsApi });
+      addCandidate(candidates, { file, source, score: subjectScore({ file, page: pseudoPage, source, aliases, production, actorEvidence: null, side: "portrait", lead: false }) - 10, method: "commons-name-search-v3", page: { title: "Wikimedia Commons search", url: source.origin, extract_windows: [] }, api: endpoints.commonsApi });
     }
   }
-  return { aliases, production, pages: pages.map(({ api, page }) => ({ api, title: page.title, url: pageUrl(api, page) })), candidates: [...candidates.values()].sort((a, b) => b.score - a.score) };
+  const ranked = rankBoundCandidates([...candidates.values()], {
+    side: "portrait",
+    expectedSubject: expected,
+    actor: record.actor,
+    production,
+    performanceMode: item.shape?.performance_mode || item.cohort_key?.split("::")[1],
+    actorEvidence: null,
+  });
+  return { aliases, production, pages: pages.map(({ api, page }) => ({ api, title: page.title, url: pageUrl(api, page) })), candidates: ranked };
 }
 
 async function selectDownloadable({ item, pool, out, transport, attempts, repositoryHashes, limits, magick }) {
@@ -461,6 +477,20 @@ async function selectDownloadable({ item, pool, out, transport, attempts, reposi
   await mkdir(tempRoot, { recursive: true });
   for (const [index, candidate] of pool.candidates.slice(0, limits.downloadCandidateLimit * 3).entries()) {
     if (screened.length >= limits.downloadCandidateLimit) break;
+    if (candidate.binding?.eligible === false) {
+      screened.push({
+        ...candidate,
+        temp: null,
+        extension: null,
+        image: { width: candidate.source?.width || 0, height: candidate.source?.height || 0 },
+        sha256: null,
+        bytes: 0,
+        duplicate_matches: [],
+        prescreen_reason: `source-binding:${candidate.binding.reasons.join("+")}`,
+        resolved_url: null,
+      });
+      continue;
+    }
     try {
       const url = candidate.source.original_url || candidate.source.url;
       const result = await transport.request(url, { stage: `candidate-download:${item.wall_id}:${index + 1}`, attempts, accept: "image/avif,image/webp,image/png,image/jpeg,image/gif,image/*,*/*;q=.5", referer: candidate.source.origin || candidate.page.url, binary: true, retries: 2 });
@@ -497,12 +527,12 @@ async function discoverOne({ item, record, out, transport, endpoints, repository
   const attempts = [];
   const expected = item.expected_subject || (item.side === "still" ? record.character : record.actor);
   const receipt = {
-    version: 2,
+    version: CARD_BACKFILL_SOURCE_POLICY_V2.version,
     wall_id: item.wall_id,
     side: item.side,
     expected_subject: expected,
-    source_policy_version: 2,
-    source_family: item.side === "portrait" ? "commons-multicandidate-v2" : "mediawiki-multicandidate-v2",
+    source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version,
+    source_family: item.side === "portrait" ? "commons-bound-multicandidate-v3" : "mediawiki-bound-multicandidate-v3",
     canonical_link: item.canonical_link || record.link || null,
     attempts,
     canonical_write: false,
@@ -518,6 +548,7 @@ async function discoverOne({ item, record, out, transport, endpoints, repository
     expected_subject_aliases: pool.aliases,
     production: pool.production,
     candidate_pool_count: pool.candidates.length,
+    binding: selected?.binding || null,
     prescreened: screened.map((row) => ({
       file: row.file,
       page_title: row.page.title,
@@ -525,11 +556,12 @@ async function discoverOne({ item, record, out, transport, endpoints, repository
       source_origin: row.source.origin,
       method: row.method,
       score: row.score,
-      width: row.image.width,
-      height: row.image.height,
+      width: row.image?.width || row.source?.width || 0,
+      height: row.image?.height || row.source?.height || 0,
       sha256: row.sha256,
       duplicate_matches: row.duplicate_matches,
       prescreen_reason: row.prescreen_reason,
+      binding: row.binding || null,
       description: row.source.description,
       categories: row.source.categories,
       page_extract_windows: row.page.extract_windows,
@@ -556,14 +588,14 @@ async function discoverOne({ item, record, out, transport, endpoints, repository
     source_page_title: selected.page.title,
     source_file: selected.file,
     source_method: selected.method,
-    source_policy_version: 2,
+    source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version,
     source_score: selected.score,
     width: selected.image.width,
     height: selected.image.height,
     sha256: selected.sha256,
   };
   return {
-    row: { wall_id: item.wall_id, side: item.side, expected_subject: expected, reason: item.reason, status: "candidate", baseline: null, candidate, candidate_sha256: selected.sha256, discovery: { ...receipt, source_evidence: sourceEvidence, selected_candidate: { file: selected.file, page_title: selected.page.title, page_url: selected.page.url, source_origin: selected.source.origin, method: selected.method, score: selected.score, width: selected.image.width, height: selected.image.height, sha256: selected.sha256, description: selected.source.description, categories: selected.source.categories, page_extract_windows: selected.page.extract_windows }, candidate_pool_count: pool.candidates.length, screened_count: screened.length } },
+    row: { wall_id: item.wall_id, side: item.side, expected_subject: expected, reason: item.reason, status: "candidate", baseline: null, candidate, candidate_sha256: selected.sha256, discovery: { ...receipt, source_evidence: sourceEvidence, selected_candidate: { file: selected.file, page_title: selected.page.title, page_url: selected.page.url, source_origin: selected.source.origin, method: selected.method, score: selected.score, width: selected.image.width, height: selected.image.height, sha256: selected.sha256, binding: selected.binding || null, description: selected.source.description, categories: selected.source.categories, page_extract_windows: selected.page.extract_windows }, candidate_pool_count: pool.candidates.length, screened_count: screened.length } },
     receipt,
   };
 }
@@ -593,7 +625,7 @@ async function main() {
   const specimens = await readJson(join(baseline, "data/specimens.json"));
   const byId = new Map(specimens.map((row) => [row.id, row]));
   const repositoryHashes = await buildRepositoryHashIndex(baseline);
-  const transport = new Transport({ userAgent: `undercast-card-backfill-source-v2/2.0 (+https://github.com/BigBirdReturns/undercast; ${contact})`, timeoutMs: Math.floor(numeric("--timeout-ms", 30000)), delayMs: Math.floor(numeric("--delay-ms", 350)) });
+  const transport = new Transport({ userAgent: `undercast-card-backfill-source-v3/3.0 (+https://github.com/BigBirdReturns/undercast; ${contact})`, timeoutMs: Math.floor(numeric("--timeout-ms", 30000)), delayMs: Math.floor(numeric("--delay-ms", 350)) });
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
   await mkdir(dirname(journal), { recursive: true });
@@ -603,15 +635,15 @@ async function main() {
     if (!record) throw new Error(`missing specimen ${item.wall_id}`);
     const { row } = await discoverOne({ item, record, out, transport, endpoints, repositoryHashes, limits, magick });
     results.push(row);
-    await appendFile(journal, JSON.stringify({ version: 2, op: "media-search.attempted", at: now, run_id: runId, wall_id: item.wall_id, side: item.side, source_policy_version: 2, result: row.status, candidate_sha256: row.candidate_sha256, failure: row.discovery?.failure || null }) + "\n");
+    await appendFile(journal, JSON.stringify({ version: CARD_BACKFILL_SOURCE_POLICY_V2.version, op: "media-search.attempted", at: now, run_id: runId, wall_id: item.wall_id, side: item.side, source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version, result: row.status, candidate_sha256: row.candidate_sha256, failure: row.discovery?.failure || null }) + "\n");
     console.log(`${row.status === "candidate" ? "CANDIDATE" : "MISS"} ${item.wall_id}/${item.side} pool=${row.discovery?.candidate_pool_count || 0} screened=${row.discovery?.screened_count || 0}`);
   }
   const counts = Object.fromEntries(["candidate", "unchanged", "not-found"].map((key) => [key, results.filter((row) => row.status === key).length]));
-  const report = { version: 2, generated_at: now, run_id: runId, artifact: `card-backfill-source-v2-${runId}`, source_policy_version: 2, canonical_write: false, counts, results };
+  const report = { version: CARD_BACKFILL_SOURCE_POLICY_V2.version, generated_at: now, run_id: runId, artifact: `card-backfill-source-v2-${runId}`, source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version, canonical_write: false, counts, results };
   await writeJson(join(out, "report.json"), report);
   await writeJson(latest, report);
-  console.log(`PASS — source policy v2 produced ${counts.candidate} candidate(s) and ${counts["not-found"]} miss(es)`);
+  console.log(`PASS — source policy v3 produced ${counts.candidate} candidate(s) and ${counts["not-found"]} miss(es)`);
   console.log(`OUTPUT — ${out}`);
 }
 
-main().catch((error) => { console.error(`card-backfill source v2: ${error.stack || error.message}`); process.exit(1); });
+main().catch((error) => { console.error(`card-backfill source v3: ${error.stack || error.message}`); process.exit(1); });

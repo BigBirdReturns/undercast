@@ -46,7 +46,7 @@ assert(!first.obligations.some((row) => row.obligation_id === "UC-004/still"));
 
 const secondAttemptIndex = {
   entries: attemptIndex.entries.map((row) => row.obligation_id === "UC-001/still"
-    ? { ...row, attempts: [...row.attempts, { cohort_key: `still::physical-or-live-action::${CARD_BACKFILL_SOURCE_POLICY_V2.still_route}::canonical-link-only::character-depiction`, source_policy_version: 2, final_disposition: "quarantine" }] }
+    ? { ...row, attempts: [...row.attempts, { cohort_key: `still::physical-or-live-action::${CARD_BACKFILL_SOURCE_POLICY_V2.still_route}::canonical-link-only::character-depiction`, source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version, final_disposition: "quarantine" }] }
     : row),
 };
 const second = buildSourcePolicyV2Estate({ estate, attemptIndex: secondAttemptIndex, stagedObligationIds: ["UC-002/portrait"] });
