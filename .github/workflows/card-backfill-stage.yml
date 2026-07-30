@@ -96,8 +96,8 @@ jobs:
             artifact_id=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(String(x.source.artifact_id))" "$decision")
             artifact_digest=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(x.source.artifact_digest||'')" "$decision")
             head_sha=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(x.source.head_sha||'')" "$decision")
-            artifact_root="$RUNNER_TEMP/candidate-$run_id"
-            adjudicated="$RUNNER_TEMP/adjudicated-$run_id"
+            artifact_root="$RUNNER_TEMP/candidate-$run_id-$artifact_id"
+            adjudicated="$RUNNER_TEMP/adjudicated-$run_id-$artifact_id"
             rm -rf "$artifact_root" "$adjudicated"
             mkdir -p "$artifact_root"
             metadata="$RUNNER_TEMP/artifact-$artifact_id.json"
@@ -114,7 +114,15 @@ jobs:
             NODE
             gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$artifact_name" --dir "$artifact_root"
 
-            node --input-type=module - "$decision" "$artifact_root/final/packets/batch-result.json" <<'NODE'
+            candidate_root="$artifact_root/final/packets"
+            if [ ! -f "$candidate_root/batch-result.json" ] && [ -f "$artifact_root/packets/batch-result.json" ]; then
+              candidate_root="$artifact_root/packets"
+              echo 'PASS — retained wave artifact layout selected; rediscovery=false'
+            fi
+            test -f "$candidate_root/batch-result.json"
+            test -d "$candidate_root/packets"
+
+            node --input-type=module - "$decision" "$candidate_root/batch-result.json" <<'NODE'
             import fs from 'node:fs';
             const decision=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
             const result=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
@@ -127,7 +135,7 @@ jobs:
             NODE
 
             node scripts/card-backfill-cohort-adjudicate.mjs \
-              --candidates "$artifact_root/final/packets" \
+              --candidates "$candidate_root" \
               --decisions "$decision" \
               --control .github/CARD-BACKFILL-COHORT.json \
               --out "$adjudicated" \
