@@ -108,49 +108,83 @@ if text.count(old_return) != 1:
     raise SystemExit("UC-176 source receipt surface anchor drift")
 text = text.replace(old_return, new_return, 1)
 
-old_commons = """  const response = await context.request.get(apiUrl, {
+old_commons = """  const response = await context.request.get(orbit.api, {
+    params: {
+      action: 'query', format: 'json', formatversion: '2', generator: 'categorymembers',
+      gcmtitle: orbit.category, gcmtype: 'file', gcmlimit: '100',
+      prop: 'imageinfo', iiprop: 'url|size|mime|sha1|timestamp|extmetadata'
+    },
     headers: { 'User-Agent': UA, Accept: 'application/json' },
     timeout: control.transport_timeout_ms,
     failOnStatusCode: false
   });
   assert(response.ok(), `Commons API HTTP ${response.status()}`);
-  const payload = await response.json();
+  const json = await response.json();
+  await writeJson(join(OUT, 'source-api-commons-category.json'), json);
 """
-new_commons = """  let response = null;
+new_commons = """  const apiParams = {
+    action: 'query', format: 'json', formatversion: '2', generator: 'categorymembers',
+    gcmtitle: orbit.category, gcmtype: 'file', gcmlimit: '100',
+    prop: 'imageinfo', iiprop: 'url|size|mime|sha1|timestamp|extmetadata'
+  };
+  let response = null;
   const apiAttempts = [];
   const fallbackDelays = [2000, 4000, 8000, 16000];
   for (let attempt = 1; attempt <= 5; attempt++) {
-    response = await context.request.get(apiUrl, {
+    response = await context.request.get(orbit.api, {
+      params: apiParams,
       headers: { 'User-Agent': UA, Accept: 'application/json' },
       timeout: control.transport_timeout_ms,
       failOnStatusCode: false
     });
-    const headers = response.headers();
-    const row = { attempt, http_status: response.status(), resolved_url: response.url() || apiUrl, retry_after_header: headers['retry-after'] || null };
-    apiAttempts.push(row);
+    const responseHeaders = response.headers();
+    const retryAfterHeader = responseHeaders['retry-after'] || null;
+    const attemptRow = {
+      attempt,
+      requested_url: orbit.api,
+      resolved_url: response.url() || orbit.api,
+      http_status: response.status(),
+      retry_after_header: retryAfterHeader
+    };
+    apiAttempts.push(attemptRow);
     if (response.ok()) break;
     if (![429, 503].includes(response.status()) || attempt === 5) break;
-    const retryAfterSeconds = Number(headers['retry-after']);
-    const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
-      ? Math.max(1000, Math.min(retryAfterSeconds * 1000, 30000))
-      : fallbackDelays[Math.min(attempt - 1, fallbackDelays.length - 1)];
-    row.delay_ms = delayMs;
+    let delayMs = fallbackDelays[Math.min(attempt - 1, fallbackDelays.length - 1)];
+    if (retryAfterHeader) {
+      const retryAfterSeconds = Number(retryAfterHeader);
+      if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+        delayMs = Math.max(1000, Math.min(retryAfterSeconds * 1000, 30000));
+      } else {
+        const retryAfterDate = Date.parse(retryAfterHeader);
+        if (Number.isFinite(retryAfterDate)) delayMs = Math.max(1000, Math.min(retryAfterDate - Date.now(), 30000));
+      }
+    }
+    attemptRow.delay_ms = delayMs;
     await new Promise(resolve => setTimeout(resolve, delayMs));
   }
   assert(response?.ok(), `Commons API HTTP ${response?.status() ?? 'none'} after ${apiAttempts.length} attempt(s)`);
-  const payload = await response.json();
+  const json = await response.json();
+  await writeJson(join(OUT, 'source-api-commons-category.json'), json);
+  await writeJson(join(OUT, 'source-api-commons-category-retry.json'), {
+    api_url: orbit.api,
+    params: apiParams,
+    attempts: apiAttempts,
+    completed: true,
+    final_http_status: response.status()
+  });
 """
 if text.count(old_commons) != 1:
-    raise SystemExit("UC-176 Commons request anchor drift")
+    raise SystemExit("UC-176 exact orbit.api Commons request anchor drift")
 text = text.replace(old_commons, new_commons, 1)
 
-old_commons_return = """  return { api_url: apiUrl, query: source.query, category_count: categoryMembers.length, attempts, candidates };
+old_manifest = """    commons_api_receipt: { path: 'source-api-commons-category.json', sha256: sha(await readFile(join(OUT, 'source-api-commons-category.json'))) },
 """
-new_commons_return = """  return { api_url: apiUrl, query: source.query, api_attempts: apiAttempts, category_count: categoryMembers.length, attempts, candidates };
+new_manifest = """    commons_api_receipt: { path: 'source-api-commons-category.json', sha256: sha(await readFile(join(OUT, 'source-api-commons-category.json'))) },
+    commons_transport_retry_receipt: { path: 'source-api-commons-category-retry.json', sha256: sha(await readFile(join(OUT, 'source-api-commons-category-retry.json'))) },
 """
-if text.count(old_commons_return) != 1:
-    raise SystemExit("UC-176 Commons receipt anchor drift")
-text = text.replace(old_commons_return, new_commons_return, 1)
+if text.count(old_manifest) != 1:
+    raise SystemExit("UC-176 Commons manifest receipt anchor drift")
+text = text.replace(old_manifest, new_manifest, 1)
 
 OUTPUT.write_text(text, encoding="utf-8")
-print(f"PASS — materialized exact-blob UC-176 source mirror and bounded Commons retry repair at {OUTPUT}")
+print(f"PASS — materialized exact-blob UC-176 source mirror and exact orbit.api bounded Commons retry repair at {OUTPUT}")
