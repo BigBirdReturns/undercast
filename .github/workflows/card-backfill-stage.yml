@@ -1,0 +1,164 @@
+name: card-backfill-stage
+
+on:
+  push:
+    branches:
+      - 'agent/card-backfill-*'
+    paths:
+      - '.github/card-backfill/adjudications/*.json'
+      - '.github/workflows/card-backfill-stage.yml'
+      - '.github/CARD-BACKFILL-COHORT.json'
+      - 'scripts/card-backfill-cohort-adjudicate.mjs'
+      - 'scripts/card-backfill-staging.mjs'
+      - 'scripts/card-backfill-staging-fixtures.mjs'
+      - 'scripts/lib/card-backfill-staging.mjs'
+      - 'package.json'
+  workflow_dispatch:
+    inputs:
+      decision_path:
+        description: 'Optional exact ready decision file; blank processes every ready decision file'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: card-backfill-stage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Prove staging transaction semantics
+        run: npm run card-backfill:staging:fixtures
+
+      - name: Select ready adjudication decisions
+        id: decisions
+        env:
+          REQUESTED_DECISION: ${{ inputs.decision_path || '' }}
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const requested=process.env.REQUESTED_DECISION.trim();
+          let files=[];
+          if(requested){
+            if(!fs.existsSync(requested))throw new Error(`decision file not found: ${requested}`);
+            files=[requested];
+          }else{
+            const root='.github/card-backfill/adjudications';
+            if(fs.existsSync(root))files=fs.readdirSync(root).filter(name=>name.endsWith('.json')).map(name=>path.join(root,name)).sort();
+          }
+          const ready=[];
+          for(const file of files){
+            const value=JSON.parse(fs.readFileSync(file,'utf8'));
+            if(value.version!==1||value.status!=='ready')continue;
+            const receipt=`data/review/card-backfill-staging/adjudications/${value.batch_sha256}.json`;
+            if(fs.existsSync(receipt)){console.log(`ALREADY PROCESSED ${file} -> ${receipt}`);continue;}
+            ready.push(file);
+          }
+          fs.writeFileSync(process.env.RUNNER_TEMP+'/ready-decisions.txt',ready.join('\n')+(ready.length?'\n':''));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,`count=${ready.length}\n`);
+          console.log(`READY DECISIONS ${ready.length}`);
+          for(const file of ready)console.log(`  ${file}`);
+          NODE
+
+      - name: Download, adjudicate, and stage every ready decision
+        if: steps.decisions.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" != agent/card-backfill-* ]]; then
+            echo "refusing staging write outside agent/card-backfill-*"
+            exit 1
+          fi
+          while IFS= read -r decision; do
+            [ -n "$decision" ] || continue
+            run_id=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(String(x.source.workflow_run_id))" "$decision")
+            artifact_name=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(x.source.artifact_name)" "$decision")
+            artifact_id=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(String(x.source.artifact_id))" "$decision")
+            artifact_digest=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(x.source.artifact_digest||'')" "$decision")
+            head_sha=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(x.source.head_sha||'')" "$decision")
+            artifact_root="$RUNNER_TEMP/candidate-$run_id"
+            adjudicated="$RUNNER_TEMP/adjudicated-$run_id"
+            rm -rf "$artifact_root" "$adjudicated"
+            mkdir -p "$artifact_root"
+            metadata="$RUNNER_TEMP/artifact-$artifact_id.json"
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id" > "$metadata"
+            node --input-type=module - "$decision" "$metadata" <<'NODE'
+            import fs from 'node:fs';
+            const decision=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+            const artifact=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
+            if(artifact.id!==decision.source.artifact_id||artifact.name!==decision.source.artifact_name)throw new Error('artifact identity mismatch');
+            if(artifact.expired)throw new Error('source artifact is expired');
+            if(artifact.workflow_run?.id!==decision.source.workflow_run_id||artifact.workflow_run?.head_sha!==decision.source.head_sha)throw new Error('artifact workflow custody mismatch');
+            if(decision.source.artifact_digest&&artifact.digest!==decision.source.artifact_digest)throw new Error('artifact digest mismatch');
+            console.log(`PASS — artifact ${artifact.id} retains exact run, head, name, and digest custody`);
+            NODE
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$artifact_name" --dir "$artifact_root"
+
+            node --input-type=module - "$decision" "$artifact_root/final/packets/batch-result.json" <<'NODE'
+            import fs from 'node:fs';
+            const decision=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+            const result=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
+            if(decision.batch_sha256!==result.batch_sha256)throw new Error('downloaded artifact batch mismatch');
+            if(decision.campaign_id!==result.campaign_id||decision.estate_sha256!==result.estate_sha256)throw new Error('downloaded artifact campaign mismatch');
+            if(decision.source.candidate_result_sha256&&decision.source.candidate_result_sha256!==result.result_sha256)throw new Error('downloaded artifact result digest mismatch');
+            const pending=result.results.filter(row=>row.disposition==='candidate-pending-independent-visual-adjudication');
+            if(pending.length!==decision.decisions.length)throw new Error(`decision cardinality mismatch: ${decision.decisions.length} vs ${pending.length}`);
+            console.log(`PASS — decision file binds ${pending.length} candidate(s) in workflow run ${decision.source.workflow_run_id}`);
+            NODE
+
+            node scripts/card-backfill-cohort-adjudicate.mjs \
+              --candidates "$artifact_root/final/packets" \
+              --decisions "$decision" \
+              --control .github/CARD-BACKFILL-COHORT.json \
+              --out "$adjudicated" \
+              --source-run-id "$run_id"
+
+            node scripts/card-backfill-staging.mjs stage \
+              --input "$adjudicated" \
+              --root data/review/card-backfill-staging \
+              --permanent-root data/review/card-backfill
+          done < "$RUNNER_TEMP/ready-decisions.txt"
+
+          node scripts/card-backfill-staging.mjs validate \
+            --root data/review/card-backfill-staging \
+            --permanent-root data/review/card-backfill
+
+      - name: Commit accepted staging packets and adjudication receipts
+        if: steps.decisions.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          git config user.name 'undercast-card-backfill-stage'
+          git config user.email 'undercast-card-backfill-stage@users.noreply.github.com'
+          git add -A -- data/review/card-backfill-staging
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'staging already contains every accepted packet; no commit required'
+            exit 0
+          fi
+          git commit -m "Card backfill: stage independently accepted packets"
+          remote_head=$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | awk '{print $1}')
+          if [ "$remote_head" != "$GITHUB_SHA" ]; then
+            echo "branch moved from $GITHUB_SHA to $remote_head; refusing stale staging push"
+            exit 1
+          fi
+          git push origin "HEAD:$GITHUB_REF_NAME"
