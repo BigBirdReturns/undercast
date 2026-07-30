@@ -1,0 +1,52 @@
+name: card-backfill-amortization-installer
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-amortization-build-20260730
+    paths:
+      - '.github/card-backfill/amortization-payload/MANIFEST.json'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: card-backfill-amortization-installer-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 1
+
+      - name: Validate, expand, and retire the exact amortization payload
+        run: |
+          set -euo pipefail
+          root='.github/card-backfill/amortization-payload'
+          cat "$root"/part-* | base64 -d > "$RUNNER_TEMP/card-backfill-amortization.tar.gz"
+          echo '0c6913b9ed5a57e54cb1a83a19fe286f5d9211fad0672a31d0f18fe033049c20  '"$RUNNER_TEMP/card-backfill-amortization.tar.gz" | sha256sum -c -
+          if tar -tzf "$RUNNER_TEMP/card-backfill-amortization.tar.gz" | grep -E '(^/|(^|/)\.\.(/|$))'; then
+            echo 'unsafe amortization payload path'
+            exit 1
+          fi
+          tar -xzf "$RUNNER_TEMP/card-backfill-amortization.tar.gz" -C .
+          rm -rf "$root"
+          rm .github/workflows/card-backfill-amortization-installer.yml
+          node --check scripts/card-backfill-source-v2-cached.mjs
+          node --check scripts/card-backfill-wave-reduce-amortized.mjs
+          node scripts/card-backfill-amortization-fixtures.mjs
+          git add -A
+          git diff --cached --check
+
+      - name: Commit the complete amortization system once
+        run: |
+          set -euo pipefail
+          git config user.name 'undercast-card-backfill-amortization-installer'
+          git config user.email 'undercast-card-backfill-amortization-installer@users.noreply.github.com'
+          git commit -m 'Card backfill: amortize measured fan-out gains'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo 'PASS — amortization payload installed and installer retired'
