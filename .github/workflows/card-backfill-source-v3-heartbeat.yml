@@ -1,0 +1,65 @@
+name: card-backfill-source-v3-heartbeat
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-source-v3
+    paths:
+      - '.github/workflows/card-backfill-source-v3-heartbeat.yml'
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: card-backfill-source-v3-heartbeat-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Commit an executable proof that branch workflows run
+        env:
+          RUN_ID: ${{ github.run_id }}
+          START_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p .github/card-backfill/source-v3
+          receipt=".github/card-backfill/source-v3/heartbeat-${RUN_ID}.json"
+          RUN_ID_VALUE="$RUN_ID" START_HEAD_VALUE="$START_HEAD" RECEIPT="$receipt" node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          fs.writeFileSync(process.env.RECEIPT,JSON.stringify({
+            version:1,
+            lane:'card-backfill-source-v3-heartbeat',
+            workflow_run_id:Number(process.env.RUN_ID_VALUE),
+            start_head:process.env.START_HEAD_VALUE,
+            recorded_at:new Date().toISOString(),
+            source_v3_dispatch_requested:true,
+            manual_continue_required:false,
+            canonical_mutation:false,
+          },null,2)+'\n');
+          NODE
+          git config user.name 'undercast-card-backfill-source-v3'
+          git config user.email 'undercast-card-backfill-source-v3@users.noreply.github.com'
+          git add "$receipt"
+          git diff --cached --check
+          git commit -m "Card backfill: record source v3 workflow heartbeat ${RUN_ID}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Dispatch the latest v3 branch head without a chat continuation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/card-backfill-source-v3-autonomous.yml/dispatches" \
+            -f ref="${GITHUB_REF_NAME}" \
+            -f 'inputs[cohort_limit]=40' \
+            -f 'inputs[model]=openai/gpt-4.1-mini'
+          echo 'PASS — source-policy-v3 dispatch requested from repository execution'
