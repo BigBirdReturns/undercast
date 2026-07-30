@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// activation-generation: inherited-wave-1
+// activation-generation: inherited-wave-2-clean-scheduler
 import assert from "node:assert/strict";
 import { buildDisjointWaveBatches, validateDisjointWave } from "./lib/card-backfill-wave.mjs";
 
