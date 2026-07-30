@@ -2,6 +2,13 @@
 name: run-card-backfill-source-v3-apply
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/run-card-backfill-source-v3-apply.yml'
+      - 'scripts/apply-card-backfill-source-v3.py'
+      - 'scripts/lib/card-backfill-source-policy-v3.mjs'
+      - 'scripts/card-backfill-source-policy-v3-fixtures.mjs'
   push:
     branches:
       - agent/card-backfill-next-041
@@ -12,11 +19,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: run-card-backfill-source-v3-apply
+  group: run-card-backfill-source-v3-apply-${{ github.event.pull_request.head.ref || github.ref }}
   cancel-in-progress: false
 
 jobs:
   apply:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.ref == 'agent/card-backfill-next-041' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -31,6 +39,28 @@ jobs:
       - run: npm ci
       - name: Apply exact source-policy-v3 transformation
         run: python3 scripts/apply-card-backfill-source-v3.py
+      - name: Install complete gate runtime
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          command="$1"
+          case "$command" in
+            identify|montage)
+              shift
+              exec "$command" "$@"
+              ;;
+            *)
+              exec convert "$@"
+              ;;
+          esac
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          npx playwright install --with-deps chromium
       - name: Prove source-policy-v3 and the full repository
         run: |
           set -euo pipefail
