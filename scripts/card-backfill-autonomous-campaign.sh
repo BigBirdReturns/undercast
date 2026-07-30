@@ -332,7 +332,7 @@ const value={
     cycles:n('CYCLES_VALUE'),
     obligations_selected:n('SELECTED_VALUE'),
     candidates_adjudicated:n('PENDING_VALUE'),
-    accepted_for_staging:n('ACEPTED_VALUE'),
+    accepted_for_staging:n('ACCEPTED_VALUE'),
     rejected_or_quarantined:n('REJECTED_VALUE'),
     permanent_packets_published:n('PUBLISHED_VALUE'),
     completed_evidence_packets:n('COMPLETED_VALUE'),
