@@ -1,4 +1,5 @@
 import { canonicalJson, sha256 } from "./card-backfill-cohort.mjs";
+import { isMultiSubject } from "./card-backfill-source-policy-v3.mjs";
 
 export const CARD_BACKFILL_SOURCE_POLICY_V2 = Object.freeze({
   version: 3,
@@ -66,6 +67,10 @@ export function buildSourcePolicyV2Estate({ estate, attemptIndex, stagedObligati
         && row.quarantine_reasons[0] === "no-bounded-still-source-route");
     if (!eligibleBoundary) {
       exclusions.push({ obligation_id: row.obligation_id, reason: "residual-non-source-policy-quarantine" });
+      continue;
+    }
+    if (row.side === "still" && isMultiSubject(row.expected_subject)) {
+      exclusions.push({ obligation_id: row.obligation_id, reason: "multi-subject-composite-required" });
       continue;
     }
     if (staged.has(row.obligation_id)) {
