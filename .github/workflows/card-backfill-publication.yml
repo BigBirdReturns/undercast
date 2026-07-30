@@ -1,33 +1,54 @@
-name: card-backfill-two-packet-record-breaker
+name: card-backfill-publication
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - 'agent/card-backfill-*'
     paths:
+      - 'data/review/card-backfill-staging/**'
+      - '.github/CARD-BACKFILL-COHORT.json'
       - '.github/workflows/card-backfill-publication.yml'
-      - '.github/card-backfill/bootstrap/record-breaker-policy.part*.b64'
+      - 'scripts/card-backfill-staging.mjs'
+      - 'scripts/card-backfill-staging-fixtures.mjs'
+      - 'scripts/card-backfill-cohort-materialize.mjs'
+      - 'scripts/lib/card-backfill-staging.mjs'
+      - 'package.json'
+  pull_request:
+    paths:
+      - 'data/review/card-backfill-staging/**'
+      - '.github/CARD-BACKFILL-COHORT.json'
+      - '.github/workflows/card-backfill-publication.yml'
+      - 'scripts/card-backfill-staging.mjs'
+      - 'scripts/card-backfill-staging-fixtures.mjs'
+      - 'scripts/card-backfill-cohort-materialize.mjs'
+      - 'scripts/lib/card-backfill-staging.mjs'
+      - 'package.json'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Optional permanent publication size (2-50; blank uses target 40)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
   actions: read
 
 concurrency:
-  group: card-backfill-two-packet-record-breaker
-  cancel-in-progress: true
-
-env:
-  SOURCE_BRANCH: ${{ github.event.pull_request.head.ref }}
-  SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
+  group: card-backfill-publication-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  publish-two:
-    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-041'
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 30
+    outputs:
+      ready: ${{ steps.plan.outputs.ready }}
+      publication_batch_sha256: ${{ steps.plan.outputs.publication_batch_sha256 }}
+      selected_count: ${{ steps.plan.outputs.selected_count }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.SOURCE_BRANCH }}
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
@@ -37,9 +58,57 @@ jobs:
 
       - run: npm ci
 
-      - name: Install the complete repository-gate runtime
+      - name: Prove cross-cohort staging and materialization semantics
+        run: npm run card-backfill:staging:fixtures
+
+      - name: Validate active staging and build the exact next publication plan
+        id: plan
+        env:
+          LIMIT: ${{ inputs.limit || '' }}
         run: |
           set -euo pipefail
+          out="$RUNNER_TEMP/card-backfill-publication"
+          mkdir -p "$out"
+          node scripts/card-backfill-staging.mjs validate \
+            --root data/review/card-backfill-staging \
+            --permanent-root data/review/card-backfill
+          args=(plan --root data/review/card-backfill-staging --permanent-root data/review/card-backfill --control .github/CARD-BACKFILL-COHORT.json --out "$out")
+          if [ -n "$LIMIT" ]; then args+=(--limit "$LIMIT"); fi
+          node scripts/card-backfill-staging.mjs "${args[@]}"
+          plan="$out/publication-plan.json"
+          ready=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(String(p.ready))" "$plan")
+          selected=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(String(p.selected_count))" "$plan")
+          batch=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(p.publication_batch_sha256||'')" "$plan")
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          echo "selected_count=$selected" >> "$GITHUB_OUTPUT"
+          echo "publication_batch_sha256=$batch" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-publication-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/card-backfill-publication
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    needs: plan
+    if: github.event_name == 'push' && needs.plan.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install complete canonical gate runtime
+        run: |
           sudo apt-get update
           sudo apt-get install -y imagemagick
           mkdir -p "$RUNNER_TEMP/bin"
@@ -60,156 +129,58 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           npx playwright install --with-deps chromium
 
-      - name: Verify and install the exact two-packet policy bundle
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/record-breaker-policy"
-          encoded="$root/policy.b64"
-          archive="$root/policy.tar.gz"
-          mkdir -p "$root"
-          cat > "$root/chunks.sha256" <<'SUMS'
-          38fc032ffef0c29c9278fae7f1f40ba6911e52c9086159fb4af3a696ef05a7e3  .github/card-backfill/bootstrap/record-breaker-policy.part00a.b64
-          42e86ffe47cd03a82cb2732a6dbd78bc58e1bc805dcc714c6d2754941f32e2c6  .github/card-backfill/bootstrap/record-breaker-policy.part00b.b64
-          177d8c898a9538809473605f19bd01dde3eae133e7b3c9cfea8d2cf00ba6ec3c  .github/card-backfill/bootstrap/record-breaker-policy.part00c.b64
-          b6cab49eafdec02651c7db573d736caa5f70c03ebe1f19f979fc9f26d9abb05e  .github/card-backfill/bootstrap/record-breaker-policy.part00d.b64
-          88879d8b6590efe3a964a8f11c543be9d29d7851179ce8a1d844a7396f84f731  .github/card-backfill/bootstrap/record-breaker-policy.part01.b64
-          68b8f8518d6ec7fc5ea295cafcd0343c2b9a33a7093da18669b9b512ba7af0c7  .github/card-backfill/bootstrap/record-breaker-policy.part02.b64
-          35d1aaaadf47e9885ac6ff98d051bd09da2e7d114c3e92f67a5f13176db56313  .github/card-backfill/bootstrap/record-breaker-policy.part03.b64
-          179e690d29a14868f71f38023ab198252dd0b3db90f9a4ccb79b184e3d42379f  .github/card-backfill/bootstrap/record-breaker-policy.part04.b64
-          4637d6cd77202433c5af32fe4eca8fa0f4618e02f734a276c1ed2ea1962763e9  .github/card-backfill/bootstrap/record-breaker-policy.part05.b64
-          55b2fb0e4b41bcd327f37e881b998f662725d1acedae3513f16ed07e5a7b9210  .github/card-backfill/bootstrap/record-breaker-policy.part06.b64
-          SUMS
-          sha256sum -c "$root/chunks.sha256"
-          cat \
-            .github/card-backfill/bootstrap/record-breaker-policy.part00a.b64 \
-            .github/card-backfill/bootstrap/record-breaker-policy.part00b.b64 \
-            .github/card-backfill/bootstrap/record-breaker-policy.part00c.b64 \
-            .github/card-backfill/bootstrap/record-breaker-policy.part00d.b64 \
-            .github/card-backfill/bootstrap/record-breaker-policy.part01.b64 \
-            .github/card-backfill/bootstrap/record-breaker-policy.part02.b64 \
-            .github/card-backfill/bootstrap/record-breaker-policy.part03.b64 \
-            .github/card-backfill/bootstrap/record-breaker-policy.part04.b64 \
-            .github/card-backfill/bootstrap/record-breaker-policy.part05.b64 \
-            .github/card-backfill/bootstrap/record-breaker-policy.part06.b64 \
-            > "$encoded"
-          printf '%s  %s\n' '40c919ca5987bb7fd718c72d6bda9f6589e742abe66d4e7ffb67ecb129f37d49' "$encoded" | sha256sum -c -
-          base64 --decode "$encoded" > "$archive"
-          printf '%s  %s\n' 'c7c7e632ebc6275901c6e142a63d9dc84e221fd387079eae2ebff93ced0aa4af' "$archive" | sha256sum -c -
-          tar -tzf "$archive" | sort
-          tar -xzf "$archive" -C "$GITHUB_WORKSPACE"
-          git show 7c8499c3a147f70c91668f235c2d068ba5f6f077:.github/workflows/card-backfill-cohort.yml > .github/workflows/card-backfill-cohort.yml
-          rm -f .github/workflows/apply-card-backfill-staging-reset.yml
-          rm -f .github/card-backfill/bootstrap/record-breaker-policy.part*.b64
-          rmdir .github/card-backfill/bootstrap 2>/dev/null || true
+      - uses: actions/download-artifact@v4
+        with:
+          name: card-backfill-publication-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/publication-plan
 
-      - name: Download the exact source artifact and independently adjudicate both candidates
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Materialize the exact mixed staging batch
         run: |
           set -euo pipefail
-          decision=.github/card-backfill/adjudications/30514452128.json
-          run_id=30514452128
-          artifact_id=8748379478
-          artifact_name=card-backfill-cohort-30514452128
-          artifact_root="$RUNNER_TEMP/source-artifact"
-          adjudicated="$RUNNER_TEMP/adjudicated"
-          metadata="$RUNNER_TEMP/artifact.json"
-          mkdir -p "$artifact_root"
-          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id" > "$metadata"
-          node --input-type=module - "$decision" "$metadata" <<'NODE'
-          import fs from 'node:fs';
-          const decision=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-          const artifact=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
-          if(artifact.id!==decision.source.artifact_id||artifact.name!==decision.source.artifact_name)throw new Error('artifact identity mismatch');
-          if(artifact.expired)throw new Error('source artifact expired');
-          if(artifact.workflow_run?.id!==decision.source.workflow_run_id||artifact.workflow_run?.head_sha!==decision.source.head_sha)throw new Error('artifact workflow custody mismatch');
-          if(decision.source.artifact_digest&&artifact.digest!==decision.source.artifact_digest)throw new Error('artifact digest mismatch');
-          console.log('PASS — exact run, head, name, and digest custody');
-          NODE
-          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$artifact_name" --dir "$artifact_root"
-          node scripts/card-backfill-cohort-adjudicate.mjs \
-            --candidates "$artifact_root/final/packets" \
-            --decisions "$decision" \
-            --control .github/CARD-BACKFILL-COHORT.json \
-            --out "$adjudicated" \
-            --source-run-id "$run_id" \
-            --now 2026-07-30T07:20:00.000Z
-          node scripts/card-backfill-staging.mjs stage \
-            --input "$adjudicated" \
-            --root data/review/card-backfill-staging \
-            --permanent-root data/review/card-backfill \
-            --now 2026-07-30T07:20:30.000Z
-
-      - name: Materialize the exact two-packet permanent batch
-        run: |
-          set -euo pipefail
-          plan="$RUNNER_TEMP/publication-plan"
-          node scripts/card-backfill-staging.mjs validate \
-            --root data/review/card-backfill-staging \
-            --permanent-root data/review/card-backfill
-          node scripts/card-backfill-staging.mjs plan \
-            --root data/review/card-backfill-staging \
-            --permanent-root data/review/card-backfill \
-            --control .github/CARD-BACKFILL-COHORT.json \
-            --out "$plan" \
-            --require-ready \
-            --now 2026-07-30T07:21:00.000Z
           node scripts/card-backfill-cohort-materialize.mjs \
-            --plan "$plan/publication-plan.json" \
+            --plan "$RUNNER_TEMP/publication-plan/publication-plan.json" \
             --staging data/review/card-backfill-staging \
             --destination data/review/card-backfill \
-            --now 2026-07-30T07:21:00.000Z
-          batch=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(p.publication_batch_sha256)" "$plan/publication-plan.json")
-          test -f data/review/card-backfill/UC-518/manifest.json
-          test -f data/review/card-backfill/UC-526/manifest.json
-          test -f "data/review/card-backfill/batches/$batch.json"
-          echo "PASS — materialized exact batch $batch"
-
-      - name: Prove the selector moved from 40 to 42 before the full gate
-        run: |
-          set -euo pipefail
-          out="$RUNNER_TEMP/post-publication-plan"
-          node scripts/card-backfill-cohort.mjs plan \
-            --control .github/CARD-BACKFILL-COHORT.json \
-            --out "$out" \
-            --limit 40
-          grep -qx 'current_completed_evidence_packets=42' "$out/summary.txt"
-          grep -qx 'current_open_source_declared_absences=430' "$out/summary.txt"
-          grep -qx 'selector_defined_estate=472' "$out/summary.txt"
-          echo 'PASS — permanent selector count is 42 completed / 430 open / 472 total'
-
-      - name: Run the complete repository gate once, then stage only evidence bytes
-        run: |
-          set -euo pipefail
-          git add -A
-          git diff --cached --check
-          npm run gate 2>&1 | tee "$RUNNER_TEMP/record-breaker-gate.log"
-          git reset
+            | tee "$RUNNER_TEMP/materialize.log"
           git add -A -- data/review/card-backfill data/review/card-backfill-staging
-          git diff --cached --check
-
-      - name: Refuse any path outside the two evidence estates
-        run: |
-          set -euo pipefail
           node --input-type=module - <<'NODE'
           import { execFileSync } from 'node:child_process';
           const paths=execFileSync('git',['diff','--cached','--name-only'],{encoding:'utf8'}).trim().split(/\r?\n/).filter(Boolean);
-          if(!paths.length)throw new Error('no evidence paths staged');
-          for(const path of paths){
-            if(path.startsWith('data/review/card-backfill/'))continue;
-            if(path.startsWith('data/review/card-backfill-staging/'))continue;
-            throw new Error(`evidence publication escaped its boundary: ${path}`);
-          }
-          if(!paths.some(path=>path.startsWith('data/review/card-backfill/UC-518/'))||!paths.some(path=>path.startsWith('data/review/card-backfill/UC-526/')))throw new Error('both permanent packet directories are required');
-          console.log(`PASS — exact ${paths.length}-path evidence-only transaction`);
+          if(!paths.length)throw new Error('publication materialized no repository changes');
+          for(const path of paths)if(!path.startsWith('data/review/card-backfill/')&&!path.startsWith('data/review/card-backfill-staging/'))throw new Error(`publication path escaped evidence and staging estates: ${path}`);
+          console.log(`PASS — publication transaction is confined to ${paths.length} evidence/staging path(s)`);
           NODE
 
-      - name: Commit and push two permanent evidence packets
+      - name: Run the complete repository gate exactly once for the permanent batch
         run: |
           set -euo pipefail
+          npm run gate 2>&1 | tee "$RUNNER_TEMP/permanent-batch-gate.log"
+
+      - name: Commit and push the exact permanent publication transaction
+        env:
+          PUBLICATION_BATCH: ${{ needs.plan.outputs.publication_batch_sha256 }}
+          SELECTED_COUNT: ${{ needs.plan.outputs.selected_count }}
+        run: |
+          set -euo pipefail
+          git diff --cached --check
           git config user.name 'undercast-card-backfill-publication'
           git config user.email 'undercast-card-backfill-publication@users.noreply.github.com'
-          git commit -m 'Card backfill: publish 2 permanent evidence packets'
-          remote_head=$(git ls-remote origin "refs/heads/$SOURCE_BRANCH" | awk '{print $1}')
-          test "$remote_head" = "$SOURCE_HEAD"
-          git push origin "HEAD:$SOURCE_BRANCH"
+          git commit -m "Card backfill: publish ${SELECTED_COUNT} staged evidence packets"
+          remote_head=$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | awk '{print $1}')
+          if [ "$remote_head" != "$GITHUB_SHA" ]; then
+            echo "branch moved from $GITHUB_SHA to $remote_head; refusing stale permanent publication push"
+            exit 1
+          fi
+          git push origin "HEAD:$GITHUB_REF_NAME"
+          echo "published batch $PUBLICATION_BATCH"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: card-backfill-publication-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/publication-plan
+            ${{ runner.temp }}/materialize.log
+            ${{ runner.temp }}/permanent-batch-gate.log
+          if-no-files-found: warn
+          retention-days: 90

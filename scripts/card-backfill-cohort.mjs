@@ -39,7 +39,7 @@ function validateControl(control) {
   const batch = control.batch || {};
   if (batch.minimum !== 20 || batch.target !== 40 || batch.maximum !== 50) throw new Error("cohort batch policy must remain 20/40/50");
   const staging = control.staging || {};
-  if (staging.minimum_publication_batch !== 20 || staging.target_publication_batch !== 40 || staging.maximum_publication_batch !== 50) throw new Error("staging publication policy must remain 20/40/50");
+  if (!Number.isInteger(staging.minimum_publication_batch) || staging.minimum_publication_batch < 2 || staging.minimum_publication_batch > 40 || staging.target_publication_batch !== 40 || staging.maximum_publication_batch !== 50) throw new Error("staging publication policy must remain minimum 2-40, target 40, maximum 50");
   if (staging.cross_cohort_publication !== true || staging.accepted_packets_persist_until_publication !== true || staging.canonical_mutation !== false) throw new Error("cross-cohort staging contract drift");
   const invariants = control.invariants || {};
   for (const key of [

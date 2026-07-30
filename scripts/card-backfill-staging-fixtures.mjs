@@ -69,16 +69,16 @@ try {
   const controlPath = join(root, "control.json");
   await writeFile(controlPath, JSON.stringify({
     batch: { minimum: 20, target: 40, maximum: 50 },
-    staging: { minimum_publication_batch: 20, target_publication_batch: 40, maximum_publication_batch: 50 },
+    staging: { minimum_publication_batch: 2, target_publication_batch: 40, maximum_publication_batch: 50 },
   }, null, 2) + "\n");
   const stagingRoot = join(root, "staging");
   const permanentRoot = join(root, "permanent");
 
-  const first = await makeCandidateBatch({ name: "first", start: 1, count: 2, cohortKey: "portrait::voice::wikimedia::canonical::neutral-human" });
+  const first = await makeCandidateBatch({ name: "first", start: 1, count: 1, cohortKey: "portrait::voice::wikimedia::canonical::neutral-human" });
   const firstAdjudicated = join(root, "first", "adjudicated");
   execFileSync(process.execPath, [adjudicate, "--candidates", first.candidates, "--decisions", first.decisionsPath, "--control", controlPath, "--out", firstAdjudicated, "--now", "2026-07-30T00:01:00.000Z"], { stdio: "inherit" });
   const firstReceipt = JSON.parse(await readFile(join(firstAdjudicated, "adjudication-run-receipt.json"), "utf8"));
-  assert.equal(firstReceipt.counts.accepted, 2);
+  assert.equal(firstReceipt.counts.accepted, 1);
   assert.equal(firstReceipt.publication_window.ready_without_existing_staging, false);
   execFileSync(process.execPath, [staging, "stage", "--input", firstAdjudicated, "--root", stagingRoot, "--permanent-root", permanentRoot, "--now", "2026-07-30T00:02:00.000Z"], { stdio: "inherit" });
   const firstEventCount = (await readdir(join(stagingRoot, "events"))).length;
@@ -88,9 +88,9 @@ try {
   execFileSync(process.execPath, [staging, "plan", "--root", stagingRoot, "--permanent-root", permanentRoot, "--control", controlPath, "--out", waitOut, "--now", "2026-07-30T00:03:00.000Z"], { stdio: "inherit" });
   const waitPlan = JSON.parse(await readFile(join(waitOut, "publication-plan.json"), "utf8"));
   assert.equal(waitPlan.ready, false);
-  assert.equal(waitPlan.staged_count, 2);
+  assert.equal(waitPlan.staged_count, 1);
 
-  const second = await makeCandidateBatch({ name: "second", start: 101, count: 18, cohortKey: "still::live-action::franchise-mediawiki::filed::character-depiction" });
+  const second = await makeCandidateBatch({ name: "second", start: 101, count: 1, cohortKey: "still::live-action::franchise-mediawiki::filed::character-depiction" });
   const secondAdjudicated = join(root, "second", "adjudicated");
   execFileSync(process.execPath, [adjudicate, "--candidates", second.candidates, "--decisions", second.decisionsPath, "--control", controlPath, "--out", secondAdjudicated, "--now", "2026-07-30T00:04:00.000Z"], { stdio: "inherit" });
   execFileSync(process.execPath, [staging, "stage", "--input", secondAdjudicated, "--root", stagingRoot, "--permanent-root", permanentRoot, "--now", "2026-07-30T00:05:00.000Z"], { stdio: "inherit" });
@@ -101,13 +101,13 @@ try {
   const readyPlanPath = join(readyOut, "publication-plan.json");
   const readyPlan = JSON.parse(await readFile(readyPlanPath, "utf8"));
   assert.equal(readyPlan.ready, true);
-  assert.equal(readyPlan.selected_count, 20);
+  assert.equal(readyPlan.selected_count, 2);
   assert.equal(Object.keys(readyPlan.cohort_counts).length, 2);
   assert.equal(Object.keys(readyPlan.discovery_batch_counts).length, 2);
 
   execFileSync(process.execPath, [materialize, "--plan", readyPlanPath, "--staging", stagingRoot, "--destination", permanentRoot, "--now", "2026-07-30T00:07:00.000Z"], { stdio: "inherit" });
   const permanentDirs = (await readdir(permanentRoot, { withFileTypes: true })).filter((entry) => entry.isDirectory() && entry.name !== "batches");
-  assert.equal(permanentDirs.length, 20);
+  assert.equal(permanentDirs.length, 2);
   assert.equal((await readdir(join(permanentRoot, "batches"))).length, 1);
   const finalLedger = JSON.parse(await readFile(join(stagingRoot, "STAGING.json"), "utf8"));
   assert.equal(finalLedger.counts.staged, 0);

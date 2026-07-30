@@ -192,12 +192,12 @@ npm run card-backfill:staging -- plan \
 The publication threshold is applied only here:
 
 ```text
-minimum: 20
+minimum: 2
  target: 40
 maximum: 50
 ```
 
-When fewer than twenty accepted packets are staged, the plan is a truthful `ready: false` receipt. At twenty or more, the planner selects the oldest accepted packets in deterministic order, up to the target or explicit bounded limit. The selected packets may come from any number of discovery cohorts and discovery workflow runs.
+When fewer than two accepted packets are staged, the plan is a truthful `ready: false` receipt. At two or more, the planner selects the oldest accepted packets in deterministic order, up to the target or explicit bounded limit. The selected packets may come from any number of discovery cohorts and discovery workflow runs.
 
 The publication batch digest binds:
 
@@ -223,7 +223,7 @@ The transaction:
 1. revalidates the staging ledger and every selected packet;
 2. refuses ledger or plan drift;
 3. refuses permanent overwrites;
-4. copies exactly twenty to fifty packets to `data/review/card-backfill/<record>/`;
+4. copies exactly two to fifty packets to `data/review/card-backfill/<record>/`;
 5. writes one mixed-batch receipt under `data/review/card-backfill/batches/`;
 6. writes the matching staging publication receipt;
 7. removes only the selected packet directories from active staging;
@@ -246,7 +246,7 @@ visual review             one contact sheet per discovery cohort
 attempt suppression       once per retained adjudication run in the current pass
 accepted storage          once per accepted packet
 publication planning      once per staging-ledger state
-permanent materialize     once per 20–50 accepted packets
+permanent materialize     once per 2–50 accepted packets
 complete repository gate  once per permanent publication batch
 receipts                  still per card
 ```

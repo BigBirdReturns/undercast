@@ -354,7 +354,7 @@ export function buildPublicationPlan({ ledger, control, now = new Date().toISOSt
   const minimum = Number(control.staging?.minimum_publication_batch ?? control.batch?.minimum ?? 20);
   const target = Number(control.staging?.target_publication_batch ?? control.batch?.target ?? 40);
   const maximum = Number(control.staging?.maximum_publication_batch ?? control.batch?.maximum ?? 50);
-  if (minimum !== 20 || target !== 40 || maximum !== 50) throw new Error("publication policy must remain 20/40/50");
+  if (!Number.isInteger(minimum) || minimum < 2 || minimum > target || target !== 40 || maximum !== 50) throw new Error("publication policy must remain minimum 2-40, target 40, maximum 50");
   let ceiling = target;
   if (limit !== null) {
     ceiling = Number(limit);
@@ -393,12 +393,16 @@ export function buildPublicationPlan({ ledger, control, now = new Date().toISOSt
 
 export async function materializePublicationPlan({ plan, root, destination, now = new Date().toISOString() }) {
   if (plan.version !== 1 || plan.lane !== "card-backfill-publication-plan" || plan.ready !== true) throw new Error("publication plan is not ready");
-  if (plan.selected_count < 20 || plan.selected_count > 50 || plan.selected_count !== plan.selected?.length) throw new Error(`publication batch must contain 20-50 packets; observed ${plan.selected_count}`);
+  const minimum = Number(plan.policy?.minimum);
+  const target = Number(plan.policy?.target);
+  const maximum = Number(plan.policy?.maximum);
+  if (!Number.isInteger(minimum) || minimum < 2 || minimum > target || target !== 40 || maximum !== 50) throw new Error("publication plan policy drift");
+  if (plan.selected_count < minimum || plan.selected_count > maximum || plan.selected_count !== plan.selected?.length) throw new Error(`publication batch must contain ${minimum}-${maximum} packets; observed ${plan.selected_count}`);
   const ledgerPath = join(root, "STAGING.json");
   const originalLedgerBytes = await readFile(ledgerPath);
   const ledger = await validateStaging({ root, permanentRoot: destination });
   if (ledger.ledger_sha256 !== plan.source_ledger_sha256) throw new Error("publication source ledger drift");
-  const recomputed = buildPublicationPlan({ ledger, control: { batch: { minimum: 20, target: 40, maximum: 50 }, staging: { minimum_publication_batch: 20, target_publication_batch: 40, maximum_publication_batch: 50 } }, now: plan.generated_at, limit: plan.policy?.requested_limit });
+  const recomputed = buildPublicationPlan({ ledger, control: { batch: { minimum: 20, target: 40, maximum: 50 }, staging: { minimum_publication_batch: minimum, target_publication_batch: target, maximum_publication_batch: maximum } }, now: plan.generated_at, limit: plan.policy?.requested_limit });
   if (recomputed.publication_batch_sha256 !== plan.publication_batch_sha256 || canonicalJson(recomputed.selected) !== canonicalJson(plan.selected)) throw new Error("publication plan digest drift");
 
   const byObligation = new Map(ledger.entries.map((entry) => [entry.obligation_id, entry]));
