@@ -3,7 +3,18 @@ import { isMultiSubject } from "./card-backfill-source-policy-v3.mjs";
 
 export const CARD_BACKFILL_SOURCE_POLICY_V2 = Object.freeze({
   version: 3,
+  revision: 1,
   lane: "card-backfill-source-policy",
+  policy_id: "card-backfill-policy-v3-wave-1",
+  parent_policy_id: "card-backfill-cohort-v2",
+  lessons_contract_path: ".github/CARD-BACKFILL-LESSONS.json",
+  lessons_contract_sha256: "bafa82adfc525421f498f5655bf12ba0000d131349fcd72edd03f940d9b78931",
+  inherited_lesson_ids: Object.freeze([
+    "CBL-001", "CBL-002", "CBL-003", "CBL-004", "CBL-005", "CBL-006",
+    "CBL-007", "CBL-008", "CBL-009", "CBL-010", "CBL-011", "CBL-012",
+    "CBL-013", "CBL-014", "CBL-015", "CBL-016", "CBL-017", "CBL-018",
+    "CBL-019", "CBL-020", "CBL-021", "CBL-022", "CBL-023", "CBL-024",
+  ]),
   still_route: "mediawiki-bound-multicandidate-v3",
   portrait_route: "commons-bound-multicandidate-v3",
   page_search_limit: 10,
@@ -21,6 +32,8 @@ export const CARD_BACKFILL_SOURCE_POLICY_V2 = Object.freeze({
   selected_image_never_proves_identity_or_role: true,
   independent_machine_or_person_adjudication_required: true,
   one_attempt_per_obligation_per_policy_version: true,
+  immutable_parallel_discovery_wave: true,
+  serialized_exact_head_reducer: true,
   fail_closed: true,
   canonical_mutation: false,
 });
@@ -97,14 +110,20 @@ export function buildSourcePolicyV2Estate({ estate, attemptIndex, stagedObligati
       disposition: "ready",
       quarantine_reasons: [],
       source_policy: CARD_BACKFILL_SOURCE_POLICY_V2,
+      source_policy_id: CARD_BACKFILL_SOURCE_POLICY_V2.policy_id,
       source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version,
+      source_policy_revision: CARD_BACKFILL_SOURCE_POLICY_V2.revision,
+      lessons_contract_sha256: CARD_BACKFILL_SOURCE_POLICY_V2.lessons_contract_sha256,
       retry_of_attempt_count: attempts.length,
       prior_attempts: attempts.map((attempt) => ({
         discovery_batch_sha256: attempt.discovery_batch_sha256,
         cohort_key: attempt.cohort_key,
         final_disposition: attempt.final_disposition,
         reason: attempt.reason,
+        source_policy_id: attempt.source_policy_id || null,
         source_policy_version: priorPolicyVersion(attempt),
+        source_policy_revision: attempt.source_policy_revision ?? null,
+        lessons_contract_sha256: attempt.lessons_contract_sha256 || null,
       })),
       canonical_mutation: false,
     };
