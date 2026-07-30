@@ -1,0 +1,327 @@
+name: card-backfill-source-v2-autonomous
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/card-backfill-source-v2-autonomous.yml'
+      - 'scripts/card-backfill-source-v2.mjs'
+      - 'scripts/card-backfill-source-v2-plan.mjs'
+      - 'scripts/card-backfill-source-v2-enrich-report.mjs'
+      - 'scripts/card-backfill-source-policy-v2-fixtures.mjs'
+      - 'scripts/lib/card-backfill-source-policy-v2.mjs'
+  workflow_dispatch:
+    inputs:
+      cohort_limit:
+        description: 'Shape-equivalent source-policy-v2 obligations per run (1-50)'
+        required: false
+        default: '40'
+      model:
+        description: 'Independent second-desk GitHub Model'
+        required: false
+        default: 'openai/gpt-4.1-mini'
+
+permissions:
+  contents: write
+  actions: write
+  models: read
+
+concurrency:
+  group: card-backfill-publication-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      ready: ${{ steps.plan.outputs.ready }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      selected_count: ${{ steps.plan.outputs.selected_count }}
+      batch_sha256: ${{ steps.plan.outputs.batch_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Prove source-policy versioning and syntax before transport
+        run: |
+          set -euo pipefail
+          node --check scripts/card-backfill-source-v2.mjs
+          node --check scripts/card-backfill-source-v2-plan.mjs
+          node --check scripts/card-backfill-source-v2-enrich-report.mjs
+          node scripts/card-backfill-source-policy-v2-fixtures.mjs
+
+      - name: Select the next never-v2-attempted cohort
+        id: plan
+        env:
+          LIMIT: ${{ inputs.cohort_limit || '40' }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/card-backfill-source-v2-plan"
+          mkdir -p "$out"
+          set +e
+          node scripts/card-backfill-source-v2-plan.mjs \
+            --control .github/CARD-BACKFILL-COHORT.json \
+            --out "$out" \
+            --limit "$LIMIT" > "$out/plan.log" 2>&1
+          status=$?
+          set -e
+          cat "$out/plan.log"
+          if [ "$status" -ne 0 ]; then
+            if grep -q 'no source-policy-v2 cohort available' "$out/plan.log"; then
+              echo 'ready=false' >> "$GITHUB_OUTPUT"
+              echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+              echo 'selected_count=0' >> "$GITHUB_OUTPUT"
+              echo 'batch_sha256=' >> "$GITHUB_OUTPUT"
+              echo 'PASS — source-policy-v2 retry pass is drained'
+              exit 0
+            fi
+            exit "$status"
+          fi
+          matrix=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(JSON.stringify(p.matrix))" "$out/shards.json")
+          selected=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(String(p.selected_count))" "$out/batch.json")
+          batch=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(p.batch_sha256)" "$out/batch.json")
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "selected_count=$selected" >> "$GITHUB_OUTPUT"
+          echo "batch_sha256=$batch" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.ready == 'true'
+        with:
+          name: card-backfill-source-v2-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/card-backfill-source-v2-plan
+          if-no-files-found: error
+          retention-days: 90
+
+  discover:
+    needs: plan
+    if: needs.plan.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install deterministic image inspection
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          command="$1"
+          case "$command" in
+            identify|montage)
+              shift
+              exec "$command" "$@"
+              ;;
+            *)
+              exec convert "$@"
+              ;;
+          esac
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: card-backfill-source-v2-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/planning
+
+      - name: Enumerate, download, and prescreen alternative source candidates
+        env:
+          SHARD_ID: ${{ matrix.id }}
+          PLAN_PATH: ${{ matrix.plan_path }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/source-v2-$SHARD_ID"
+          output="$root/output"
+          plan="$RUNNER_TEMP/planning/$PLAN_PATH"
+          mkdir -p "$output"
+          node scripts/card-backfill-source-v2.mjs \
+            --baseline "$GITHUB_WORKSPACE" \
+            --plan "$plan" \
+            --out "$output/candidates" \
+            --journal "$output/media-search.jsonl" \
+            --latest "$output/latest.json" \
+            --run-id "${GITHUB_RUN_ID}-source-v2-shard-${SHARD_ID}" \
+            --contact 'bigbirdreturns@proton.me' \
+            --delay-ms 350 \
+            --magick magick | tee "$output/retrieve.log"
+          node scripts/card-backfill-source-v2-enrich-report.mjs \
+            --report "$output/candidates/report.json" | tee "$output/enrich.log"
+          cp "$plan" "$output/retrieval-plan.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-source-v2-shard-${{ matrix.id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/source-v2-${{ matrix.id }}/output
+          if-no-files-found: error
+          retention-days: 90
+
+  assemble:
+    needs: [plan, discover]
+    if: needs.plan.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install deterministic render tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          command="$1"
+          case "$command" in
+            identify|montage)
+              shift
+              exec "$command" "$@"
+              ;;
+            *)
+              exec convert "$@"
+              ;;
+          esac
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: card-backfill-source-v2-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/planning
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: card-backfill-source-v2-shard-*-${{ github.run_id }}
+          path: ${{ runner.temp }}/shards
+          merge-multiple: false
+
+      - name: Merge and render the exact v2 cohort
+        run: |
+          set -euo pipefail
+          final="$RUNNER_TEMP/final"
+          mkdir -p "$final"
+          node scripts/card-backfill-cohort-merge.mjs \
+            --batch "$RUNNER_TEMP/planning/batch.json" \
+            --shards-root "$RUNNER_TEMP/shards" \
+            --out "$final/candidates" \
+            --run-id "$GITHUB_RUN_ID" | tee "$final/merge.log"
+          node scripts/card-backfill-cohort-packetize.mjs \
+            --baseline "$GITHUB_WORKSPACE" \
+            --candidates "$final/candidates" \
+            --report "$final/candidates/report.json" \
+            --batch "$RUNNER_TEMP/planning/batch.json" \
+            --scopes "$RUNNER_TEMP/planning/batch-scopes" \
+            --control .github/CARD-BACKFILL-COHORT.json \
+            --out "$final/packets" \
+            --magick magick | tee "$final/packetize.log"
+
+      - name: Independently adjudicate, retain, and stage the cohort
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODEL: ${{ inputs.model || 'openai/gpt-4.1-mini' }}
+          BATCH: ${{ needs.plan.outputs.batch_sha256 }}
+        run: |
+          set -euo pipefail
+          final="$RUNNER_TEMP/final"
+          node scripts/card-backfill-machine-adjudicate.mjs \
+            --candidates "$final/packets" \
+            --out "$final/machine-decisions.json" \
+            --model "$MODEL" \
+            --fallback-model 'openai/gpt-4o-mini' \
+            --max-parallel 2 \
+            --cycle 1 \
+            --artifact-name "card-backfill-source-v2-${GITHUB_RUN_ID}" \
+            --head-sha "$GITHUB_SHA" | tee "$final/machine-adjudicate.log"
+          node scripts/card-backfill-cohort-adjudicate.mjs \
+            --candidates "$final/packets" \
+            --decisions "$final/machine-decisions.json" \
+            --control .github/CARD-BACKFILL-COHORT.json \
+            --out "$final/adjudicated" \
+            --source-run-id "$GITHUB_RUN_ID" | tee "$final/adjudicate.log"
+          node scripts/card-backfill-staging.mjs stage \
+            --input "$final/adjudicated" \
+            --root data/review/card-backfill-staging \
+            --permanent-root data/review/card-backfill | tee "$final/stage.log"
+          node scripts/card-backfill-staging.mjs validate \
+            --root data/review/card-backfill-staging \
+            --permanent-root data/review/card-backfill | tee "$final/staging-validate.log"
+          decision=".github/card-backfill/adjudications/${BATCH}.json"
+          mkdir -p "$(dirname "$decision")"
+          cp "$final/machine-decisions.json" "$decision"
+
+      - name: Commit the exact v2 attempt and any accepted staging packets
+        env:
+          SELECTED: ${{ needs.plan.outputs.selected_count }}
+        run: |
+          set -euo pipefail
+          git config user.name 'undercast-card-backfill-source-v2'
+          git config user.email 'undercast-card-backfill-source-v2@users.noreply.github.com'
+          git add -A -- .github/card-backfill/adjudications data/review/card-backfill-staging
+          git diff --cached --check
+          git commit -m "Card backfill: source v2 adjudicate ${SELECTED} obligations"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: card-backfill-source-v2-${{ github.run_id }}
+          path: ${{ runner.temp }}/final
+          if-no-files-found: warn
+          retention-days: 90
+
+  continue:
+    needs: [plan, assemble]
+    if: needs.plan.outputs.ready == 'true' && needs.assemble.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-arm the next never-v2-attempted cohort without a chat turn
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LIMIT: ${{ inputs.cohort_limit || '40' }}
+          MODEL: ${{ inputs.model || 'openai/gpt-4.1-mini' }}
+        run: |
+          set -euo pipefail
+          sleep 10
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/card-backfill-source-v2-autonomous.yml/dispatches" \
+            -f ref="${GITHUB_REF_NAME}" \
+            -f "inputs[cohort_limit]=${LIMIT}" \
+            -f "inputs[model]=${MODEL}"
+          echo 'PASS — source-policy-v2 campaign re-armed itself'
