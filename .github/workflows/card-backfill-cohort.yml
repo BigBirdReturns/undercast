@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - '.github/CARD-BACKFILL-COHORT.json'
-      - '.github/card-backfill/serial-retirement/**'
+      - '.github/card-backfill/**'
       - '.github/workflows/card-backfill-cohort.yml'
       - 'docs/CARD-BACKFILL-COHORTS.md'
       - 'scripts/card-backfill-cohort*.mjs'
@@ -132,52 +132,69 @@ jobs:
           name: card-backfill-cohort-plan-${{ github.run_id }}
           path: ${{ runner.temp }}/planning
 
-      - name: Discover only the exact shard facets in an isolated worktree
+      - name: Discover exact shard facets through the shared source-family adapter
         env:
           SHARD_ID: ${{ matrix.id }}
           SHARD_COUNT: ${{ matrix.count }}
           PLAN_PATH: ${{ matrix.plan_path }}
-          CRAWL_DELAY_MS: '1500'
+          CRAWL_DELAY_MS: '500'
           CONTACT: 'bigbirdreturns@proton.me'
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/shard-$SHARD_ID"
-          work="$root/worktree"
           output="$root/output"
+          plan="$RUNNER_TEMP/planning/$PLAN_PATH"
           mkdir -p "$output"
-          cleanup() { git worktree remove --force "$work" >/dev/null 2>&1 || true; }
-          trap cleanup EXIT
-          git worktree add --detach "$work" HEAD
-          cp "$RUNNER_TEMP/planning/$PLAN_PATH" "$work/retrieval-plan.json"
-          cd "$work"
-          node scripts/media-search-prepare.mjs \
-            --plan retrieval-plan.json \
-            --ids-out retrieval-ids.txt \
-            --mask-unselected \
-            --restore-out retrieval-restore.json \
-            | tee "$output/prepare.log"
-          ids=$(cat retrieval-ids.txt)
-          if [ -n "$ids" ]; then
-            RETRIEVE_ONLY="$ids" \
-            RETRIEVE_MAX="$SHARD_COUNT" \
-            IMAGE_MODE=loose \
-            CRAWL_DELAY_MS="$CRAWL_DELAY_MS" \
-            CONTACT="$CONTACT" \
-            node scripts/retrieve.mjs | tee "$output/retrieve.log"
+          side=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));const v=[...new Set(p.candidates.map(r=>r.side))];if(v.length!==1)throw new Error('mixed shard sides');process.stdout.write(v[0])" "$plan")
+          route=$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));const v=[...new Set(p.candidates.map(r=>r.cohort_key.split('::')[2]))];if(v.length!==1)throw new Error('mixed shard source routes');process.stdout.write(v[0])" "$plan")
+
+          if [ "$side" = portrait ] && [ "$route" = performer-reference-crawl ]; then
+            node scripts/card-backfill-wikimedia-portraits.mjs \
+              --plan "$plan" \
+              --out "$output/candidates" \
+              --journal "$output/media-search.jsonl" \
+              --latest "$output/latest.json" \
+              --run-id "${GITHUB_RUN_ID}-shard-${SHARD_ID}" \
+              --contact "$CONTACT" \
+              --delay-ms "$CRAWL_DELAY_MS" \
+              | tee "$output/retrieve.log"
+            printf '%s\n' '{"version":1,"restore":[],"adapter":"exact-canonical-wikimedia-portrait"}' > "$output/retrieval-restore.json"
+          else
+            work="$root/worktree"
+            cleanup() { git worktree remove --force "$work" >/dev/null 2>&1 || true; }
+            trap cleanup EXIT
+            git worktree add --detach "$work" HEAD
+            cp "$plan" "$work/retrieval-plan.json"
+            cd "$work"
+            node scripts/media-search-prepare.mjs \
+              --plan retrieval-plan.json \
+              --ids-out retrieval-ids.txt \
+              --mask-unselected \
+              --restore-out retrieval-restore.json \
+              | tee "$output/prepare.log"
+            ids=$(cat retrieval-ids.txt)
+            if [ -n "$ids" ]; then
+              RETRIEVE_ONLY="$ids" \
+              RETRIEVE_MAX="$SHARD_COUNT" \
+              IMAGE_MODE=loose \
+              CRAWL_DELAY_MS="$CRAWL_DELAY_MS" \
+              CONTACT="$CONTACT" \
+              node scripts/retrieve.mjs | tee "$output/retrieve.log"
+            fi
+            node scripts/media-search-restore.mjs --receipt retrieval-restore.json | tee "$output/restore.log"
+            cd "$GITHUB_WORKSPACE"
+            node scripts/media-search-report.mjs \
+              --baseline "$GITHUB_WORKSPACE" \
+              --candidate "$work" \
+              --plan "$plan" \
+              --out "$output/candidates" \
+              --journal "$output/media-search.jsonl" \
+              --latest "$output/latest.json" \
+              --run-id "${GITHUB_RUN_ID}-shard-${SHARD_ID}" \
+              | tee "$output/report.log"
+            cp "$work/retrieval-restore.json" "$output/retrieval-restore.json"
           fi
-          node scripts/media-search-restore.mjs --receipt retrieval-restore.json | tee "$output/restore.log"
-          cd "$GITHUB_WORKSPACE"
-          node scripts/media-search-report.mjs \
-            --baseline "$GITHUB_WORKSPACE" \
-            --candidate "$work" \
-            --plan "$RUNNER_TEMP/planning/$PLAN_PATH" \
-            --out "$output/candidates" \
-            --journal "$output/media-search.jsonl" \
-            --latest "$output/latest.json" \
-            --run-id "${GITHUB_RUN_ID}-shard-${SHARD_ID}" \
-            | tee "$output/report.log"
-          cp "$RUNNER_TEMP/planning/$PLAN_PATH" "$output/retrieval-plan.json"
-          cp "$work/retrieval-restore.json" "$output/retrieval-restore.json"
+          cp "$plan" "$output/retrieval-plan.json"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -202,7 +219,7 @@ jobs:
 
       - run: npm ci
 
-      - name: Install deterministic image and browser tools
+      - name: Install deterministic image tools
         run: |
           sudo apt-get update
           sudo apt-get install -y imagemagick
@@ -222,7 +239,6 @@ jobs:
           SH
           chmod +x "$RUNNER_TEMP/bin/magick"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-          npx playwright install --with-deps chromium
 
       - uses: actions/download-artifact@v4
         with:

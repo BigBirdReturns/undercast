@@ -117,3 +117,22 @@ receipts               still per card
 ```
 
 Rigor stays local to the claim. Ceremony is amortized across the batch.
+
+## First live cohort: source-family failure, not forty card failures
+
+Workflow run `30513656297` exercised the complete forty-obligation lane at commit `a5220bb8d249ad5bb318b79eb55af2676cfd7cc2`. Planning, all four ten-card shards, packet custody, quarantine, and the complete repository gate passed. Candidate yield was zero: every selected portrait remained absent and all forty obligations were quarantined as `no-new-candidate` without canonical mutation.
+
+The run exposed one shared defect in the inherited portrait retriever. It enumerated page images weakly, swallowed transport failures, and reported each record as “illustrated” because its pre-existing still was truthy even though the selected portrait facet remained absent. The durable receipt is `.github/card-backfill/cohort-runs/30513656297.json`.
+
+The promoted repair is `scripts/card-backfill-wikimedia-portraits.mjs`. For the `performer-reference-crawl` portrait family it now:
+
+- resolves the exact filed canonical Wikipedia page rather than searching by an unbounded name;
+- requests the lead page image and Wikidata item in one typed API call;
+- falls back to the filed entity's Wikidata `P18` image claim;
+- resolves local or Commons image metadata, dimensions, authorship, license, and description-page origin;
+- tries bounded media transports in a deterministic order;
+- records every HTTP status, content type, byte count, digest, response excerpt, timeout, and validation failure per obligation;
+- emits the same candidate/report contract consumed by the cohort merger;
+- never mutates canonical data and never treats the opposite facet as completion.
+
+This is the intended economics: one forty-card run found one source-family defect, and one shared repair replaces forty bespoke retries.
