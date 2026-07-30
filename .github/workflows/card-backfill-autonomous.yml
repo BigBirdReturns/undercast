@@ -1,0 +1,116 @@
+name: card-backfill-autonomous-campaign
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/card-backfill-autonomous.yml'
+      - 'scripts/card-backfill-autonomous-campaign.sh'
+      - 'scripts/card-backfill-machine-adjudicate.mjs'
+      - 'scripts/card-backfill-machine-adjudicate-fixtures.mjs'
+      - 'scripts/card-backfill-open-web-plan.mjs'
+      - 'scripts/card-backfill-bounded-open-web-fixtures.mjs'
+      - 'scripts/lib/card-backfill-bounded-open-web.mjs'
+      - '.github/CARD-BACKFILL-COHORT.json'
+      - 'docs/CARD-BACKFILL-AUTONOMOUS.md'
+      - 'package.json'
+  workflow_dispatch:
+    inputs:
+      max_cycles:
+        description: 'Maximum autonomous discovery/adjudication cycles in this run'
+        required: false
+        default: '12'
+      cohort_limit:
+        description: 'Shape-equivalent obligations per discovery cycle (20-50)'
+        required: false
+        default: '40'
+      time_budget_minutes:
+        description: 'Wall-clock budget before an unattended re-arm is attempted'
+        required: false
+        default: '330'
+      publish_target:
+        description: 'Preferred permanent publication batch size (2-50)'
+        required: false
+        default: '40'
+  schedule:
+    - cron: '17 */4 * * *'
+
+permissions:
+  contents: write
+  actions: write
+  models: read
+
+concurrency:
+  group: card-backfill-autonomous-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  campaign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CARD_BACKFILL_BRANCH: ${{ github.ref_name }}
+      CARD_BACKFILL_MAX_CYCLES: ${{ inputs.max_cycles || '12' }}
+      CARD_BACKFILL_COHORT_LIMIT: ${{ inputs.cohort_limit || '40' }}
+      CARD_BACKFILL_TIME_BUDGET_MINUTES: ${{ inputs.time_budget_minutes || '330' }}
+      CARD_BACKFILL_PUBLISH_TARGET: ${{ inputs.publish_target || '40' }}
+      CARD_BACKFILL_MODEL: ${{ vars.CARD_BACKFILL_MODEL || 'openai/gpt-4.1-mini' }}
+      CARD_BACKFILL_FALLBACK_MODEL: ${{ vars.CARD_BACKFILL_FALLBACK_MODEL || 'openai/gpt-4o-mini' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install deterministic image and browser tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/magick" <<'SH'
+          #!/bin/sh
+          command="$1"
+          case "$command" in
+            identify|montage)
+              shift
+              exec "$command" "$@"
+              ;;
+            *)
+              exec convert "$@"
+              ;;
+          esac
+          SH
+          chmod +x "$RUNNER_TEMP/bin/magick"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          npx playwright install --with-deps chromium
+
+      - name: Run the selector estate without manual continuation
+        run: bash scripts/card-backfill-autonomous-campaign.sh
+
+      - name: Publish autonomous campaign logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-autonomous-${{ github.run_id }}
+          path: ${{ runner.temp }}/card-backfill-autonomous-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Write campaign receipt to the job summary
+        if: always()
+        run: |
+          receipt=".github/card-backfill/autonomous-runs/${GITHUB_RUN_ID}.json"
+          if [ -f "$receipt" ]; then
+            printf '## Autonomous card-backfill campaign\n\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+            cat "$receipt" >> "$GITHUB_STEP_SUMMARY"
+            printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
