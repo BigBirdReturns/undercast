@@ -1,0 +1,59 @@
+name: card-backfill-source-v3-validation
+
+on:
+  pull_request:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/card-backfill-source-v3-validation.yml'
+      - '.github/workflows/card-backfill-source-v3-autonomous.yml'
+      - 'scripts/card-backfill-source-v3-plan.mjs'
+      - 'scripts/card-backfill-source-v3-filter.mjs'
+      - 'scripts/card-backfill-source-v3-dedupe.mjs'
+      - 'scripts/card-backfill-source-policy-v3-fixtures.mjs'
+      - 'scripts/card-backfill-source-v3-prescreen-fixtures.mjs'
+      - 'scripts/card-backfill-source-v3-dedupe-fixtures.mjs'
+      - 'scripts/lib/card-backfill-source-policy-v3.mjs'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Prove v3 source-policy code and regressions
+        run: |
+          set -euo pipefail
+          node --check scripts/card-backfill-source-v3-plan.mjs
+          node --check scripts/card-backfill-source-v3-filter.mjs
+          node --check scripts/card-backfill-source-v3-dedupe.mjs
+          node --check scripts/lib/card-backfill-source-policy-v3.mjs
+          node scripts/card-backfill-source-policy-v3-fixtures.mjs
+          node scripts/card-backfill-source-v3-prescreen-fixtures.mjs
+          node scripts/card-backfill-source-v3-dedupe-fixtures.mjs
+
+      - name: Prove the live v3 planner against the current 44/428 estate
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/card-backfill-source-v3-validation"
+          node scripts/card-backfill-source-v3-plan.mjs \
+            --control .github/CARD-BACKFILL-COHORT.json \
+            --out "$out" \
+            --limit 1
+          test -s "$out/batch.json"
+          test -s "$out/composite-queue.json"
+          cat "$out/summary.txt"
