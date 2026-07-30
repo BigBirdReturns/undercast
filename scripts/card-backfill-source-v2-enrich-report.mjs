@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// This file is a source-policy-v2 workflow trigger surface; behavior remains deterministic.
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
