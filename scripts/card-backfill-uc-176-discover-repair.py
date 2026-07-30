@@ -34,14 +34,22 @@ new = """    const title = await page.title();
     const transportMirrorRows = [];
     if (source.key === 'asc-history') {
       const mirrorUrls = [
+        'https://m.theasc.com/magazine/mar99/two/pg4.htm',
+        'https://m.theasc.com/magazine/mar99/two/pg1.htm',
         'https://theasc.com/articles/two-faced-treachery-dr-jekyll-and-mr-hyde',
         'https://theasc.com/magazine/mar99/two/pg1.htm',
         'https://theasc.com/magazine/mar99/two/pg4.htm'
       ];
-      for (const mirrorUrl of mirrorUrls) {
+      for (let mirrorIndex = 0; mirrorIndex < mirrorUrls.length; mirrorIndex++) {
+        const mirrorUrl = mirrorUrls[mirrorIndex];
         try {
           const mirrorResponse = await context.request.get(mirrorUrl, {
-            headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml,*/*;q=0.8' },
+            headers: {
+              'User-Agent': UA,
+              Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.9',
+              Referer: source.url
+            },
             timeout: control.transport_timeout_ms,
             failOnStatusCode: false
           });
@@ -54,19 +62,36 @@ new = """    const title = await page.title();
             const parsed = new DOMParser().parseFromString(html, 'text/html');
             return parsed.body?.textContent || '';
           }, mirrorHtml);
+          const stem = `asc-history-mirror-${String(mirrorIndex + 1).padStart(2, '0')}`;
+          const htmlLocal = `pages/${stem}.html`;
+          const textLocal = `pages/${stem}.txt`;
+          await writeFile(join(OUT, htmlLocal), mirrorHtml);
+          await writeFile(join(OUT, textLocal), mirrorText);
           transportMirrorRows.push({
             requested_url: mirrorUrl,
             resolved_url: mirrorResponse.url() || mirrorUrl,
             http_status: mirrorResponse.status(),
-            html_bytes: Buffer.byteLength(mirrorHtml, 'utf8'),
-            html_sha256: sha(Buffer.from(mirrorHtml, 'utf8')),
-            text_sha256: sha(Buffer.from(mirrorText, 'utf8')),
+            html_receipt: {
+              path: htmlLocal,
+              bytes: Buffer.byteLength(mirrorHtml, 'utf8'),
+              sha256: sha(Buffer.from(mirrorHtml, 'utf8'))
+            },
+            text_receipt: {
+              path: textLocal,
+              bytes: Buffer.byteLength(mirrorText, 'utf8'),
+              sha256: sha(Buffer.from(mirrorText, 'utf8'))
+            },
+            html: mirrorHtml,
             text: mirrorText
           });
         } catch (error) {
           transportMirrorRows.push({ requested_url: mirrorUrl, resolved_url: null, http_status: null, error: error.message });
         }
       }
+      await writeJson(
+        join(OUT, 'pages', 'asc-history-transport-mirrors.json'),
+        transportMirrorRows.map(({ html, text, ...row }) => row)
+      );
     }
     const validationSurfaces = ['visible-innerText'];
     const bodyParts = [visibleBody];
@@ -74,10 +99,13 @@ new = """    const title = await page.title();
       validationSurfaces.push('same-page-body-textContent');
       bodyParts.push(`--- SAME-PAGE DOM TEXTCONTENT ---\n\n${samePageDomText}`);
     }
-    const usableTransportMirrors = transportMirrorRows.filter(row => row.text);
+    const usableTransportMirrors = transportMirrorRows.filter(row => row.text || row.html);
     if (usableTransportMirrors.length) {
-      validationSurfaces.push('exact-same-article-transport-mirror');
-      for (const row of usableTransportMirrors) bodyParts.push(`--- ASC SAME-ARTICLE MIRROR ${row.requested_url} ---\n\n${row.text}`);
+      validationSurfaces.push('exact-same-article-transport-mirror-text-and-html');
+      for (const row of usableTransportMirrors) {
+        bodyParts.push(`--- ASC SAME-ARTICLE MIRROR TEXT ${row.requested_url} ---\n\n${row.text || ''}`);
+        bodyParts.push(`--- ASC SAME-ARTICLE MIRROR RAW HTML ${row.requested_url} ---\n\n${row.html || ''}`);
+      }
     }
     const body = bodyParts.join(String.fromCharCode(10, 10));
     const normalizedBody = normalized(body);
@@ -101,7 +129,7 @@ text = text.replace(old_receipt, new_receipt, 1)
 old_return = """      title, required_terms: source.required_terms, required_terms_missing: missing,
 """
 new_return = """      title, validation_surfaces: validationSurfaces,
-      transport_mirrors: transportMirrorRows.map(({ text, ...row }) => row),
+      transport_mirrors: transportMirrorRows.map(({ html, text, ...row }) => row),
       required_terms: source.required_terms, required_terms_missing: missing,
 """
 if text.count(old_return) != 1:
@@ -187,4 +215,4 @@ if text.count(old_manifest) != 1:
 text = text.replace(old_manifest, new_manifest, 1)
 
 OUTPUT.write_text(text, encoding="utf-8")
-print(f"PASS — materialized exact-blob UC-176 source mirror and exact orbit.api bounded Commons retry repair at {OUTPUT}")
+print(f"PASS — materialized exact-blob UC-176 static ASC mirror receipts and exact orbit.api bounded Commons retry repair at {OUTPUT}")
