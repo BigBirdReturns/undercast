@@ -92,17 +92,35 @@ jobs:
         if: steps.route.outputs.action == 'discover'
         run: |
           set -euo pipefail
+          current_head=$(git rev-parse HEAD)
           active_json=$(gh run list \
             --repo "$GITHUB_REPOSITORY" \
             --workflow card-backfill-amortized-wave.yml \
             --branch "$HEAD_BRANCH" \
             --limit 50 \
-            --json databaseId,status,url,workflowName,createdAt \
+            --json databaseId,status,url,workflowName,createdAt,headSha \
             --jq '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested")]')
-          active=$(node -e 'const rows=JSON.parse(process.argv[1]);process.stdout.write(String(rows.length))' "$active_json")
-          if [ "$active" -gt 0 ]; then
-            echo "ACTIVE_AMORTIZED_RUNS — $active_json"
-            echo "PASS — amortized discovery already active ($active); duplicate dispatch refused"
+          current=$(node -e 'const rows=JSON.parse(process.argv[1]);const head=process.argv[2];process.stdout.write(String(rows.filter(row=>row.headSha===head).length))' "$active_json" "$current_head")
+          stale_json=$(node -e 'const rows=JSON.parse(process.argv[1]);const head=process.argv[2];process.stdout.write(JSON.stringify(rows.filter(row=>row.headSha!==head)))' "$active_json" "$current_head")
+          stale=$(node -e 'const rows=JSON.parse(process.argv[1]);process.stdout.write(String(rows.length))' "$stale_json")
+          if [ "$stale" -gt 0 ]; then
+            echo "STALE_AMORTIZED_RUNS — $stale_json"
+            node -e 'for(const row of JSON.parse(process.argv[1]))console.log(row.databaseId)' "$stale_json" | while read -r run_id; do
+              if ! gh run cancel "$run_id" --repo "$GITHUB_REPOSITORY"; then
+                status=$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json status --jq .status)
+                if [ "$status" != completed ]; then
+                  echo "failed to cancel stale amortized run $run_id (status=$status)" >&2
+                  exit 1
+                fi
+                echo "PASS — stale amortized run $run_id completed before cancellation"
+              else
+                echo "PASS — cancelled stale amortized run $run_id"
+              fi
+            done
+          fi
+          if [ "$current" -gt 0 ]; then
+            echo "CURRENT_HEAD_AMORTIZED_RUNS — $active_json"
+            echo "PASS — current-head amortized discovery already active ($current); duplicate dispatch refused"
             exit 0
           fi
           gh workflow run card-backfill-amortized-wave.yml \
