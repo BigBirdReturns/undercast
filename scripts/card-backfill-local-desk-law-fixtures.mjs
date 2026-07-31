@@ -11,7 +11,7 @@ const ACTIVE_REDUCER = "scripts/card-backfill-wave-reduce-amortized.mjs";
 const LOCAL_ADJUDICATOR = "scripts/card-backfill-local-adjudicate.mjs";
 const CLOUD_ADJUDICATOR = "scripts/card-backfill-machine-adjudicate.mjs";
 
-const [lessons, control, amortization, activation, packageJson, activeWorkflow, retiredWorkflow, autonomousDoc, cohortsDoc, amortizationDoc] = await Promise.all([
+const [lessons, control, amortization, activation, packageJson, activeWorkflow, retiredWorkflow, supervisorWorkflow, autonomousDoc, cohortsDoc, amortizationDoc] = await Promise.all([
   json(".github/CARD-BACKFILL-LESSONS.json"),
   json(".github/CARD-BACKFILL-COHORT.json"),
   json(".github/CARD-BACKFILL-AMORTIZATION.json"),
@@ -19,6 +19,7 @@ const [lessons, control, amortization, activation, packageJson, activeWorkflow, 
   json("package.json"),
   text(ACTIVE_WORKFLOW),
   text(RETIRED_WORKFLOW),
+  text(".github/workflows/card-backfill-supervisor.yml"),
   text("docs/CARD-BACKFILL-AUTONOMOUS.md"),
   text("docs/CARD-BACKFILL-COHORTS.md"),
   text("docs/CARD-BACKFILL-AMORTIZATION.md"),
@@ -81,6 +82,11 @@ assert(!activeWorkflow.includes("\n  continue:\n"), "only the supervisor may rou
 assert.match(retiredWorkflow, /retired/i);
 assert(!retiredWorkflow.includes("\n  push:\n"));
 assert(!retiredWorkflow.includes("models: read"));
+
+assert.match(supervisorWorkflow, /contents: read/);
+assert(!supervisorWorkflow.includes("card-backfill-align-local-desk-law"));
+assert(!supervisorWorkflow.includes("steps.alignment"));
+assert.match(supervisorWorkflow, /fetch-depth: 1/);
 
 assert.equal(packageJson.scripts["card-backfill:wave:reduce"], "node scripts/card-backfill-wave-reduce-amortized.mjs");
 assert.equal(packageJson.scripts["card-backfill:local-desk-law:fixtures"], "node scripts/card-backfill-local-desk-law-fixtures.mjs");

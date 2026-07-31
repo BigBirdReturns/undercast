@@ -216,6 +216,37 @@ async function alignActiveWorkflow() {
   await writeText(path, text);
 }
 
+async function alignSupervisor() {
+  const path = ".github/workflows/card-backfill-supervisor.yml";
+  let text = await readText(path);
+  text = replaceExact(text, "  contents: write\n", "  contents: read\n", "supervisor temporary write permission");
+  text = replaceExact(text, "    timeout-minutes: 120\n", "", "supervisor temporary timeout");
+  text = replaceExact(text, "          fetch-depth: 0\n", "          fetch-depth: 1\n", "supervisor bootstrap checkout depth");
+
+  const bootstrapStart = text.indexOf("\n      - name: Complete pending local-desk law alignment before routing\n");
+  const routeStart = text.indexOf("\n      - name: Prove and compute the one permitted successor\n");
+  if (bootstrapStart < 0 || routeStart < 0 || routeStart <= bootstrapStart) fail("supervisor bootstrap/route boundary drift");
+  text = text.slice(0, bootstrapStart) + text.slice(routeStart);
+
+  text = replaceExact(text, "        if: steps.alignment.outputs.completed != 'true'\n", "", "supervisor route bootstrap condition");
+  for (const action of ["stage", "publish", "discover", "stop"]) {
+    text = replaceExact(
+      text,
+      `if: steps.alignment.outputs.completed != 'true' && steps.route.outputs.action == '${action}'`,
+      `if: steps.route.outputs.action == '${action}'`,
+      `supervisor ${action} bootstrap condition`,
+    );
+  }
+
+  const customCustody = `          action="\${{ steps.route.outputs.action || 'failed' }}"\n          completed="\${{ steps.route.outputs.completed || '?' }}"\n          target="\${{ steps.route.outputs.target || '?' }}"\n          status_head="$HEAD_SHA"\n          if [ "\${{ steps.alignment.outputs.completed }}" = true ]; then\n            action=law-align\n            completed=46\n            target=147\n            status_head="\${{ steps.alignment.outputs.final_head }}"\n          fi\n          description="action=\${action}; completed=\${completed}/\${target}; yield=\${YIELD_REASON}"\n`;
+  const ordinaryCustody = `          description="action=\${{ steps.route.outputs.action || 'failed' }}; completed=\${{ steps.route.outputs.completed || '?' }}/\${{ steps.route.outputs.target || '?' }}; yield=\${YIELD_REASON}"\n`;
+  text = replaceExact(text, customCustody, ordinaryCustody, "supervisor custody bootstrap reporting");
+  text = replaceExact(text, "statuses/${status_head}", "statuses/${HEAD_SHA}", "supervisor custody status head");
+
+  if (text.includes("card-backfill-align-local-desk-law") || text.includes("steps.alignment")) fail("temporary alignment bootstrap remained in supervisor");
+  await writeText(path, text);
+}
+
 async function alignPackage() {
   const path = "package.json";
   const packageJson = await readJson(path);
@@ -309,6 +340,7 @@ async function main() {
   await alignCohortControl();
   await alignAmortizationContract();
   await alignActiveWorkflow();
+  await alignSupervisor();
   await alignPackage();
   await alignFixtureInheritance();
   await alignDocs();
