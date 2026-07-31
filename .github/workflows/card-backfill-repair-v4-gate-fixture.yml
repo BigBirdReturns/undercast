@@ -1,0 +1,78 @@
+name: card-backfill-repair-v4-gate-fixture
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/card-backfill-repair-v4-gate-fixture.yml'
+
+permissions:
+  contents: write
+  statuses: write
+
+concurrency:
+  group: card-backfill-source-policy-v4-gate-repair-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HEAD_BRANCH: ${{ github.ref_name }}
+      REPAIR_HEAD: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Repair only the adversarial error-diagnosis fixture and re-trigger activation
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const fixture='scripts/card-backfill-lessons-fixtures.mjs';
+          let value=fs.readFileSync(fixture,'utf8');
+          const from='/inheritance drift|omits mandatory/';
+          const to='/inheritance drift|omits mandatory|dropped inherited lesson/';
+          if(!value.includes(from)) throw new Error('lesson omission diagnosis assertion not found');
+          value=value.replace(from,to);
+          fs.writeFileSync(fixture,value);
+
+          const workflow='.github/workflows/card-backfill-activate-source-policy-v4-retry.yml';
+          let workflowText=fs.readFileSync(workflow,'utf8');
+          workflowText=workflowText.replace(/^# gate-fixture-retry:.*\n/,'');
+          fs.writeFileSync(workflow,`# gate-fixture-retry: 2\n${workflowText}`);
+          console.log('PASS — dropped inherited lessons remain fail-closed; fixture accepts the precise valid diagnosis');
+          NODE
+          rm .github/workflows/card-backfill-repair-v4-gate-fixture.yml
+
+      - name: Prove and commit the exact repair
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-lessons-fixtures.mjs
+          git add -A -- \
+            .github/workflows/card-backfill-activate-source-policy-v4-retry.yml \
+            .github/workflows/card-backfill-repair-v4-gate-fixture.yml \
+            scripts/card-backfill-lessons-fixtures.mjs
+          git diff --cached --check
+          git diff --cached --name-only | sort > "$RUNNER_TEMP/actual.txt"
+          cat > "$RUNNER_TEMP/expected.txt" <<'PATHS'
+          .github/workflows/card-backfill-activate-source-policy-v4-retry.yml
+          .github/workflows/card-backfill-repair-v4-gate-fixture.yml
+          scripts/card-backfill-lessons-fixtures.mjs
+          PATHS
+          diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/actual.txt"
+          git config user.name 'undercast-card-backfill-v4-gate-repair'
+          git config user.email 'undercast-card-backfill-v4-gate-repair@users.noreply.github.com'
+          git commit -m 'Card backfill: accept precise inherited-lesson failure diagnosis'
+          remote_head=$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | awk '{print $1}')
+          if [ "$remote_head" != "$REPAIR_HEAD" ]; then
+            echo "branch moved from repair head $REPAIR_HEAD to $remote_head; refusing stale repair push" >&2
+            exit 1
+          fi
+          git push origin "HEAD:${HEAD_BRANCH}"
+          echo 'PASS — activation workflow retriggered from the repaired exact head'
