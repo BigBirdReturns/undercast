@@ -24,12 +24,21 @@ try {
   const fixtureOccurrences = fixture.split(retiredNeedle).length - 1;
   if (fixtureOccurrences !== 1) throw new Error(`expected one retired token fixture seam, found ${fixtureOccurrences}`);
   fixture = fixture.replace(retiredNeedle, localNeedle);
+
   const runtimeAssertion = 'assert(files.runtime.includes("if ! command -v identify") && files.runtime.includes("sudo apt-get install -y imagemagick"));';
   if (!fixture.includes(runtimeAssertion)) throw new Error("amortization runtime assertion seam is missing");
-  fixture = fixture.replace(runtimeAssertion, `${runtimeAssertion}\nassert(!files.workflow.includes("card-backfill-machine-adjudicate.mjs"));\nassert(!files.workflow.includes("models: read"));`);
+  const runtimeReplacement = [
+    'assert(files.runtime.includes("packages+=(imagemagick)"));',
+    'assert(files.runtime.includes("packages+=(python3-opencv)"));',
+    'assert(files.runtime.includes("packages+=(tesseract-ocr)"));',
+    'assert(files.runtime.includes(\'sudo apt-get install -y "${packages[@]}"\'));',
+    'assert(!files.workflow.includes("card-backfill-machine-adjudicate.mjs"));',
+    'assert(!files.workflow.includes("models: read"));',
+  ].join("\n");
+  fixture = fixture.replace(runtimeAssertion, runtimeReplacement);
   await writeFile(fixturePath, fixture);
 
-  console.log("PASS — local-desk installer v2 corrected namesake morphology and replaced the retired cloud-token fixture with local-desk custody");
+  console.log("PASS — local-desk installer v2 corrected namesake morphology and aligned amortization fixtures with the current local runtime");
 } finally {
   await rm(root, { recursive: true, force: true });
 }
