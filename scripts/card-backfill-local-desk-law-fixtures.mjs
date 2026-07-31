@@ -98,7 +98,7 @@ assert.match(autonomousDoc, /card-backfill-wave-reduce-amortized\.mjs/);
 assert.match(cohortsDoc, /repository-local independent second desk/i);
 assert.match(cohortsDoc, /--amortization-plan/);
 assert.match(cohortsDoc, /--mutation-head/);
-assert.match(amortizationDoc, /lean discovery runtime/i);
+assert.match(amortizationDoc, /Discovery installs only missing ImageMagick compatibility/i);
 assert.match(amortizationDoc, /No cloud-model token is required/);
 assert(!amortizationDoc.includes("missing model token"));
 
