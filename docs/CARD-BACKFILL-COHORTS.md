@@ -25,7 +25,7 @@ lesson-bound disjoint wave planning
         ↓
 parallel immutable discovery artifacts
         ↓
-parallel independent adjudication artifacts
+parallel repository-local independent adjudication artifacts
         ↓
 one exact-head reducer
         ↓
@@ -236,7 +236,7 @@ Failures receive packet-level quarantine receipts and do not stop unrelated obli
 
 ## Independent adjudication
 
-Discovery cannot approve its result. The independent machine or person second desk must decide two different claims:
+Discovery cannot approve its result. The repository-local independent second desk must decide two different claims:
 
 ```text
 identity     = expected
@@ -250,9 +250,9 @@ The decision file binds:
 - source workflow and artifact identity;
 - exact source head;
 - campaign, estate, cohort, and batch digests;
-- model or person identity;
+- repository-local provider and adjudication implementation;
 - confidence thresholds;
-- prompt, response, and image digests;
+- source-custody, local feature, and decision digests;
 - evidence URLs;
 - every pending candidate.
 
@@ -260,7 +260,7 @@ Zero acceptances is valid when every candidate fails. The complete adjudication 
 
 ## Immutable wave results
 
-Each parallel assembly job writes `wave-result.json` beside its adjudicated packet tree and machine decisions.
+Each parallel assembly job writes `wave-result.json` beside its adjudicated packet tree and repository-local decisions.
 
 The artifact binds:
 
@@ -271,7 +271,7 @@ batch digest and index
 policy ID, version, and revision
 lesson-contract digest
 selected and adjudication counts
-paths to adjudicated packets and machine decisions
+paths to adjudicated packets and repository-local decisions
 artifact_only=true
 canonical_mutation=false
 ```
@@ -285,11 +285,14 @@ Run locally with suitable artifacts:
 ```bash
 npm run card-backfill:wave:reduce -- \
   --wave .card-backfill-wave/wave.json \
+  --amortization-plan .card-backfill-wave/amortization-plan.json \
   --results-root .card-backfill-wave-results \
-  --source-head <exact-40-character-sha>
+  --source-head <exact-source-sha> \
+  --mutation-head <exact-branch-sha> \
+  --observed-head <exact-branch-sha>
 ```
 
-The reducer is the only source-wave branch writer. It:
+The amortized reducer is the only source-wave branch writer. It:
 
 1. verifies the source head and refuses stale reduction;
 2. requires one and only one result per planned batch;
@@ -298,7 +301,7 @@ The reducer is the only source-wave branch writer. It:
 5. enriches the adjudication receipts with wave and policy identity;
 6. stages accepted packets through the complete packet validator;
 7. retains zero-acceptance adjudication receipts;
-8. copies independent machine decisions into repository custody;
+8. copies independent repository-local decisions into repository custody;
 9. writes one wave-reduction receipt;
 10. validates active staging;
 11. commits all wave state atomically.
@@ -394,7 +397,7 @@ scope extraction          once per selector snapshot
 source machinery          once per source family
 wave planning             once per disjoint 1–4 batch wave
 discovery transport       up to 16 read-only jobs per wave
-render/adjudication       up to 4 independent jobs per wave
+render/adjudication       up to 4 repository-local independent jobs per wave
 branch mutation           one reducer commit per wave
 accepted storage          once per accepted packet
 publication planning      once per staging-ledger state

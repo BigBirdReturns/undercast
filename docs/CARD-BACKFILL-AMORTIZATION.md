@@ -13,7 +13,7 @@ deterministic longest-processing-time shard balance
         ↓
 immutable parallel source artifacts
         ↓
-independent adjudication
+repository-local independent adjudication
         ↓
 one exact-head reducer
         ↓
@@ -36,11 +36,11 @@ The next wave assigns the longest predicted obligations first to the currently l
 
 ### Downstream failures
 
-Rendered and packetized batch artifacts are immutable. A missing model token, reducer race, or publication delay does not authorize source rediscovery. Ready decision files form a barrier: new discovery yields until retained bytes have been reduced into complete attempt receipts. The first action after activation is therefore to ingest the already-paid 160-obligation wave rather than search those records again.
+Rendered and packetized batch artifacts are immutable. A local-desk runtime failure, reducer race, or publication delay does not authorize source rediscovery. Ready decision files form a barrier: new discovery yields until retained bytes have been reduced into complete attempt receipts. The first action after activation is therefore to ingest the already-paid 160-obligation wave rather than search those records again.
 
 ### Runner setup
 
-The shared runtime action reuses ImageMagick already present on the hosted image. Package installation occurs only when the required commands are absent.
+The shared runtime action has two explicit profiles. Discovery installs only missing ImageMagick compatibility and deliberately omits OpenCV, NumPy, cascade data, and Tesseract. Assembly uses the `local-desk` profile, which installs `python3-opencv`, `opencv-data`, and `tesseract-ocr` only when absent and verifies a usable face-cascade path before adjudication. No cloud-model token is required.
 
 ## Boundaries retained
 

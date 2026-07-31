@@ -26,6 +26,7 @@ assert.equal(contract.cache.maximum_age_hours, 24);
 
 await import("./card-backfill-source-policy-v3-fixtures.mjs");
 await import("./card-backfill-source-policy-v3-live-regressions.mjs");
+await import("./card-backfill-local-desk-law-fixtures.mjs");
 const imageFeatureFixtureOutput = execFileSync(
   process.env.PYTHON || "python3",
   [join(repositoryRoot, "scripts/card-backfill-image-features-fixtures.py")],

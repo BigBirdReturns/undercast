@@ -9,7 +9,7 @@ on:
         default: 'explicit-dispatch'
 
 permissions:
-  contents: write
+  contents: read
   actions: write
   statuses: write
 
@@ -20,7 +20,6 @@ concurrency:
 jobs:
   route:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
     env:
       HEAD_BRANCH: ${{ github.ref_name }}
       HEAD_SHA: ${{ github.sha }}
@@ -30,7 +29,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - uses: actions/setup-node@v4
         with:
@@ -39,69 +38,8 @@ jobs:
 
       - run: npm ci
 
-      - name: Complete pending local-desk law alignment before routing
-        id: alignment
-        run: |
-          set -euo pipefail
-          if [ ! -f scripts/card-backfill-align-local-desk-law.mjs ]; then
-            echo 'completed=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          mutation_head=$(git rev-parse HEAD)
-          [ "$mutation_head" = "$HEAD_SHA" ]
-          node --check scripts/card-backfill-align-local-desk-law.mjs
-          node --check scripts/card-backfill-local-desk-law-fixtures.mjs
-          node scripts/card-backfill-align-local-desk-law.mjs
-          node scripts/card-backfill-local-desk-law-fixtures.mjs
-          node scripts/card-backfill-amortization-fixtures.mjs
-          node scripts/card-backfill-lessons-fixtures.mjs
-          node scripts/card-backfill-lessons.mjs validate --out "$RUNNER_TEMP/local-desk-law-lessons.json"
-          npx playwright install --with-deps chromium
-          node scripts/gate.mjs | tee "$RUNNER_TEMP/local-desk-law-gate.log"
-          git diff --check
-          git rm -- \
-            .github/workflows/card-backfill-align-local-desk-law.yml \
-            scripts/card-backfill-align-local-desk-law.mjs
-          git add -- \
-            .github/CARD-BACKFILL-LESSONS.json \
-            .github/CARD-BACKFILL-COHORT.json \
-            .github/CARD-BACKFILL-AMORTIZATION.json \
-            .github/workflows/card-backfill-amortized-wave.yml \
-            .github/workflows/card-backfill-supervisor.yml \
-            docs/CARD-BACKFILL-AMORTIZATION.md \
-            docs/CARD-BACKFILL-AUTONOMOUS.md \
-            docs/CARD-BACKFILL-COHORTS.md \
-            package.json \
-            scripts/card-backfill-amortization-fixtures.mjs \
-            scripts/card-backfill-local-desk-law-fixtures.mjs
-          git diff --cached --check
-          git config user.name 'undercast-card-backfill-law-aligner'
-          git config user.email 'undercast-card-backfill-law-aligner@users.noreply.github.com'
-          git commit -m 'Card backfill: align local desk law and active workflow'
-          remote_head=$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | awk '{print $1}')
-          if [ "$remote_head" != "$mutation_head" ]; then
-            echo "branch moved from law-alignment head $mutation_head to $remote_head; refusing stale push"
-            exit 1
-          fi
-          git push origin "HEAD:${HEAD_BRANCH}"
-          final_head=$(git rev-parse HEAD)
-          gh workflow run card-backfill-supervisor.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref "$HEAD_BRANCH" \
-            -f reason=local-desk-law-aligned
-          gh api -X POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${final_head}" \
-            -f state=success \
-            -f context='card-backfill/local-desk-law-alignment' \
-            -f description='complete gate passed; active law and production lane aligned' \
-            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          echo 'completed=true' >> "$GITHUB_OUTPUT"
-          echo "final_head=$final_head" >> "$GITHUB_OUTPUT"
-          echo 'manual_continue_required=false'
-
       - name: Prove and compute the one permitted successor
         id: route
-        if: steps.alignment.outputs.completed != 'true'
         run: |
           set -euo pipefail
           node scripts/card-backfill-route-next-fixtures.mjs
@@ -111,7 +49,7 @@ jobs:
           cat "$RUNNER_TEMP/card-backfill-next-action.json"
 
       - name: Dispatch retained-decision reduction once
-        if: steps.alignment.outputs.completed != 'true' && steps.route.outputs.action == 'stage'
+        if: steps.route.outputs.action == 'stage'
         run: |
           set -euo pipefail
           active=$(gh run list \
@@ -131,7 +69,7 @@ jobs:
           echo 'PASS — supervisor dispatched retained-decision staging'
 
       - name: Dispatch permanent publication once
-        if: steps.alignment.outputs.completed != 'true' && steps.route.outputs.action == 'publish'
+        if: steps.route.outputs.action == 'publish'
         run: |
           set -euo pipefail
           active=$(gh run list \
@@ -151,7 +89,7 @@ jobs:
           echo 'PASS — supervisor dispatched permanent publication'
 
       - name: Dispatch the next cache-aware discovery wave once
-        if: steps.alignment.outputs.completed != 'true' && steps.route.outputs.action == 'discover'
+        if: steps.route.outputs.action == 'discover'
         run: |
           set -euo pipefail
           active_json=$(gh run list \
@@ -177,7 +115,7 @@ jobs:
           echo 'PASS — supervisor dispatched the next 4x40 amortized local-desk wave'
 
       - name: Record the unattended target stop
-        if: steps.alignment.outputs.completed != 'true' && steps.route.outputs.action == 'stop'
+        if: steps.route.outputs.action == 'stop'
         run: |
           set -euo pipefail
           echo "PASS — unattended target reached at ${{ steps.route.outputs.completed }}/${{ steps.route.outputs.target }} permanent packets"
@@ -188,19 +126,9 @@ jobs:
           set -euo pipefail
           state=success
           if [ "${{ job.status }}" != success ]; then state=failure; fi
-          action="${{ steps.route.outputs.action || 'failed' }}"
-          completed="${{ steps.route.outputs.completed || '?' }}"
-          target="${{ steps.route.outputs.target || '?' }}"
-          status_head="$HEAD_SHA"
-          if [ "${{ steps.alignment.outputs.completed }}" = true ]; then
-            action=law-align
-            completed=46
-            target=147
-            status_head="${{ steps.alignment.outputs.final_head }}"
-          fi
-          description="action=${action}; completed=${completed}/${target}; yield=${YIELD_REASON}"
+          description="action=${{ steps.route.outputs.action || 'failed' }}; completed=${{ steps.route.outputs.completed || '?' }}/${{ steps.route.outputs.target || '?' }}; yield=${YIELD_REASON}"
           gh api -X POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${status_head}" \
+            "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
             -f state="$state" \
             -f context='card-backfill/supervisor' \
             -f description="${description:0:140}" \

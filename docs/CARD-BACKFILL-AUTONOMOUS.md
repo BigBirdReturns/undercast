@@ -13,7 +13,7 @@ up to four disjoint shape-equivalent batches per wave
         ↓
 up to sixteen read-only discovery shards in parallel
         ↓
-up to four independent render/adjudication jobs in parallel
+up to four repository-local independent render/adjudication jobs in parallel
         ↓
 immutable wave-result artifacts
         ↓
@@ -141,7 +141,7 @@ The adversarial wave fixture proves that four 40-obligation batches select 160 u
 
 ## Immutable discovery and adjudication
 
-The workflow `.github/workflows/card-backfill-source-v2-autonomous.yml` is retained at its historical path but now runs `card-backfill-source-v3-wave-autonomous`.
+The production workflow is `.github/workflows/card-backfill-amortized-wave.yml`. The historical `.github/workflows/card-backfill-source-v2-autonomous.yml` remains manual-only as an explicit retirement receipt; it is not a production scheduler or enforcement surface. Successful production completion yields through `.github/workflows/card-backfill-supervisor-hook.yml` to the single supervisor.
 
 A default wave creates:
 
@@ -157,7 +157,7 @@ The workflow then creates up to four parallel assembly jobs. Each job:
 
 1. merges its exact shard reports in frozen obligation order;
 2. renders deterministic evidence packets;
-3. calls the independent machine second desk only for candidates that survive typed prescreening;
+3. calls the repository-local independent second desk only for candidates that survive typed prescreening;
 4. writes an adjudication run and immutable `wave-result.json` artifact;
 5. performs no branch mutation.
 
@@ -165,7 +165,7 @@ Discovery breadth therefore no longer conflicts with branch custody.
 
 ## One exact-head reducer
 
-`scripts/card-backfill-wave-reduce.mjs` is the only source-wave branch writer.
+`scripts/card-backfill-wave-reduce-amortized.mjs` is the only source-wave branch writer.
 
 The reducer:
 
@@ -175,7 +175,7 @@ The reducer:
 4. enriches every adjudication receipt with policy and wave identity;
 5. stages accepted packets through the existing packet validator;
 6. retains zero-acceptance adjudication receipts so misses still advance the policy frontier;
-7. copies the independent machine decisions into repository custody;
+7. copies the independent repository-local decisions into repository custody;
 8. writes one wave-reduction receipt;
 9. validates the complete staging ledger;
 10. commits the entire wave in one exact-head branch transaction.
@@ -226,7 +226,7 @@ A wave stops only for a typed reason:
 - no source-policy-v3 work remains;
 - the frozen denominator is complete;
 - accepted staging is ready for the permanent publisher;
-- source, model, custody, reducer, or repository-gate integrity fails;
+- source, local-desk runtime, custody, reducer, or repository-gate integrity fails;
 - a stale branch head makes reduction unsafe.
 
 A miss, rejection, or quarantine does not stop unrelated work. It becomes durable input to the next policy frontier.
