@@ -1,0 +1,59 @@
+name: card-backfill-local-desk-recovery-v3
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/card-backfill-local-desk-recovery-v3.yml'
+
+permissions:
+  contents: write
+  actions: write
+  statuses: write
+
+concurrency:
+  group: card-backfill-local-desk-recovery-v3-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  recover-install-and-yield:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - uses: ./.github/actions/card-backfill-runtime
+
+      - name: Recover from retained source artifacts with corrected local policy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          node --check scripts/card-backfill-install-local-desk-v2.mjs
+          sed 's#node scripts/card-backfill-install-local-desk.mjs#node scripts/card-backfill-install-local-desk-v2.mjs#' \
+            scripts/card-backfill-local-desk-recover.sh > "$RUNNER_TEMP/card-backfill-local-desk-recover-v3.sh"
+          grep -q 'node scripts/card-backfill-install-local-desk-v2.mjs' "$RUNNER_TEMP/card-backfill-local-desk-recover-v3.sh"
+          bash "$RUNNER_TEMP/card-backfill-local-desk-recover-v3.sh"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: card-backfill-local-desk-recovery-v3-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/source-planning
+            ${{ runner.temp }}/recovered-results
+            ${{ runner.temp }}/lessons-local-desk-validation.json
+            ${{ runner.temp }}/local-desk-recovery-reduce.log
+          if-no-files-found: warn
+          retention-days: 90
