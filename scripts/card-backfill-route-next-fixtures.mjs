@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildRoute, computeNextAction } from "./card-backfill-route-next.mjs";
@@ -17,6 +17,15 @@ const direct = [
   [{ completed: 44, target: 147, readyDecisions: 0, staged: 0, publicationMinimum: 2, total: 472 }, "discover"],
 ];
 for (const [input, expected] of direct) assert.equal(computeNextAction(input).action, expected);
+
+const supervisorWorkflow = await readFile(new URL("../.github/workflows/card-backfill-supervisor.yml", import.meta.url), "utf8");
+const amortizedWorkflow = await readFile(new URL("../.github/workflows/card-backfill-amortized-wave.yml", import.meta.url), "utf8");
+assert.match(supervisorWorkflow, /current_head=\$\(git rev-parse HEAD\)/);
+assert.match(supervisorWorkflow, /--json databaseId,status,url,workflowName,createdAt,headSha/);
+assert.match(supervisorWorkflow, /gh run cancel "\$run_id"/);
+assert.match(supervisorWorkflow, /current-head amortized discovery already active/);
+assert.match(amortizedWorkflow, /group: card-backfill-amortized-wave-\$\{\{ github\.ref_name \}\}\n  cancel-in-progress: true/);
+assert.match(amortizedWorkflow, /ref: \$\{\{ github\.ref_name \}\}\n          fetch-depth: 1/);
 
 const root = await mkdtemp(join(tmpdir(), "undercast-route-next-"));
 try {
@@ -60,7 +69,7 @@ try {
   assert.equal(route.action, "stop");
   assert.equal(route.reason, "target-reached");
 
-  console.log("card-backfill route-next fixtures: PASS — target > ready decisions > publication > discovery; no chat continuation is a valid route");
+  console.log("card-backfill route-next fixtures: PASS — target > ready decisions > publication > discovery; stale waves are superseded and no chat continuation is valid");
 } finally {
   await rm(root, { recursive: true, force: true });
 }
