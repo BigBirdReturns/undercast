@@ -33,13 +33,13 @@ jobs:
 
       - run: npm ci
 
-      - name: Recover retained source artifacts and install the cloud-independent production desk
+      - name: Recover retained source artifacts and publish only evidence state
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           node --check scripts/card-backfill-install-local-desk-v2.mjs
-          python3 - scripts/card-backfill-local-desk-recover.sh "$RUNNER_TEMP/card-backfill-local-desk-recover-v5.sh" <<'PY'
+          python3 - scripts/card-backfill-local-desk-recover.sh "$RUNNER_TEMP/card-backfill-local-desk-recover-v6.sh" <<'PY'
           from pathlib import Path
           import sys
 
@@ -50,21 +50,48 @@ jobs:
               raise SystemExit("recovery installer seam drift")
           source = source.replace(installer_old, installer_new, 1)
 
-          stage_old = "git add -A -- \\"
-          stage_new = "git add -A -- scripts/card-backfill-amortization-fixtures.mjs\n" + stage_old
+          stage_old = r'''git add -A -- \
+            .github/actions/card-backfill-runtime/action.yml \
+            .github/workflows/card-backfill-amortized-activation.yml \
+            .github/workflows/card-backfill-amortized-wave.yml \
+            .github/card-backfill/adjudications \
+            .github/card-backfill/waves \
+            .github/card-backfill/performance \
+            data/review/card-backfill-staging \
+            package.json \
+            scripts/gate.mjs \
+            scripts/card-backfill-local-adjudicate-fixtures.mjs \
+            scripts/card-backfill-source-policy-v3-fixtures.mjs \
+            scripts/lib/card-backfill-source-policy-v3.mjs'''
+          stage_new = r'''git add -A -- \
+            .github/card-backfill/adjudications \
+            .github/card-backfill/waves \
+            .github/card-backfill/performance \
+            data/review/card-backfill-staging'''
           if source.count(stage_old) != 1:
-              raise SystemExit("recovery staging seam drift")
+              raise SystemExit("recovery evidence-only staging seam drift")
           source = source.replace(stage_old, stage_new, 1)
+
+          commit_old = "git commit -m 'Card backfill: recover retained wave and install local second desk'"
+          commit_new = "git commit -m 'Card backfill: recover retained wave (140 obligations, 2 accepted)'"
+          if source.count(commit_old) != 1:
+              raise SystemExit("recovery commit-message seam drift")
+          source = source.replace(commit_old, commit_new, 1)
+          source = source.replace(
+              "retained 140 reduced; accepted=2; local desk installed; supervisor dispatched",
+              "retained 140 reduced; accepted=2; supervisor dispatched",
+          )
           Path(sys.argv[2]).write_text(source, encoding="utf-8")
           PY
-          grep -q 'node scripts/card-backfill-install-local-desk-v2.mjs' "$RUNNER_TEMP/card-backfill-local-desk-recover-v5.sh"
-          grep -q 'git add -A -- scripts/card-backfill-amortization-fixtures.mjs' "$RUNNER_TEMP/card-backfill-local-desk-recover-v5.sh"
-          bash "$RUNNER_TEMP/card-backfill-local-desk-recover-v5.sh"
+          grep -q 'node scripts/card-backfill-install-local-desk-v2.mjs' "$RUNNER_TEMP/card-backfill-local-desk-recover-v6.sh"
+          grep -q "git commit -m 'Card backfill: recover retained wave (140 obligations, 2 accepted)'" "$RUNNER_TEMP/card-backfill-local-desk-recover-v6.sh"
+          ! grep -A12 '^git add -A --' "$RUNNER_TEMP/card-backfill-local-desk-recover-v6.sh" | grep -q '^  \.github/workflows/'
+          bash "$RUNNER_TEMP/card-backfill-local-desk-recover-v6.sh"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: card-backfill-local-desk-recovery-v5-${{ github.run_id }}
+          name: card-backfill-local-desk-recovery-v6-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/source-planning
             ${{ runner.temp }}/recovered-results
@@ -73,4 +100,4 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-# Registered trigger: source artifacts and adjudication decisions remain unchanged.
+# Evidence-only recovery: workflow migrations remain a separate authorized transaction.
