@@ -1,4 +1,4 @@
-name: card-backfill-publication-fixture-repair
+name: card-backfill-facet-completion-inventory
 
 on:
   push:
@@ -8,16 +8,11 @@ on:
       - '.github/workflows/card-backfill-local-desk-recovery-v5.yml'
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
   statuses: write
 
-concurrency:
-  group: card-backfill-publication-fixture-repair-${{ github.ref_name }}
-  cancel-in-progress: false
-
 jobs:
-  repair-and-retry:
+  inventory:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,46 +27,28 @@ jobs:
 
       - run: npm ci
 
-      - name: Align the amortization fixture with the proven conditional runtime
+      - name: Enumerate every completed-packet key dependency and candidate fixture seam
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HEAD_BRANCH: ${{ github.ref_name }}
-          MUTATION_HEAD: ${{ github.sha }}
         run: |
           set -euo pipefail
+          echo '=== readCompletedPackets consumers ==='
+          grep -R -n --exclude-dir=node_modules --exclude='card-backfill-local-desk-recovery-v5.yml' \
+            -E 'readCompletedPackets|completedPackets\.has|completedPackets\.get|completedPackets\.size' scripts .github || true
+          echo '=== cohort fixture candidates ==='
+          find scripts -maxdepth 1 -type f -name '*card-backfill*fixture*.mjs' -print | sort
+          echo '=== audit multiplicity for the two newly permanent records ==='
           node --input-type=module - <<'NODE'
-          import { readFile, writeFile } from 'node:fs/promises';
-          const path='scripts/card-backfill-amortization-fixtures.mjs';
-          let value=await readFile(path,'utf8');
-          const prior='assert(files.runtime.includes("if ! command -v identify") && files.runtime.includes("sudo apt-get install -y imagemagick"));';
-          const next=[
-            'assert(files.runtime.includes("packages+=(imagemagick)"));',
-            'assert(files.runtime.includes("packages+=(python3-opencv)"));',
-            'assert(files.runtime.includes("packages+=(tesseract-ocr)"));',
-            'assert(files.runtime.includes(\'sudo apt-get install -y "${packages[@]}"\'));',
-          ].join('\n');
-          const count=value.split(prior).length-1;
-          if(count!==1)throw new Error(`expected one stale runtime assertion, found ${count}`);
-          value=value.replace(prior,next);
-          await writeFile(path,value);
+          import fs from 'node:fs';
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items||[];
+          for(const id of ['UC-625','UC-1004']){
+            const rows=audit.filter((row)=>row.wall_id===id);
+            console.log(id, JSON.stringify(rows.map((row)=>({side:row.side,status:row.status,risk_codes:row.risk_codes}))));
+          }
           NODE
-          node scripts/card-backfill-amortization-fixtures.mjs
-          git diff --check
-          git add -- scripts/card-backfill-amortization-fixtures.mjs
-          test "$(git diff --cached --name-only)" = 'scripts/card-backfill-amortization-fixtures.mjs'
-          git config user.name 'undercast-card-backfill-publication-repair'
-          git config user.email 'undercast-card-backfill-publication-repair@users.noreply.github.com'
-          git commit -m 'Card backfill: align amortization fixture with local runtime'
-          remote_head=$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | awk '{print $1}')
-          [ "$remote_head" = "$MUTATION_HEAD" ]
-          git push origin "HEAD:${HEAD_BRANCH}"
-          final_head=$(git rev-parse HEAD)
-          gh workflow run card-backfill-publication.yml --repo "$GITHUB_REPOSITORY" --ref "$HEAD_BRANCH"
-          for sha in "$MUTATION_HEAD" "$final_head"; do
-            gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${sha}" \
-              -f state=success \
-              -f context='card-backfill/publication-fixture-repair' \
-              -f description='runtime fixture aligned; publication re-dispatched' \
-              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null
-          done
-          echo "PASS — pushed ${final_head}; publication re-dispatched; manual_continue_required=false"
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state=success \
+            -f context='card-backfill/facet-completion-inventory' \
+            -f description='completed-packet dependencies enumerated; no source transport' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null
+          echo 'PASS — inventory complete; canonical_mutation=false; source_transport_calls=0'
