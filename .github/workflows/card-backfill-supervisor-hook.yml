@@ -1,0 +1,65 @@
+name: card-backfill-supervisor-hook
+
+on:
+  workflow_run:
+    workflows:
+      - card-backfill-amortized-wave
+      - card-backfill-stage
+      - card-backfill-publication
+    types:
+      - completed
+    branches:
+      - agent/card-backfill-next-041
+
+permissions:
+  contents: read
+  actions: write
+  statuses: write
+
+concurrency:
+  group: card-backfill-supervisor-hook-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  route-success:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      SOURCE_WORKFLOW: ${{ github.event.workflow_run.name }}
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: Explicitly yield the completed transaction to the supervisor
+        run: |
+          set -euo pipefail
+          reason=$(printf '%s' "$SOURCE_WORKFLOW" | tr '[:upper:] ' '[:lower:]-')-completed
+          gh workflow run card-backfill-supervisor.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$HEAD_BRANCH" \
+            -f reason="$reason"
+          echo "PASS — workflow ${SOURCE_RUN_ID} yielded explicitly to the supervisor"
+          echo 'manual_continue_required=false'
+
+  record-typed-stop:
+    if: github.event.workflow_run.conclusion != 'success'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_WORKFLOW: ${{ github.event.workflow_run.name }}
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+      CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+    steps:
+      - name: Record a typed hard stop instead of silently dying
+        run: |
+          set -euo pipefail
+          description="typed-stop: ${SOURCE_WORKFLOW} run ${SOURCE_RUN_ID} concluded ${CONCLUSION}"
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            -f state=failure \
+            -f context='card-backfill/unattended-stop' \
+            -f description="${description:0:140}" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}"
+          echo "$description"
+          echo 'manual_continue_required=false'
