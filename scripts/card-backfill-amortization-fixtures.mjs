@@ -175,7 +175,10 @@ for (const needle of [
   "--amortization-plan",
   "rediscovery:false",
 ]) assert(files.workflow.includes(needle), `amortized workflow guard missing ${needle}`);
-assert(files.runtime.includes("if ! command -v identify") && files.runtime.includes("sudo apt-get install -y imagemagick"));
+assert(files.runtime.includes("packages+=(imagemagick)"));
+assert(files.runtime.includes("packages+=(python3-opencv)"));
+assert(files.runtime.includes("packages+=(tesseract-ocr)"));
+assert(files.runtime.includes('sudo apt-get install -y "${packages[@]}"'));
 assert(files.stageResume.includes("card-backfill-amortized-wave.yml"));
 assert(files.publicationResume.includes("card-backfill-amortized-wave.yml") && !files.publicationResume.includes("card-backfill-source-v2-autonomous.yml"));
 assert(files.gate.includes("Card backfill amortization fixtures"));
