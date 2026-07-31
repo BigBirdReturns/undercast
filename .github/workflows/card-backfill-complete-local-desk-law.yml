@@ -1,0 +1,126 @@
+name: card-backfill-complete-local-desk-law
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/card-backfill-complete-local-desk-law.yml'
+
+permissions:
+  contents: write
+  actions: write
+  statuses: write
+
+concurrency:
+  group: card-backfill-publication-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  complete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HEAD_BRANCH: ${{ github.ref_name }}
+      MUTATION_HEAD: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build and stage the exact permanent alignment transaction
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$MUTATION_HEAD" ]
+          node --check scripts/card-backfill-align-local-desk-law.mjs
+          node --check scripts/card-backfill-local-desk-law-fixtures.mjs
+          node scripts/card-backfill-align-local-desk-law.mjs
+          node scripts/card-backfill-local-desk-law-fixtures.mjs
+          node scripts/card-backfill-amortization-fixtures.mjs
+          node scripts/card-backfill-lessons-fixtures.mjs
+          node scripts/card-backfill-lessons.mjs validate \
+            --out "$RUNNER_TEMP/local-desk-law-lessons.json"
+
+          git rm -- \
+            .github/workflows/card-backfill-complete-local-desk-law.yml \
+            .github/workflows/card-backfill-align-local-desk-law.yml \
+            scripts/card-backfill-align-local-desk-law.mjs
+          git add -- \
+            .github/CARD-BACKFILL-LESSONS.json \
+            .github/CARD-BACKFILL-COHORT.json \
+            .github/CARD-BACKFILL-AMORTIZATION.json \
+            .github/workflows/card-backfill-amortized-wave.yml \
+            .github/workflows/card-backfill-supervisor.yml \
+            docs/CARD-BACKFILL-AMORTIZATION.md \
+            docs/CARD-BACKFILL-AUTONOMOUS.md \
+            docs/CARD-BACKFILL-COHORTS.md \
+            package.json \
+            scripts/card-backfill-amortization-fixtures.mjs \
+            scripts/card-backfill-local-desk-law-fixtures.mjs
+          git diff --cached --check
+          git diff --exit-code -- .
+          git status --short
+
+      - name: Prove the staged transaction with the complete repository gate
+        run: |
+          set -euo pipefail
+          npx playwright install --with-deps chromium
+          node scripts/gate.mjs 2>&1 | tee "$RUNNER_TEMP/local-desk-law-gate.log"
+          git diff --exit-code -- .
+          git diff --cached --check
+
+      - name: Commit, exact-head push, and yield to the supervisor
+        run: |
+          set -euo pipefail
+          git config user.name 'undercast-card-backfill-law-aligner'
+          git config user.email 'undercast-card-backfill-law-aligner@users.noreply.github.com'
+          git commit -m 'Card backfill: align local desk law and active workflow'
+          remote_head=$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | awk '{print $1}')
+          if [ "$remote_head" != "$MUTATION_HEAD" ]; then
+            echo "branch moved from law-alignment head $MUTATION_HEAD to $remote_head; refusing stale push" >&2
+            exit 1
+          fi
+          git push origin "HEAD:${HEAD_BRANCH}"
+          final_head=$(git rev-parse HEAD)
+          echo "FINAL_HEAD=$final_head" >> "$GITHUB_ENV"
+          gh workflow run card-backfill-supervisor.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$HEAD_BRANCH" \
+            -f reason=local-desk-law-aligned
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${final_head}" \
+            -f state=success \
+            -f context='card-backfill/local-desk-law-alignment' \
+            -f description='complete gate passed; temporary bootstrap retired; supervisor rearmed' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo 'manual_continue_required=false'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: card-backfill-local-desk-law-completion-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/local-desk-law-lessons.json
+            ${{ runner.temp }}/local-desk-law-gate.log
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Publish observable completion failure
+        if: failure()
+        run: |
+          set -euo pipefail
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${MUTATION_HEAD}" \
+            -f state=failure \
+            -f context='card-backfill/local-desk-law-alignment' \
+            -f description="run ${GITHUB_RUN_ID}: final aligned transaction failed before successor transport" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
