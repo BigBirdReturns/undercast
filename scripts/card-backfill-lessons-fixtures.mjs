@@ -24,7 +24,7 @@ assert.equal(report.lessons_contract_sha256, "bafa82adfc525421f498f5655bf12ba000
 {
   const broken = clone(source);
   broken.policies.find((policy) => policy.status === "active").inherited_lesson_ids.pop();
-  assert.throws(() => validateContractStructure(broken), /inheritance drift|omits mandatory/);
+  assert.throws(() => validateContractStructure(broken), /inheritance drift|omits mandatory|dropped inherited lesson/);
 }
 
 {
