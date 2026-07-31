@@ -40,15 +40,32 @@ for (let i = 28; i <= 29; i++) {
 }
 auditItems.push({ id: "ma-30", wall_id: "UC-030", side: "still", scope: "sitewide", status: "absent", expected_subject: "Missing Character", risk_codes: ["source-declared-absent"] });
 
-const completed = new Map([["UC-001", { record_id: "UC-001", side: "portrait" }]]);
+const completed = new Map([["UC-001/still", { obligation_id: "UC-001/still", record_id: "UC-001", side: "still" }]]);
 const estate = buildEstate({ specimens, sources, auditItems, completedPackets: completed, control });
 assert.equal(estate.obligations.length, 28);
 assert.equal(estate.denominator.selector_total, 29);
-assert(!estate.obligations.some((row) => row.wall_id === "UC-001"), "the frozen campaign must preserve the live selector's packet-per-record completion rule");
+assert(!estate.obligations.some((row) => row.obligation_id === "UC-001/still"), "only the exact completed facet may leave the open estate");
 assert.equal(estate.counts.ready, 26);
 assert.equal(estate.counts.quarantine, 2);
 assert.equal(estate.selector_exclusions.length, 1);
 assert.equal(estate.selector_exclusions[0].reason, "missing-canonical-specimen");
+
+const dualSpecimens = [{
+  id: "UC-099", actor: "Actor 99", character: "Character 99", production: "Production 99", years: "2004",
+  universe: "Fixture", kind: "physical", wiki: "fixture", link: "https://example.test/UC-099",
+  references: [{ url: "https://evidence.test/UC-099" }], still: null, portrait: null,
+}];
+const dualSources = [{ id: "UC-099", still: null, portrait: null }];
+const dualAuditItems = [
+  { id: "ma-99-still", wall_id: "UC-099", side: "still", scope: "sitewide", status: "absent", expected_subject: "Character 99", risk_codes: ["source-declared-absent"] },
+  { id: "ma-99-portrait", wall_id: "UC-099", side: "portrait", scope: "sitewide", status: "absent", expected_subject: "Actor 99", risk_codes: ["source-declared-absent"] },
+];
+const dualCompleted = new Map([["UC-099/portrait", { obligation_id: "UC-099/portrait", record_id: "UC-099", side: "portrait" }]]);
+const dualEstate = buildEstate({ specimens: dualSpecimens, sources: dualSources, auditItems: dualAuditItems, completedPackets: dualCompleted, control });
+assert.deepEqual(dualEstate.obligations.map((row) => row.obligation_id), ["UC-099/still"]);
+assert.equal(dualEstate.denominator.completed_packet_count, 1);
+assert.equal(dualEstate.denominator.open_obligation_count, 1);
+assert.equal(dualEstate.denominator.selector_total, 2);
 
 const shuffled = buildEstate({ specimens: [...specimens].reverse(), sources: [...sources].reverse(), auditItems: [...auditItems].reverse(), completedPackets: completed, control });
 assert.equal(shuffled.estate_sha256, estate.estate_sha256, "estate hash must be input-order independent");
@@ -75,9 +92,10 @@ try {
   await mkdir(join(root, "UC-901"), { recursive: true });
   await writeFile(join(root, "UC-901", "review.json"), JSON.stringify({ record_id: "UC-901", render_contract: { candidate_path: "uc-901-portrait-candidate.jpg" } }));
   const found = await readCompletedPackets(root);
-  assert(found.has("UC-900"));
-  assert(found.has("UC-901"));
-  assert.equal(found.get("UC-901").side, "portrait");
+  assert(found.has("UC-900/still"));
+  assert(found.has("UC-901/portrait"));
+  assert(!found.has("UC-900"));
+  assert.equal(found.get("UC-901/portrait").side, "portrait");
 } finally {
   await rm(root, { recursive: true, force: true });
 }

@@ -148,7 +148,7 @@ export function buildEstate({ specimens, sources, auditItems, completedPackets =
 
   for (const audit of auditItems || []) {
     if (audit.scope !== denominator.scope || audit.status !== denominator.status || !allowedSides.has(audit.side)) continue;
-    if (completedPackets.has(audit.wall_id)) continue;
+    if (completedPackets.has(facetKey(audit.wall_id, audit.side))) continue;
     const record = specimenById.get(audit.wall_id) || null;
     if (!record) { selectorExclusions.push({ wall_id: audit.wall_id, side: audit.side, audit_id: audit.id || null, reason: "missing-canonical-specimen" }); continue; }
     obligations.push(classifyObligation({ audit, record, source: sourceById.get(audit.wall_id) || null }));
@@ -341,7 +341,7 @@ export async function readCompletedPackets(root) {
     const recordId = row.record_id || row.id || entry.name;
     const side = row.side || inferSideFromReview(row);
     if (!recordId || !side) continue;
-    completed.set(recordId, { record_id: recordId, side, path: dir });
+    completed.set(facetKey(recordId, side), { obligation_id: facetKey(recordId, side), record_id: recordId, side, path: dir });
   }
   return completed;
 }

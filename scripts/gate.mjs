@@ -92,6 +92,7 @@ const stepDefinitions = [
     runNpmScript("Card-backfill wave fixtures", "card-backfill:wave:fixtures");
     runNpmScript("Card-backfill lesson contract", "card-backfill:lessons", ["--", "validate"]);
     runNodeScript("Card backfill amortization fixtures", "scripts/card-backfill-amortization-fixtures.mjs");
+    runNodeScript("Card backfill local adjudication fixtures", "scripts/card-backfill-local-adjudicate-fixtures.mjs");
   } },
   { id: "projections", label: "Rebuild projection and refuse drift", action: runProjectedSteps },
   { id: "archive", label: "Validate archive invariants", action: () => runNodeScript("Archive invariants", "scripts/validate.mjs") },

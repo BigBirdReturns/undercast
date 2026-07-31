@@ -7,7 +7,6 @@ on:
 permissions:
   contents: read
   pull-requests: read
-  statuses: write
 
 jobs:
   collection-mode:
@@ -25,77 +24,3 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: node scripts/corpus-ops.mjs check-pr --base "$BASE_SHA" --event "$GITHUB_EVENT_PATH" --json
-
-  export-facet-safe-card-backfill-migration:
-    if: github.event.pull_request.head.ref == 'agent/card-backfill-next-041'
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-    env:
-      HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-    steps:
-      - name: Publish observable start custody
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          gh api -X POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
-            -f state=pending \
-            -f context='card-backfill/facet-safe-migration' \
-            -f description='building exact 46+426=472 migration; source transport=0' \
-            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null
-
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.HEAD_SHA }}
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-
-      - run: npm ci
-
-      - uses: ./.github/actions/card-backfill-runtime
-
-      - name: Install rendered-gate browser
-        run: npx playwright install --with-deps chromium
-
-      - name: Build, prove, and export the exact migration transaction
-        run: |
-          set -euo pipefail
-          node --check scripts/card-backfill-build-facet-safe-local-desk-migration.mjs
-          MIGRATION_ROOT="$RUNNER_TEMP/card-backfill-facet-safe-local-desk" \
-            node scripts/card-backfill-build-facet-safe-local-desk-migration.mjs
-
-      - name: Upload exact migration transaction
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: card-backfill-facet-safe-local-desk-${{ github.run_id }}
-          path: ${{ runner.temp }}/card-backfill-facet-safe-local-desk
-          if-no-files-found: warn
-          retention-days: 90
-
-      - name: Publish terminal custody
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          JOB_STATUS: ${{ job.status }}
-        run: |
-          set -euo pipefail
-          state=failure
-          description='facet-safe migration failed; inspect retained artifact and logs'
-          if [ "$JOB_STATUS" = success ]; then
-            state=success
-            description='46+426=472; disjoint wave; staged full gate pass; exact export'
-          fi
-          gh api -X POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
-            -f state="$state" \
-            -f context='card-backfill/facet-safe-migration' \
-            -f description="$description" \
-            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null
-          echo 'manual_continue_required=false'

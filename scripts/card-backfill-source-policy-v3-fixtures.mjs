@@ -93,4 +93,39 @@ const ranked = rankBoundCandidates([
 assert.equal(ranked[0].file, "Ned Flanders The Simpsons.png");
 assert.equal(ranked[0].binding.eligible, true);
 
-console.log("card-backfill source-policy v3 fixtures: PASS");
+const unrelatedExactCharacterFile = evaluateSourceCandidate({
+  side: "still", expectedSubject: "Mighty Joe Young", actor: "John Alexander", production: "Mighty Joe Young", performanceMode: "physical-or-live-action", actorEvidence: null,
+  candidate: { file: "Transport trailer.jpg", page: { title: "Mighty Joe Young", extract_windows: ["Mighty Joe Young is a film character."] }, source: { description: "transport trailer vehicle", categories: "Trailers" } },
+});
+assert.equal(unrelatedExactCharacterFile.eligible, false);
+assert(unrelatedExactCharacterFile.reasons.includes("candidate-file-not-explicitly-bound-to-subject"));
+assert(unrelatedExactCharacterFile.reasons.includes("generic-non-depiction-asset"));
+
+const wrongLiveActionDerivative = evaluateSourceCandidate({
+  side: "still", expectedSubject: "Cowardly Lion", actor: "Bert Lahr", production: "The Wizard of Oz", performanceMode: "physical-or-live-action", actorEvidence: null,
+  candidate: { file: "Cowardly Lion.png", page: { title: "Cowardly Lion", extract_windows: ["Bert Lahr portrayed the Cowardly Lion in The Wizard of Oz."] }, source: { description: "1900 book illustration of the Cowardly Lion, The Wizard of Oz", categories: "Book illustrations|The Wizard of Oz" } },
+});
+assert.equal(wrongLiveActionDerivative.eligible, false);
+assert(wrongLiveActionDerivative.reasons.includes("wrong-adaptation-derivative-for-live-action-claim"));
+
+const exactPortrait = evaluateSourceCandidate({
+  side: "portrait", expectedSubject: "Scott Lawrence", actor: "Scott Lawrence", production: "Darth Vader", performanceMode: "voice-or-animation", actorEvidence: null,
+  candidate: { file: "Scott Lawrence.jpg", page: { title: "Scott Lawrence", extract_windows: ["Scott Lawrence is an American actor."] }, source: { description: "Portrait photograph of actor Scott Lawrence", categories: "American actors" } },
+});
+assert.equal(exactPortrait.eligible, true);
+
+const pharmacologistNamesake = evaluateSourceCandidate({
+  side: "portrait", expectedSubject: "Peter Elliott", actor: "Peter Elliott", production: "The Dark Crystal", performanceMode: "physical-or-live-action", actorEvidence: null,
+  candidate: { file: "Peter Elliott.jpg", page: { title: "Peter Elliott", extract_windows: ["Peter Elliott is a pharmacologist."] }, source: { description: "Portrait of British pharmacologist Peter Elliott", categories: "Pharmacologists" } },
+});
+assert.equal(pharmacologistNamesake.eligible, false);
+assert(pharmacologistNamesake.reasons.includes("portrait-namesake-profession-conflict"));
+
+const genericActorIcon = evaluateSourceCandidate({
+  side: "portrait", expectedSubject: "Kan Tanaka", actor: "Kan Tanaka", production: "Example", performanceMode: "voice-or-animation", actorEvidence: null,
+  candidate: { file: "Kan Tanaka Seiyu.png", page: { title: "Kan Tanaka", extract_windows: ["Kan Tanaka is a voice actor."] }, source: { description: "Generic seiyu icon", categories: "Icons" } },
+});
+assert.equal(genericActorIcon.eligible, false);
+assert(genericActorIcon.reasons.includes("portrait-is-object-document-icon-or-artifact"));
+
+console.log("card-backfill source-policy v3 fixtures: PASS — exact file custody required; namesakes, icons, objects, and wrong adaptations fail closed");

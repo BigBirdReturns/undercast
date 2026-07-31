@@ -10,6 +10,8 @@ on:
       - '.github/CARD-BACKFILL-AMORTIZATION.json'
       - '.github/actions/card-backfill-runtime/action.yml'
       - 'scripts/card-backfill-amortization-*.mjs'
+      - 'scripts/card-backfill-local-adjudicate*.mjs'
+      - 'scripts/card-backfill-image-features.py'
       - 'scripts/card-backfill-source-v2-cached.mjs'
       - 'scripts/card-backfill-source-cache-merge.mjs'
       - 'scripts/card-backfill-rebalance-wave.mjs'
@@ -33,14 +35,13 @@ on:
         required: false
         default: '4'
       model:
-        description: 'Independent second-desk GitHub Model'
+        description: 'Legacy compatibility input; the repository-local second desk ignores it'
         required: false
-        default: 'openai/gpt-4.1-mini'
+        default: 'repository-local'
 
 permissions:
   contents: write
   actions: write
-  models: read
   statuses: write
 
 concurrency:
@@ -85,6 +86,7 @@ jobs:
           node scripts/card-backfill-wave-fixtures.mjs
           node scripts/card-backfill-source-policy-v2-fixtures.mjs
           node scripts/card-backfill-source-policy-v3-fixtures.mjs
+          node scripts/card-backfill-local-adjudicate-fixtures.mjs
           node scripts/card-backfill-amortization-fixtures.mjs
           node scripts/card-backfill-lessons.mjs validate \
             --out "$RUNNER_TEMP/lessons-validation.json"
@@ -336,8 +338,6 @@ jobs:
 
       - name: Merge, render, independently adjudicate, and retain amortization state
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MODEL: ${{ inputs.model || 'openai/gpt-4.1-mini' }}
           BATCH_SHA: ${{ matrix.batch_sha256 }}
           BATCH_INDEX: ${{ matrix.batch_index }}
           BATCH_PATH: ${{ matrix.batch_path }}
@@ -345,7 +345,6 @@ jobs:
           SOURCE_HEAD: ${{ needs.plan.outputs.source_head }}
         run: |
           set -euo pipefail
-          test -n "$GITHUB_TOKEN"
           final="$RUNNER_TEMP/final-$BATCH_SHA"
           batch="$RUNNER_TEMP/planning/$BATCH_PATH"
           scopes="$RUNNER_TEMP/planning/$SCOPES_PATH"
@@ -369,15 +368,13 @@ jobs:
             --shards-root "$RUNNER_TEMP/shards" \
             --out "$final/amortization" \
             --batch-sha "$BATCH_SHA" | tee "$final/amortization-collect.log"
-          node scripts/card-backfill-machine-adjudicate.mjs \
+          node scripts/card-backfill-local-adjudicate.mjs \
             --candidates "$final/packets" \
             --out "$final/machine-decisions.json" \
-            --model "$MODEL" \
-            --fallback-model 'openai/gpt-4o-mini' \
-            --max-parallel 2 \
+            --max-parallel 4 \
             --cycle 1 \
-            --artifact-name "card-backfill-amortized-wave-${GITHUB_RUN_ID}-${BATCH_SHA}" \
-            --head-sha "$SOURCE_HEAD" | tee "$final/machine-adjudicate.log"
+            --artifact-name "card-backfill-amortized-local-${GITHUB_RUN_ID}-${BATCH_SHA}" \
+            --head-sha "$SOURCE_HEAD" | tee "$final/local-adjudicate.log"
           node scripts/card-backfill-cohort-adjudicate.mjs \
             --candidates "$final/packets" \
             --decisions "$final/machine-decisions.json" \
@@ -401,7 +398,7 @@ jobs:
             artifact_only:true,rediscovery:false,canonical_mutation:false};
           fs.writeFileSync(path.join(final,'wave-result.json'),JSON.stringify(result,null,2)+'\n');
           NODE
-          echo 'PASS — immutable batch adjudicated; token injected; rediscovery=false'
+          echo 'PASS — immutable batch adjudicated by the repository-local second desk; cloud inference=0; rediscovery=false'
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -437,7 +434,7 @@ jobs:
           set -euo pipefail
           git fetch origin "$SOURCE_HEAD" --depth=1
           git diff --name-only "$SOURCE_HEAD..$MUTATION_HEAD" > "$RUNNER_TEMP/intervening-paths.txt"
-          if grep -E '^(data/(specimens\.json|SOURCES\.json|MEDIA-AUDIT\.json)|\.github/(CARD-BACKFILL-COHORT\.json|CARD-BACKFILL-LESSONS\.json|CARD-BACKFILL-AMORTIZATION\.json|actions/card-backfill-runtime/action\.yml|workflows/card-backfill-amortized-wave\.yml)|scripts/(card-backfill-(source-v2(-cached|-enrich-report)?|cohort-(merge|packetize|adjudicate)|machine-adjudicate|source-v3-wave-plan|rebalance-wave|amortization-collect|wave-reduce-amortized)\.mjs|lib/card-backfill-(source-policy-v2|source-policy-v3|cohort|packet|staging|amortization|source-cache|performance|wave)\.mjs))$' "$RUNNER_TEMP/intervening-paths.txt"; then
+          if grep -E '^(data/(specimens\.json|SOURCES\.json|MEDIA-AUDIT\.json)|\.github/(CARD-BACKFILL-COHORT\.json|CARD-BACKFILL-LESSONS\.json|CARD-BACKFILL-AMORTIZATION\.json|actions/card-backfill-runtime/action\.yml|workflows/card-backfill-amortized-wave\.yml)|scripts/(card-backfill-(source-v2(-cached|-enrich-report)?|cohort-(merge|packetize|adjudicate)|machine-adjudicate|local-adjudicate|source-v3-wave-plan|rebalance-wave|amortization-collect|wave-reduce-amortized)\.mjs|card-backfill-image-features\.py|lib/card-backfill-(source-policy-v2|source-policy-v3|cohort|packet|staging|amortization|source-cache|performance|wave)\.mjs))$' "$RUNNER_TEMP/intervening-paths.txt"; then
             echo 'source-sensitive drift occurred after immutable planning; refusing reduction'
             cat "$RUNNER_TEMP/intervening-paths.txt"
             exit 1
@@ -469,6 +466,7 @@ jobs:
           node scripts/card-backfill-attempt-index-fixtures.mjs
           node scripts/card-backfill-wave-fixtures.mjs
           node scripts/card-backfill-amortization-fixtures.mjs
+          node scripts/card-backfill-local-adjudicate-fixtures.mjs
           node scripts/card-backfill-lessons.mjs validate --out "$RUNNER_TEMP/lessons-validation.json"
 
       - name: Reduce all results once and feed measured cost into the next wave
@@ -545,7 +543,7 @@ jobs:
           BATCH_LIMIT: ${{ inputs.cohort_limit || '40' }}
           WAVE_BATCHES: ${{ inputs.wave_batches || '4' }}
           WORKERS: ${{ inputs.workers_per_batch || '4' }}
-          MODEL: ${{ inputs.model || 'openai/gpt-4.1-mini' }}
+          MODEL: ${{ inputs.model || 'repository-local' }}
         run: |
           set -euo pipefail
           sleep 10

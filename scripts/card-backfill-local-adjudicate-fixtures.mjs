@@ -69,7 +69,7 @@ try {
     campaign_id: "fixture-campaign",
     estate_sha256: "a".repeat(64),
     batch_sha256: "b".repeat(64),
-    cohort_key: "fixture-mixed",
+    cohort_key: cohortStill,
     selected_count: results.length,
     result_sha256: "c".repeat(64),
     results,

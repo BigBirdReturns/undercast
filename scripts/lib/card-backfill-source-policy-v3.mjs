@@ -6,7 +6,11 @@ const PAGE_KIND_MISMATCH = /\b(?:episode|film|movie|novel|comic|soundtrack|attra
 const FOREIGN_ADAPTATION = /\b(?:multiversus|lego|fortnite|comic|manga|novel|statues?|sculptures?|cosplay|merchandise|toys?|figures?|floats?|theme park|attraction|grauman|handprints?|waxworks?|fan art|fanart)\b/i;
 const ALWAYS_NON_ROLE_PRESENTATION = /\b(?:statues?|sculptures?|cosplay|merchandise|toys?|action figures?|figurines?|floats?|waxworks?|fan art|fanart)\b/i;
 const HUMAN_EVENT_PHOTO = /\b(?:voice actor|actor|actress|fan expo|wondercon|comic[- ]?con|panel discussion|red carpet|premiere|headshot|portrait|convention|festival)\b/i;
-const GENERIC_NON_DEPICTION = /\b(?:building|entrance|street|road|sign|logo|poster|cover|bottle|potion|skull|weapon|gun|vehicle|store|cafe|ride|trophy|plaque|interface|screenshot of text|title card)\b/i;
+const GENERIC_NON_DEPICTION = /\b(?:building|entrance|interior|street|road|sign|logo|poster|advertisement|advert|cover|bottle|potion|skull|weapon|gun|vehicle|trailer|store|cafe|ride|trophy|plaque|interface|screenshot of text|title card|certificate|sheet music|signature|autograph|icon|emoji|mask|mechanism|landscape|lake|reeds)\b/i;
+const LIVE_ACTION_DERIVATIVE = /\b(?:illustration|drawing|graphic|novel|book|edition|painting|artwork)\b/i;
+const PORTRAIT_ARTIFACT = /\b(?:statue|sculpture|certificate|sheet music|signature|autograph|icon|emoji|logo|poster|advertisement|cover|mask|mechanism|landscape|lake|reeds|vehicle|trailer|document|drawing|artwork)\b/i;
+const PORTRAIT_NAMESAKE_CONFLICT = /\b(?:pharmacolog(?:ist|ists|y|ical)?|football(?:er|ers|match)?|soccer|chemist(?:ry)?|physician|politician|scientist|composer)\b/i;
+const PORTRAIT_CONTEXT = /\b(?:portrait|headshot|photo of|photograph of|actor|actress|performer|stuntman|stuntwoman|voice actor|film actor|television actor)\b/i;
 const PORTRAIT_COSTUME = /\b(?:cosplay|costume|masked|mask|character makeup|prosthetic|in character|as [A-Z])\b/i;
 const GROUP = /\b(?:and|with|cast|group|panel|crew|ensemble|family|team)\b|[,;&]/i;
 
@@ -141,7 +145,11 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
   const pageKindMismatch = PAGE_KIND_MISMATCH.test(pageTitle) && !productionMatch(pageTitle, production);
   const foreignAdaptation = ALWAYS_NON_ROLE_PRESENTATION.test(fileText) || (FOREIGN_ADAPTATION.test(fileText) && !fileHasProduction);
   const humanEventPhoto = HUMAN_EVENT_PHOTO.test(fileText) && !fileHasAlias;
-  const genericNonDepiction = GENERIC_NON_DEPICTION.test(fileText) && !fileHasAlias;
+  const genericNonDepiction = GENERIC_NON_DEPICTION.test(fileText);
+  const liveActionDerivative = side === "still" && /physical|live-action/i.test(String(performanceMode || "")) && LIVE_ACTION_DERIVATIVE.test(fileText);
+  const portraitArtifact = PORTRAIT_ARTIFACT.test(fileText);
+  const portraitNamesakeConflict = PORTRAIT_NAMESAKE_CONFLICT.test(fileText);
+  const portraitContext = PORTRAIT_CONTEXT.test(fileText);
   const multi = isMultiSubject(expectedSubject);
   const voiceLike = /voice|animation/i.test(String(performanceMode || ""));
   const reasons = [];
@@ -150,18 +158,21 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
     if (multi) reasons.push("requires-multi-subject-composite");
     if (pageLooksLikeActor) reasons.push("actor-page-is-not-character-still");
     if (humanEventPhoto) reasons.push("human-event-photo-for-character-still");
-    if (!exactPage && !fileHasAlias) reasons.push("candidate-not-bound-to-subject-page-or-file");
-    if (!pageHasProduction && !fileHasProduction) reasons.push("candidate-lacks-filed-production-context");
+    if (!fileHasAlias) reasons.push("candidate-file-not-explicitly-bound-to-subject");
+    if (!fileHasProduction) reasons.push("candidate-file-lacks-filed-production-context");
     if (pageKindMismatch) reasons.push("page-kind-does-not-match-character-claim");
     if (foreignAdaptation) reasons.push("foreign-adaptation-or-merchandise");
     if (genericNonDepiction) reasons.push("generic-non-depiction-asset");
+    if (liveActionDerivative) reasons.push("wrong-adaptation-derivative-for-live-action-claim");
     if (voiceLike && !roleBound) reasons.push("actor-role-chain-not-explicit");
   } else if (side === "portrait") {
     const exactActorPage = actorAliases.some((alias) => textEquivalent(titleBase(pageTitle), alias));
     const fileHasActor = containsAlias(fileText, actorAliases);
-    if (!exactActorPage && !fileHasActor) reasons.push("portrait-not-explicitly-bound-to-actor");
-    if (GROUP.test(file) && !fileHasActor) reasons.push("group-or-ambiguous-portrait");
+    if (!exactActorPage && !(fileHasActor && portraitContext)) reasons.push("portrait-not-explicitly-bound-to-actor");
+    if (GROUP.test(file)) reasons.push("group-or-ambiguous-portrait");
     if (PORTRAIT_COSTUME.test(combined)) reasons.push("role-costume-or-masked-portrait");
+    if (portraitArtifact) reasons.push("portrait-is-object-document-icon-or-artifact");
+    if (portraitNamesakeConflict) reasons.push("portrait-namesake-profession-conflict");
     if (FOREIGN_ADAPTATION.test(fileText) && !fileHasActor) reasons.push("portrait-is-role-or-franchise-artifact");
   } else {
     reasons.push("unsupported-side");
@@ -180,7 +191,7 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
     eligible,
     reasons,
     score_adjustment: adjustment,
-    explicit_chain: side === "still" ? Boolean((exactPage || fileHasAlias) && (pageHasProduction || fileHasProduction) && (!voiceLike || roleBound)) : eligible,
+    explicit_chain: side === "still" ? Boolean(eligible && fileHasAlias && fileHasProduction && (!voiceLike || roleBound)) : eligible,
     facts: {
       exact_subject_page: exactPage,
       page_has_subject: pageHasAlias,
