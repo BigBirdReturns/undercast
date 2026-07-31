@@ -158,7 +158,7 @@ node scripts/card-backfill-staging.mjs validate \
   --root data/review/card-backfill-staging \
   --permanent-root data/review/card-backfill
 test -f ".github/card-backfill/waves/${WAVE_SHA}.json"
-staged=$(node -e "const x=require('./data/review/card-backfill-staging/LEDGER.json');process.stdout.write(String(x.counts.staged))")
+staged=$(node -e "const x=require('./data/review/card-backfill-staging/STAGING.json');process.stdout.write(String(x.counts.staged))")
 [ "$staged" -ge 2 ]
 echo "PASS — retained reduction complete; staged=${staged}; publication floor reached"
 
