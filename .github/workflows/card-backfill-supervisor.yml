@@ -7,11 +7,6 @@ on:
         description: 'Typed reason the previous transaction yielded control'
         required: false
         default: 'explicit-dispatch'
-  pull_request:
-    branches:
-      - agent/card-backfill-next-040
-    paths:
-      - '.github/workflows/card-backfill-supervisor.yml'
 
 permissions:
   contents: read
@@ -19,22 +14,21 @@ permissions:
   statuses: write
 
 concurrency:
-  group: card-backfill-supervisor-${{ github.event.pull_request.head.ref || github.ref_name }}
+  group: card-backfill-supervisor-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   route:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'agent/card-backfill-next-041'
     runs-on: ubuntu-latest
     env:
-      HEAD_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      HEAD_BRANCH: ${{ github.ref_name }}
+      HEAD_SHA: ${{ github.sha }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      YIELD_REASON: ${{ inputs.reason || 'supervisor-installed' }}
+      YIELD_REASON: ${{ inputs.reason || 'explicit-dispatch' }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.HEAD_BRANCH }}
+          ref: ${{ github.ref_name }}
           fetch-depth: 1
 
       - uses: actions/setup-node@v4
@@ -54,28 +48,61 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/card-backfill-next-action.json"
 
-      - name: Dispatch retained-decision reduction
+      - name: Dispatch retained-decision reduction once
         if: steps.route.outputs.action == 'stage'
         run: |
           set -euo pipefail
+          active=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow card-backfill-stage.yml \
+            --branch "$HEAD_BRANCH" \
+            --limit 50 \
+            --json status \
+            --jq '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested")] | length')
+          if [ "$active" -gt 0 ]; then
+            echo "PASS — staging already active ($active); duplicate dispatch refused"
+            exit 0
+          fi
           gh workflow run card-backfill-stage.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$HEAD_BRANCH"
           echo 'PASS — supervisor dispatched retained-decision staging'
 
-      - name: Dispatch permanent publication
+      - name: Dispatch permanent publication once
         if: steps.route.outputs.action == 'publish'
         run: |
           set -euo pipefail
+          active=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow card-backfill-publication.yml \
+            --branch "$HEAD_BRANCH" \
+            --limit 50 \
+            --json status \
+            --jq '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested")] | length')
+          if [ "$active" -gt 0 ]; then
+            echo "PASS — publication already active ($active); duplicate dispatch refused"
+            exit 0
+          fi
           gh workflow run card-backfill-publication.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$HEAD_BRANCH"
           echo 'PASS — supervisor dispatched permanent publication'
 
-      - name: Dispatch the next cache-aware discovery wave
+      - name: Dispatch the next cache-aware discovery wave once
         if: steps.route.outputs.action == 'discover'
         run: |
           set -euo pipefail
+          active=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow card-backfill-amortized-wave.yml \
+            --branch "$HEAD_BRANCH" \
+            --limit 50 \
+            --json status \
+            --jq '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested")] | length')
+          if [ "$active" -gt 0 ]; then
+            echo "PASS — amortized discovery already active ($active); duplicate dispatch refused"
+            exit 0
+          fi
           gh workflow run card-backfill-amortized-wave.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$HEAD_BRANCH" \
