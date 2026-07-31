@@ -16,7 +16,20 @@ const path = join(root, "installer.mjs");
 try {
   await writeFile(path, patched);
   await import(`${pathToFileURL(path).href}?v=2`);
-  console.log("PASS — local-desk installer v2 corrected pharmacologist/football namesake morphology before migration");
+
+  const fixturePath = "scripts/card-backfill-amortization-fixtures.mjs";
+  let fixture = await readFile(fixturePath, "utf8");
+  const retiredNeedle = '  "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",\n';
+  const localNeedle = '  "card-backfill-local-adjudicate.mjs",\n';
+  const fixtureOccurrences = fixture.split(retiredNeedle).length - 1;
+  if (fixtureOccurrences !== 1) throw new Error(`expected one retired token fixture seam, found ${fixtureOccurrences}`);
+  fixture = fixture.replace(retiredNeedle, localNeedle);
+  const runtimeAssertion = 'assert(files.runtime.includes("if ! command -v identify") && files.runtime.includes("sudo apt-get install -y imagemagick"));';
+  if (!fixture.includes(runtimeAssertion)) throw new Error("amortization runtime assertion seam is missing");
+  fixture = fixture.replace(runtimeAssertion, `${runtimeAssertion}\nassert(!files.workflow.includes("card-backfill-machine-adjudicate.mjs"));\nassert(!files.workflow.includes("models: read"));`);
+  await writeFile(fixturePath, fixture);
+
+  console.log("PASS — local-desk installer v2 corrected namesake morphology and replaced the retired cloud-token fixture with local-desk custody");
 } finally {
   await rm(root, { recursive: true, force: true });
 }
