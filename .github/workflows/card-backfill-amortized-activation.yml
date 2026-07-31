@@ -10,12 +10,12 @@ on:
 permissions:
   contents: write
   actions: write
-  models: read
+  copilot-requests: write
   statuses: write
 
 concurrency:
   group: card-backfill-publication-${{ github.event.pull_request.head.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   recover-retained-wave:
@@ -28,7 +28,7 @@ jobs:
       HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       SOURCE_RUN_ID: '30593861671'
-      MODEL: 'openai/gpt-4.1-mini'
+      COPILOT_MODEL: 'auto'
       WAVE_SHA: 'c0caa3c183b89007d8cdf5f661d25678d3f40621468202e246a7ebe56b07417c'
     steps:
       - uses: actions/checkout@v4
@@ -59,13 +59,21 @@ jobs:
       - uses: ./.github/actions/card-backfill-runtime
         if: steps.existing.outputs.recovered != 'true'
 
-      - name: Prove recovery, cache-merge, and independent-desk resilience
+      - name: Install the supported independent desk
+        if: steps.existing.outputs.recovered != 'true'
+        run: |
+          set -euo pipefail
+          npm install -g @github/copilot
+          copilot version
+          echo 'PASS — Copilot CLI installed; retired GitHub Models inference is not used'
+
+      - name: Prove recovery, cache merge, and Copilot decision custody
         if: steps.existing.outputs.recovered != 'true'
         run: |
           set -euo pipefail
           node scripts/card-backfill-amortization-fixtures.mjs
           node scripts/card-backfill-amortization-collect-fixtures.mjs
-          node scripts/card-backfill-machine-adjudicate-resilient-fixtures.mjs
+          node scripts/card-backfill-copilot-adjudicate-fixtures.mjs
           node scripts/card-backfill-lessons.mjs validate --out "$RUNNER_TEMP/lessons-recovery-validation.json"
 
       - name: Bind source run, mutation head, and immutable plan
@@ -134,18 +142,16 @@ jobs:
                 --shards-root "$shards" \
                 --out "$final/amortization" \
                 --batch-sha "$batch_sha" | tee "$final/amortization-recovery.log"
-              node scripts/card-backfill-machine-adjudicate-resilient.mjs \
-                --brownout-attempts 10 \
-                --brownout-base-delay-ms 30000 \
-                --brownout-max-delay-ms 300000 \
+              node scripts/card-backfill-copilot-adjudicate.mjs \
                 --candidates "$final/packets" \
                 --out "$final/machine-decisions.json" \
-                --model "$MODEL" \
-                --fallback-model 'openai/gpt-4o-mini' \
-                --max-parallel 2 \
+                --model "$COPILOT_MODEL" \
+                --max-parallel 4 \
+                --attempts 3 \
+                --timeout-ms 900000 \
                 --cycle 1 \
-                --artifact-name "card-backfill-amortized-activation-recovery-${GITHUB_RUN_ID}" \
-                --head-sha "$SOURCE_HEAD" | tee "$final/machine-adjudicate-recovery.log"
+                --artifact-name "card-backfill-amortized-copilot-recovery-${GITHUB_RUN_ID}" \
+                --head-sha "$SOURCE_HEAD" | tee "$final/copilot-adjudicate-recovery.log"
               node scripts/card-backfill-cohort-adjudicate.mjs \
                 --candidates "$final/packets" \
                 --decisions "$final/machine-decisions.json" \
@@ -166,7 +172,7 @@ jobs:
             done
           count=$(find "$results" -name wave-result.json -type f | wc -l)
           [ "$count" -eq 4 ]
-          echo 'PASS — four retained batches recovered; source rediscovery=0'
+          echo 'PASS — four retained batches recovered through Copilot CLI; source rediscovery=0'
 
       - name: Reduce all recovered results once
         if: steps.existing.outputs.recovered != 'true'
@@ -220,14 +226,14 @@ jobs:
           gh workflow run card-backfill-supervisor.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$HEAD_BRANCH" \
-            -f reason=retained-wave-recovery-complete
+            -f reason=copilot-retained-wave-recovery-complete
           echo 'PASS — recovered wave yielded explicitly to the unattended supervisor'
           echo 'manual_continue_required=false'
 
       - uses: actions/upload-artifact@v4
         if: always() && steps.existing.outputs.recovered != 'true'
         with:
-          name: card-backfill-amortized-activation-recovery-${{ github.run_id }}
+          name: card-backfill-amortized-copilot-recovery-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/source-planning
             ${{ runner.temp }}/recovered-results
@@ -247,5 +253,5 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
             -f state="$state" \
             -f context='card-backfill/retained-wave-recovery' \
-            -f description="run ${GITHUB_RUN_ID}: recover 140; rediscovery=0; status=${{ job.status }}" \
+            -f description="run ${GITHUB_RUN_ID}: Copilot recover 140; rediscovery=0; status=${{ job.status }}" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
