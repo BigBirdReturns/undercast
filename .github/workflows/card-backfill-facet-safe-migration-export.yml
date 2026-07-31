@@ -1,0 +1,89 @@
+name: card-backfill-facet-safe-migration-export
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/card-backfill-facet-safe-migration-export.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: card-backfill-facet-safe-migration-export-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build-prove-export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Publish observable start custody
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state=pending \
+            -f context='card-backfill/facet-safe-migration-export' \
+            -f description='building 46+426=472 migration; source transport=0' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - uses: ./.github/actions/card-backfill-runtime
+
+      - name: Install rendered-gate browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Build, prove, and export the exact migration
+        id: build
+        env:
+          MIGRATION_ROOT: ${{ runner.temp }}/card-backfill-facet-safe-local-desk
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-build-facet-safe-local-desk-migration.mjs
+
+      - name: Upload exact migration transaction
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-facet-safe-local-desk-${{ github.run_id }}
+          path: ${{ runner.temp }}/card-backfill-facet-safe-local-desk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish terminal custody
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          state=failure
+          description='facet-safe migration export failed; inspect retained artifact/logs'
+          if [ "$JOB_STATUS" = success ]; then
+            state=success
+            description='46+426=472; 160 selected; full gate pass; migration exported'
+          fi
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context='card-backfill/facet-safe-migration-export' \
+            -f description="$description" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null
+          echo "manual_continue_required=false"
