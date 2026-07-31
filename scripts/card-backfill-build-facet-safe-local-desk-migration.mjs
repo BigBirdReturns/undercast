@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = process.cwd();
 const OUT = resolve(process.env.MIGRATION_ROOT || join(tmpdir(), "card-backfill-facet-safe-local-desk"));
-const SELF = fileURLToPath(import.meta.url);
+fileURLToPath(import.meta.url);
 
 function run(label, command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -18,7 +18,9 @@ function run(label, command, args, options = {}) {
     maxBuffer: 256 * 1024 * 1024,
   });
   if (result.error) throw new Error(`${label}: ${result.error.message}`);
-  if (result.status !== 0) throw new Error(`${label}: exited ${result.status}\n${result.stderr || result.stdout || ""}`);
+  if (result.status !== 0) {
+    throw new Error(`${label}: exited ${result.status}\n${result.stderr || result.stdout || ""}`);
+  }
   return { stdout: result.stdout || "", stderr: result.stderr || "" };
 }
 
@@ -84,6 +86,7 @@ async function patchFacetCompletion() {
     if (count !== 1) throw new Error(`${label}: expected one seam, found ${count}`);
     fixture = fixture.replace(prior, next);
   }
+
   const insertion = `
 const dualSpecimens = [{
   id: "UC-099", actor: "Actor 99", character: "Character 99", production: "Production 99", years: "2004",
@@ -112,7 +115,9 @@ async function patchAmortizationFixture() {
   const path = "scripts/card-backfill-amortization-fixtures.mjs";
   let value = await readFile(path, "utf8");
   const tokenNeedle = '  "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",\n';
-  if (value.includes(tokenNeedle)) value = value.replace(tokenNeedle, '  "card-backfill-local-adjudicate.mjs",\n');
+  if (value.includes(tokenNeedle)) {
+    value = value.replace(tokenNeedle, '  "card-backfill-local-adjudicate.mjs",\n');
+  }
   for (const line of [
     'assert(files.runtime.includes("packages+=(imagemagick)"));',
     'assert(files.runtime.includes("packages+=(python3-opencv)"));',
@@ -126,12 +131,16 @@ async function patchAmortizationFixture() {
     'assert(!files.workflow.includes("models: read"));',
   ];
   const anchor = 'assert(files.runtime.includes(\'sudo apt-get install -y "${packages[@]}"\'));';
-  if (!value.includes(cloudGuards[0])) value = value.replace(anchor, `${anchor}\n${cloudGuards.join("\n")}`);
+  if (!value.includes(cloudGuards[0])) {
+    value = value.replace(anchor, `${anchor}\n${cloudGuards.join("\n")}`);
+  }
   await writeFile(path, value);
 }
 
 async function retireBuilderWorkflow() {
-  await writeFile(".github/workflows/card-backfill-local-desk-recovery-v5.yml", `name: card-backfill-local-desk-migration-retired
+  await writeFile(
+    ".github/workflows/card-backfill-local-desk-recovery-v5.yml",
+    `name: card-backfill-local-desk-migration-retired
 
 on:
   workflow_dispatch:
@@ -147,7 +156,20 @@ jobs:
           echo 'RETIRED — facet-safe completion accounting and the repository-local second desk are installed.'
           echo 'The unattended supervisor and amortized wave own all continuing transitions.'
           echo 'manual_continue_required=false'
-`);
+`,
+  );
+}
+
+function summaryMap(summary) {
+  return new Map(
+    summary
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return separator < 0 ? [line, ""] : [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
 }
 
 async function proveAndExport() {
@@ -166,53 +188,149 @@ async function proveAndExport() {
     process.stderr.write(result.stderr);
     await writeFile(log(name), `${result.stdout}${result.stderr}`);
   }
-  run("lesson contract", process.execPath, ["scripts/card-backfill-lessons.mjs", "validate", "--out", log("lessons-validation.json")]);
+
+  run("lesson contract", process.execPath, [
+    "scripts/card-backfill-lessons.mjs",
+    "validate",
+    "--out",
+    log("lessons-validation.json"),
+  ]);
 
   const planRoot = log("plan");
   await rm(planRoot, { recursive: true, force: true });
-  const plan = run("facet-safe wave plan", process.execPath, [
-    "scripts/card-backfill-source-v3-wave-plan.mjs",
-    "--control", ".github/CARD-BACKFILL-COHORT.json",
-    "--out", planRoot,
-    "--batch-limit", "40",
-    "--wave-batches", "4",
-    "--workers-per-batch", "4",
-  ], { capture: true });
+  const plan = run(
+    "facet-safe wave plan",
+    process.execPath,
+    [
+      "scripts/card-backfill-source-v3-wave-plan.mjs",
+      "--control",
+      ".github/CARD-BACKFILL-COHORT.json",
+      "--out",
+      planRoot,
+      "--batch-limit",
+      "40",
+      "--wave-batches",
+      "4",
+      "--workers-per-batch",
+      "4",
+    ],
+    { capture: true },
+  );
   process.stdout.write(plan.stdout);
   process.stderr.write(plan.stderr);
   await writeFile(log("plan.log"), `${plan.stdout}${plan.stderr}`);
+
   const summary = await readFile(join(planRoot, "summary.txt"), "utf8");
+  const summaryLines = summary.split(/\r?\n/).filter(Boolean);
   for (const line of [
     "current_completed_evidence_packets=46",
     "current_open_source_declared_absences=426",
     "selector_defined_estate=472",
-    "selected_count=160",
-  ]) if (!summary.split(/\r?\n/).includes(line)) throw new Error(`planning proof missing ${line}`);
-  console.log("PASS — facet-safe planner proves 46+426=472 and selects 160 with source_transport_calls=0");
+  ]) {
+    if (!summaryLines.includes(line)) throw new Error(`planning proof missing ${line}`);
+  }
+  const parsed = summaryMap(summary);
+  const selected = Number(parsed.get("selected_count"));
+  const ready = Number(parsed.get("source_policy_v3_ready"));
+  const disjoint = Number(parsed.get("disjoint_obligation_ids"));
+  const batches = Number(parsed.get("wave_batches"));
+  const jobs = Number(parsed.get("discovery_jobs"));
+  if (!Number.isInteger(selected) || selected < 1 || selected > 160) {
+    throw new Error(`invalid selected frontier ${selected}`);
+  }
+  if (!Number.isInteger(ready) || selected > ready) {
+    throw new Error(`planning selected beyond eligible frontier: selected=${selected}; eligible=${ready}`);
+  }
+  if (disjoint !== selected) {
+    throw new Error(`disjoint selection drift: selected=${selected}; disjoint=${disjoint}`);
+  }
+  if (batches !== 4 || jobs !== 16) {
+    throw new Error(`fan-out shape drift: batches=${batches}; jobs=${jobs}`);
+  }
+  console.log(
+    `PASS — facet-safe planner proves 46+426=472 and schedules one valid disjoint wave: selected=${selected}; eligible=${ready}; successor_frontier=${ready - selected}; source_transport_calls=0`,
+  );
+
+  run("stage migration candidate", "git", ["add", "-A", "--", "."]);
+  const stagedBeforeGate = run(
+    "staged migration paths",
+    "git",
+    ["diff", "--cached", "--name-only"],
+    { capture: true },
+  ).stdout;
+  if (!stagedBeforeGate.trim()) throw new Error("migration candidate changed zero staged paths");
+  console.log(
+    `STAGED — ${stagedBeforeGate.trim().split(/\r?\n/).filter(Boolean).length} migration path(s) bound before the complete gate`,
+  );
 
   const gate = run("complete repository gate", process.execPath, ["scripts/gate.mjs"], { capture: true });
   process.stdout.write(gate.stdout);
   process.stderr.write(gate.stderr);
   await writeFile(log("full-gate.log"), `${gate.stdout}${gate.stderr}`);
 
-  run("diff check", "git", ["diff", "--check"]);
+  run("cached diff check", "git", ["diff", "--cached", "--check"]);
   const status = run("status", "git", ["status", "--short"], { capture: true }).stdout;
-  const nameStatus = run("name status", "git", ["diff", "--name-status"], { capture: true }).stdout;
-  const patch = run("migration patch", "git", ["diff", "--binary"], { capture: true }).stdout;
-  const changed = run("changed files", "git", ["diff", "--name-only"], { capture: true }).stdout;
+  const nameStatus = run(
+    "name status",
+    "git",
+    ["diff", "--cached", "--name-status"],
+    { capture: true },
+  ).stdout;
+  const patch = run(
+    "migration patch",
+    "git",
+    ["diff", "--cached", "--binary"],
+    { capture: true },
+  ).stdout;
+  const changed = run(
+    "changed files",
+    "git",
+    ["diff", "--cached", "--name-only"],
+    { capture: true },
+  ).stdout;
+  const existing = run(
+    "existing changed files",
+    "git",
+    ["diff", "--cached", "--name-only", "--diff-filter=ACMRT"],
+    { capture: true },
+  ).stdout;
+  const deleted = run(
+    "deleted changed files",
+    "git",
+    ["diff", "--cached", "--name-only", "--diff-filter=D"],
+    { capture: true },
+  ).stdout;
+
   await Promise.all([
     writeFile(log("status.txt"), status),
     writeFile(log("name-status.txt"), nameStatus),
     writeFile(log("migration.patch"), patch),
     writeFile(log("changed-files.txt"), changed),
+    writeFile(log("existing-files.txt"), existing),
+    writeFile(log("deleted-files.txt"), deleted),
+    writeFile(log("source-head.txt"), `${run("source head", "git", ["rev-parse", "HEAD"], { capture: true }).stdout.trim()}\n`),
   ]);
-  const existing = changed.split(/\r?\n/).filter(Boolean).filter((path) => path !== "scripts/card-backfill-build-facet-safe-local-desk-migration.mjs");
-  if (!existing.length) throw new Error("migration candidate changed zero durable files");
-  await writeFile(log("existing-files.txt"), existing.join("\n") + "\n");
-  run("migration archive", "tar", ["-cf", log("changed-files.tar"), "-T", log("existing-files.txt")]);
-  run("migration checksums", "sha256sum", [log("changed-files.tar"), log("migration.patch")], { capture: true });
+
+  const existingPaths = existing.split(/\r?\n/).filter(Boolean);
+  const changedPaths = changed.split(/\r?\n/).filter(Boolean);
+  if (!changedPaths.length) throw new Error("migration candidate changed zero durable files");
+  if (existingPaths.length) {
+    run("migration archive", "tar", ["-cf", log("changed-files.tar"), "-T", log("existing-files.txt")]);
+  } else {
+    await writeFile(log("changed-files.tar"), Buffer.alloc(10240));
+  }
+  const checksums = run(
+    "migration checksums",
+    "sha256sum",
+    [log("changed-files.tar"), log("migration.patch"), log("changed-files.txt"), log("deleted-files.txt")],
+    { capture: true },
+  ).stdout;
+  await writeFile(log("checksums.sha256"), checksums);
+
   console.log(nameStatus.trim());
-  console.log(`PASS — migration candidate built and fully gated; changed_files=${existing.length}; branch_mutation=false`);
+  console.log(
+    `PASS — migration candidate built and fully gated; changed_files=${changedPaths.length}; deleted_files=${deleted.split(/\r?\n/).filter(Boolean).length}; branch_mutation=false`,
+  );
 }
 
 async function main() {
