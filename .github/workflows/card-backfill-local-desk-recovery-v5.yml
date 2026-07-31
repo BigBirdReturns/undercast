@@ -1,0 +1,74 @@
+name: card-backfill-local-desk-recovery-v5
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/card-backfill-local-desk-recovery-v5.yml'
+
+permissions:
+  contents: write
+  actions: write
+  statuses: write
+
+concurrency:
+  group: card-backfill-local-desk-recovery-v5-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  recover-install-and-yield:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Recover retained source artifacts and install the cloud-independent production desk
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          node --check scripts/card-backfill-install-local-desk-v2.mjs
+          python3 - scripts/card-backfill-local-desk-recover.sh "$RUNNER_TEMP/card-backfill-local-desk-recover-v5.sh" <<'PY'
+          from pathlib import Path
+          import sys
+
+          source = Path(sys.argv[1]).read_text(encoding="utf-8")
+          installer_old = "node scripts/card-backfill-install-local-desk.mjs"
+          installer_new = "node scripts/card-backfill-install-local-desk-v2.mjs"
+          if source.count(installer_old) != 1:
+              raise SystemExit("recovery installer seam drift")
+          source = source.replace(installer_old, installer_new, 1)
+
+          stage_old = "git add -A -- \\"
+          stage_new = "git add -A -- scripts/card-backfill-amortization-fixtures.mjs\n" + stage_old
+          if source.count(stage_old) != 1:
+              raise SystemExit("recovery staging seam drift")
+          source = source.replace(stage_old, stage_new, 1)
+          Path(sys.argv[2]).write_text(source, encoding="utf-8")
+          PY
+          grep -q 'node scripts/card-backfill-install-local-desk-v2.mjs' "$RUNNER_TEMP/card-backfill-local-desk-recover-v5.sh"
+          grep -q 'git add -A -- scripts/card-backfill-amortization-fixtures.mjs' "$RUNNER_TEMP/card-backfill-local-desk-recover-v5.sh"
+          bash "$RUNNER_TEMP/card-backfill-local-desk-recover-v5.sh"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: card-backfill-local-desk-recovery-v5-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/source-planning
+            ${{ runner.temp }}/recovered-results
+            ${{ runner.temp }}/lessons-local-desk-validation.json
+            ${{ runner.temp }}/local-desk-recovery-reduce.log
+          if-no-files-found: warn
+          retention-days: 90
