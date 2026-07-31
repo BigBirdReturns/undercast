@@ -1,0 +1,402 @@
+name: card-backfill-amortized-recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: 'Failed amortized-wave run whose packetized artifacts must be recovered'
+        required: true
+        default: '30593861671'
+      model:
+        description: 'Independent second-desk GitHub Model'
+        required: false
+        default: 'openai/gpt-4.1-mini'
+
+permissions:
+  contents: write
+  actions: write
+  models: read
+  statuses: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      source_run_id: ${{ steps.plan.outputs.source_run_id }}
+      source_head: ${{ steps.plan.outputs.source_head }}
+      source_branch: ${{ steps.plan.outputs.source_branch }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      selected_count: ${{ steps.plan.outputs.selected_count }}
+      wave_batches: ${{ steps.plan.outputs.wave_batches }}
+      wave_sha256: ${{ steps.plan.outputs.wave_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Prove recovery and independent-desk resilience before touching retained artifacts
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-amortization-fixtures.mjs
+          node scripts/card-backfill-machine-adjudicate-resilient-fixtures.mjs
+          node scripts/card-backfill-lessons.mjs validate --out "$RUNNER_TEMP/lessons-validation.json"
+
+      - name: Bind the exact failed wave and its immutable plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]
+          metadata="$RUNNER_TEMP/source-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" > "$metadata"
+          source_head=$(node -e "const x=require(process.argv[1]);process.stdout.write(String(x.head_sha||''))" "$metadata")
+          source_branch=$(node -e "const x=require(process.argv[1]);process.stdout.write(String(x.head_branch||''))" "$metadata")
+          [[ "$source_head" =~ ^[0-9a-f]{40}$ ]]
+          [ "$source_branch" = "$GITHUB_REF_NAME" ]
+          planning="$RUNNER_TEMP/source-planning"
+          mkdir -p "$planning"
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "card-backfill-amortized-plan-${SOURCE_RUN_ID}" \
+            --dir "$planning"
+          test -f "$planning/wave.json"
+          test -f "$planning/amortization-plan.json"
+          test -f "$planning/assemble-matrix.json"
+          node --input-type=module - "$planning/wave.json" "$planning/assemble-matrix.json" "$source_head" <<'NODE'
+          import fs from 'node:fs';
+          const [wavePath,matrixPath,sourceHead]=process.argv.slice(2);
+          const wave=JSON.parse(fs.readFileSync(wavePath,'utf8'));
+          const matrix=JSON.parse(fs.readFileSync(matrixPath,'utf8'));
+          if(wave.artifact_only!==true||wave.canonical_mutation!==false)throw new Error('source wave is not immutable');
+          if(wave.wave_batches!==matrix.include?.length)throw new Error('source recovery matrix cardinality drift');
+          if(new Set(matrix.include.map(row=>row.batch_sha256)).size!==matrix.include.length)throw new Error('duplicate source recovery batch');
+          if(!/^[0-9a-f]{40}$/i.test(sourceHead))throw new Error('source head is invalid');
+          NODE
+          matrix=$(node -e "const fs=require('fs');process.stdout.write(JSON.stringify(JSON.parse(fs.readFileSync(process.argv[1],'utf8'))))" "$planning/assemble-matrix.json")
+          selected=$(node -e "const x=require(process.argv[1]);process.stdout.write(String(x.selected_count))" "$planning/wave.json")
+          batches=$(node -e "const x=require(process.argv[1]);process.stdout.write(String(x.wave_batches))" "$planning/wave.json")
+          wave=$(node -e "const x=require(process.argv[1]);process.stdout.write(String(x.wave_sha256))" "$planning/wave.json")
+          echo "source_run_id=$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "source_head=$source_head" >> "$GITHUB_OUTPUT"
+          echo "source_branch=$source_branch" >> "$GITHUB_OUTPUT"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "selected_count=$selected" >> "$GITHUB_OUTPUT"
+          echo "wave_batches=$batches" >> "$GITHUB_OUTPUT"
+          echo "wave_sha256=$wave" >> "$GITHUB_OUTPUT"
+          cp "$metadata" "$planning/source-run.json"
+          cp "$RUNNER_TEMP/lessons-validation.json" "$planning/lessons-recovery-validation.json"
+          echo 'PASS — failed wave plan recovered; source transport remains forbidden'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-amortized-recovery-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/source-planning
+          if-no-files-found: error
+          retention-days: 90
+
+  recover:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - uses: ./.github/actions/card-backfill-runtime
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: card-backfill-amortized-recovery-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/planning
+
+      - name: Download retained packet and shard artifacts; source transport remains zero
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_RUN_ID: ${{ needs.plan.outputs.source_run_id }}
+          BATCH_SHA: ${{ matrix.batch_sha256 }}
+        run: |
+          set -euo pipefail
+          original="$RUNNER_TEMP/original-$BATCH_SHA"
+          shards="$RUNNER_TEMP/shards-$BATCH_SHA"
+          mkdir -p "$original" "$shards"
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "card-backfill-amortized-result-${BATCH_SHA}-${SOURCE_RUN_ID}" \
+            --dir "$original"
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "card-backfill-amortized-shard-${BATCH_SHA}-*-${SOURCE_RUN_ID}" \
+            --dir "$shards"
+          test -f "$original/packets/batch-result.json"
+          test -d "$original/packets/packets"
+          count=$(find "$shards" -name source-telemetry.json -type f | wc -l)
+          [ "$count" -gt 0 ]
+          echo "PASS — retained batch and ${count} telemetry shard(s) downloaded; source_transport_calls=0"
+
+      - name: Rebuild amortization custody and retry only the independent desk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODEL: ${{ inputs.model || 'openai/gpt-4.1-mini' }}
+          SOURCE_RUN_ID: ${{ needs.plan.outputs.source_run_id }}
+          SOURCE_HEAD: ${{ needs.plan.outputs.source_head }}
+          BATCH_SHA: ${{ matrix.batch_sha256 }}
+          BATCH_INDEX: ${{ matrix.batch_index }}
+          BATCH_PATH: ${{ matrix.batch_path }}
+        run: |
+          set -euo pipefail
+          test -n "$GITHUB_TOKEN"
+          original="$RUNNER_TEMP/original-$BATCH_SHA"
+          shards="$RUNNER_TEMP/shards-$BATCH_SHA"
+          final="$RUNNER_TEMP/recovered-$BATCH_SHA"
+          batch="$RUNNER_TEMP/planning/$BATCH_PATH"
+          wave="$RUNNER_TEMP/planning/wave.json"
+          mkdir -p "$final"
+          cp -a "$original/packets" "$final/packets"
+          node scripts/card-backfill-amortization-collect.mjs \
+            --shards-root "$shards" \
+            --out "$final/amortization" \
+            --batch-sha "$BATCH_SHA" | tee "$final/amortization-recovery.log"
+          node scripts/card-backfill-machine-adjudicate-resilient.mjs \
+            --brownout-attempts 10 \
+            --brownout-base-delay-ms 30000 \
+            --brownout-max-delay-ms 300000 \
+            --candidates "$final/packets" \
+            --out "$final/machine-decisions.json" \
+            --model "$MODEL" \
+            --fallback-model 'openai/gpt-4o-mini' \
+            --max-parallel 2 \
+            --cycle 1 \
+            --artifact-name "card-backfill-amortized-recovered-${GITHUB_RUN_ID}-${BATCH_SHA}" \
+            --head-sha "$SOURCE_HEAD" | tee "$final/machine-adjudicate-recovery.log"
+          node scripts/card-backfill-cohort-adjudicate.mjs \
+            --candidates "$final/packets" \
+            --decisions "$final/machine-decisions.json" \
+            --control .github/CARD-BACKFILL-COHORT.json \
+            --out "$final/adjudicated" \
+            --source-run-id "$GITHUB_RUN_ID" | tee "$final/adjudicate-recovery.log"
+          cp "$batch" "$final/batch.json"
+          node --input-type=module - "$final" "$batch" "$wave" "$SOURCE_HEAD" "$SOURCE_RUN_ID" "$BATCH_INDEX" <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const [final,batchPath,wavePath,sourceHead,sourceRunId,batchIndex]=process.argv.slice(2);
+          const batch=JSON.parse(fs.readFileSync(batchPath,'utf8'));
+          const wave=JSON.parse(fs.readFileSync(wavePath,'utf8'));
+          const receipt=JSON.parse(fs.readFileSync(path.join(final,'adjudicated','adjudication-run-receipt.json'),'utf8'));
+          const result={
+            version:1,
+            lane:'card-backfill-source-v3-wave-result',
+            source_head:sourceHead,
+            source_workflow_run_id:Number(sourceRunId),
+            recovery_workflow_run_id:Number(process.env.GITHUB_RUN_ID),
+            recovery_code_head:process.env.GITHUB_SHA,
+            wave_sha256:wave.wave_sha256,
+            batch_sha256:batch.batch_sha256,
+            batch_index:Number(batchIndex),
+            source_policy_id:wave.source_policy_id,
+            source_policy_version:wave.source_policy_version,
+            source_policy_revision:wave.source_policy_revision,
+            lessons_contract_sha256:wave.lessons_contract_sha256,
+            amortization_plan_sha256:wave.amortization_plan_sha256,
+            cost_model_sha256:wave.cost_model_sha256||null,
+            selected_count:batch.selected_count,
+            counts:receipt.counts,
+            adjudicated_path:'adjudicated',
+            machine_decisions_path:'machine-decisions.json',
+            amortization_path:'amortization',
+            recovered_from_packetized_artifact:true,
+            source_transport_calls:0,
+            artifact_only:true,
+            rediscovery:false,
+            canonical_mutation:false,
+          };
+          fs.writeFileSync(path.join(final,'wave-result.json'),JSON.stringify(result,null,2)+'\n');
+          NODE
+          echo 'PASS — retained packet batch independently adjudicated; rediscovery=false; source_transport_calls=0'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: card-backfill-amortized-recovered-${{ matrix.batch_sha256 }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/recovered-${{ matrix.batch_sha256 }}
+          if-no-files-found: error
+          retention-days: 90
+
+  reduce:
+    needs: [plan, recover]
+    if: needs.recover.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    concurrency:
+      group: card-backfill-publication-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Bind the sole mutation head after acquiring the publication lock
+        id: mutation
+        run: echo "mutation_head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse any source-estate drift while permitting recovery-only machinery
+        env:
+          SOURCE_HEAD: ${{ needs.plan.outputs.source_head }}
+          MUTATION_HEAD: ${{ steps.mutation.outputs.mutation_head }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$SOURCE_HEAD" --depth=1
+          git diff --name-only "$SOURCE_HEAD..$MUTATION_HEAD" > "$RUNNER_TEMP/recovery-intervening-paths.txt"
+          if grep -E '^(data/(specimens\.json|SOURCES\.json|MEDIA-AUDIT\.json)|\.github/(CARD-BACKFILL-COHORT\.json|CARD-BACKFILL-LESSONS\.json)|scripts/(card-backfill-(source-v2(-cached|-enrich-report)?|cohort-(merge|packetize)|source-v3-wave-plan|rebalance-wave)\.mjs|lib/card-backfill-(source-policy-v2|source-policy-v3|cohort|packet|wave)\.mjs))$' "$RUNNER_TEMP/recovery-intervening-paths.txt"; then
+            echo 'source-sensitive drift occurred after the retained wave; refusing artifact recovery'
+            cat "$RUNNER_TEMP/recovery-intervening-paths.txt"
+            exit 1
+          fi
+          echo 'PASS — intervening changes are recovery/control-loop only; source evidence remains bound to the original head'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: card-backfill-amortized-recovery-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/planning
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: card-backfill-amortized-recovered-*-${{ github.run_id }}
+          path: ${{ runner.temp }}/results
+          merge-multiple: false
+
+      - name: Re-prove all inherited and recovery contracts at the mutation boundary
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-lessons-fixtures.mjs
+          node scripts/card-backfill-attempt-index-fixtures.mjs
+          node scripts/card-backfill-wave-fixtures.mjs
+          node scripts/card-backfill-amortization-fixtures.mjs
+          node scripts/card-backfill-machine-adjudicate-resilient-fixtures.mjs
+          node scripts/card-backfill-lessons.mjs validate --out "$RUNNER_TEMP/lessons-recovery-reduction.json"
+
+      - name: Reduce four recovered results once
+        env:
+          SOURCE_HEAD: ${{ needs.plan.outputs.source_head }}
+          MUTATION_HEAD: ${{ steps.mutation.outputs.mutation_head }}
+        run: |
+          set -euo pipefail
+          observed_head=$(git rev-parse HEAD)
+          node scripts/card-backfill-wave-reduce-amortized.mjs \
+            --wave "$RUNNER_TEMP/planning/wave.json" \
+            --amortization-plan "$RUNNER_TEMP/planning/amortization-plan.json" \
+            --results-root "$RUNNER_TEMP/results" \
+            --staging-root data/review/card-backfill-staging \
+            --permanent-root data/review/card-backfill \
+            --adjudications-root .github/card-backfill/adjudications \
+            --wave-receipt-root .github/card-backfill/waves \
+            --performance-root .github/card-backfill/performance \
+            --source-head "$SOURCE_HEAD" \
+            --mutation-head "$MUTATION_HEAD" \
+            --observed-head "$observed_head" | tee "$RUNNER_TEMP/amortized-recovery-reduce.log"
+          node scripts/card-backfill-staging.mjs validate \
+            --root data/review/card-backfill-staging \
+            --permanent-root data/review/card-backfill
+
+      - name: Commit one exact recovered reduction and explicitly yield control
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MUTATION_HEAD: ${{ steps.mutation.outputs.mutation_head }}
+          SELECTED_COUNT: ${{ needs.plan.outputs.selected_count }}
+          WAVE_BATCHES: ${{ needs.plan.outputs.wave_batches }}
+          SOURCE_RUN_ID: ${{ needs.plan.outputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          git add -A -- \
+            .github/card-backfill/adjudications \
+            .github/card-backfill/waves \
+            .github/card-backfill/performance \
+            data/review/card-backfill-staging
+          git diff --cached --check
+          if ! git diff --cached --quiet; then
+            git config user.name 'undercast-card-backfill-amortized-recovery'
+            git config user.email 'undercast-card-backfill-amortized-recovery@users.noreply.github.com'
+            git commit -m "Card backfill: recover ${WAVE_BATCHES} retained batches (${SELECTED_COUNT} obligations)"
+            remote_head=$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')
+            if [ "$remote_head" != "$MUTATION_HEAD" ]; then
+              echo "branch moved from recovery mutation head $MUTATION_HEAD to $remote_head; refusing stale push"
+              exit 1
+            fi
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          else
+            echo 'recovered reduction was already present; no duplicate commit required'
+          fi
+          gh workflow run card-backfill-supervisor.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$GITHUB_REF_NAME" \
+            -f reason="amortized-recovery-${SOURCE_RUN_ID}-complete"
+          echo 'PASS — retained wave reduced and yielded explicitly to the unattended supervisor'
+          echo 'manual_continue_required=false'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: card-backfill-amortized-recovery-reduction-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/planning
+            ${{ runner.temp }}/results
+            ${{ runner.temp }}/amortized-recovery-reduce.log
+            ${{ runner.temp }}/recovery-intervening-paths.txt
+          if-no-files-found: warn
+          retention-days: 90
+
+  report-status:
+    needs: [plan, recover, reduce]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish observable retained-wave recovery status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_HEAD: ${{ needs.plan.outputs.source_head || github.sha }}
+          SOURCE_RUN_ID: ${{ needs.plan.outputs.source_run_id || inputs.source_run_id }}
+          RECOVER_RESULT: ${{ needs.recover.result }}
+          REDUCE_RESULT: ${{ needs.reduce.result }}
+          SELECTED: ${{ needs.plan.outputs.selected_count || '0' }}
+        run: |
+          set -euo pipefail
+          state=success
+          if [ "$RECOVER_RESULT" != success ] || [ "$REDUCE_RESULT" != success ]; then state=failure; fi
+          description="recover ${SOURCE_RUN_ID}: selected=${SELECTED}; recover=${RECOVER_RESULT}; reduce=${REDUCE_RESULT}; rediscovery=0"
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${SOURCE_HEAD}" \
+            -f state="$state" \
+            -f context='card-backfill/amortized-recovery' \
+            -f description="${description:0:140}" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
