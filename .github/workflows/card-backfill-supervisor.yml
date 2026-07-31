@@ -1,0 +1,107 @@
+name: card-backfill-supervisor
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Typed reason the previous transaction yielded control'
+        required: false
+        default: 'explicit-dispatch'
+  pull_request:
+    branches:
+      - agent/card-backfill-next-040
+    paths:
+      - '.github/workflows/card-backfill-supervisor.yml'
+
+permissions:
+  contents: read
+  actions: write
+  statuses: write
+
+concurrency:
+  group: card-backfill-supervisor-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  route:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'agent/card-backfill-next-041'
+    runs-on: ubuntu-latest
+    env:
+      HEAD_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      YIELD_REASON: ${{ inputs.reason || 'supervisor-installed' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_BRANCH }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Prove and compute the one permitted successor
+        id: route
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-route-next-fixtures.mjs
+          node scripts/card-backfill-route-next.mjs \
+            --out "$RUNNER_TEMP/card-backfill-next-action.json" \
+            --github-output "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/card-backfill-next-action.json"
+
+      - name: Dispatch retained-decision reduction
+        if: steps.route.outputs.action == 'stage'
+        run: |
+          set -euo pipefail
+          gh workflow run card-backfill-stage.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$HEAD_BRANCH"
+          echo 'PASS — supervisor dispatched retained-decision staging'
+
+      - name: Dispatch permanent publication
+        if: steps.route.outputs.action == 'publish'
+        run: |
+          set -euo pipefail
+          gh workflow run card-backfill-publication.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$HEAD_BRANCH"
+          echo 'PASS — supervisor dispatched permanent publication'
+
+      - name: Dispatch the next cache-aware discovery wave
+        if: steps.route.outputs.action == 'discover'
+        run: |
+          set -euo pipefail
+          gh workflow run card-backfill-amortized-wave.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$HEAD_BRANCH" \
+            -f cohort_limit=40 \
+            -f wave_batches=4 \
+            -f workers_per_batch=4 \
+            -f model=openai/gpt-4.1-mini
+          echo 'PASS — supervisor dispatched the next 4x40 amortized wave'
+
+      - name: Record the unattended target stop
+        if: steps.route.outputs.action == 'stop'
+        run: |
+          set -euo pipefail
+          echo "PASS — unattended target reached at ${{ steps.route.outputs.completed }}/${{ steps.route.outputs.target }} permanent packets"
+
+      - name: Publish observable supervisor custody
+        if: always()
+        run: |
+          set -euo pipefail
+          state=success
+          if [ "${{ job.status }}" != success ]; then state=failure; fi
+          description="action=${{ steps.route.outputs.action || 'failed' }}; completed=${{ steps.route.outputs.completed || '?' }}/${{ steps.route.outputs.target || '?' }}; yield=${YIELD_REASON}"
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            -f state="$state" \
+            -f context='card-backfill/supervisor' \
+            -f description="${description:0:140}" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo 'manual_continue_required=false'
