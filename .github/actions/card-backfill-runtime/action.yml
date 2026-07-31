@@ -1,5 +1,5 @@
 name: card-backfill-runtime
-description: Reuse the hosted runner image when possible and install deterministic image tools only when absent.
+description: Reuse the hosted runner image when possible and install deterministic local image-analysis tools only when absent.
 runs:
   using: composite
   steps:
@@ -7,18 +7,38 @@ runs:
       run: |
         set -euo pipefail
         mkdir -p "$RUNNER_TEMP/card-backfill-bin"
-        if command -v magick >/dev/null 2>&1; then
-          echo 'PASS — ImageMagick 7 already present; apt work avoided'
-          exit 0
+
+        packages=()
+        if ! command -v magick >/dev/null 2>&1 && \
+           { ! command -v identify >/dev/null 2>&1 || ! command -v convert >/dev/null 2>&1 || ! command -v montage >/dev/null 2>&1; }; then
+          packages+=(imagemagick)
         fi
-        if ! command -v identify >/dev/null 2>&1 || ! command -v convert >/dev/null 2>&1 || ! command -v montage >/dev/null 2>&1; then
+        if ! python3 - <<'PY'
+        import cv2
+        import numpy
+        PY
+        then
+          packages+=(python3-opencv)
+        fi
+        if ! command -v tesseract >/dev/null 2>&1; then
+          packages+=(tesseract-ocr)
+        fi
+
+        if [ "${#packages[@]}" -gt 0 ]; then
           sudo apt-get update
-          sudo apt-get install -y imagemagick
-          echo 'INSTALLED — ImageMagick was absent from the runner image'
+          sudo apt-get install -y "${packages[@]}"
+          printf 'INSTALLED — %s\n' "${packages[*]}"
         else
-          echo 'PASS — ImageMagick 6 already present; apt work avoided'
+          echo 'PASS — ImageMagick, OpenCV, NumPy, and Tesseract already present; apt work avoided'
         fi
-        cat > "$RUNNER_TEMP/card-backfill-bin/magick" <<'SH'
+
+        if command -v magick >/dev/null 2>&1; then
+          echo 'PASS — ImageMagick 7 command is available'
+        else
+          command -v identify >/dev/null
+          command -v convert >/dev/null
+          command -v montage >/dev/null
+          cat > "$RUNNER_TEMP/card-backfill-bin/magick" <<'SH'
         #!/bin/sh
         command="$1"
         case "$command" in
@@ -31,5 +51,14 @@ runs:
             ;;
         esac
         SH
-        chmod +x "$RUNNER_TEMP/card-backfill-bin/magick"
-        echo "$RUNNER_TEMP/card-backfill-bin" >> "$GITHUB_PATH"
+          chmod +x "$RUNNER_TEMP/card-backfill-bin/magick"
+          echo "$RUNNER_TEMP/card-backfill-bin" >> "$GITHUB_PATH"
+          echo 'PASS — ImageMagick 6 compatibility command installed'
+        fi
+
+        python3 - <<'PY'
+        import cv2
+        import numpy
+        print(f'PASS — local image desk runtime: OpenCV {cv2.__version__}; NumPy {numpy.__version__}')
+        PY
+        tesseract --version | head -n 1
