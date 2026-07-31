@@ -45,7 +45,7 @@ function validateProgress(control, completed, open) {
 
 async function main() {
   const controlPath = option("--control", ".github/CARD-BACKFILL-COHORT.json");
-  const out = resolve(option("--out", ".card-backfill-source-v3-wave"));
+  const out = resolve(option("--out", ".card-backfill-source-v4-wave"));
   const completedRoot = option("--completed-root", "data/review/card-backfill");
   const control = await readJson(controlPath);
   const stagingRoot = option("--staging-root", control.staging?.root || "data/review/card-backfill-staging");
@@ -64,13 +64,13 @@ async function main() {
   ]);
   const publicationMinimum = Number(control.staging?.minimum_publication_batch ?? 2);
   if (!Number.isInteger(publicationMinimum) || publicationMinimum < 2) throw new Error(`invalid publication minimum ${publicationMinimum}`);
-  if (stagingLedger.counts.staged >= publicationMinimum) throw new Error(`no source-policy-v3 wave available: ${stagingLedger.counts.staged} staged packet(s) are publication-ready; discovery yields to the permanent publisher`);
+  if (stagingLedger.counts.staged >= publicationMinimum) throw new Error(`no source-policy-v4 wave available: ${stagingLedger.counts.staged} staged packet(s) are publication-ready; discovery yields to the permanent publisher`);
 
   const sourceEstate = buildEstate({ specimens, sources, auditItems: auditRoot.items || [], completedPackets, control });
   sourceEstate.generated_at = now;
   const progress = validateProgress(control, completedPackets.size, sourceEstate.obligations.length);
   const retryEstate = buildSourcePolicyV2Estate({ estate: sourceEstate, attemptIndex, stagedObligationIds: stagingLedger.entries.map((row) => row.obligation_id) });
-  if (!retryEstate.cohorts.length) throw new Error("no source-policy-v3 wave available");
+  if (!retryEstate.cohorts.length) throw new Error("no source-policy-v4 wave available");
 
   const exclusionState = {
     staging_ledger_sha256: stagingLedger.ledger_sha256,
@@ -87,7 +87,7 @@ async function main() {
     batchLimit,
     waveBatchLimit,
   }));
-  if (!wave.wave_batches) throw new Error("no source-policy-v3 wave available");
+  if (!wave.wave_batches) throw new Error("no source-policy-v4 wave available");
 
   const discoverMatrix = { include: [] };
   const assembleMatrix = { include: [] };
@@ -142,7 +142,7 @@ async function main() {
   await writeFile(join(out, "summary.txt"), [
     `campaign=${wave.campaign_id}`,
     `generated_at=${now}`,
-    `planner=source-policy-v3-wave`,
+    `planner=source-policy-v4-wave`,
     `current_completed_evidence_packets=${progress.current.completed}`,
     `current_open_source_declared_absences=${progress.current.open}`,
     `selector_defined_estate=${progress.current.total}`,
@@ -159,7 +159,7 @@ async function main() {
     `wave_sha256=${wave.wave_sha256}`,
     `canonical_mutation=false`,
   ].join("\n") + "\n");
-  console.log(`PASS — source policy v3 wave selected ${wave.selected_count} disjoint obligation(s) in ${wave.wave_batches} immutable batch(es)`);
+  console.log(`PASS — source policy v4 wave selected ${wave.selected_count} disjoint obligation(s) in ${wave.wave_batches} immutable batch(es)`);
   console.log(`FANOUT — ${discoverMatrix.include.length} shard job(s); artifact_only=true`);
   console.log(`POLICY — ${wave.source_policy_id} lessons=${wave.lessons_contract_sha256}`);
   console.log(`OUTPUT — ${out}`);

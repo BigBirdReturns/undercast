@@ -31,7 +31,14 @@ async function packet({ id, side, subject, actor, production, required, file, me
     categories,
     source_origin: `https://example.test/file/${id}`,
     page_extract_windows: pageTitle ? [`${pageTitle} is an actor profile.`] : [],
-    binding: { facts: { page_looks_like_actor: method.startsWith("exact-actor-pageimage"), actor_role_bound: true } },
+    binding: { facts: {
+      page_looks_like_actor: method.startsWith("exact-actor-pageimage"),
+      actor_role_bound: true,
+      exact_lead_pageimage: method.includes("pageimage"),
+      exact_actor_lead_pageimage: method.startsWith("exact-actor-pageimage"),
+      pageimage_subject_bound: method.includes("pageimage"),
+      pageimage_production_bound: method.includes("pageimage"),
+    } },
   };
   await writeFile(join(packetRoot, "source-receipt.json"), JSON.stringify({
     version: 1,
@@ -58,10 +65,10 @@ try {
   const cohortPortrait = "portrait::voice-or-animation::commons-bound-multicandidate-v3::canonical-link-only::neutral-human";
   const cohortStill = "still::physical-or-live-action::mediawiki-bound-multicandidate-v3::canonical-link-only::character-depiction";
   const results = [
-    await packet({ id: "UC-001", side: "portrait", subject: "Exact Actor", actor: "Exact Actor", production: "Example", required: "neutral-human", file: "Exact Actor portrait.jpg", method: "exact-actor-pageimage-v3", description: "Portrait of Exact Actor", categories: "Actors", pageTitle: "Exact Actor", cohortKey: cohortPortrait }),
-    await packet({ id: "UC-002", side: "portrait", subject: "Generic Voice", actor: "Generic Voice", production: "Example", required: "neutral-human", file: "Seiyu.png", method: "exact-actor-pageimage-v3", description: "Generic voice actor icon", categories: "Icons", pageTitle: "Generic Voice", cohortKey: cohortPortrait }),
-    await packet({ id: "UC-003", side: "still", subject: "Filed Beast", actor: "Actor Three", production: "Filed Movie 1999", required: "character-depiction", file: "Filed Beast - Filed Movie 1999.jpg", method: "exact-character-page-v3", description: "Filed Beast in Filed Movie 1999", categories: "Filed Movie 1999 characters", pageTitle: "Filed Beast", cohortKey: cohortStill }),
-    await packet({ id: "UC-004", side: "still", subject: "Filed Lion", actor: "Actor Four", production: "Filed Movie 1939", required: "character-depiction", file: "Filed Lion.png", method: "exact-character-page-v3", description: "Book illustration from the 1900 novel edition", categories: "Book illustrations", pageTitle: "Filed Lion", cohortKey: cohortStill }),
+    await packet({ id: "UC-001", side: "portrait", subject: "Exact Actor", actor: "Exact Actor", production: "Example", required: "neutral-human", file: "Lead image.jpg", method: "exact-actor-pageimage-v4", description: "Official profile image", categories: "Actors", pageTitle: "Exact Actor", cohortKey: cohortPortrait }),
+    await packet({ id: "UC-002", side: "portrait", subject: "Generic Voice", actor: "Generic Voice", production: "Example", required: "neutral-human", file: "Seiyu.png", method: "exact-actor-pageimage-v4", description: "Generic voice actor icon", categories: "Icons", pageTitle: "Generic Voice", cohortKey: cohortPortrait }),
+    await packet({ id: "UC-003", side: "still", subject: "Filed Beast", actor: "Actor Three", production: "Filed Movie 1999", required: "character-depiction", file: "Lead image.jpg", method: "mediawiki-pageimage-v4", description: "Official lead image", categories: "Production images", pageTitle: "Filed Beast", cohortKey: cohortStill }),
+    await packet({ id: "UC-004", side: "still", subject: "Filed Lion", actor: "Actor Four", production: "Filed Movie 1939", required: "character-depiction", file: "Filed Lion.png", method: "mediawiki-pageimage-v4", description: "Book illustration from the 1900 novel edition", categories: "Book illustrations", pageTitle: "Filed Lion", cohortKey: cohortStill }),
   ];
   const candidates = join(root, "candidates");
   await writeFile(join(candidates, "batch-result.json"), JSON.stringify({

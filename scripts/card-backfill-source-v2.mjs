@@ -395,14 +395,14 @@ async function stillPool({ record, item, transport, attempts, endpoints, limits,
         file,
         source,
         score,
-        method: "mediawiki-page-candidate-v3",
+        method: "mediawiki-page-candidate-v4",
         page: { title: page.title, url: origin, extract_windows: matchingWindows(page.extract || "", [...aliases, production, ...words(production)], 5) },
         api,
       });
     }
     if (page.original?.source || page.thumbnail?.source) {
       const source = { url: page.original?.source || page.thumbnail?.source, original_url: page.original?.source || null, origin, width: page.original?.width || page.thumbnail?.width || null, height: page.original?.height || page.thumbnail?.height || null, mime: null, author: "", license: "", year: null, description: "", categories: "" };
-      addCandidate(candidates, { file: page.pageimage || null, source, score: subjectScore({ file: page.pageimage || "", page, source, aliases, production, actorEvidence, side: "still", lead: true }), method: "mediawiki-pageimage-v3", page: { title: page.title, url: origin, extract_windows: matchingWindows(page.extract || "", [...aliases, production, ...words(production)], 5) }, api });
+      addCandidate(candidates, { file: page.pageimage || null, source, score: subjectScore({ file: page.pageimage || "", page, source, aliases, production, actorEvidence, side: "still", lead: true }), method: "mediawiki-pageimage-v4", page: { title: page.title, url: origin, extract_windows: matchingWindows(page.extract || "", [...aliases, production, ...words(production)], 5) }, api });
     }
   }
   const ranked = rankBoundCandidates([...candidates.values()], {
@@ -446,18 +446,18 @@ async function portraitPool({ record, item, transport, attempts, endpoints, limi
     if (missing.length) infos = [...infos, ...await queryImageInfos(endpoints.commonsApi, missing, transport, attempts, "portrait-commons-imageinfo")];
     for (const { file, info } of infos) {
       const source = fileSource(info, origin);
-      addCandidate(candidates, { file, source, score: subjectScore({ file, page, source, aliases, production, actorEvidence: null, side: "portrait", lead: leadNames.includes(file) }), method: "exact-actor-page-image-v3", page: { title: page.title, url: origin, extract_windows: matchingWindows(page.extract || "", [expected, production], 4) }, api });
+      addCandidate(candidates, { file, source, score: subjectScore({ file, page, source, aliases, production, actorEvidence: null, side: "portrait", lead: leadNames.includes(file) }), method: "exact-actor-page-image-v4", page: { title: page.title, url: origin, extract_windows: matchingWindows(page.extract || "", [expected, production], 4) }, api });
     }
     if (page.original?.source || page.thumbnail?.source) {
       const source = { url: page.original?.source || page.thumbnail?.source, original_url: page.original?.source || null, origin, width: page.original?.width || page.thumbnail?.width || null, height: page.original?.height || page.thumbnail?.height || null, mime: null, author: "", license: "", year: null, description: "", categories: "" };
-      addCandidate(candidates, { file: page.pageimage || null, source, score: subjectScore({ file: page.pageimage || "", page, source, aliases, production, actorEvidence: null, side: "portrait", lead: true }), method: "exact-actor-pageimage-v3", page: { title: page.title, url: origin, extract_windows: matchingWindows(page.extract || "", [expected, production], 4) }, api });
+      addCandidate(candidates, { file: page.pageimage || null, source, score: subjectScore({ file: page.pageimage || "", page, source, aliases, production, actorEvidence: null, side: "portrait", lead: true }), method: "exact-actor-pageimage-v4", page: { title: page.title, url: origin, extract_windows: matchingWindows(page.extract || "", [expected, production], 4) }, api });
     }
   }
   for (const query of [`"${expected}"`, expected]) {
     for (const { file, info } of await commonsSearch(query, transport, attempts, endpoints, 20)) {
       const source = fileSource(info, info?.descriptionurl || null);
       const pseudoPage = { title: expected, extract: "" };
-      addCandidate(candidates, { file, source, score: subjectScore({ file, page: pseudoPage, source, aliases, production, actorEvidence: null, side: "portrait", lead: false }) - 10, method: "commons-name-search-v3", page: { title: "Wikimedia Commons search", url: source.origin, extract_windows: [] }, api: endpoints.commonsApi });
+      addCandidate(candidates, { file, source, score: subjectScore({ file, page: pseudoPage, source, aliases, production, actorEvidence: null, side: "portrait", lead: false }) - 10, method: "commons-name-search-v4", page: { title: "Wikimedia Commons search", url: source.origin, extract_windows: [] }, api: endpoints.commonsApi });
     }
   }
   const ranked = rankBoundCandidates([...candidates.values()], {
@@ -625,7 +625,7 @@ async function main() {
   const specimens = await readJson(join(baseline, "data/specimens.json"));
   const byId = new Map(specimens.map((row) => [row.id, row]));
   const repositoryHashes = await buildRepositoryHashIndex(baseline);
-  const transport = new Transport({ userAgent: `undercast-card-backfill-source-v3/3.0 (+https://github.com/BigBirdReturns/undercast; ${contact})`, timeoutMs: Math.floor(numeric("--timeout-ms", 30000)), delayMs: Math.floor(numeric("--delay-ms", 350)) });
+  const transport = new Transport({ userAgent: `undercast-card-backfill-source-v4/4.0 (+https://github.com/BigBirdReturns/undercast; ${contact})`, timeoutMs: Math.floor(numeric("--timeout-ms", 30000)), delayMs: Math.floor(numeric("--delay-ms", 350)) });
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
   await mkdir(dirname(journal), { recursive: true });
@@ -642,8 +642,8 @@ async function main() {
   const report = { version: CARD_BACKFILL_SOURCE_POLICY_V2.version, generated_at: now, run_id: runId, artifact: `card-backfill-source-v2-${runId}`, source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version, canonical_write: false, counts, results };
   await writeJson(join(out, "report.json"), report);
   await writeJson(latest, report);
-  console.log(`PASS — source policy v3 produced ${counts.candidate} candidate(s) and ${counts["not-found"]} miss(es)`);
+  console.log(`PASS — source policy v4 produced ${counts.candidate} candidate(s) and ${counts["not-found"]} miss(es)`);
   console.log(`OUTPUT — ${out}`);
 }
 
-main().catch((error) => { console.error(`card-backfill source v3: ${error.stack || error.message}`); process.exit(1); });
+main().catch((error) => { console.error(`card-backfill source v4: ${error.stack || error.message}`); process.exit(1); });

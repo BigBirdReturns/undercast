@@ -179,9 +179,13 @@ async function main() {
       && /\b(?:illustration|drawing|graphic|novel|book|edition|painting|artwork)\b/i.test(source.fileText);
     const artifactMetadata = ARTIFACT.test(source.fileText) || liveActionDerivative;
     const groupMetadata = GROUP.test(source.candidate.source_file || "");
+    const exactLeadPageImage = source.facts.exact_lead_pageimage === true;
     const exactActorPage = String(source.candidate.source_method || "").startsWith("exact-actor-pageimage")
-      && (equivalent(source.candidate.source_page_title, actor) || source.facts.page_looks_like_actor === true)
-      && fileHasActor;
+      && exactLeadPageImage
+      && (equivalent(source.candidate.source_page_title, actor) || source.facts.page_looks_like_actor === true);
+    const pageimageStillBound = exactLeadPageImage
+      && source.facts.pageimage_subject_bound === true
+      && source.facts.pageimage_production_bound === true;
     const explicitFilePortrait = exactSubjectFile(source.candidate.source_file, actorAliases)
       && fileHasActor
       && PORTRAIT_METADATA.test([source.selected.description, source.selected.categories].filter(Boolean).join(" "))
@@ -196,12 +200,14 @@ async function main() {
       identityValue = "expected";
       identityConfidence = exactActorPage ? 0.99 : 0.96;
       identityNote = exactActorPage
-        ? "The selected file is carried by the exact actor page and explicitly names the filed actor."
+        ? "The exact actor page and its exact lead page-image relationship bind the selected bytes without relying on the filename."
         : "The selected file title and portrait metadata explicitly name the filed actor without conflicting namesake custody.";
-    } else if (review.side === "still" && fileHasSubject && fileHasProduction && !artifactMetadata && (!voiceLike || roleBound)) {
+    } else if (review.side === "still" && ((fileHasSubject && fileHasProduction) || pageimageStillBound) && !artifactMetadata && (!voiceLike || roleBound)) {
       identityValue = "expected";
-      identityConfidence = 0.98;
-      identityNote = "The selected file metadata explicitly names both the filed character and production, with the required actor-role chain when applicable.";
+      identityConfidence = pageimageStillBound && !(fileHasSubject && fileHasProduction) ? 0.97 : 0.98;
+      identityNote = pageimageStillBound && !(fileHasSubject && fileHasProduction)
+        ? "The exact character page, exact lead page-image relationship, filed production context, and required actor-role chain bind the selected bytes without relying on the filename."
+        : "The selected file metadata explicitly names both the filed character and production, with the required actor-role chain when applicable.";
     } else if (artifactMetadata || (!fileHasSubject && !fileHasActor)) {
       identityValue = "wrong";
       identityConfidence = 0.98;
@@ -277,7 +283,7 @@ async function main() {
       decided_at: now,
       machine: {
         provider: "repository-local",
-        model: "opencv-haar-tesseract-source-custody-v1",
+        model: "opencv-haar-tesseract-source-custody-v2",
         feature_sha256: featureDigest,
         features,
         identity_confidence: identityConfidence,
@@ -285,7 +291,7 @@ async function main() {
         identity_threshold: identityThreshold,
         presentation_threshold: presentationThreshold,
         appearance_used_for_identity: false,
-        policy: "explicit-source-binding-and-required-presentation-or-fail-closed"
+        policy: "explicit-file-or-exact-lead-pageimage-binding-and-required-presentation-or-fail-closed"
       }
     };
     console.log(`${accepted ? "ACCEPT" : "REJECT"} ${row.record_id}/${row.side} identity=${identityValue} presentation=${presentationValue}`);
@@ -307,12 +313,12 @@ async function main() {
     batch_sha256: batch.batch_sha256,
     cohort_key: batch.cohort_key,
     adjudicator: {
-      id: "repository-local-opencv-source-custody-second-desk-v1",
+      id: "repository-local-opencv-source-custody-second-desk-v2",
       kind: "machine",
       independent_from_discovery: true,
       method: "deterministic textual source-custody adjudication plus local OpenCV face/framing analysis and bounded Tesseract text-density rejection",
       provider: "repository-local",
-      primary_model: "opencv-haar-tesseract-source-custody-v1",
+      primary_model: "opencv-haar-tesseract-source-custody-v2",
       identity_confidence_threshold: identityThreshold,
       presentation_confidence_threshold: presentationThreshold,
     },

@@ -131,8 +131,6 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
   const pageWindows = candidate?.page?.extract_windows || [];
   const source = candidate?.source || {};
   const file = candidate?.file || "";
-  const method = String(candidate?.method || "");
-  const exactLeadPageImage = /(?:^|-)pageimage-v(?:3|4)$/i.test(method);
   const pageText = [pageTitle, ...pageWindows].join(" ");
   const fileText = [file, source.description || "", source.categories || ""].join(" ");
   const combined = `${pageText} ${fileText}`;
@@ -142,10 +140,6 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
   const pageHasActor = actorAliases.length > 0 && containsAlias(pageText, actorAliases);
   const pageHasProduction = productionMatch(pageText, production);
   const fileHasProduction = productionMatch(fileText, production);
-  const pageimageSubjectBound = Boolean(exactLeadPageImage && exactPage);
-  const pageimageProductionBound = Boolean(pageimageSubjectBound && pageHasProduction);
-  const subjectBound = fileHasAlias || pageimageSubjectBound;
-  const productionBound = fileHasProduction || pageimageProductionBound;
   const actorEvidenceBound = actorRoleBound(actorEvidence, aliases, production);
   const voiceLike = /voice|animation/i.test(String(performanceMode || ""));
   const characterPageRoleBound = Boolean((exactPage || pageHasAlias) && pageHasActor && pageHasProduction);
@@ -166,8 +160,8 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
     if (multi) reasons.push("requires-multi-subject-composite");
     if (pageLooksLikeActor) reasons.push("actor-page-is-not-character-still");
     if (humanEventPhoto) reasons.push("human-event-photo-for-character-still");
-    if (!subjectBound) reasons.push("candidate-file-not-explicitly-bound-to-subject");
-    if (!productionBound) reasons.push("candidate-file-lacks-filed-production-context");
+    if (!fileHasAlias) reasons.push("candidate-file-not-explicitly-bound-to-subject");
+    if (!fileHasProduction) reasons.push("candidate-file-lacks-filed-production-context");
     if (pageKindMismatch) reasons.push("page-kind-does-not-match-character-claim");
     if (foreignAdaptation) reasons.push("foreign-adaptation-or-merchandise");
     if (genericNonDepiction) reasons.push("generic-non-depiction-asset");
@@ -175,9 +169,8 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
     if (voiceLike && !roleBound) reasons.push("actor-role-chain-not-explicit");
   } else if (side === "portrait") {
     const exactActorPage = actorAliases.some((alias) => textEquivalent(titleBase(pageTitle), alias));
-    const exactActorLeadPageImage = Boolean(exactActorPage && exactLeadPageImage);
     const fileHasActor = containsAlias(fileText, actorAliases);
-    if (!exactActorLeadPageImage && !(fileHasActor && portraitContext)) reasons.push("portrait-not-explicitly-bound-to-actor");
+    if (!exactActorPage && !(fileHasActor && portraitContext)) reasons.push("portrait-not-explicitly-bound-to-actor");
     if (GROUP.test(file)) reasons.push("group-or-ambiguous-portrait");
     if (PORTRAIT_COSTUME.test(combined)) reasons.push("role-costume-or-masked-portrait");
     if (portraitArtifact) reasons.push("portrait-is-object-document-icon-or-artifact");
@@ -190,7 +183,6 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
   const eligible = reasons.length === 0;
   let adjustment = 0;
   if (exactPage) adjustment += 180;
-  if (exactLeadPageImage) adjustment += 140;
   if (fileHasAlias) adjustment += 100;
   if (pageHasProduction) adjustment += 80;
   if (fileHasProduction) adjustment += 60;
@@ -201,7 +193,7 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
     eligible,
     reasons,
     score_adjustment: adjustment,
-    explicit_chain: side === "still" ? Boolean(eligible && subjectBound && productionBound && (!voiceLike || roleBound)) : eligible,
+    explicit_chain: side === "still" ? Boolean(eligible && fileHasAlias && fileHasProduction && (!voiceLike || roleBound)) : eligible,
     facts: {
       exact_subject_page: exactPage,
       page_has_subject: pageHasAlias,
@@ -209,10 +201,6 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
       page_has_actor: pageHasActor,
       page_has_production: pageHasProduction,
       file_has_production: fileHasProduction,
-      exact_lead_pageimage: exactLeadPageImage,
-      pageimage_subject_bound: pageimageSubjectBound,
-      pageimage_production_bound: pageimageProductionBound,
-      exact_actor_lead_pageimage: Boolean(side === "portrait" && exactLeadPageImage && actorAliases.some((alias) => textEquivalent(titleBase(pageTitle), alias))),
       actor_evidence_bound: actorEvidenceBound,
       character_page_role_bound: characterPageRoleBound,
       actor_role_bound: roleBound,

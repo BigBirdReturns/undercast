@@ -2,11 +2,11 @@ import { canonicalJson, sha256 } from "./card-backfill-cohort.mjs";
 import { isMultiSubject } from "./card-backfill-source-policy-v3.mjs";
 
 export const CARD_BACKFILL_SOURCE_POLICY_V2 = Object.freeze({
-  version: 3,
-  revision: 1,
+  version: 4,
+  revision: 0,
   lane: "card-backfill-source-policy",
-  policy_id: "card-backfill-policy-v3-wave-1",
-  parent_policy_id: "card-backfill-cohort-v2",
+  policy_id: "card-backfill-policy-v4-exact-pageimage-1",
+  parent_policy_id: "card-backfill-policy-v3-wave-1",
   lessons_contract_path: ".github/CARD-BACKFILL-LESSONS.json",
   lessons_contract_sha256: "bafa82adfc525421f498f5655bf12ba0000d131349fcd72edd03f940d9b78931",
   inherited_lesson_ids: Object.freeze([
@@ -15,8 +15,8 @@ export const CARD_BACKFILL_SOURCE_POLICY_V2 = Object.freeze({
     "CBL-013", "CBL-014", "CBL-015", "CBL-016", "CBL-017", "CBL-018",
     "CBL-019", "CBL-020", "CBL-021", "CBL-022", "CBL-023", "CBL-024",
   ]),
-  still_route: "mediawiki-bound-multicandidate-v3",
-  portrait_route: "commons-bound-multicandidate-v3",
+  still_route: "mediawiki-bound-multicandidate-v4",
+  portrait_route: "commons-bound-multicandidate-v4",
   page_search_limit: 10,
   file_metadata_limit: 32,
   downloaded_candidate_limit: 8,
@@ -27,6 +27,8 @@ export const CARD_BACKFILL_SOURCE_POLICY_V2 = Object.freeze({
   exact_subject_and_production_evidence: true,
   actor_role_extract_required_when_available: true,
   predownload_textual_binding_gate: true,
+  exact_lead_pageimage_custody_allowed: true,
+  generic_filename_requires_exact_pageimage_relation: true,
   wrong_adaptation_and_non_depiction_filter: true,
   multi_subjects_require_composite_lane: true,
   selected_image_never_proves_identity_or_role: true,
@@ -95,7 +97,7 @@ export function buildSourcePolicyV2Estate({ estate, attemptIndex, stagedObligati
       continue;
     }
     if (attempts.some((attempt) => priorPolicyVersion(attempt) >= CARD_BACKFILL_SOURCE_POLICY_V2.version)) {
-      exclusions.push({ obligation_id: row.obligation_id, reason: "source-policy-v3-already-attempted" });
+      exclusions.push({ obligation_id: row.obligation_id, reason: "source-policy-v4-already-attempted" });
       continue;
     }
 
@@ -140,7 +142,7 @@ export function buildSourcePolicyV2Estate({ estate, attemptIndex, stagedObligati
   };
   return {
     version: 1,
-    lane: "card-backfill-source-policy-v3-estate",
+    lane: "card-backfill-source-policy-v4-estate",
     campaign_id: estate.campaign_id,
     source_estate_sha256: estate.estate_sha256,
     estate_sha256: sha256(canonicalJson(hashBody)),
