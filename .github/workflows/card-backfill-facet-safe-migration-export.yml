@@ -49,7 +49,7 @@ jobs:
       - name: Install rendered-gate browser
         run: npx playwright install --with-deps chromium
 
-      - name: Replace nominal-capacity folklore with valid disjoint-wave progress
+      - name: Bind the builder to a staged, disjoint, policy-bounded transaction
         env:
           MIGRATION_ROOT: ${{ runner.temp }}/card-backfill-facet-safe-local-desk
         run: |
@@ -99,13 +99,61 @@ jobs:
               r'console.log("PASS — facet-safe planner proves 46+426=472 and schedules one valid disjoint wave: selected=" + selected + "; eligible=" + ready + "; successor_frontier=" + (ready - selected) + "; source_transport_calls=0");',
           ]
           lines[index:index + 1] = [indent + line for line in replacement]
-          path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          value = '\n'.join(lines) + '\n'
+
+          gate_marker = '  const gate = run("complete repository gate", process.execPath, ["scripts/gate.mjs"], { capture: true });\n'
+          if value.count(gate_marker) != 1:
+              raise SystemExit('complete-gate marker drift')
+          stage_block = '''  run("stage migration candidate", "git", ["add", "-A", "--", "."]);
+          const stagedBeforeGate = run("staged migration paths", "git", ["diff", "--cached", "--name-only"], { capture: true }).stdout;
+          if (!stagedBeforeGate.trim()) throw new Error("migration candidate changed zero staged paths");
+          console.log(`STAGED — ${stagedBeforeGate.trim().split(/\\r?\\n/).filter(Boolean).length} migration path(s) bound before the complete gate`);
+
+'''
+          value = value.replace(gate_marker, stage_block + gate_marker)
+
+          replacements = [
+              (
+                  '  run("diff check", "git", ["diff", "--check"]);',
+                  '  run("unstage temporary migration builder", "git", ["reset", "HEAD", "--", "scripts/card-backfill-build-facet-safe-local-desk-migration.mjs"]);\n  run("diff check", "git", ["diff", "--cached", "--check"]);',
+                  'cached diff check',
+              ),
+              (
+                  '  const nameStatus = run("name status", "git", ["diff", "--name-status"], { capture: true }).stdout;',
+                  '  const nameStatus = run("name status", "git", ["diff", "--cached", "--name-status"], { capture: true }).stdout;',
+                  'cached name status',
+              ),
+              (
+                  '  const patch = run("migration patch", "git", ["diff", "--binary"], { capture: true }).stdout;',
+                  '  const patch = run("migration patch", "git", ["diff", "--cached", "--binary"], { capture: true }).stdout;',
+                  'cached patch',
+              ),
+              (
+                  '  const changed = run("changed files", "git", ["diff", "--name-only"], { capture: true }).stdout;',
+                  '  const changed = run("changed files", "git", ["diff", "--cached", "--name-only"], { capture: true }).stdout;',
+                  'cached changed files',
+              ),
+              (
+                  '  run("migration checksums", "sha256sum", [log("changed-files.tar"), log("migration.patch")], { capture: true });',
+                  '  const checksums = run("migration checksums", "sha256sum", [log("changed-files.tar"), log("migration.patch")], { capture: true }).stdout;\n  await writeFile(log("checksums.sha256"), checksums);',
+                  'checksum receipt',
+              ),
+          ]
+          for prior, next_value, label in replacements:
+              count = value.count(prior)
+              if count != 1:
+                  raise SystemExit(f'{label} seam drift: expected one, found {count}')
+              value = value.replace(prior, next_value)
+
+          path.write_text(value, encoding='utf-8')
           PY
           node --check scripts/card-backfill-build-facet-safe-local-desk-migration.mjs
           grep -q 'selected > ready' scripts/card-backfill-build-facet-safe-local-desk-migration.mjs
           grep -q 'disjoint !== selected' scripts/card-backfill-build-facet-safe-local-desk-migration.mjs
+          grep -q 'stage migration candidate' scripts/card-backfill-build-facet-safe-local-desk-migration.mjs
+          grep -q 'diff", "--cached", "--binary"' scripts/card-backfill-build-facet-safe-local-desk-migration.mjs
           ! grep -q 'selected_count=160' scripts/card-backfill-build-facet-safe-local-desk-migration.mjs
-          echo 'PASS — wrapper requires a nonempty, disjoint, policy-bounded wave and preserves its successor frontier'
+          echo 'PASS — builder now gates the staged transaction and exports only its cached delta'
 
       - name: Build, prove, and export the exact migration
         id: build
@@ -136,7 +184,7 @@ jobs:
           description='facet-safe migration export failed; inspect retained artifact/logs'
           if [ "$JOB_STATUS" = success ]; then
             state=success
-            description='46+426=472; disjoint wave planned; full gate pass; migration exported'
+            description='46+426=472; staged full gate pass; exact migration exported'
           fi
           gh api -X POST \
             "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
