@@ -1,42 +1,50 @@
 #!/usr/bin/env python3
-"""Regression fixtures for distro and wheel OpenCV cascade layouts."""
+"""Dependency-free regression fixtures for wheel and distro OpenCV cascade layouts."""
 from __future__ import annotations
 
 import importlib.util
+import sys
 import tempfile
+import types
 from pathlib import Path
 from unittest.mock import patch
 
-import cv2
-import numpy as np
-
 SCRIPT = Path(__file__).with_name("card-backfill-image-features.py")
+
+# Planning must prove path semantics without installing the local-desk runtime.
+fake_cv2 = types.ModuleType("cv2")
+fake_cv2.__file__ = "/tmp/card-backfill-fake-cv2/__init__.py"
+fake_numpy = types.ModuleType("numpy")
+sys.modules["cv2"] = fake_cv2
+sys.modules["numpy"] = fake_numpy
+
 SPEC = importlib.util.spec_from_file_location("card_backfill_image_features", SCRIPT)
 if SPEC is None or SPEC.loader is None:
     raise SystemExit("unable to import card-backfill-image-features.py")
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
-resolved = MODULE.resolve_haarcascade_path()
-if resolved is None or not resolved.is_file():
-    raise SystemExit("fixture environment exposes no OpenCV frontal-face cascade")
-
-# Reproduce Ubuntu's python3-opencv shape: cv2 imports, but cv2.data is absent.
-distro_style = MODULE.resolve_haarcascade_path(
-    extra_candidates=[resolved],
-    include_module_data=False,
-)
-assert distro_style == resolved
-
 with tempfile.TemporaryDirectory(prefix="card-backfill-image-feature-fixture-") as root:
-    image_path = Path(root) / "blank.png"
-    image = np.full((240, 320, 3), 127, dtype=np.uint8)
-    assert cv2.imwrite(str(image_path), image)
-    with patch.object(MODULE, "resolve_haarcascade_path", return_value=None):
-        features = MODULE.analyze(image_path)
-    assert features["face_detection_available"] is False
-    assert features["face_count"] == 0
-    assert features["dominant_single_face"] is False
-    assert features["canonical_mutation"] is False
+    root_path = Path(root)
+    wheel_root = root_path / "wheel-data"
+    distro_root = root_path / "distro-data"
+    wheel_root.mkdir()
+    distro_root.mkdir()
+    wheel_cascade = wheel_root / MODULE.CASCADE_NAME
+    distro_cascade = distro_root / MODULE.CASCADE_NAME
+    wheel_cascade.write_text("wheel fixture\n", encoding="utf-8")
+    distro_cascade.write_text("distro fixture\n", encoding="utf-8")
 
-print("card-backfill image feature fixtures: PASS — wheel and distro cascade layouts resolve; missing detector fails closed without crashing")
+    fake_cv2.data = types.SimpleNamespace(haarcascades=f"{wheel_root}/")
+    with patch.object(MODULE, "SYSTEM_CASCADE_ROOTS", (distro_root,)):
+        assert MODULE.resolve_haarcascade_path() == wheel_cascade
+
+        del fake_cv2.data
+        assert MODULE.resolve_haarcascade_path() == distro_cascade
+
+        with patch.object(MODULE, "resolve_haarcascade_path", return_value=None):
+            ratios, available = MODULE._face_features(object(), 320, 240)
+        assert ratios == []
+        assert available is False
+
+print("card-backfill image feature fixtures: PASS — wheel and distro cascade layouts resolve; missing detector fails closed without importing OpenCV")
