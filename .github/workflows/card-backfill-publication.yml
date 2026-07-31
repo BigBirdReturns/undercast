@@ -22,7 +22,7 @@ on:
 
 permissions:
   contents: write
-  actions: read
+  actions: write
 
 concurrency:
   group: card-backfill-publication-${{ github.ref_name }}
@@ -182,3 +182,22 @@ jobs:
             ${{ runner.temp }}/permanent-batch-gate.log
           if-no-files-found: warn
           retention-days: 90
+
+  resume:
+    needs: [plan, publish]
+    if: always() && needs.plan.result == 'success' && (needs.plan.outputs.ready != 'true' || needs.publish.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Yield explicitly to the unattended campaign supervisor
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          reason=publication-not-ready
+          if [ "${{ needs.plan.outputs.ready }}" = true ]; then reason=publication-complete; fi
+          gh workflow run card-backfill-supervisor.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$GITHUB_REF_NAME" \
+            -f reason="$reason"
+          echo 'PASS — publication yielded explicitly; no push-recursion assumption'
+          echo 'manual_continue_required=false'
