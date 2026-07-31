@@ -1,27 +1,70 @@
 name: card-backfill-runtime
-description: Reuse the hosted runner image when possible and install deterministic local image-analysis tools only when absent.
+description: Install only the deterministic image tooling required by the current card-backfill job.
+inputs:
+  profile:
+    description: 'auto, discovery, or local-desk; auto maps the discover job to the lean discovery runtime'
+    required: false
+    default: auto
 runs:
   using: composite
   steps:
     - shell: bash
+      env:
+        REQUESTED_PROFILE: ${{ inputs.profile }}
       run: |
         set -euo pipefail
         mkdir -p "$RUNNER_TEMP/card-backfill-bin"
+
+        profile="$REQUESTED_PROFILE"
+        if [ "$profile" = auto ]; then
+          case "${GITHUB_JOB:-}" in
+            discover) profile=discovery ;;
+            *) profile=local-desk ;;
+          esac
+        fi
+        case "$profile" in
+          discovery|local-desk) ;;
+          *) echo "invalid card-backfill runtime profile: $profile" >&2; exit 2 ;;
+        esac
+        echo "PROFILE — card-backfill runtime=$profile job=${GITHUB_JOB:-unknown}"
 
         packages=()
         if ! command -v magick >/dev/null 2>&1 && \
            { ! command -v identify >/dev/null 2>&1 || ! command -v convert >/dev/null 2>&1 || ! command -v montage >/dev/null 2>&1; }; then
           packages+=(imagemagick)
         fi
-        if ! python3 - <<'PY'
+
+        if [ "$profile" = local-desk ]; then
+          if ! python3 - <<'PY'
         import cv2
         import numpy
         PY
-        then
-          packages+=(python3-opencv)
-        fi
-        if ! command -v tesseract >/dev/null 2>&1; then
-          packages+=(tesseract-ocr)
+          then
+            packages+=(python3-opencv)
+          fi
+          if ! python3 - <<'PY'
+        from pathlib import Path
+        try:
+            import cv2
+        except Exception:
+            raise SystemExit(1)
+        name = "haarcascade_frontalface_default.xml"
+        roots = []
+        data = getattr(cv2, "data", None)
+        if data is not None and getattr(data, "haarcascades", None):
+            roots.append(Path(data.haarcascades))
+        roots.extend([
+            Path("/usr/share/opencv4/haarcascades"),
+            Path("/usr/share/opencv/haarcascades"),
+        ])
+        raise SystemExit(0 if any((root / name).is_file() for root in roots) else 1)
+        PY
+          then
+            packages+=(opencv-data)
+          fi
+          if ! command -v tesseract >/dev/null 2>&1; then
+            packages+=(tesseract-ocr)
+          fi
         fi
 
         if [ "${#packages[@]}" -gt 0 ]; then
@@ -29,7 +72,7 @@ runs:
           sudo apt-get install -y "${packages[@]}"
           printf 'INSTALLED — %s\n' "${packages[*]}"
         else
-          echo 'PASS — ImageMagick, OpenCV, NumPy, and Tesseract already present; apt work avoided'
+          echo "PASS — $profile runtime already present; apt work avoided"
         fi
 
         if command -v magick >/dev/null 2>&1; then
@@ -56,9 +99,27 @@ runs:
           echo 'PASS — ImageMagick 6 compatibility command installed'
         fi
 
+        if [ "$profile" = discovery ]; then
+          echo 'PASS — lean discovery runtime omits OpenCV, NumPy, cascade data, and Tesseract'
+          exit 0
+        fi
+
         python3 - <<'PY'
+        from pathlib import Path
         import cv2
         import numpy
-        print(f'PASS — local image desk runtime: OpenCV {cv2.__version__}; NumPy {numpy.__version__}')
+        name = "haarcascade_frontalface_default.xml"
+        roots = []
+        data = getattr(cv2, "data", None)
+        if data is not None and getattr(data, "haarcascades", None):
+            roots.append(Path(data.haarcascades))
+        roots.extend([
+            Path("/usr/share/opencv4/haarcascades"),
+            Path("/usr/share/opencv/haarcascades"),
+        ])
+        cascade = next((root / name for root in roots if (root / name).is_file()), None)
+        if cascade is None:
+            raise SystemExit("OpenCV face cascade is unavailable after runtime installation")
+        print(f'PASS — local image desk runtime: OpenCV {cv2.__version__}; NumPy {numpy.__version__}; cascade={cascade}')
         PY
         tesseract --version | head -n 1

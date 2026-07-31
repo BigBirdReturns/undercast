@@ -1,12 +1,13 @@
 const ROLE_PARENTHETICAL = /\s*\((?:[^)]*\b(?:voice|vocal|after|narrat|puppet|capture|dub|radio)\b[^)]*)\)\s*/gi;
+const ROLE_VARIANT_HINT = /\([^)]*\b(?:voice|vocal|after|narrat|puppet|capture|dub|radio)\b[^)]*\)/i;
 const GENERIC_TAIL = /\s+(?:&|and)\s+(?:many|others|more|a bestiary of monsters|the rest|the cast)$/i;
 const MULTI_SEPARATOR = /\s*(?:\/|&|,|;|\band\b)\s*/i;
 const STOP_WORDS = new Set(["the", "and", "from", "with", "into", "for", "voice", "actor", "film", "series", "character", "role"]);
 const PAGE_KIND_MISMATCH = /\b(?:episode|film|movie|novel|comic|soundtrack|attraction|exhibition|museum|list of|franchise|video game|television series)\b/i;
 const FOREIGN_ADAPTATION = /\b(?:multiversus|lego|fortnite|comic|manga|novel|statues?|sculptures?|cosplay|merchandise|toys?|figures?|floats?|theme park|attraction|grauman|handprints?|waxworks?|fan art|fanart)\b/i;
 const ALWAYS_NON_ROLE_PRESENTATION = /\b(?:statues?|sculptures?|cosplay|merchandise|toys?|action figures?|figurines?|floats?|waxworks?|fan art|fanart)\b/i;
-const HUMAN_EVENT_PHOTO = /\b(?:voice actor|actor|actress|fan expo|wondercon|comic[- ]?con|panel discussion|red carpet|premiere|headshot|portrait|convention|festival)\b/i;
-const GENERIC_NON_DEPICTION = /\b(?:building|entrance|interior|street|road|sign|logo|poster|advertisement|advert|cover|bottle|potion|skull|weapon|gun|vehicle|trailer|store|cafe|ride|trophy|plaque|interface|screenshot of text|title card|certificate|sheet music|signature|autograph|icon|emoji|mask|mechanism|landscape|lake|reeds)\b/i;
+const HUMAN_EVENT_PHOTO = /\b(?:voice actor|actor|actress|fan expo|wondercon|comic[- ]?con|panel discussion|press conference|press event|red carpet|premiere|headshot|portrait|photo ?call|photocall|interview|convention|festival|live shoot|on set|behind the scenes)\b/i;
+const GENERIC_NON_DEPICTION = /\b(?:building|entrance|interior|street|road|sign|logo|poster|advertisement|advert|cover|bottle|potion|skull|weapon|gun|vehicle|trailer|store|store ?front|shop ?front|bakery|wrapper|packaging|bubblegum|cafe|ride|trophy|plaque|interface|screenshot of text|title card|certificate|sheet music|signature|autograph|icon|emoji|mask|mechanism|landscape|lake|reeds|framed fact)\b/i;
 const LIVE_ACTION_DERIVATIVE = /\b(?:illustration|drawing|graphic|novel|book|edition|painting|artwork)\b/i;
 const PORTRAIT_ARTIFACT = /\b(?:statue|sculpture|certificate|sheet music|signature|autograph|icon|emoji|logo|poster|advertisement|cover|mask|mechanism|landscape|lake|reeds|vehicle|trailer|document|drawing|artwork)\b/i;
 const PORTRAIT_NAMESAKE_CONFLICT = /\b(?:pharmacolog(?:ist|ists|y|ical)?|football(?:er|ers|match)?|soccer|chemist(?:ry)?|physician|politician|scientist|composer)\b/i;
@@ -34,7 +35,7 @@ function cleanFiledLabel(value) {
     .trim();
 }
 
-function aliasVariants(value) {
+function aliasVariants(value, { allowPlural = false } = {}) {
   const clean = cleanFiledLabel(value);
   if (!clean) return [];
   const variants = new Set([clean]);
@@ -45,7 +46,7 @@ function aliasVariants(value) {
   for (const item of [...variants]) {
     const parts = item.split(/\s+/);
     const last = parts.at(-1) || "";
-    if (/^[a-z]+$/i.test(last) && last.length >= 4 && !/(?:ss|us|is|ous|y)$/i.test(last)) {
+    if (allowPlural && /^[a-z]+$/i.test(last) && last.length >= 4 && !/(?:ss|us|is|ous|y|ie)$/i.test(last)) {
       const copy = [...parts];
       copy[copy.length - 1] = /s$/i.test(last) ? last.slice(0, -1) : `${last}s`;
       variants.add(copy.join(" "));
@@ -57,11 +58,12 @@ function aliasVariants(value) {
 export function sourceSubjectAliases(value) {
   const cleaned = cleanFiledLabel(value);
   if (!cleaned) return [];
+  const allowPlural = ROLE_VARIANT_HINT.test(String(value || ""));
   const parts = cleaned
     .split(MULTI_SEPARATOR)
     .map((part) => part.trim())
     .filter((part) => part.length >= 2 && !/^(?:many|others|more)$/i.test(part));
-  return [...new Set([cleaned, ...parts].flatMap(aliasVariants).filter(Boolean))].slice(0, 24);
+  return [...new Set([cleaned, ...parts].flatMap((part) => aliasVariants(part, { allowPlural })).filter(Boolean))].slice(0, 24);
 }
 
 export function isMultiSubject(value) {
@@ -100,7 +102,7 @@ function containsAlias(text, aliases) {
   return aliases.some((alias) => {
     const needle = normalizeSourceText(alias);
     if (needle.length < 2) return false;
-    if (hay === needle || hay.includes(needle)) return true;
+    if (hay === needle || ` ${hay} `.includes(` ${needle} `)) return true;
     return /\d/.test(needle) && compactHay.includes(needle.replace(/\s+/g, ""));
   });
 }
@@ -139,19 +141,19 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
   const pageHasProduction = productionMatch(pageText, production);
   const fileHasProduction = productionMatch(fileText, production);
   const actorEvidenceBound = actorRoleBound(actorEvidence, aliases, production);
+  const voiceLike = /voice|animation/i.test(String(performanceMode || ""));
   const characterPageRoleBound = Boolean((exactPage || pageHasAlias) && pageHasActor && pageHasProduction);
   const roleBound = actorEvidenceBound || characterPageRoleBound;
   const pageLooksLikeActor = actor && textEquivalent(titleBase(pageTitle), actor);
   const pageKindMismatch = PAGE_KIND_MISMATCH.test(pageTitle) && !productionMatch(pageTitle, production);
   const foreignAdaptation = ALWAYS_NON_ROLE_PRESENTATION.test(fileText) || (FOREIGN_ADAPTATION.test(fileText) && !fileHasProduction);
-  const humanEventPhoto = HUMAN_EVENT_PHOTO.test(fileText) && !fileHasAlias;
+  const humanEventPhoto = HUMAN_EVENT_PHOTO.test(fileText) && (voiceLike || !fileHasAlias);
   const genericNonDepiction = GENERIC_NON_DEPICTION.test(fileText);
   const liveActionDerivative = side === "still" && /physical|live-action/i.test(String(performanceMode || "")) && LIVE_ACTION_DERIVATIVE.test(fileText);
   const portraitArtifact = PORTRAIT_ARTIFACT.test(fileText);
   const portraitNamesakeConflict = PORTRAIT_NAMESAKE_CONFLICT.test(fileText);
   const portraitContext = PORTRAIT_CONTEXT.test(fileText);
   const multi = isMultiSubject(expectedSubject);
-  const voiceLike = /voice|animation/i.test(String(performanceMode || ""));
   const reasons = [];
 
   if (side === "still") {

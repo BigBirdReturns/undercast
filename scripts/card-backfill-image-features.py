@@ -4,13 +4,64 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Iterable
 
 import cv2
 import numpy as np
+
+CASCADE_NAME = "haarcascade_frontalface_default.xml"
+SYSTEM_CASCADE_ROOTS = (
+    Path("/usr/share/opencv4/haarcascades"),
+    Path("/usr/share/opencv/haarcascades"),
+)
+
+
+def _candidate_cascade_paths(
+    *,
+    extra_candidates: Iterable[Path] = (),
+    include_module_data: bool = True,
+) -> list[Path]:
+    candidates: list[Path] = []
+    configured = os.environ.get("CARD_BACKFILL_HAARCASCADE")
+    if configured:
+        candidates.append(Path(configured))
+    candidates.extend(Path(value) for value in extra_candidates)
+    if include_module_data:
+        data = getattr(cv2, "data", None)
+        root = getattr(data, "haarcascades", None) if data is not None else None
+        if root:
+            candidates.append(Path(root) / CASCADE_NAME)
+    candidates.extend(root / CASCADE_NAME for root in SYSTEM_CASCADE_ROOTS)
+    module_root = Path(getattr(cv2, "__file__", "")).resolve().parent
+    if module_root != Path("."):
+        candidates.append(module_root / "data" / CASCADE_NAME)
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key not in seen:
+            unique.append(candidate)
+            seen.add(key)
+    return unique
+
+
+def resolve_haarcascade_path(
+    *,
+    extra_candidates: Iterable[Path] = (),
+    include_module_data: bool = True,
+) -> Path | None:
+    for candidate in _candidate_cascade_paths(
+        extra_candidates=extra_candidates,
+        include_module_data=include_module_data,
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _ocr_features(image: np.ndarray) -> tuple[int, float, bool]:
@@ -58,6 +109,21 @@ def _ocr_features(image: np.ndarray) -> tuple[int, float, bool]:
     return characters, area / max(1, width * height), True
 
 
+def _face_features(gray: np.ndarray, width: int, height: int) -> tuple[list[float], bool]:
+    cascade_path = resolve_haarcascade_path()
+    if cascade_path is None:
+        return [], False
+    cascade = cv2.CascadeClassifier(str(cascade_path))
+    if cascade.empty():
+        return [], False
+    faces = cascade.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=5, minSize=(35, 35))
+    ratios = sorted(
+        (float(face_width * face_height) / max(1, width * height) for _x, _y, face_width, face_height in faces),
+        reverse=True,
+    )
+    return ratios, True
+
+
 def analyze(path: Path) -> dict:
     raw = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if raw is None:
@@ -79,12 +145,7 @@ def analyze(path: Path) -> dict:
         )
     height, width = image.shape[:2]
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    faces = cascade.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=5, minSize=(35, 35))
-    face_ratios = sorted(
-        (float(face_width * face_height) / max(1, width * height) for _x, _y, face_width, face_height in faces),
-        reverse=True,
-    )
+    face_ratios, face_detection_available = _face_features(gray, width, height)
     histogram = cv2.calcHist([gray], [0], None, [256], [0, 256]).ravel()
     probabilities = histogram / max(1.0, float(histogram.sum()))
     probabilities = probabilities[probabilities > 0]
@@ -95,12 +156,13 @@ def analyze(path: Path) -> dict:
     laplacian_variance = float(cv2.Laplacian(gray, cv2.CV_64F).var())
     text_characters, text_area_ratio, ocr_available = _ocr_features(image)
     dominant_face = bool(
-        face_ratios
+        face_detection_available
+        and face_ratios
         and face_ratios[0] >= 0.018
         and (len(face_ratios) == 1 or face_ratios[0] >= 2.5 * face_ratios[1])
     )
     return {
-        "version": 1,
+        "version": 2,
         "lane": "card-backfill-local-image-features",
         "path": str(path),
         "original_width": original_width,
@@ -108,6 +170,7 @@ def analyze(path: Path) -> dict:
         "analysis_width": width,
         "analysis_height": height,
         "had_alpha": had_alpha,
+        "face_detection_available": face_detection_available,
         "face_count": len(face_ratios),
         "face_area_ratios": [round(value, 8) for value in face_ratios],
         "dominant_single_face": dominant_face,

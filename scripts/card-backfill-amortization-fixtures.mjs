@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -22,6 +23,15 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const contract = validateAmortizationContract(JSON.parse(await readFile(join(repositoryRoot, ".github/CARD-BACKFILL-AMORTIZATION.json"), "utf8")));
 assert.equal(contract.canonical_mutation, false);
 assert.equal(contract.cache.maximum_age_hours, 24);
+
+await import("./card-backfill-source-policy-v3-fixtures.mjs");
+await import("./card-backfill-source-policy-v3-live-regressions.mjs");
+const imageFeatureFixtureOutput = execFileSync(
+  process.env.PYTHON || "python3",
+  [join(repositoryRoot, "scripts/card-backfill-image-features-fixtures.py")],
+  { cwd: repositoryRoot, encoding: "utf8" },
+).trim();
+if (imageFeatureFixtureOutput) console.log(imageFeatureFixtureOutput);
 
 const rows = Array.from({ length: 40 }, (_, index) => ({
   obligation_id: `UC-${String(index + 1).padStart(3, "0")}/still`,
@@ -175,9 +185,13 @@ for (const needle of [
   "--amortization-plan",
   "rediscovery:false",
 ]) assert(files.workflow.includes(needle), `amortized workflow guard missing ${needle}`);
+assert(files.runtime.includes("profile=\"$REQUESTED_PROFILE\""));
+assert(files.runtime.includes("discover) profile=discovery"));
 assert(files.runtime.includes("packages+=(imagemagick)"));
 assert(files.runtime.includes("packages+=(python3-opencv)"));
+assert(files.runtime.includes("packages+=(opencv-data)"));
 assert(files.runtime.includes("packages+=(tesseract-ocr)"));
+assert(files.runtime.includes("lean discovery runtime omits OpenCV, NumPy, cascade data, and Tesseract"));
 assert(files.runtime.includes('sudo apt-get install -y "${packages[@]}"'));
 assert(!files.workflow.includes("card-backfill-machine-adjudicate.mjs"));
 assert(!files.workflow.includes("models: read"));
