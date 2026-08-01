@@ -1,0 +1,147 @@
+name: operational-reliability-evidence
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/operational-reliability-evidence.yml"
+      - "scripts/operational-reliability.mjs"
+      - "scripts/operational-reliability-execute.mjs"
+      - "scripts/operational-reliability-fixtures.mjs"
+      - "scripts/operational-reliability-execute-fixtures.mjs"
+      - "package.json"
+      - "docs/OPERATIONAL-RELIABILITY.md"
+      - "preservation/SNAPSHOTS.json"
+  workflow_dispatch:
+    inputs:
+      snapshot_id:
+        description: "Optional exact preservation snapshot id; defaults to the newest usable repository snapshot"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: operational-reliability-evidence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EVIDENCE_ROOT: /tmp/undercast-operational-reliability
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Validate evidence machinery before using external artifacts
+        run: npm run operational:fixtures
+
+      - name: Install the rendered runtime used by the canonical gate
+        run: npx playwright install --with-deps chromium
+
+      - name: Select the immutable repository snapshot
+        id: snapshot
+        env:
+          REQUESTED_SNAPSHOT: ${{ inputs.snapshot_id || '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT/download" "$EVIDENCE_ROOT/evidence" "$EVIDENCE_ROOT/diagnostics"
+          args=(select-snapshot --registry preservation/SNAPSHOTS.json)
+          if [ -n "$REQUESTED_SNAPSHOT" ]; then
+            args+=(--snapshot-id "$REQUESTED_SNAPSHOT")
+          fi
+          node scripts/operational-reliability.mjs "${args[@]}" > "$EVIDENCE_ROOT/selection.json"
+          node - <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs = require('fs');
+          const row = JSON.parse(fs.readFileSync(process.env.EVIDENCE_ROOT + '/selection.json', 'utf8'));
+          for (const [key, value] of Object.entries({
+            snapshot_id: row.id,
+            release_tag: row.release_tag,
+            asset_name: row.asset.name,
+            snapshot_commit: row.repository_commit,
+          })) console.log(`${key}=${value}`);
+          NODE
+
+      - name: Download the hash-bound repository snapshot
+        run: |
+          set -euo pipefail
+          gh release download "${{ steps.snapshot.outputs.release_tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "${{ steps.snapshot.outputs.asset_name }}" \
+            --dir "$EVIDENCE_ROOT/download"
+
+      - name: Restore the preservation snapshot, recover exact head, and run the canonical gate
+        run: |
+          set -euo pipefail
+          node scripts/operational-reliability-execute.mjs restore-drill \
+            --checkout-root . \
+            --registry preservation/SNAPSHOTS.json \
+            --snapshot-id "${{ steps.snapshot.outputs.snapshot_id }}" \
+            --archive "$EVIDENCE_ROOT/download/${{ steps.snapshot.outputs.asset_name }}" \
+            --target-head "$GITHUB_SHA" \
+            --work-root "$EVIDENCE_ROOT/restore" \
+            --output "$EVIDENCE_ROOT/evidence/repository-restore.json"
+
+      - name: Inject and roll back an isolated bad publication
+        run: |
+          set -euo pipefail
+          node scripts/operational-reliability-execute.mjs rollback-drill \
+            --restored-root "$EVIDENCE_ROOT/restore/restored" \
+            --restore-receipt "$EVIDENCE_ROOT/evidence/repository-restore.json" \
+            --work-root "$EVIDENCE_ROOT/rollback" \
+            --output "$EVIDENCE_ROOT/evidence/publication-rollback.json"
+
+      - name: Validate the exact-head evidence bundle
+        run: |
+          set -euo pipefail
+          node scripts/operational-reliability.mjs validate-bundle \
+            --restore-receipt "$EVIDENCE_ROOT/evidence/repository-restore.json" \
+            --rollback-receipt "$EVIDENCE_ROOT/evidence/publication-rollback.json" \
+            --output "$EVIDENCE_ROOT/evidence/bundle.json" \
+            | tee "$EVIDENCE_ROOT/diagnostics/bundle-validation.json"
+
+      - name: Summarize the unreviewed evidence boundary
+        if: success()
+        run: |
+          node - <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require('fs');
+          const root = process.env.EVIDENCE_ROOT + '/evidence';
+          const restore = JSON.parse(fs.readFileSync(root + '/repository-restore.json', 'utf8'));
+          const rollback = JSON.parse(fs.readFileSync(root + '/publication-rollback.json', 'utf8'));
+          console.log('## Operational-reliability evidence');
+          console.log('');
+          console.log(`- snapshot: \`${restore.source_snapshot.id}\``);
+          console.log(`- restored target: \`${restore.forward_recovery.target_head}\``);
+          console.log(`- exact tracked files: ${restore.forward_recovery.target_files}`);
+          console.log(`- canonical gate: ${restore.canonical_gate.duration_ms} ms`);
+          console.log(`- rollback surface: ${rollback.known_good.paths.length} critical files`);
+          console.log(`- served exact-byte checks: ${rollback.served_checks.length}`);
+          console.log('');
+          console.log('These artifacts are workflow-executed evidence. They do not create reviewed waterline receipts or complete the roadmap milestone.');
+          NODE
+
+      - name: Upload drill receipts and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-reliability-evidence-${{ github.run_id }}
+          path: |
+            /tmp/undercast-operational-reliability/selection.json
+            /tmp/undercast-operational-reliability/evidence
+            /tmp/undercast-operational-reliability/restore/diagnostics
+            /tmp/undercast-operational-reliability/diagnostics
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
