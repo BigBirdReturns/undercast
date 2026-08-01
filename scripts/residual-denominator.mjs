@@ -17,10 +17,11 @@ const AUTHORITY_KEYS = [
   'graph_effects_allowed',
   'publication_effects_allowed'
 ];
+const LANE_SCHEMA = 'schema/residual-denominator-lane.schema.json';
 const GENERATED_SUMMARY = 'data/review/residual-denominator/WAVE-01-SUMMARY.json';
 const GENERATED_MANIFEST = 'data/review/residual-denominator/MANIFEST.json';
 const INPUT_FILES = [
-  'schema/residual-denominator-lane.schema.json',
+  LANE_SCHEMA,
   'data/review/residual-denominator/wave-01.json',
   ...REQUIRED_LANES.map(id => `data/review/residual-denominator/lanes/${id}.json`),
   'docs/research/residual-denominator/WAVE-01.md',
@@ -53,6 +54,82 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function valueType(value) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value;
+}
+
+function typeMatches(value, expected) {
+  return valueType(value) === expected;
+}
+
+function deepKey(value) {
+  return JSON.stringify(sortDeep(value));
+}
+
+export function validateAgainstSchema(value, schema, scope = '$') {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    throw new Error(`${scope}: schema node must be an object`);
+  }
+  const types = schema.type === undefined ? null : (Array.isArray(schema.type) ? schema.type : [schema.type]);
+  if (types) {
+    assert(types.some(type => typeMatches(value, type)), `${scope}: expected type ${types.join('|')}, got ${valueType(value)}`);
+  }
+  if (Object.hasOwn(schema, 'const')) {
+    assert(deepKey(value) === deepKey(schema.const), `${scope}: value must equal schema const`);
+  }
+  if (Array.isArray(schema.enum)) {
+    assert(schema.enum.some(candidate => deepKey(candidate) === deepKey(value)), `${scope}: value not in schema enum`);
+  }
+  if (schema.minLength !== undefined || schema.pattern !== undefined) {
+    assert(typeof value === 'string', `${scope}: string constraint applied to non-string`);
+    if (schema.minLength !== undefined) assert(value.length >= schema.minLength, `${scope}: string shorter than minLength ${schema.minLength}`);
+    if (schema.pattern !== undefined) assert(new RegExp(schema.pattern).test(value), `${scope}: string does not match ${schema.pattern}`);
+  }
+  if (Array.isArray(value)) {
+    if (schema.minItems !== undefined) assert(value.length >= schema.minItems, `${scope}: array shorter than minItems ${schema.minItems}`);
+    if (schema.maxItems !== undefined) assert(value.length <= schema.maxItems, `${scope}: array longer than maxItems ${schema.maxItems}`);
+    if (schema.uniqueItems) {
+      const keys = value.map(deepKey);
+      assert(new Set(keys).size === keys.length, `${scope}: array items must be unique`);
+    }
+    if (schema.items) value.forEach((item, index) => validateAgainstSchema(item, schema.items, `${scope}[${index}]`));
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const properties = schema.properties || {};
+    for (const required of schema.required || []) {
+      assert(Object.hasOwn(value, required), `${scope}: missing required property ${required}`);
+    }
+    if (schema.additionalProperties === false) {
+      for (const key of Object.keys(value)) assert(Object.hasOwn(properties, key), `${scope}: additional property ${key} is not allowed`);
+    }
+    for (const [key, child] of Object.entries(properties)) {
+      if (Object.hasOwn(value, key)) validateAgainstSchema(value[key], child, `${scope}.${key}`);
+    }
+  }
+  return value;
+}
+
+function validateSchemaContract(schema) {
+  assert(schema.$schema === 'https://json-schema.org/draft/2020-12/schema', `${LANE_SCHEMA}: unsupported schema dialect`);
+  assert(schema.type === 'object' && schema.additionalProperties === false, `${LANE_SCHEMA}: lane root must remain a closed object`);
+  const properties = schema.properties || {};
+  for (const required of ['authority', 'sources', 'observations', 'findings', 'terminal_receipt']) {
+    assert(properties[required], `${LANE_SCHEMA}: missing protected property ${required}`);
+  }
+  const findingSources = properties.findings?.items?.properties?.source_ids;
+  const observationSources = properties.observations?.items?.properties?.source_ids;
+  assert(findingSources?.minItems === 1 && findingSources?.uniqueItems === true, `${LANE_SCHEMA}: finding source_ids must require one or more unique sources`);
+  assert(observationSources?.minItems === 1 && observationSources?.uniqueItems === true, `${LANE_SCHEMA}: observation source_ids must require one or more unique sources`);
+  assert(properties.sources?.items?.additionalProperties === false, `${LANE_SCHEMA}: source objects must remain closed`);
+  assert(properties.terminal_receipt?.properties?.closed_residual_classes?.maxItems === 0, `${LANE_SCHEMA}: residual closure must remain impossible`);
+  for (const key of AUTHORITY_KEYS) {
+    assert(properties.authority?.properties?.[key]?.const === false, `${LANE_SCHEMA}: authority key ${key} must remain false`);
+  }
+  return schema;
+}
+
 function validateAuthority(authority, scope) {
   assert(authority && typeof authority === 'object' && !Array.isArray(authority), `${scope}: authority must be an object`);
   for (const key of AUTHORITY_KEYS) {
@@ -72,46 +149,43 @@ function uniqueIds(items, scope) {
   return ids;
 }
 
-export function validateLane(lane, expectedId) {
+function assertUniqueStrings(items, scope) {
+  assert(Array.isArray(items), `${scope}: expected an array`);
+  assert(items.every(item => typeof item === 'string' && item.length > 0), `${scope}: values must be non-empty strings`);
+  assert(new Set(items).size === items.length, `${scope}: values must be unique`);
+}
+
+export function validateLane(lane, expectedId, schema) {
   const scope = expectedId;
+  validateAgainstSchema(lane, schema, scope);
   assert(lane.schema_version === 1, `${scope}: schema_version must be 1`);
   assert(lane.wave_id === 'RD-W01', `${scope}: wave_id must be RD-W01`);
   assert(lane.lane_id === expectedId, `${scope}: lane_id mismatch`);
-  assert(typeof lane.title === 'string' && lane.title.length > 0, `${scope}: missing title`);
-  assert(typeof lane.decisive_join === 'string' && lane.decisive_join.length > 0, `${scope}: missing decisive_join`);
-  assert(typeof lane.selection_rule === 'string' && lane.selection_rule.length > 0, `${scope}: missing selection_rule`);
   validateAuthority(lane.authority, scope);
 
-  assert(Array.isArray(lane.sources) && lane.sources.length > 0, `${scope}: sources must be non-empty`);
   const sourceIds = uniqueIds(lane.sources, `${scope}.sources`);
   for (const source of lane.sources) {
-    assert(typeof source.url === 'string' && source.url.startsWith('https://'), `${scope}: source ${source.id} must use https`);
+    assert(source.url.startsWith('https://'), `${scope}: source ${source.id} must use https`);
     assert(source.accessed === '2026-08-01', `${scope}: source ${source.id} must pin accessed date`);
-    assert(Array.isArray(source.supports) && source.supports.length > 0, `${scope}: source ${source.id} missing supports`);
-    assert(Array.isArray(source.limits) && source.limits.length > 0, `${scope}: source ${source.id} missing limits`);
   }
 
-  assert(Array.isArray(lane.observations) && lane.observations.length > 0, `${scope}: observations must be non-empty`);
-  uniqueIds(lane.observations, `${scope}.observations`);
-  assert(Array.isArray(lane.findings) && lane.findings.length > 0, `${scope}: findings must be non-empty`);
-  uniqueIds(lane.findings, `${scope}.findings`);
+  uniqueIds([...lane.observations, ...lane.findings], `${scope}.evidence_items`);
   for (const item of [...lane.observations, ...lane.findings]) {
-    assert(Array.isArray(item.source_ids), `${scope}: ${item.id} source_ids must be an array`);
+    assert(item.source_ids.length > 0, `${scope}: ${item.id} must cite at least one source`);
     for (const sourceId of item.source_ids) {
       assert(sourceIds.has(sourceId), `${scope}: ${item.id} has dangling source ${sourceId}`);
     }
   }
 
   const receipt = lane.terminal_receipt;
-  assert(receipt && typeof receipt.state === 'string' && receipt.state.length > 0, `${scope}: terminal receipt missing state`);
-  assert(Array.isArray(receipt.closed_residual_classes), `${scope}: closed_residual_classes must be an array`);
   assert(receipt.closed_residual_classes.length === 0, `${scope}: this wave may not close residual classes`);
-  assert(Array.isArray(receipt.open_residual_classes) && receipt.open_residual_classes.length > 0, `${scope}: open_residual_classes must be non-empty`);
-  assert(Array.isArray(receipt.prohibited_inferences) && receipt.prohibited_inferences.length > 0, `${scope}: prohibited_inferences must be non-empty`);
+  assertUniqueStrings(receipt.open_residual_classes, `${scope}.terminal_receipt.open_residual_classes`);
+  assertUniqueStrings(receipt.prohibited_inferences, `${scope}.terminal_receipt.prohibited_inferences`);
   return lane;
 }
 
 export function validateCorpus(root) {
+  const schema = validateSchemaContract(readJson(root, LANE_SCHEMA));
   const wave = readJson(root, 'data/review/residual-denominator/wave-01.json');
   assert(wave.schema_version === 1 && wave.id === 'RD-W01', 'wave-01.json: invalid identity');
   validateAuthority(wave.authority, 'wave-01.json');
@@ -120,12 +194,20 @@ export function validateCorpus(root) {
   assert(wave.denominator.open_residual_classes === 42, 'wave-01.json: open denominator must remain 42');
   assert(JSON.stringify(wave.execution.lanes) === JSON.stringify(REQUIRED_LANES), 'wave-01.json: lane set or order changed');
   assert(wave.execution.required_terminal_receipts === 6, 'wave-01.json: six receipts required');
+  assert(wave.boundary?.review_status === 'evidence_only_draft', 'wave-01.json: review status must remain evidence_only_draft');
+  assert(Array.isArray(wave.boundary?.canonical_product_paths_allowed) && wave.boundary.canonical_product_paths_allowed.length === 0, 'wave-01.json: canonical product paths must remain empty');
+  assert(Array.isArray(wave.boundary?.graph_paths_allowed) && wave.boundary.graph_paths_allowed.length === 0, 'wave-01.json: graph paths must remain empty');
+  assert(Array.isArray(wave.boundary?.publication_paths_allowed) && wave.boundary.publication_paths_allowed.length === 0, 'wave-01.json: publication paths must remain empty');
 
-  const lanes = REQUIRED_LANES.map(id => {
-    const relative = `data/review/residual-denominator/lanes/${id}.json`;
-    assert(fs.existsSync(path.join(root, relative)), `${relative}: missing required lane`);
-    return validateLane(readJson(root, relative), id);
-  });
+  const laneDirectory = path.join(root, 'data/review/residual-denominator/lanes');
+  const expectedFiles = REQUIRED_LANES.map(id => `${id}.json`).sort();
+  const actualFiles = fs.readdirSync(laneDirectory, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
+    .map(entry => entry.name)
+    .sort();
+  assert(JSON.stringify(actualFiles) === JSON.stringify(expectedFiles), `lane directory must contain exactly ${expectedFiles.join(', ')}`);
+
+  const lanes = REQUIRED_LANES.map(id => validateLane(readJson(root, `data/review/residual-denominator/lanes/${id}.json`), id, schema));
   return { wave, lanes };
 }
 
@@ -208,10 +290,27 @@ function writeOrCheck(root, mode) {
   return outputs;
 }
 
-function parseArgs(argv) {
-  const mode = argv.includes('--write') ? 'write' : 'check';
-  const rootIndex = argv.indexOf('--root');
-  const root = rootIndex >= 0 ? path.resolve(argv[rootIndex + 1]) : DEFAULT_ROOT;
+export function parseArgs(argv) {
+  let mode = 'check';
+  let modeSeen = false;
+  let root = DEFAULT_ROOT;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--write' || arg === '--check') {
+      assert(!modeSeen, 'choose exactly one of --write or --check');
+      mode = arg.slice(2);
+      modeSeen = true;
+      continue;
+    }
+    if (arg === '--root') {
+      const value = argv[index + 1];
+      assert(value && !value.startsWith('--'), '--root requires a value');
+      root = path.resolve(value);
+      index += 1;
+      continue;
+    }
+    throw new Error(`unknown argument ${arg}`);
+  }
   return { mode, root };
 }
 
