@@ -108,8 +108,10 @@ function sourceOrigin(manifest, importHead) {
     manifest.source?.page_resolved_url,
     manifest.source?.resolved_page,
     manifest.source?.asset_url,
+    manifest.selected_source?.source_page,
     manifest.selected_source?.page_url,
     manifest.selected_source?.url,
+    manifest.selected_source?.origin,
     manifest.source_receipt?.page_url,
     manifest.source_receipt?.url,
   ]) || `https://github.com/BigBirdReturns/undercast/blob/${importHead}/${manifest.__manifest_path}`;
@@ -137,15 +139,26 @@ async function inspectPacket({ root, imported, importHead, correctionMap, adopte
   const raw = manifestDoc.value;
   raw.__manifest_path = imported.manifest_path;
   const legacy = Boolean(raw.record?.id && raw.composition?.file);
+  const batched = Boolean(!legacy && Array.isArray(raw.files) && raw.campaign_id);
+  const batchedReviewDoc = batched
+    ? await readJson(root, `${imported.root}/review.json`, `${key} batched review`, false)
+    : null;
+  const batchedReview = batchedReviewDoc?.value || null;
   const recordId = legacy ? raw.record.id : raw.record_id;
   const side = legacy ? raw.record.side : raw.side;
   assert(key === keyFor(recordId, side), `${key} manifest identity drifted`);
-  const actor = legacy ? raw.record.actor : raw.actor;
-  const character = legacy ? raw.record.character : raw.character;
-  const production = legacy ? raw.record.production : raw.production;
+  const actor = legacy ? raw.record.actor : batched ? batchedReview?.identity?.actor : raw.actor;
+  const character = legacy ? raw.record.character : batched ? batchedReview?.identity?.character : raw.character;
+  const production = legacy ? raw.record.production : batched ? batchedReview?.identity?.production : raw.production;
+  if (batched && batchedReview?.selected_source) raw.selected_source = batchedReview.selected_source;
+  const renderedPermanent = Boolean(!legacy && !batched && !raw.candidate && raw.render?.candidate);
   const candidate = legacy
     ? { path: raw.composition.file, sha256: raw.composition.sha256, mime: raw.composition.mime, width: raw.composition.width, height: raw.composition.height }
-    : raw.candidate;
+    : batched
+      ? batchedReview?.render_result?.candidate
+      : renderedPermanent
+        ? { ...raw.render.candidate, mime: raw.render.candidate.mime || null }
+        : raw.candidate;
   assert(candidate?.path && /^[0-9a-f]{64}$/.test(candidate.sha256 || ""), `${key} candidate receipt is malformed`);
   const candidatePath = `${imported.root}/${candidate.path}`;
   const candidateResolved = resolveInside(root, candidatePath, `${key} candidate`);
@@ -158,20 +171,54 @@ async function inspectPacket({ root, imported, importHead, correctionMap, adopte
   const manifestBound = checksums.get(path.posix.basename(imported.manifest_path)) === imported.manifest_sha256;
   const candidateBound = checksums.get(path.posix.basename(candidatePath)) === candidate.sha256;
 
-  const reviewDoc = legacy ? await readJson(root, `${imported.root}/review.json`, `${key} legacy review`, false) : null;
+  const reviewDoc = legacy
+    ? await readJson(root, `${imported.root}/review.json`, `${key} legacy review`, false)
+    : renderedPermanent
+      ? await readJson(root, `${imported.root}/review.json`, `${key} rendered packet review`, false)
+      : batchedReviewDoc;
   const modernReview = raw.exact_subject_review || null;
+  const renderedReview = renderedPermanent ? reviewDoc?.value || null : null;
+  const renderedReviewReady = Boolean(renderedPermanent
+    && renderedReview?.disposition === "reviewed-evidence-candidate"
+    && renderedReview?.visual_second_desk?.status === "accepted-for-render"
+    && renderedReview?.render_result?.candidate?.path === candidate.path
+    && renderedReview?.render_result?.candidate?.sha256 === candidate.sha256
+    && renderedReview?.render_result?.wall_crop?.path
+    && renderedReview?.canonical_mutation === false
+    && Array.isArray(renderedReview?.duplicate_scan?.items)
+    && renderedReview.duplicate_scan.items.every((item) => Array.isArray(item.matches) && item.matches.length === 0));
+  const batchedReviewReady = Boolean(batched
+    && batchedReview?.disposition === "reviewed-evidence-candidate"
+    && batchedReview?.visual_adjudication?.status === "accepted"
+    && batchedReview?.visual_adjudication?.independent_from_discovery === true
+    && batchedReview?.visual_adjudication?.identity?.value === "expected"
+    && acceptedPresentation(batchedReview?.visual_adjudication?.presentation?.value)
+    && batchedReview?.render_result?.candidate?.path === candidate.path
+    && batchedReview?.render_result?.candidate?.sha256 === candidate.sha256
+    && batchedReview?.render_result?.wall_crop?.path
+    && batchedReview?.canonical_mutation === false
+    && Array.isArray(batchedReview?.duplicate_scan?.items)
+    && batchedReview.duplicate_scan.items.every((item) => Array.isArray(item.matches) && item.matches.length === 0));
   const reviewReady = legacy
     ? legacyReviewPassed(reviewDoc?.value)
-    : Boolean(raw.reviewed_by && raw.reviewed_role
-      && new Set(["reviewed-evidence-candidate", "reviewed-evidence-ready-for-canonical-consideration"]).has(raw.disposition)
-      && acceptedIdentity(modernReview?.identity)
-      && acceptedPresentation(modernReview?.presentation)
-      && modernCropPassed(modernReview));
+    : batched
+      ? batchedReviewReady
+      : renderedPermanent
+        ? renderedReviewReady
+        : Boolean(raw.reviewed_by && raw.reviewed_role
+          && new Set(["reviewed-evidence-candidate", "reviewed-evidence-ready-for-canonical-consideration"]).has(raw.disposition)
+          && acceptedIdentity(modernReview?.identity)
+          && acceptedPresentation(modernReview?.presentation)
+          && modernCropPassed(modernReview));
 
   let duplicatePass = false;
   const duplicateDoc = await readJson(root, `${imported.root}/duplicate-scan.json`, `${key} duplicate scan`, false);
-  if (duplicateDoc) duplicatePass = String(duplicateDoc.value?.status || "").toLowerCase() === "pass";
-  else if (legacy) duplicatePass = String(reviewDoc?.value?.candidate?.duplicate_scan?.status || raw.duplicate_scan?.status || "").toLowerCase() === "pass";
+  if (duplicateDoc) {
+    duplicatePass = String(duplicateDoc.value?.status || "").toLowerCase() === "pass"
+      || (Array.isArray(duplicateDoc.value?.items) && duplicateDoc.value.items.every((item) => Array.isArray(item.matches) && item.matches.length === 0));
+  } else if (legacy) duplicatePass = String(reviewDoc?.value?.candidate?.duplicate_scan?.status || raw.duplicate_scan?.status || "").toLowerCase() === "pass";
+  else if (batched) duplicatePass = batchedReviewReady;
+  else if (renderedPermanent) duplicatePass = renderedReviewReady;
   else duplicatePass = String(raw.duplicate_scan?.status || "").toLowerCase() === "pass";
 
   const specimen = exactRow([...specimenById.values()], (row) => row.id === recordId, `${key} specimen`);
@@ -234,7 +281,7 @@ async function inspectPacket({ root, imported, importHead, correctionMap, adopte
     actor,
     character,
     production: production || null,
-    packet_generation: legacy ? "legacy-serial" : "normalized",
+    packet_generation: legacy ? "legacy-serial" : batched ? "batched-amortized" : renderedPermanent ? "rendered-permanent" : "normalized",
     packet_root: imported.root,
     manifest_path: imported.manifest_path,
     manifest_sha256: imported.manifest_sha256,
