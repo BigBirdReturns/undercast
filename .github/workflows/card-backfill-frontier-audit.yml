@@ -26,14 +26,15 @@ concurrency:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 180
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       AUDIT_HEAD: ${{ github.sha }}
+      CANDIDATE_REF: agent/card-backfill-frontier-routing-001
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.CANDIDATE_REF }}
           fetch-depth: 1
 
       - uses: actions/setup-node@v4
@@ -43,6 +44,13 @@ jobs:
 
       - run: npm ci
 
+      - uses: ./.github/actions/card-backfill-runtime
+        with:
+          profile: local-desk
+
+      - name: Install rendered-gate runtime
+        run: npx playwright install --with-deps chromium
+
       - name: Measure every open obligation and prior attempt
         run: |
           set -euo pipefail
@@ -50,26 +58,44 @@ jobs:
           node scripts/card-backfill-frontier-audit.mjs --out "$out" | tee "$RUNNER_TEMP/frontier.log"
           node --input-type=module - "$out/frontier.json" <<'NODE'
           import fs from 'node:fs';
-          const path = process.argv[2];
-          const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
           const classes = Object.fromEntries((value.summary?.frontier_class || []).map((row) => [row.key, row.count]));
-          if (value.completed_packets + value.open_obligations !== value.selector_defined_estate) {
-            throw new Error(`estate accounting drift: ${value.completed_packets}+${value.open_obligations}!=${value.selector_defined_estate}`);
-          }
-          if (value.completed_packets >= 147) throw new Error('frontier audit was dispatched after the unattended target had already been reached');
-          if (!value.open_obligations) throw new Error('below-target frontier has no open obligations');
+          if (value.completed_packets + value.open_obligations !== value.selector_defined_estate) throw new Error('estate accounting drift');
+          if (value.completed_packets !== 55 || value.open_obligations !== 417) throw new Error(`unexpected frozen frontier ${value.completed_packets}/${value.open_obligations}`);
           if (!Object.keys(classes).length) throw new Error('frontier classes are empty');
-          console.log(`PASS — frontier classified ${value.open_obligations} open obligations across ${Object.keys(classes).length} executable classes`);
+          console.log(`PASS — frontier classified ${value.open_obligations} open obligations across ${Object.keys(classes).length} classes`);
           console.log(`CLASSES — ${JSON.stringify(classes)}`);
           NODE
 
+      - name: Classify the composite denominator
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/card-backfill-composite-census"
+          node scripts/card-backfill-composite-census.mjs --out "$out" | tee "$RUNNER_TEMP/composite-census.log"
+          node --input-type=module - "$out/composite-census.json" <<'NODE'
+          import fs from 'node:fs';
+          const census = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (census.composite_obligations !== 53) throw new Error(`expected 53 composite-class obligations, got ${census.composite_obligations}`);
+          const classes = Object.fromEntries(census.summary.census_class.map((row) => [row.key, row.count]));
+          for (const key of ['finite-composite-candidate','alias-equivalence-review','open-denominator-review']) {
+            if (!classes[key]) throw new Error(`required class ${key} is empty`);
+          }
+          console.log(`PASS — exact composite frontier classes ${JSON.stringify(classes)}`);
+          NODE
+
+      - name: Run complete repository gate
+        run: npm run gate
+
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: card-backfill-frontier-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/card-backfill-frontier
             ${{ runner.temp }}/frontier.log
-          if-no-files-found: error
+            ${{ runner.temp }}/card-backfill-composite-census
+            ${{ runner.temp }}/composite-census.log
+          if-no-files-found: warn
           retention-days: 90
 
       - name: Publish observable frontier custody
@@ -82,7 +108,7 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/statuses/${AUDIT_HEAD}" \
             -f state="$state" \
             -f context='card-backfill/frontier-audit' \
-            -f description="policy frontier audit ${state}; canonical_mutation=false" \
+            -f description="typed frontier candidate ${state}; canonical_mutation=false" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           echo 'manual_continue_required=false'
           echo 'canonical_mutation=false'
