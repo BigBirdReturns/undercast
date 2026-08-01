@@ -16,7 +16,7 @@ Binary forward deltas fail closed. A later snapshot must absorb such a delta bef
 
 ## Isolated publication-rollback drill
 
-The rollback drill builds a deterministic critical-surface bundle from the recovered site. The bundle includes the homepage, the quality ledger, permanent record routes, and image assets. It publishes the known-good bundle into an isolated local slot, atomically injects a bad homepage, proves that the manifest changed, and restores the known-good slot through a same-filesystem directory rename.
+The rollback drill builds a deterministic critical-surface bundle from the recovered site. The bundle includes the homepage, the quality ledger, permanent record routes, and files with recognized image extensions. Documentation and other non-image files under `images/` are excluded. It publishes the known-good bundle into an isolated local slot, atomically injects a bad homepage, proves that the manifest changed, and restores the known-good slot through a same-filesystem directory rename.
 
 The restored slot is then served over HTTP. Every selected route must match the known-good bytes exactly. The drill never deploys to GitHub Pages and cannot modify the live publication.
 
