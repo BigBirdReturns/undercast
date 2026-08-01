@@ -190,8 +190,12 @@ for (const needle of [
 assert(files.runtime.includes("profile=\"$REQUESTED_PROFILE\""));
 assert(files.runtime.includes("discover) profile=discovery"));
 assert(files.runtime.includes("packages+=(imagemagick)"));
-assert(files.runtime.includes("packages+=(python3-opencv)"));
-assert(files.runtime.includes("packages+=(opencv-data)"));
+assert(files.runtime.includes("opencv-python-headless==4.10.0.84"));
+assert(files.runtime.includes("numpy==1.26.4"));
+assert(files.runtime.includes("--break-system-packages"));
+assert(files.runtime.includes("pinned headless OpenCV"));
+assert(!files.runtime.includes("packages+=(python3-opencv)"));
+assert(!files.runtime.includes("packages+=(opencv-data)"));
 assert(files.runtime.includes("packages+=(tesseract-ocr)"));
 assert(files.runtime.includes("lean discovery runtime omits OpenCV, NumPy, cascade data, and Tesseract"));
 assert(files.runtime.includes('sudo apt-get install -y "${packages[@]}"'));

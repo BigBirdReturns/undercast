@@ -34,33 +34,22 @@ runs:
           packages+=(imagemagick)
         fi
 
+        need_headless_cv=false
         if [ "$profile" = local-desk ]; then
           if ! python3 - <<'PY'
+        from pathlib import Path
         import cv2
         import numpy
-        PY
-          then
-            packages+=(python3-opencv)
-          fi
-          if ! python3 - <<'PY'
-        from pathlib import Path
-        try:
-            import cv2
-        except Exception:
-            raise SystemExit(1)
         name = "haarcascade_frontalface_default.xml"
-        roots = []
         data = getattr(cv2, "data", None)
-        if data is not None and getattr(data, "haarcascades", None):
-            roots.append(Path(data.haarcascades))
-        roots.extend([
-            Path("/usr/share/opencv4/haarcascades"),
-            Path("/usr/share/opencv/haarcascades"),
-        ])
+        roots = [Path(data.haarcascades)] if data is not None and getattr(data, "haarcascades", None) else []
         raise SystemExit(0 if any((root / name).is_file() for root in roots) else 1)
         PY
           then
-            packages+=(opencv-data)
+            need_headless_cv=true
+            if ! python3 -m pip --version >/dev/null 2>&1; then
+              packages+=(python3-pip)
+            fi
           fi
           if ! command -v tesseract >/dev/null 2>&1; then
             packages+=(tesseract-ocr)
@@ -72,7 +61,18 @@ runs:
           sudo apt-get install -y "${packages[@]}"
           printf 'INSTALLED — %s\n' "${packages[*]}"
         else
-          echo "PASS — $profile runtime already present; apt work avoided"
+          echo "PASS — $profile apt runtime already present; apt work avoided"
+        fi
+
+        if [ "$need_headless_cv" = true ]; then
+          python3 -m pip install \
+            --disable-pip-version-check \
+            --no-input \
+            --user \
+            --break-system-packages \
+            'numpy==1.26.4' \
+            'opencv-python-headless==4.10.0.84'
+          echo 'INSTALLED — deterministic headless OpenCV wheel; distro GUI/GPU dependency tree avoided'
         fi
 
         if command -v magick >/dev/null 2>&1; then
@@ -109,17 +109,12 @@ runs:
         import cv2
         import numpy
         name = "haarcascade_frontalface_default.xml"
-        roots = []
         data = getattr(cv2, "data", None)
-        if data is not None and getattr(data, "haarcascades", None):
-            roots.append(Path(data.haarcascades))
-        roots.extend([
-            Path("/usr/share/opencv4/haarcascades"),
-            Path("/usr/share/opencv/haarcascades"),
-        ])
+        roots = [Path(data.haarcascades)] if data is not None and getattr(data, "haarcascades", None) else []
         cascade = next((root / name for root in roots if (root / name).is_file()), None)
         if cascade is None:
-            raise SystemExit("OpenCV face cascade is unavailable after runtime installation")
+            raise SystemExit("OpenCV face cascade is unavailable after headless runtime installation")
         print(f'PASS — local image desk runtime: OpenCV {cv2.__version__}; NumPy {numpy.__version__}; cascade={cascade}')
         PY
         tesseract --version | head -n 1
+        echo 'PASS — local desk uses pinned headless OpenCV rather than the distro GUI/GPU stack'
