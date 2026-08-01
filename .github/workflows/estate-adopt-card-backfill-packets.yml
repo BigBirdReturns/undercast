@@ -1,64 +1,20 @@
-name: estate-adopt-card-backfill-packets
+name: estate-adopt-card-backfill-packets-retired
 
 on:
   workflow_dispatch:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    branches: [main]
-    paths:
-      - .github/workflows/estate-adopt-card-backfill-packets.yml
-      - .github/workflows/estate-adopt-card-backfill-uc046.yml
-      - data/review/estate-debt/COLLECT-003-CANONICAL-ADOPTION-PLAN.json
-      - docs/ESTATE-PRODUCT-ALIGNMENT.md
-      - scripts/estate-adopt-card-backfill-packets.mjs
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
-  group: estate-adopt-card-backfill-packets
+  group: estate-adopt-card-backfill-packets-retired
   cancel-in-progress: true
 
-env:
-  PR_NUMBER: ${{ github.event.pull_request.number || 132 }}
-  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  TARGET_BRANCH: agent/estate-consolidation-001
-  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-  EXPECTED_ADOPTIONS: '5'
-
 jobs:
-  adopt:
-    if: github.repository == 'BigBirdReturns/undercast' && github.actor != 'github-actions[bot]'
+  verify-paid-transaction:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.AUTHORIZED_HEAD }}
-          fetch-depth: 0
-
-      - name: Establish exact-head custody
-        id: custody
-        run: |
-          set -euo pipefail
-          CURRENT_HEAD="$(git rev-parse HEAD)"
-          test "$CURRENT_HEAD" = "$AUTHORIZED_HEAD"
-          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
-          REMOTE_HEAD="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
-          test "$REMOTE_HEAD" = "$AUTHORIZED_HEAD"
-          echo "head=$CURRENT_HEAD" >> "$GITHUB_OUTPUT"
-
-      - name: Announce product-paying adoption
-        run: |
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF_COMMENT
-          COLLECT-003 canonical adoption started on workflow run $GITHUB_RUN_ID.
-
-          Authorized branch head: ${{ steps.custody.outputs.head }}.
-          Exact bounded records: UC-025/still, UC-046/still, UC-053/still, UC-111/still, and UC-113/still.
-
-          This run performs no discovery, creates no source policy or supervisor, preserves every rejected historical byte, smoke-gates the canonical candidate tree, and publishes only under an exact-head lease. Success must improve five visitor-facing flipcards and move complete pairs from 678 to 683 without resetting the quality baseline.
-          EOF_COMMENT
 
       - uses: actions/setup-node@v4
         with:
@@ -68,203 +24,11 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
-      - name: Install rendered-browser dependency
-        run: npx playwright install --with-deps chromium
-
-      - name: Prove COLLECT-003 fail-closed fixtures
-        run: node scripts/estate-adopt-card-backfill-packets.mjs --fixtures
-
-      - name: Capture exact pre-adoption quality
-        run: cp data/quality.json /tmp/COLLECT-003-quality-before.json
-
-      - name: Prove exact current-head adoption denominator
-        id: preflight
+      - name: Verify COLLECT-003 remains paid and cumulatively accounted
         run: |
           set -euo pipefail
-          node scripts/estate-adopt-card-backfill-packets.mjs | tee /tmp/COLLECT-003-preflight.json
-          PENDING="$(node -e "const x=JSON.parse(require('fs').readFileSync('/tmp/COLLECT-003-preflight.json','utf8')); process.stdout.write(String(x.pending))")"
-          AUTHORIZED="$(node -e "const x=JSON.parse(require('fs').readFileSync('/tmp/COLLECT-003-preflight.json','utf8')); process.stdout.write(String(x.authorized))")"
-          test "$AUTHORIZED" = "$EXPECTED_ADOPTIONS"
-          test "$PENDING" = "$EXPECTED_ADOPTIONS" -o "$PENDING" = "0"
-          echo "pending=$PENDING" >> "$GITHUB_OUTPUT"
-
-      - name: Apply exact packet winners to versioned canonical paths
-        run: |
-          set -euo pipefail
-          trap 'git reset --hard HEAD; git clean -fd' ERR
-          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          node scripts/estate-adopt-card-backfill-packets.mjs \
-            --write \
-            --now "$NOW" \
-            --report /tmp/COLLECT-003-apply.json
-
-      - name: Rebuild audit, serving projections, and permanent records
-        run: |
-          set -euo pipefail
-          npm run media:audit -- sync
-          node scripts/shard.mjs
-          node scripts/build-record-pages.mjs
-
-      - name: Validate exact canonical adoption and quality payment
-        id: quality
-        run: |
-          set -euo pipefail
-          node scripts/estate-adopt-card-backfill-packets.mjs \
-            --validate \
-            --before-quality /tmp/COLLECT-003-quality-before.json \
-            | tee /tmp/COLLECT-003-validation.json
-          COMPLETE_PAIRS="$(node -p "require('./data/quality.json').metrics.complete_pairs")"
-          PAIR_RATIO="$(node -p "require('./data/quality.json').metrics.complete_pair_ratio")"
-          MISSING_STILL="$(node -p "require('./data/quality.json').metrics.missing_still")"
-          MISSING_BOTH="$(node -p "require('./data/quality.json').metrics.missing_both")"
-          test "$COMPLETE_PAIRS" = "683"
-          test "$MISSING_STILL" = "383"
-          test "$MISSING_BOTH" = "109"
-          echo "complete_pairs=$COMPLETE_PAIRS" >> "$GITHUB_OUTPUT"
-          echo "pair_ratio=$PAIR_RATIO" >> "$GITHUB_OUTPUT"
-          echo "missing_still=$MISSING_STILL" >> "$GITHUB_OUTPUT"
-          echo "missing_both=$MISSING_BOTH" >> "$GITHUB_OUTPUT"
-
-      - name: Stage only the product-paying candidate tree
-        id: staged
-        run: |
-          set -euo pipefail
-          git add -A
-          git diff --cached --check
-          git diff --cached --name-only -z > /tmp/COLLECT-003-staged-paths.zlist
-          node --input-type=module - /tmp/COLLECT-003-staged-paths.zlist <<'NODE'
-          import fs from 'node:fs';
-          const plan = JSON.parse(fs.readFileSync('data/review/estate-debt/COLLECT-003-CANONICAL-ADOPTION-PLAN.json', 'utf8'));
-          const exactImages = new Set(plan.adoptions.map((row) => row.destination_path));
-          const paths = fs.readFileSync(process.argv[2]).toString('utf8').split('\0').filter(Boolean);
-          const unexpected = paths.filter((file) => !file.startsWith('data/') && !file.startsWith('records/') && !exactImages.has(file));
-          if (unexpected.length) throw new Error(`COLLECT-003 runtime escaped product boundary: ${unexpected.join(', ')}`);
-          if (!paths.some((file) => file === 'data/specimens.json')) throw new Error('canonical specimens were not changed');
-          if (!paths.some((file) => file === 'data/SOURCES.json')) throw new Error('canonical source ledger was not changed');
-          for (const image of exactImages) if (!paths.includes(image)) throw new Error(`planned canonical image was not staged: ${image}`);
-          console.log(`PASS — ${paths.length} staged product paths remain inside data/, records/, and five exact canonical images`);
-          NODE
-          git diff --cached --binary > /tmp/COLLECT-003-candidate.patch
-          git write-tree > /tmp/COLLECT-003-candidate.tree
-          if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-          test "$(cat /tmp/COLLECT-003-candidate.tree)" != "$(git rev-parse HEAD^{tree})"
-
-      - name: Smoke-gate the exact candidate tree
-        run: npm run gate
-
-      - name: Refuse post-gate drift
-        run: |
-          set -euo pipefail
-          git diff --exit-code
-          test -z "$(git ls-files --others --exclude-standard)"
-          git diff --cached --check
-          PRE_TREE="$(cat /tmp/COLLECT-003-candidate.tree)"
-          POST_TREE="$(git write-tree)"
-          test "$PRE_TREE" = "$POST_TREE"
-
-      - name: Promote permanent receipt only after the smoke gate
-        id: receipt
-        run: |
-          set -euo pipefail
-          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          GATED_TREE="$(cat /tmp/COLLECT-003-candidate.tree)"
-          node scripts/estate-adopt-card-backfill-packets.mjs \
-            --write-receipt \
-            --before-quality /tmp/COLLECT-003-quality-before.json \
-            --authorized-parent "$AUTHORIZED_HEAD" \
-            --gated-tree "$GATED_TREE" \
-            --workflow-run "$GITHUB_RUN_ID" \
-            --now "$NOW" \
-            | tee /tmp/COLLECT-003-receipt-write.json
-          git add data/review/estate-debt/COLLECT-003-CANONICAL-ADOPTION.json
-          git diff --cached --check
-          FINAL_TREE="$(git write-tree)"
-          DIFFERENCE="$(git diff --name-only "$GATED_TREE" "$FINAL_TREE")"
-          test "$DIFFERENCE" = "data/review/estate-debt/COLLECT-003-CANONICAL-ADOPTION.json"
-          node scripts/estate-adopt-card-backfill-packets.mjs \
-            --validate-receipt \
-            --before-quality /tmp/COLLECT-003-quality-before.json \
-            | tee /tmp/COLLECT-003-receipt-validation.json
-          echo "candidate_tree=$GATED_TREE" >> "$GITHUB_OUTPUT"
-          echo "final_tree=$FINAL_TREE" >> "$GITHUB_OUTPUT"
-
-      - name: Commit and publish exact gated adoption under lease
-        if: steps.staged.outputs.changed == 'true'
-        id: publish
-        run: |
-          set -euo pipefail
-          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
-          REMOTE_HEAD="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
-          test "$REMOTE_HEAD" = "$AUTHORIZED_HEAD"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit \
-            -m "Estate adoption: restore five frontier-certified stills" \
-            -m "canonical_adoptions=5" \
-            -m "complete_pairs=678->683" \
-            -m "missing_still=388->383" \
-            -m "quality_baseline_reset=false" \
-            -m "authorized_parent=${AUTHORIZED_HEAD}" \
-            -m "workflow_run=${GITHUB_RUN_ID}" \
-            -m "gated_tree=${{ steps.receipt.outputs.candidate_tree }}" \
-            -m "final_tree=${{ steps.receipt.outputs.final_tree }}"
-          PUBLISHED_HEAD="$(git rev-parse HEAD)"
-          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}" origin "HEAD:refs/heads/${TARGET_BRANCH}"
-          echo "head=$PUBLISHED_HEAD" >> "$GITHUB_OUTPUT"
-
-      - name: Report product payment
-        if: success()
-        run: |
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF_COMMENT
-          COLLECT-003 canonical adoption passed on workflow run $GITHUB_RUN_ID.
-
-          Authorized parent: ${{ steps.custody.outputs.head }}.
-          Published descendant: ${{ steps.publish.outputs.head }}.
-          Canonical stills adopted: 5.
-          Complete pairs: 678 → ${{ steps.quality.outputs.complete_pairs }}.
-          Complete-pair ratio: 0.516375 → ${{ steps.quality.outputs.pair_ratio }}.
-          Missing stills: 388 → ${{ steps.quality.outputs.missing_still }}.
-          Missing-both records: 109 → ${{ steps.quality.outputs.missing_both }}.
-          Smoke-gated candidate tree: ${{ steps.receipt.outputs.candidate_tree }}.
-          Final receipted tree: ${{ steps.receipt.outputs.final_tree }}.
-
-          UC-025, UC-046, UC-053, UC-111, and UC-113 now use versioned canonical packet bytes while every rejected historical image remains retained. No discovery, source-policy expansion, supervisor expansion, or quality-baseline reset occurred. The next lawful work is another bounded adoption batch from the remaining retained packets, followed by retirement of paid packet-production debt.
-
-          manual_continue_required=false
-          canonical_mutation=true
-          EOF_COMMENT
-
-      - name: Report failed product payment
-        if: failure()
-        run: |
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF_COMMENT
-          COLLECT-003 canonical adoption failed closed on workflow run $GITHUB_RUN_ID.
-
-          Authorized parent: ${{ steps.custody.outputs.head || env.AUTHORIZED_HEAD }}.
-
-          No canonical-adoption or quality-payment claim is authorized. Inspect the failed step and retained artifact before changing an exact packet hash, historical correction ruling, canonical current binding, five-record denominator, product boundary, or complete-gate requirement.
-          EOF_COMMENT
-
-      - name: Preserve exact transaction evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: COLLECT-003-canonical-adoption-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            /tmp/COLLECT-003-preflight.json
-            /tmp/COLLECT-003-apply.json
-            /tmp/COLLECT-003-quality-before.json
-            /tmp/COLLECT-003-validation.json
-            /tmp/COLLECT-003-candidate.patch
-            /tmp/COLLECT-003-candidate.tree
-            /tmp/COLLECT-003-receipt-write.json
-            /tmp/COLLECT-003-receipt-validation.json
-            data/quality.json
-            data/review/estate-debt/COLLECT-003-CANONICAL-ADOPTION-PLAN.json
-            data/review/estate-debt/COLLECT-003-CANONICAL-ADOPTION.json
-          if-no-files-found: warn
-          retention-days: 30
+          test -f data/review/estate-debt/COLLECT-003-CANONICAL-ADOPTION.json
+          test "$(node -p "require('./data/review/estate-debt/COLLECT-003-CANONICAL-ADOPTION.json').status")" = paid
+          test "$(node -p "require('./data/review/estate-debt/COLLECT-003-CANONICAL-ADOPTION.json').counts.canonical_adoptions")" = 5
+          node scripts/estate-canonical-adoption-ledger.mjs
+          echo 'PASS — COLLECT-003 mutation authority is retired; future batches require a new bounded plan and receipt.'
