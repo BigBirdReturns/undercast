@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import {
   buildOperationalEvidenceIssue,
   sha256,
@@ -83,7 +85,7 @@ const rollbackReceipt = {
   status: "passed",
   evidence_tier: EVIDENCE_TIER,
   generated_at: "2026-08-01T00:00:01Z",
-  workflow: restoreReceipt.workflow,
+  workflow: { ...restoreReceipt.workflow },
   known_good: {
     snapshot_id: restoreReceipt.source_snapshot.id,
     snapshot_commit: snapshotCommit,
@@ -145,6 +147,7 @@ const bundle = {
   },
 };
 
+const artifactId = 8825000000;
 const input = {
   restoreReceipt,
   restoreRaw,
@@ -159,15 +162,17 @@ const input = {
   headBranch: "main",
   headSha,
   generatedAt: "2026-08-01T00:00:02Z",
-  artifactId: 8825000000,
+  artifactId,
   artifactName: `operational-reliability-evidence-${runId}`,
-  artifactUrl: `https://github.com/${repository}/actions/runs/${runId}/artifacts/8825000000`,
+  artifactUrl: `https://github.com/${repository}/actions/runs/${runId}/artifacts/${artifactId}`,
   artifactDigest: `sha256:${sha256("artifact")}`,
 };
 
 const issue = buildOperationalEvidenceIssue(input);
 assert.equal(issue.title, `Operational reliability evidence run ${runId} @ ${headSha.slice(0, 12)}`);
 assert.match(issue.body, /workflow-executed-unreviewed/);
+assert.match(issue.body, /durable discovery surface/);
+assert.match(issue.body, /issue may be updated on a rerun/);
 assert.match(issue.body, new RegExp(String(runId)));
 assert.match(issue.body, new RegExp(headSha));
 assert.match(issue.body, /Canonical gate observation: 71208 ms/);
@@ -175,13 +180,22 @@ assert.match(issue.body, /Rollback surface: 4 files/);
 assert.match(issue.body, /No reviewed waterline receipt was created/);
 assert.equal(issue.facts.review_status, "unreviewed");
 assert.equal(issue.facts.boundary.operational_metrics_populated, false);
+assert.equal(issue.facts.boundary.discovery_issue_is_mutable, true);
+assert.equal(issue.facts.boundary.artifact_and_receipt_hashes_are_authoritative, true);
 assert.equal(issue.facts.rollback.served_exact_byte_checks, 4);
 assert.match(issue.facts.ledger_sha256, /^[0-9a-f]{64}$/);
 
 assert.throws(() => buildOperationalEvidenceIssue({ ...input, eventName: "pull_request" }), /only push evidence/);
 assert.throws(() => buildOperationalEvidenceIssue({ ...input, headBranch: "feature" }), /only main evidence/);
 assert.throws(() => buildOperationalEvidenceIssue({ ...input, headSha: "e".repeat(40) }), /target does not match/);
+assert.throws(() => buildOperationalEvidenceIssue({ ...input, repository: "not-a-repository" }), /owner\/name/);
+assert.throws(() => buildOperationalEvidenceIssue({ ...input, runUrl: "https://example.test/run" }), /run URL/);
 assert.throws(() => buildOperationalEvidenceIssue({ ...input, artifactName: "wrong" }), /artifact name/);
+assert.throws(() => buildOperationalEvidenceIssue({ ...input, artifactUrl: "https://example.test/artifact" }), /artifact URL/);
+assert.throws(() => buildOperationalEvidenceIssue({
+  ...input,
+  rollbackReceipt: { ...rollbackReceipt, workflow: { ...rollbackReceipt.workflow, run_attempt: 2 } },
+}), /rollback receipt run attempt/);
 assert.throws(() => buildOperationalEvidenceIssue({
   ...input,
   bundle: { ...bundle, receipts: { ...bundle.receipts, repository_restore_sha256: sha256("wrong") } },
@@ -191,4 +205,19 @@ assert.throws(() => buildOperationalEvidenceIssue({
   bundle: { ...bundle, boundary: { ...bundle.boundary, reviewed_waterline_receipts_created: true } },
 }), /review boundary/);
 
-console.log("PASS — exact-main evidence issue payload, artifact binding, receipt hashes, idempotent title, and unreviewed boundary");
+const workflowPath = fileURLToPath(new URL("../.github/workflows/operational-reliability-evidence.yml", import.meta.url));
+const workflow = await readFile(workflowPath, "utf8");
+assert.match(workflow, /permissions:\n  contents: read\n  issues: write/);
+assert.match(workflow, /id: evidence_artifact/);
+assert.match(workflow, /steps\.evidence_artifact\.outputs\.artifact-id/);
+assert.match(workflow, /steps\.evidence_artifact\.outputs\.artifact-url/);
+assert.match(workflow, /steps\.evidence_artifact\.outputs\.artifact-digest/);
+assert.match(workflow, /github\.event_name == 'push'/);
+assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
+assert.match(workflow, /operational-reliability-ledger\.mjs issue-payload/);
+assert.match(workflow, /multiple exact evidence issues found/);
+assert.ok(workflow.indexOf("id: evidence_artifact") < workflow.indexOf("Publish the exact-main evidence discovery issue"));
+assert.doesNotMatch(workflow, /waterline\.mjs record-drill/);
+assert.doesNotMatch(workflow, /ROADMAP-STATE\.json/);
+
+console.log("PASS — exact-main evidence issue payload, artifact binding, durable publication, idempotent title, and unreviewed boundary");
