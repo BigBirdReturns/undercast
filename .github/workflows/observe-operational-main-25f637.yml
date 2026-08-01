@@ -1,0 +1,76 @@
+name: observe-operational-main-25f637
+
+on:
+  push:
+    branches:
+      - agent/observe-operational-main-25f637
+    paths:
+      - .github/workflows/observe-operational-main-25f637.yml
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  TARGET_HEAD: 25f63793eafb921d5459332441a864886c903d6e
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Locate and observe the exact-main evidence run
+        run: |
+          set -euo pipefail
+          run_id=""
+          for attempt in $(seq 1 180); do
+            gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow operational-reliability-evidence.yml \
+              --branch main --event push --limit 100 \
+              --json databaseId,headSha,status,conclusion,url,createdAt \
+              > /tmp/operational-main-runs.json
+            run_id="$(node - <<'NODE'
+          const fs = require('fs');
+          const rows = JSON.parse(fs.readFileSync('/tmp/operational-main-runs.json', 'utf8'));
+          const row = rows.find((candidate) => candidate.headSha === process.env.TARGET_HEAD);
+          if (row) process.stdout.write(String(row.databaseId));
+          NODE
+            )"
+            if [ -n "$run_id" ]; then
+              status="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json status --jq .status)"
+              if [ "$status" = completed ]; then break; fi
+            fi
+            sleep 5
+          done
+          test -n "$run_id"
+          gh run view "$run_id" --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,headSha,event,status,conclusion,url,workflowName,jobs \
+            > /tmp/operational-main-run.json
+          node - <<'NODE' > /tmp/operational-main-summary.md
+          const fs = require('fs');
+          const run = JSON.parse(fs.readFileSync('/tmp/operational-main-run.json', 'utf8'));
+          const failed = [];
+          for (const job of run.jobs || []) {
+            for (const step of job.steps || []) {
+              if (step.conclusion === 'failure') failed.push(`${job.name} / ${step.name}`);
+            }
+          }
+          console.log('## Exact-main operational-reliability observation');
+          console.log('');
+          console.log('```text');
+          console.log(`workflow:   ${run.workflowName}`);
+          console.log(`run:        ${run.databaseId}`);
+          console.log(`head:       ${run.headSha}`);
+          console.log(`event:      ${run.event}`);
+          console.log(`status:     ${run.status}`);
+          console.log(`conclusion: ${run.conclusion}`);
+          console.log('```');
+          console.log('');
+          if (failed.length) console.log(`Failed steps: ${failed.join('; ')}`);
+          else console.log('No failed step was reported.');
+          console.log('');
+          console.log(`Run: ${run.url}`);
+          NODE
+          gh pr comment 142 --repo "$GITHUB_REPOSITORY" --body-file /tmp/operational-main-summary.md
