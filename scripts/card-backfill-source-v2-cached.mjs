@@ -35,9 +35,6 @@ forwarded.push("--delay-ms", "0");
 
 const cacheRoot = option("--cache-root", null);
 const cacheWriteRoot = option("--cache-write-root", null);
-const policyId = CARD_BACKFILL_SOURCE_POLICY_V2.policy_id || `card-backfill-policy-v${CARD_BACKFILL_SOURCE_POLICY_V2.version}`;
-const policyRevision = CARD_BACKFILL_SOURCE_POLICY_V2.revision ?? 0;
-const cacheNamespace = option("--cache-namespace", `${policyId}-r${policyRevision}-json-v1`);
 const statsPath = option("--cache-stats-out", null);
 const telemetryPath = option("--telemetry-out", null);
 const batchSha = option("--batch-sha", null);
@@ -47,6 +44,11 @@ const cacheMaximumAgeMs = numeric("--cache-max-age-ms", 24 * 60 * 60 * 1000);
 const sourceScript = resolve(option("--source-script", new URL("./card-backfill-source-v2.mjs", import.meta.url).pathname));
 const planPath = option("--plan", null);
 const plan = planPath ? JSON.parse(readFileSync(resolve(planPath), "utf8")) : { candidates: [] };
+const planPolicy = plan.source_policy || plan.policy || {};
+const policyId = plan.source_policy_id || planPolicy.policy_id || CARD_BACKFILL_SOURCE_POLICY_V2.policy_id || `card-backfill-policy-v${CARD_BACKFILL_SOURCE_POLICY_V2.version}`;
+const policyVersion = Number(plan.source_policy_version || planPolicy.version || CARD_BACKFILL_SOURCE_POLICY_V2.version);
+const policyRevision = Number(plan.source_policy_revision ?? planPolicy.revision ?? CARD_BACKFILL_SOURCE_POLICY_V2.revision ?? 0);
+const cacheNamespace = option("--cache-namespace", `${policyId}-r${policyRevision}-json-v1`);
 const ordered = (plan.candidates || []).map((row) => row.obligation_id || `${row.wall_id}/${row.side}`);
 
 const cache = new SourceMetadataCache({ readRoot: cacheRoot, writeRoot: cacheWriteRoot, namespace: cacheNamespace, maximumAgeMs: cacheMaximumAgeMs });
@@ -144,7 +146,7 @@ function writeReceipts() {
     batch_sha256: batchSha,
     shard_id: shardId,
     source_policy_id: policyId,
-    source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version,
+    source_policy_version: policyVersion,
     source_policy_revision: policyRevision,
     cache_namespace: cacheNamespace,
     cache_maximum_age_ms: cacheMaximumAgeMs,

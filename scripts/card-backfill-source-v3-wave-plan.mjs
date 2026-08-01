@@ -12,6 +12,7 @@ import {
 import { validateStaging } from "./lib/card-backfill-staging.mjs";
 import { readPolicyAwareAdjudicationAttemptIndex } from "./lib/card-backfill-attempt-index.mjs";
 import { buildSourcePolicyV2Estate, CARD_BACKFILL_SOURCE_POLICY_V2 } from "./lib/card-backfill-source-policy-v2.mjs";
+import { buildSourcePolicyV5Estate, CARD_BACKFILL_SOURCE_POLICY_V5 } from "./lib/card-backfill-source-policy-v5.mjs";
 import { buildDisjointWaveBatches, validateDisjointWave } from "./lib/card-backfill-wave.mjs";
 
 const args = process.argv.slice(2);
@@ -69,13 +70,17 @@ async function main() {
   const sourceEstate = buildEstate({ specimens, sources, auditItems: auditRoot.items || [], completedPackets, control });
   sourceEstate.generated_at = now;
   const progress = validateProgress(control, completedPackets.size, sourceEstate.obligations.length);
-  const retryEstate = buildSourcePolicyV2Estate({ estate: sourceEstate, attemptIndex, stagedObligationIds: stagingLedger.entries.map((row) => row.obligation_id) });
-  if (!retryEstate.cohorts.length) throw new Error("no source-policy-v4 wave available");
+  const stagedObligationIds = stagingLedger.entries.map((row) => row.obligation_id);
+  const v4Estate = buildSourcePolicyV2Estate({ estate: sourceEstate, attemptIndex, stagedObligationIds });
+  const v5Estate = v4Estate.cohorts.length ? null : buildSourcePolicyV5Estate({ estate: sourceEstate, attemptIndex, stagedObligationIds });
+  const retryEstate = v4Estate.cohorts.length ? v4Estate : v5Estate;
+  const selectedPolicy = v4Estate.cohorts.length ? CARD_BACKFILL_SOURCE_POLICY_V2 : CARD_BACKFILL_SOURCE_POLICY_V5;
+  if (!retryEstate?.cohorts.length) throw new Error("no single-subject source-policy wave available");
 
   const exclusionState = {
     staging_ledger_sha256: stagingLedger.ledger_sha256,
     attempt_index_sha256: attemptIndex.index_sha256,
-    source_policy: CARD_BACKFILL_SOURCE_POLICY_V2,
+    source_policy: selectedPolicy,
   };
   const exclusionStateSha256 = sha256(canonicalJson(exclusionState));
   const wave = validateDisjointWave(buildDisjointWaveBatches({
@@ -83,7 +88,7 @@ async function main() {
     control,
     sourceEstateSha256: sourceEstate.estate_sha256,
     exclusionStateSha256,
-    policy: CARD_BACKFILL_SOURCE_POLICY_V2,
+    policy: selectedPolicy,
     batchLimit,
     waveBatchLimit,
   }));
@@ -116,7 +121,7 @@ async function main() {
       const scope = buildScopeReceipt(row, { campaignId: batch.campaign_id, estateSha256: batch.estate_sha256, batchSha256: batch.batch_sha256 });
       await writeJson(join(batchRoot, "batch-scopes", `${scope.record_id}-${scope.side}.json`), {
         ...scope,
-        source_policy: CARD_BACKFILL_SOURCE_POLICY_V2,
+        source_policy: selectedPolicy,
         source_policy_id: batch.source_policy_id,
         source_policy_version: batch.source_policy_version,
         source_policy_revision: batch.source_policy_revision,
@@ -142,12 +147,12 @@ async function main() {
   await writeFile(join(out, "summary.txt"), [
     `campaign=${wave.campaign_id}`,
     `generated_at=${now}`,
-    `planner=source-policy-v4-wave`,
+    `planner=source-policy-v${selectedPolicy.version}-wave`,
     `current_completed_evidence_packets=${progress.current.completed}`,
     `current_open_source_declared_absences=${progress.current.open}`,
     `selector_defined_estate=${progress.current.total}`,
-    `source_policy_v3_ready=${retryEstate.counts.ready}`,
-    `source_policy_v3_cohorts=${retryEstate.counts.cohorts}`,
+    `source_policy_ready=${retryEstate.counts.ready}`,
+    `source_policy_cohorts=${retryEstate.counts.cohorts}`,
     `wave_batches=${wave.wave_batches}`,
     `selected_count=${wave.selected_count}`,
     `discovery_jobs=${discoverMatrix.include.length}`,
@@ -159,7 +164,7 @@ async function main() {
     `wave_sha256=${wave.wave_sha256}`,
     `canonical_mutation=false`,
   ].join("\n") + "\n");
-  console.log(`PASS — source policy v4 wave selected ${wave.selected_count} disjoint obligation(s) in ${wave.wave_batches} immutable batch(es)`);
+  console.log(`PASS — source policy v${selectedPolicy.version} wave selected ${wave.selected_count} disjoint obligation(s) in ${wave.wave_batches} immutable batch(es)`);
   console.log(`FANOUT — ${discoverMatrix.include.length} shard job(s); artifact_only=true`);
   console.log(`POLICY — ${wave.source_policy_id} lessons=${wave.lessons_contract_sha256}`);
   console.log(`OUTPUT — ${out}`);

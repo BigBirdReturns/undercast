@@ -124,7 +124,7 @@ function actorRoleBound(actorEvidence, aliases, production) {
   return containsAlias(text, aliases) && productionMatch(text, production);
 }
 
-export function evaluateSourceCandidate({ side, expectedSubject, actor, production, performanceMode, candidate, actorEvidence = null }) {
+export function evaluateSourceCandidate({ side, expectedSubject, actor, production, performanceMode, candidate, actorEvidence = null, sourcePolicyVersion = 4 }) {
   const aliases = sourceSubjectAliases(expectedSubject);
   const actorAliases = sourceSubjectAliases(actor);
   const pageTitle = candidate?.page?.title || "";
@@ -145,8 +145,10 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
   const pageimageSubjectBound = Boolean(exactLeadPageImage && exactPage);
   const pageimageProductionBound = Boolean(pageimageSubjectBound && pageHasProduction);
   const subjectBound = fileHasAlias || pageimageSubjectBound;
-  const productionBound = fileHasProduction || pageimageProductionBound;
   const actorEvidenceBound = actorRoleBound(actorEvidence, aliases, production);
+  const policyVersion = Number(sourcePolicyVersion || 4);
+  const twoSourceRecovery = Boolean(policyVersion >= 5 && pageimageSubjectBound && actorEvidenceBound);
+  const productionBound = fileHasProduction || pageimageProductionBound || twoSourceRecovery;
   const voiceLike = /voice|animation/i.test(String(performanceMode || ""));
   const characterPageRoleBound = Boolean((exactPage || pageHasAlias) && pageHasActor && pageHasProduction);
   const roleBound = actorEvidenceBound || characterPageRoleBound;
@@ -195,6 +197,7 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
   if (pageHasProduction) adjustment += 80;
   if (fileHasProduction) adjustment += 60;
   if (roleBound) adjustment += 160;
+  if (twoSourceRecovery) adjustment += 120;
   if (!eligible) adjustment -= 1000;
 
   return {
@@ -216,6 +219,8 @@ export function evaluateSourceCandidate({ side, expectedSubject, actor, producti
       actor_evidence_bound: actorEvidenceBound,
       character_page_role_bound: characterPageRoleBound,
       actor_role_bound: roleBound,
+      two_source_recovery: twoSourceRecovery,
+      source_policy_version: policyVersion,
       page_looks_like_actor: pageLooksLikeActor,
       human_event_photo: humanEventPhoto,
       multi_subject: multi,

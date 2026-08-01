@@ -412,6 +412,7 @@ async function stillPool({ record, item, transport, attempts, endpoints, limits,
     production,
     performanceMode: item.shape?.performance_mode || item.cohort_key?.split("::")[1],
     actorEvidence,
+    sourcePolicyVersion: item.source_policy_version || item.source_policy?.version || CARD_BACKFILL_SOURCE_POLICY_V2.version,
   });
   return { aliases, production, pages: [...pages.values()].map(({ api, page }) => ({ api, title: page.title, url: pageUrl(api, page) })), candidates: ranked };
 }
@@ -467,6 +468,7 @@ async function portraitPool({ record, item, transport, attempts, endpoints, limi
     production,
     performanceMode: item.shape?.performance_mode || item.cohort_key?.split("::")[1],
     actorEvidence: null,
+    sourcePolicyVersion: item.source_policy_version || item.source_policy?.version || CARD_BACKFILL_SOURCE_POLICY_V2.version,
   });
   return { aliases, production, pages: pages.map(({ api, page }) => ({ api, title: page.title, url: pageUrl(api, page) })), candidates: ranked };
 }
@@ -527,11 +529,11 @@ async function discoverOne({ item, record, out, transport, endpoints, repository
   const attempts = [];
   const expected = item.expected_subject || (item.side === "still" ? record.character : record.actor);
   const receipt = {
-    version: CARD_BACKFILL_SOURCE_POLICY_V2.version,
+    version: Number(item.source_policy_version || item.source_policy?.version || CARD_BACKFILL_SOURCE_POLICY_V2.version),
     wall_id: item.wall_id,
     side: item.side,
     expected_subject: expected,
-    source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version,
+    source_policy_version: Number(item.source_policy_version || item.source_policy?.version || CARD_BACKFILL_SOURCE_POLICY_V2.version),
     source_family: item.side === "portrait" ? "commons-bound-multicandidate-v3" : "mediawiki-bound-multicandidate-v3",
     canonical_link: item.canonical_link || record.link || null,
     attempts,
@@ -588,7 +590,7 @@ async function discoverOne({ item, record, out, transport, endpoints, repository
     source_page_title: selected.page.title,
     source_file: selected.file,
     source_method: selected.method,
-    source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version,
+    source_policy_version: Number(item.source_policy_version || item.source_policy?.version || CARD_BACKFILL_SOURCE_POLICY_V2.version),
     source_score: selected.score,
     width: selected.image.width,
     height: selected.image.height,
@@ -610,22 +612,26 @@ async function main() {
   const now = option("--now", new Date().toISOString());
   const magick = option("--magick", "magick");
   const contact = option("--contact", process.env.CONTACT || "maintainer");
+  const plan = await readJson(planPath);
+  const planPolicy = plan.source_policy || plan.policy || {};
+  const policyVersion = Number(plan.source_policy_version || planPolicy.version || CARD_BACKFILL_SOURCE_POLICY_V2.version);
+  const policyId = plan.source_policy_id || planPolicy.policy_id || CARD_BACKFILL_SOURCE_POLICY_V2.policy_id;
+  const policyRevision = Number(plan.source_policy_revision ?? planPolicy.revision ?? CARD_BACKFILL_SOURCE_POLICY_V2.revision ?? 0);
   const limits = {
-    pageSearchLimit: Math.max(1, Math.min(16, Math.floor(numeric("--page-limit", 10)))),
-    fileMetadataLimit: Math.max(1, Math.min(60, Math.floor(numeric("--file-limit", 32)))),
-    downloadCandidateLimit: Math.max(1, Math.min(12, Math.floor(numeric("--download-limit", 8)))),
-    minimumWidth: Math.floor(numeric("--minimum-width", 500)),
-    minimumHeight: Math.floor(numeric("--minimum-height", 400)),
+    pageSearchLimit: Math.max(1, Math.min(24, Math.floor(numeric("--page-limit", planPolicy.page_search_limit || 10)))),
+    fileMetadataLimit: Math.max(1, Math.min(80, Math.floor(numeric("--file-limit", planPolicy.file_metadata_limit || 32)))),
+    downloadCandidateLimit: Math.max(1, Math.min(16, Math.floor(numeric("--download-limit", planPolicy.downloaded_candidate_limit || 8)))),
+    minimumWidth: Math.floor(numeric("--minimum-width", planPolicy.minimum_width || 500)),
+    minimumHeight: Math.floor(numeric("--minimum-height", planPolicy.minimum_height || 400)),
   };
   const endpoints = {
     enwikiApi: option("--enwiki-api", "https://en.wikipedia.org/w/api.php"),
     commonsApi: option("--commons-api", "https://commons.wikimedia.org/w/api.php"),
   };
-  const plan = await readJson(planPath);
   const specimens = await readJson(join(baseline, "data/specimens.json"));
   const byId = new Map(specimens.map((row) => [row.id, row]));
   const repositoryHashes = await buildRepositoryHashIndex(baseline);
-  const transport = new Transport({ userAgent: `undercast-card-backfill-source-v4/4.0 (+https://github.com/BigBirdReturns/undercast; ${contact})`, timeoutMs: Math.floor(numeric("--timeout-ms", 30000)), delayMs: Math.floor(numeric("--delay-ms", 350)) });
+  const transport = new Transport({ userAgent: `undercast-card-backfill-${policyId}/${policyVersion}.${policyRevision} (+https://github.com/BigBirdReturns/undercast; ${contact})`, timeoutMs: Math.floor(numeric("--timeout-ms", policyVersion >= 5 ? 45000 : 30000)), delayMs: Math.floor(numeric("--delay-ms", 350)) });
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
   await mkdir(dirname(journal), { recursive: true });
@@ -635,15 +641,15 @@ async function main() {
     if (!record) throw new Error(`missing specimen ${item.wall_id}`);
     const { row } = await discoverOne({ item, record, out, transport, endpoints, repositoryHashes, limits, magick });
     results.push(row);
-    await appendFile(journal, JSON.stringify({ version: CARD_BACKFILL_SOURCE_POLICY_V2.version, op: "media-search.attempted", at: now, run_id: runId, wall_id: item.wall_id, side: item.side, source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version, result: row.status, candidate_sha256: row.candidate_sha256, failure: row.discovery?.failure || null }) + "\n");
+    await appendFile(journal, JSON.stringify({ version: policyVersion, op: "media-search.attempted", at: now, run_id: runId, wall_id: item.wall_id, side: item.side, source_policy_id: policyId, source_policy_version: policyVersion, source_policy_revision: policyRevision, result: row.status, candidate_sha256: row.candidate_sha256, failure: row.discovery?.failure || null }) + "\n");
     console.log(`${row.status === "candidate" ? "CANDIDATE" : "MISS"} ${item.wall_id}/${item.side} pool=${row.discovery?.candidate_pool_count || 0} screened=${row.discovery?.screened_count || 0}`);
   }
   const counts = Object.fromEntries(["candidate", "unchanged", "not-found"].map((key) => [key, results.filter((row) => row.status === key).length]));
-  const report = { version: CARD_BACKFILL_SOURCE_POLICY_V2.version, generated_at: now, run_id: runId, artifact: `card-backfill-source-v2-${runId}`, source_policy_version: CARD_BACKFILL_SOURCE_POLICY_V2.version, canonical_write: false, counts, results };
+  const report = { version: policyVersion, generated_at: now, run_id: runId, artifact: `card-backfill-source-v${policyVersion}-${runId}`, source_policy_id: policyId, source_policy_version: policyVersion, source_policy_revision: policyRevision, canonical_write: false, counts, results };
   await writeJson(join(out, "report.json"), report);
   await writeJson(latest, report);
-  console.log(`PASS — source policy v4 produced ${counts.candidate} candidate(s) and ${counts["not-found"]} miss(es)`);
+  console.log(`PASS — source policy v${policyVersion} produced ${counts.candidate} candidate(s) and ${counts["not-found"]} miss(es)`);
   console.log(`OUTPUT — ${out}`);
 }
 
-main().catch((error) => { console.error(`card-backfill source v4: ${error.stack || error.message}`); process.exit(1); });
+main().catch((error) => { console.error(`card-backfill source: ${error.stack || error.message}`); process.exit(1); });
