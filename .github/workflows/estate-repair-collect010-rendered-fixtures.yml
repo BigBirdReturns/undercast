@@ -1,0 +1,267 @@
+name: estate-repair-collect010-rendered-fixtures
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+    paths:
+      - .github/workflows/estate-repair-collect010-rendered-fixtures.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: estate-repair-collect010-rendered-fixtures
+  cancel-in-progress: true
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  PR_NUMBER: ${{ github.event.pull_request.number || 132 }}
+  TARGET_BRANCH: agent/estate-consolidation-001
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+  TEST_FILE: tests/rendered/site.spec.mjs
+  RECEIPT: data/review/estate-debt/COLLECT-010-RENDERED-FIXTURE-REPAIR.json
+
+jobs:
+  repair:
+    if: github.repository == 'BigBirdReturns/undercast' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Install rendered-browser dependency
+        run: npx playwright install --with-deps chromium
+
+      - name: Replace stale record assumptions with a live semantic fixture
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          test -e "$TEST_FILE"
+          test ! -e "$RECEIPT"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+
+          path = Path('tests/rendered/site.spec.mjs')
+          text = path.read_text(encoding='utf-8')
+
+          old_header = '''const jpeg=await readFile(new URL("../../images/uc-035-portrait.jpg",import.meta.url));
+          const waitForWall=async page=>expect(page.locator("#result-status")).toContainText(/specimens? match/);'''
+          new_header = '''const jpeg=await readFile(new URL("../../images/uc-035-portrait.jpg",import.meta.url));
+          const specimens=JSON.parse(await readFile(new URL("../../data/specimens.json",import.meta.url),"utf8"));
+          const mediaLive=JSON.parse(await readFile(new URL("../../data/media-live.json",import.meta.url),"utf8"));
+          const releaseImage=/^https:\\/\\/github\\.com\\/[^/]+\\/[^/]+\\/releases\\/download\\/[^/]+\\/[^/?#]+$/;
+          const missingPortraitFixture=specimens.find(record=>record.still?.src&&!record.portrait?.src&&releaseImage.test(mediaLive.urls?.[record.still.src]||""));
+          if(!missingPortraitFixture) throw new Error("rendered fixture requires one filed Release still paired with a missing portrait");
+          const waitForWall=async page=>expect(page.locator("#result-status")).toContainText(/specimens? match/);'''
+
+          old_failure = '''  test("distinguishes a filed image load failure from evidence not on file",async({page})=>{
+              await page.route("**/releases/download/**",route=>route.abort());
+              await open(page,"records/UC-040/");
+              const failed=page.locator(".record-absence.load-failed");
+              const notFiled=page.locator(".record-absence.not-filed");
+              await expect(failed).toBeVisible();
+              await expect(failed).toHaveAttribute("aria-label",/could not be loaded/);
+              await expect(notFiled).toBeVisible();
+              await expect(notFiled).toHaveAttribute("aria-label",/not on file/);
+              const geometry=await failed.evaluate(node=>{
+                const well=node.closest(".record-image").getBoundingClientRect(),fallback=node.getBoundingClientRect();
+                return {well:[well.top,well.right,well.bottom,well.left],fallback:[fallback.top,fallback.right,fallback.bottom,fallback.left]};
+              });
+              for(let edge=0;edge<4;edge++) expect(Math.abs(geometry.well[edge]-geometry.fallback[edge])).toBeLessThanOrEqual(1);
+            });'''
+          new_failure = '''  test("distinguishes a filed image load failure from evidence not on file",async({page})=>{
+              await page.route("**/releases/download/**",route=>route.abort());
+              await open(page,`records/${missingPortraitFixture.id}/`);
+              const failed=page.locator(".record-image:not(.absent) .record-absence.load-failed");
+              const notFiled=page.locator(".record-image.is-portrait.absent .record-absence.not-filed");
+              await expect(failed).toHaveCount(1);
+              await expect(notFiled).toHaveCount(1);
+              await expect(failed).toBeVisible();
+              await expect(failed).toHaveAttribute("aria-label",/could not be loaded/);
+              await expect(notFiled).toBeVisible();
+              await expect(notFiled).toHaveAttribute("aria-label",/not on file/);
+              const geometry=await failed.evaluate(node=>{
+                const well=node.closest(".record-image").getBoundingClientRect(),fallback=node.getBoundingClientRect();
+                return {well:[well.top,well.right,well.bottom,well.left],fallback:[fallback.top,fallback.right,fallback.bottom,fallback.left]};
+              });
+              for(let edge=0;edge<4;edge++) expect(Math.abs(geometry.well[edge]-geometry.fallback[edge])).toBeLessThanOrEqual(1);
+            });'''
+
+          old_loop = '''  for(const viewport of [{width:1280,height:900},{width:390,height:844}]){
+              await page.setViewportSize(viewport);
+              await open(page,"recognition.html#UC-040");
+              await expect(page.getByRole("heading",{name:"Zathras",exact:true}).first()).toBeVisible();
+              await expect(page.locator('[data-plate="portrait"] .uc-absence')).toHaveAttribute("aria-label",/not on file/);
+              expectFullBleed(await measure());
+
+              await open(page,"records/UC-040/");
+              const permanent=await page.locator(".record-image.absent").evaluate(well=>{
+                const image=well.querySelector(".record-absence");
+                const rect=node=>{
+                  const box=node.getBoundingClientRect();
+                  return {top:box.top,right:box.right,bottom:box.bottom,left:box.left};
+                };
+                return {well:rect(well),image:rect(image)};
+              });
+              await expect(page.locator(".record-image.absent .record-absence")).toHaveAttribute("aria-label",/not on file/);
+              for(const edge of ["top","right","bottom","left"]){
+                expect(Math.abs(permanent.image[edge]-permanent.well[edge])).toBeLessThanOrEqual(1);
+              }
+            }'''
+          new_loop = '''  for(const viewport of [{width:1280,height:900},{width:390,height:844}]){
+              await page.setViewportSize(viewport);
+              await open(page,`recognition.html#${missingPortraitFixture.id}`);
+              await expect(page.getByRole("heading",{name:missingPortraitFixture.character,exact:true}).first()).toBeVisible();
+              await expect(page.locator('[data-plate="portrait"] .uc-absence')).toHaveAttribute("aria-label",/not on file/);
+              expectFullBleed(await measure());
+
+              await open(page,`records/${missingPortraitFixture.id}/`);
+              const permanentWell=page.locator(".record-image.is-portrait.absent");
+              await expect(permanentWell).toHaveCount(1);
+              const permanent=await permanentWell.evaluate(well=>{
+                const image=well.querySelector(".record-absence.not-filed");
+                const rect=node=>{
+                  const box=node.getBoundingClientRect();
+                  return {top:box.top,right:box.right,bottom:box.bottom,left:box.left};
+                };
+                return {well:rect(well),image:rect(image)};
+              });
+              await expect(permanentWell.locator(".record-absence.not-filed")).toHaveAttribute("aria-label",/not on file/);
+              for(const edge of ["top","right","bottom","left"]){
+                expect(Math.abs(permanent.image[edge]-permanent.well[edge])).toBeLessThanOrEqual(1);
+              }
+            }'''
+
+          for label, old, new in [
+              ('header fixture', old_header, new_header),
+              ('load failure fixture', old_failure, new_failure),
+              ('full-bleed fixture', old_loop, new_loop),
+          ]:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one exact match, found {count}')
+              text = text.replace(old, new)
+
+          path.write_text(text, encoding='utf-8')
+          receipt = {
+              'version': 1,
+              'transaction': 'COLLECT-010',
+              'operation': 'rendered-fixture-semantic-repair',
+              'status': 'authorized',
+              'recorded_at': '2026-08-01T16:26:00Z',
+              'defects': [
+                  'The permanent-record load-failure test assumed UC-040 had exactly one filed image and one absent image.',
+                  'The full-bleed absence test assumed UC-040 portrait evidence would remain absent after terminally authorized adoption.'
+              ],
+              'correction': {
+                  'fixture_selection': 'derive one current record with a filed GitHub Release still and a missing portrait from canonical specimens plus media-live projection',
+                  'load_failure_selector': 'address the filed and absent media wells by semantic state instead of global fallback cardinality',
+                  'future_canonical_fills_change_selected_record_without_changing_the_test_contract': True
+              },
+              'boundary': {
+                  'canonical_mutation': False,
+                  'packet_evidence_rewritten': False,
+                  'review_judgment_changed': False,
+                  'product_behavior_changed': False,
+                  'test_expectation_weakened': False
+              }
+          }
+          receipt_path = Path('data/review/estate-debt/COLLECT-010-RENDERED-FIXTURE-REPAIR.json')
+          receipt_path.write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
+          PY
+
+          node --check "$TEST_FILE"
+          grep -Fq 'const missingPortraitFixture=specimens.find' "$TEST_FILE"
+          grep -Fq '.record-image:not(.absent) .record-absence.load-failed' "$TEST_FILE"
+          grep -Fq '.record-image.is-portrait.absent' "$TEST_FILE"
+          test "$(node -p "require('./$RECEIPT').boundary.test_expectation_weakened")" = "false"
+
+      - name: Run targeted rendered semantics
+        run: |
+          set -euo pipefail
+          node scripts/build-record-pages.mjs
+          npx playwright test tests/rendered/site.spec.mjs --grep "distinguishes a filed image load failure|missing portraits stay full-bleed"
+
+      - name: Stage only durable test and repair receipt
+        run: |
+          set -euo pipefail
+          git add -- "$TEST_FILE" "$RECEIPT"
+          PATHS="$(git diff --cached --name-only | sort)"
+          EXPECTED="$(printf '%s\n%s\n' "$RECEIPT" "$TEST_FILE" | sort)"
+          test "$PATHS" = "$EXPECTED"
+          git diff --cached --check
+          git write-tree > /tmp/COLLECT-010-rendered-fixture-repair.tree
+
+      - name: Run complete repository and rendered-browser gate
+        run: npm run gate
+
+      - name: Refuse post-gate drift
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          test "$(cat /tmp/COLLECT-010-rendered-fixture-repair.tree)" = "$(git write-tree)"
+          node scripts/estate-canonical-adoption-ledger.mjs
+          test "$(node -p "require('./$RECEIPT').boundary.product_behavior_changed")" = "false"
+
+      - name: Publish rendered-fixture repair under exact-head lease
+        id: publish
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$AUTHORIZED_HEAD"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit \
+            -m 'Estate tests: derive missing-portrait rendered fixture from live state' \
+            -m 'transaction=COLLECT-010' \
+            -m 'canonical_mutation=false' \
+            -m 'packet_evidence_rewritten=false' \
+            -m 'product_behavior_changed=false' \
+            -m 'test_expectation_weakened=false' \
+            -m "authorized_parent=${AUTHORIZED_HEAD}" \
+            -m "workflow_run=${GITHUB_RUN_ID}" \
+            -m "gated_tree=$(cat /tmp/COLLECT-010-rendered-fixture-repair.tree)"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}" origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          echo "head=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Report durable rendered fixture
+        if: success()
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "COLLECT-010 rendered-fixture repair passed the targeted interactions and the complete repository gate on workflow run ${GITHUB_RUN_ID}. Repair head: ${{ steps.publish.outputs.head }}. The tests now derive a filed-still/missing-portrait record from live canonical state and address filed versus absent wells semantically. No product, media, evidence, or paid ledger state changed."
+
+      - name: Report failed repair
+        if: failure()
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "COLLECT-010 rendered-fixture repair failed closed on workflow run ${GITHUB_RUN_ID}. No canonical payment claim is authorized."
+
+      - name: Preserve rendered-fixture repair evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: COLLECT-010-rendered-fixture-repair-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/COLLECT-010-rendered-fixture-repair.tree
+            data/review/estate-debt/COLLECT-010-RENDERED-FIXTURE-REPAIR.json
+          if-no-files-found: warn
+          retention-days: 30
