@@ -8,7 +8,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = process.cwd();
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmCommand = process.platform === "win32" ? process.execPath : "npm";
+const npmPrefixArgs = process.platform === "win32" ? [path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")] : [];
 const MAX_BUFFER = 128 * 1024 * 1024;
 export function runCommand(label, command, args, options = {}) {
   const { cwd = ROOT, env = process.env, stdio = "inherit", allowFail = false } = options;
@@ -27,7 +28,7 @@ export function runCommand(label, command, args, options = {}) {
   return { status, stdout, stderr, failed: false };
 }
 export function runNodeScript(label, scriptPath, args = [], options = {}) { return runCommand(label, process.execPath, [path.resolve(ROOT, scriptPath), ...args], { cwd: ROOT, ...options }); }
-export function runNpmScript(label, script, extraArgs = [], options = {}) { return runCommand(label, npmCommand, ["run", script, ...extraArgs], { cwd: ROOT, ...options }); }
+export function runNpmScript(label, script, extraArgs = [], options = {}) { return runCommand(label, npmCommand, [...npmPrefixArgs, "run", script, ...extraArgs], { cwd: ROOT, ...options }); }
 export function countRecordRouteDirs(recordsRoot = path.join(ROOT, "records")) { return readdirSync(recordsRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).length; }
 export function expectedRouteCount(specimensPath = path.join(ROOT, "data/specimens.json"), tombstonesPath = path.join(ROOT, "data/tombstones.json")) {
   const specimens = JSON.parse(readFileSync(specimensPath, "utf8"));
@@ -84,8 +85,9 @@ async function runAutopilotSyncAssertion() {
 
 const stepDefinitions = [
   { id: "gate-fixtures", label: "Validate canonical gate fixtures", action: () => runNpmScript("Gate fixtures", "gate:fixtures") },
-  { id: "lockfile", label: "Verify package-lock consistency", action: () => runCommand("Lockfile consistency", npmCommand, ["ci", "--dry-run"], { cwd: ROOT }) },
+  { id: "lockfile", label: "Verify package-lock consistency", action: () => runCommand("Lockfile consistency", npmCommand, [...npmPrefixArgs, "ci", "--dry-run"], { cwd: ROOT }) },
   { id: "projections", label: "Rebuild projection and refuse drift", action: runProjectedSteps },
+  { id: "quality-baseline", label: "Validate truth-correction quality baseline custody", action: () => { runNodeScript("Quality baseline fixtures", "scripts/estate-quality-baseline-fixtures.mjs"); runNodeScript("Quality baseline custody", "scripts/estate-quality-baseline.mjs", ["--validate"]); } },
   { id: "archive", label: "Validate archive invariants", action: () => runNodeScript("Archive invariants", "scripts/validate.mjs") },
   { id: "species-fixtures", label: "Validate exact species wall and role-ledger semantics", action: () => runNpmScript("Species fixtures", "species:fixtures") },
   { id: "autopilot", label: "Validate Autopilot queue and fixtures", action: () => { runNodeScript("Autopilot state", "scripts/autopilot.mjs", ["validate"]); runNpmScript("Autopilot fixtures", "autopilot:fixtures"); } },
