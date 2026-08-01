@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,7 @@ import {
 } from "./operational-reliability.mjs";
 
 const COMMIT_RE = /^[0-9a-f]{40}$/;
+const IMAGE_EXTENSIONS = new Set([".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"]);
 
 function requireString(value, label) {
   if (!String(value || "").trim()) throw new Error(`${label} is required`);
@@ -27,6 +28,10 @@ function requireCommit(value, label) {
 async function readJson(file) {
   try { return JSON.parse(await readFile(file, "utf8")); }
   catch (error) { throw new Error(`cannot read JSON ${file}: ${error.message}`); }
+}
+async function exists(file) {
+  try { await access(file); return true; }
+  catch { return false; }
 }
 function run(command, args, options = {}) {
   const started = Date.now();
@@ -92,6 +97,38 @@ export function initializeDisposableVerificationIndex(restoredRoot, targetHead) 
     initialized_after_exact_tree_proof: true,
     source_history_restored: false,
   };
+}
+
+async function listActualImageFiles(root) {
+  const imagesRoot = path.join(root, "images");
+  if (!await exists(imagesRoot)) return [];
+  const rows = [];
+  async function visit(current) {
+    for (const entry of await readdir(path.join(imagesRoot, current), { withFileTypes: true })) {
+      const relative = current ? `${current}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) await visit(relative);
+      else if (entry.isFile() && IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) rows.push(`images/${relative}`);
+    }
+  }
+  await visit("");
+  return rows.sort();
+}
+
+export async function selectExecutablePublicationPaths(root, limitRecords = 3, limitImages = 3) {
+  root = path.resolve(root);
+  const selected = ["index.html", "data/quality.json"];
+  for (const required of selected) if (!await exists(path.join(root, required))) throw new Error(`required publication path is missing: ${required}`);
+  const specimens = await readJson(path.join(root, "data/specimens.json"));
+  const ids = (Array.isArray(specimens) ? specimens : []).map((row) => row?.id).filter(Boolean).sort();
+  for (const id of ids) {
+    const relative = `records/${id}/index.html`;
+    if (await exists(path.join(root, relative))) selected.push(relative);
+    if (selected.filter((row) => row.startsWith("records/")).length >= limitRecords) break;
+  }
+  selected.push(...(await listActualImageFiles(root)).slice(0, limitImages));
+  if (!selected.some((row) => row.startsWith("records/"))) throw new Error("publication drill found no permanent record route");
+  if (!selected.some((row) => row.startsWith("images/"))) throw new Error("publication drill found no actual image asset");
+  return [...new Set(selected)].sort();
 }
 
 export function validateExecutedRestoreReceipt(receipt) {
@@ -232,11 +269,13 @@ async function cli() {
     return;
   }
   if (command === "rollback-drill") {
+    const restoredRoot = requireString(value("restored-root"), "--restored-root");
     await runPublicationRollbackDrill({
-      restoredRoot: requireString(value("restored-root"), "--restored-root"),
+      restoredRoot,
       restoreReceiptPath: requireString(value("restore-receipt"), "--restore-receipt"),
       workRoot: requireString(value("work-root"), "--work-root"),
       outputPath: requireString(value("output"), "--output"),
+      paths: await selectExecutablePublicationPaths(restoredRoot),
     });
     return;
   }
