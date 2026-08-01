@@ -11,12 +11,9 @@ test -e "$SOURCE"
 test -e "$EXECUTOR_SOURCE"
 test -e "$SELF"
 
-# The executor's pre-adoption duplicate screen is correct for pending objects,
-# but the same unconditional assertion cannot run after those exact bytes have
-# become the intended canonical destinations. Patch only the temporary runtime
-# copy: pending objects still reject any existing hash; already-adopted objects
-# must match the exact intended binding, destination, and bytes, and both full
-# repository gates continue enforcing cross-card uniqueness.
+# The state-aware duplicate validator is now a permanent, separately gated
+# executor repair. Copy those exact bytes into the temporary execution path so
+# the original transaction runner can still retire the tracked executor cleanly.
 python3 - "$EXECUTOR_SOURCE" "$EXECUTOR_TEMP" <<'PY_EXECUTOR'
 from pathlib import Path
 import sys
@@ -24,25 +21,17 @@ import sys
 source = Path(sys.argv[1])
 target = Path(sys.argv[2])
 text = source.read_text(encoding="utf-8")
-
-old_assert = '    assert(!existingHashes.has(item.sha256), `${item.obligation_id} duplicates an existing current-branch media byte`);\n'
-if text.count(old_assert) != 1:
-    raise SystemExit(f"post-apply duplicate assertion: expected one match, found {text.count(old_assert)}")
-text = text.replace(old_assert, "")
-
-old_pending = '''    if (currentSpecimen === null && currentSource === null) {
-      assert(!destinationExists, `${item.obligation_id} destination exists before adoption`);
-      state = "pending";
-'''
-new_pending = '''    if (currentSpecimen === null && currentSource === null) {
-      assert(!existingHashes.has(item.sha256), `${item.obligation_id} duplicates an existing current-branch media byte`);
-      assert(!destinationExists, `${item.obligation_id} destination exists before adoption`);
-      state = "pending";
-'''
-if text.count(old_pending) != 1:
-    raise SystemExit(f"pending duplicate assertion insertion: expected one match, found {text.count(old_pending)}")
-text = text.replace(old_pending, new_pending)
-
+required = [
+    "const existingByHash = new Map();",
+    "forbiddenMatches.length === 0",
+    "duplicateMatches.length === 0",
+    "duplicateMatches.length === 1 && duplicateMatches[0] === item.destination",
+]
+for token in required:
+    if token not in text:
+        raise SystemExit(f"permanent duplicate repair token missing: {token}")
+if "existingHashes.has" in text:
+    raise SystemExit("obsolete unconditional duplicate assertion remains")
 target.write_text(text, encoding="utf-8")
 target.chmod(0o700)
 PY_EXECUTOR
