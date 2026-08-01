@@ -10,14 +10,26 @@ on:
 permissions:
   contents: read
   actions: write
+  statuses: write
 
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      KICK_HEAD: ${{ github.sha }}
     steps:
+      - name: Publish observable publication-kick heartbeat
+        run: |
+          set -euo pipefail
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${KICK_HEAD}" \
+            -f state=pending \
+            -f context='card-backfill/publication-kick' \
+            -f description="run ${GITHUB_RUN_ID}: locating or dispatching canonical publication" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
       - name: Dispatch permanent publication exactly once
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           active=$(gh run list \
@@ -31,7 +43,29 @@ jobs:
             gh workflow run card-backfill-publication.yml \
               --repo "$GITHUB_REPOSITORY" \
               --ref "$GITHUB_REF_NAME"
-            echo 'PASS — one-shot publication kick dispatched the staged permanent batch'
+            echo 'PASS — observable publication kick dispatched the staged permanent batch'
           else
             echo "PASS — publication already active ($active); duplicate dispatch refused"
           fi
+
+      - name: Publish successful publication-kick custody
+        if: success()
+        run: |
+          set -euo pipefail
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${KICK_HEAD}" \
+            -f state=success \
+            -f context='card-backfill/publication-kick' \
+            -f description="run ${GITHUB_RUN_ID}: canonical publication is active or dispatched" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - name: Publish failed publication-kick custody
+        if: failure()
+        run: |
+          set -euo pipefail
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${KICK_HEAD}" \
+            -f state=failure \
+            -f context='card-backfill/publication-kick' \
+            -f description="run ${GITHUB_RUN_ID}: publication handoff failed before durable publication" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
