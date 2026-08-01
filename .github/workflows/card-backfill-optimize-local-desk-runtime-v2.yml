@@ -1,0 +1,257 @@
+name: card-backfill-optimize-local-desk-runtime-v2
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/card-backfill-optimize-local-desk-runtime-v2.yml'
+
+permissions:
+  contents: write
+  actions: write
+  statuses: write
+
+concurrency:
+  group: card-backfill-optimize-local-desk-runtime-v2-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HEAD_BRANCH: ${{ github.ref_name }}
+      OPTIMIZE_HEAD: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Bind the repaired one-shot optimization head
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$OPTIMIZE_HEAD"
+          echo "PASS — repaired local-desk optimization bound to $OPTIMIZE_HEAD"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build a literal-input headless composite action
+        run: |
+          set -euo pipefail
+          cat > .github/actions/card-backfill-runtime/action.yml <<'YAML'
+          name: card-backfill-runtime
+          description: Install only the deterministic image tooling required by the current card-backfill job.
+          inputs:
+            profile:
+              description: 'auto, discovery, or local-desk; auto maps the discover job to the lean discovery runtime'
+              required: false
+              default: auto
+          runs:
+            using: composite
+            steps:
+              - shell: bash
+                env:
+                  REQUESTED_PROFILE: __CARD_BACKFILL_PROFILE_INPUT__
+                run: |
+                  set -euo pipefail
+                  mkdir -p "$RUNNER_TEMP/card-backfill-bin"
+
+                  profile="$REQUESTED_PROFILE"
+                  if [ "$profile" = auto ]; then
+                    case "${GITHUB_JOB:-}" in
+                      discover) profile=discovery ;;
+                      *) profile=local-desk ;;
+                    esac
+                  fi
+                  case "$profile" in
+                    discovery|local-desk) ;;
+                    *) echo "invalid card-backfill runtime profile: $profile" >&2; exit 2 ;;
+                  esac
+                  echo "PROFILE — card-backfill runtime=$profile job=${GITHUB_JOB:-unknown}"
+
+                  packages=()
+                  if ! command -v magick >/dev/null 2>&1 && \
+                     { ! command -v identify >/dev/null 2>&1 || ! command -v convert >/dev/null 2>&1 || ! command -v montage >/dev/null 2>&1; }; then
+                    packages+=(imagemagick)
+                  fi
+
+                  need_headless_cv=false
+                  if [ "$profile" = local-desk ]; then
+                    if ! python3 - <<'PY'
+                  from pathlib import Path
+                  import cv2
+                  import numpy
+                  name = "haarcascade_frontalface_default.xml"
+                  data = getattr(cv2, "data", None)
+                  roots = [Path(data.haarcascades)] if data is not None and getattr(data, "haarcascades", None) else []
+                  raise SystemExit(0 if any((root / name).is_file() for root in roots) else 1)
+                  PY
+                    then
+                      need_headless_cv=true
+                      if ! python3 -m pip --version >/dev/null 2>&1; then
+                        packages+=(python3-pip)
+                      fi
+                    fi
+                    if ! command -v tesseract >/dev/null 2>&1; then
+                      packages+=(tesseract-ocr)
+                    fi
+                  fi
+
+                  if [ "${#packages[@]}" -gt 0 ]; then
+                    sudo apt-get update
+                    sudo apt-get install -y "${packages[@]}"
+                    printf 'INSTALLED — %s\n' "${packages[*]}"
+                  else
+                    echo "PASS — $profile apt runtime already present; apt work avoided"
+                  fi
+
+                  if [ "$need_headless_cv" = true ]; then
+                    python3 -m pip install \
+                      --disable-pip-version-check \
+                      --no-input \
+                      --user \
+                      --break-system-packages \
+                      'numpy==1.26.4' \
+                      'opencv-python-headless==4.10.0.84'
+                    echo 'INSTALLED — deterministic headless OpenCV wheel; distro GUI/GPU dependency tree avoided'
+                  fi
+
+                  if command -v magick >/dev/null 2>&1; then
+                    echo 'PASS — ImageMagick 7 command is available'
+                  else
+                    command -v identify >/dev/null
+                    command -v convert >/dev/null
+                    command -v montage >/dev/null
+                    cat > "$RUNNER_TEMP/card-backfill-bin/magick" <<'SH'
+                  #!/bin/sh
+                  command="$1"
+                  case "$command" in
+                    identify|montage)
+                      shift
+                      exec "$command" "$@"
+                      ;;
+                    *)
+                      exec convert "$@"
+                      ;;
+                  esac
+                  SH
+                    chmod +x "$RUNNER_TEMP/card-backfill-bin/magick"
+                    echo "$RUNNER_TEMP/card-backfill-bin" >> "$GITHUB_PATH"
+                    echo 'PASS — ImageMagick 6 compatibility command installed'
+                  fi
+
+                  if [ "$profile" = discovery ]; then
+                    echo 'PASS — lean discovery runtime omits OpenCV, NumPy, cascade data, and Tesseract'
+                    exit 0
+                  fi
+
+                  python3 - <<'PY'
+                  from pathlib import Path
+                  import cv2
+                  import numpy
+                  name = "haarcascade_frontalface_default.xml"
+                  data = getattr(cv2, "data", None)
+                  roots = [Path(data.haarcascades)] if data is not None and getattr(data, "haarcascades", None) else []
+                  cascade = next((root / name for root in roots if (root / name).is_file()), None)
+                  if cascade is None:
+                      raise SystemExit("OpenCV face cascade is unavailable after headless runtime installation")
+                  print(f'PASS — local image desk runtime: OpenCV {cv2.__version__}; NumPy {numpy.__version__}; cascade={cascade}')
+                  PY
+                  tesseract --version | head -n 1
+                  echo 'PASS — local desk uses pinned headless OpenCV rather than the distro GUI/GPU stack'
+          YAML
+
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const actionPath='.github/actions/card-backfill-runtime/action.yml';
+          let action=fs.readFileSync(actionPath,'utf8');
+          const placeholder='__CARD_BACKFILL_PROFILE_INPUT__';
+          if((action.split(placeholder).length-1)!==1) throw new Error('profile-input placeholder cardinality drift');
+          action=action.replace(placeholder, '$' + '{{ inputs.profile }}');
+          fs.writeFileSync(actionPath, action);
+
+          const fixturePath='scripts/card-backfill-amortization-fixtures.mjs';
+          let fixture=fs.readFileSync(fixturePath,'utf8');
+          const from=`assert(files.runtime.includes("packages+=(python3-opencv)"));
+          assert(files.runtime.includes("packages+=(opencv-data)"));`;
+          const to=`assert(files.runtime.includes("opencv-python-headless==4.10.0.84"));
+          assert(files.runtime.includes("numpy==1.26.4"));
+          assert(files.runtime.includes("--break-system-packages"));
+          assert(files.runtime.includes("pinned headless OpenCV"));
+          assert(!files.runtime.includes("packages+=(python3-opencv)"));
+          assert(!files.runtime.includes("packages+=(opencv-data)"));`;
+          const count=fixture.split(from).length-1;
+          if(count!==1) throw new Error(`expected one distro-OpenCV fixture block, found ${count}`);
+          fixture=fixture.replace(from,to);
+          fs.writeFileSync(fixturePath,fixture);
+          NODE
+
+          grep -F 'REQUESTED_PROFILE: ${{ inputs.profile }}' .github/actions/card-backfill-runtime/action.yml
+          echo 'PASS — literal composite input survived workflow expression evaluation'
+
+      - uses: ./.github/actions/card-backfill-runtime
+        with:
+          profile: local-desk
+
+      - name: Install complete rendered-gate runtime
+        run: npx playwright install --with-deps chromium
+
+      - name: Stage and prove the exact two-file optimization transaction
+        run: |
+          set -euo pipefail
+          git add -- \
+            .github/actions/card-backfill-runtime/action.yml \
+            scripts/card-backfill-amortization-fixtures.mjs
+          git diff --cached --check
+          git diff --cached --name-only | sort > "$RUNNER_TEMP/actual.txt"
+          cat > "$RUNNER_TEMP/expected.txt" <<'PATHS'
+          .github/actions/card-backfill-runtime/action.yml
+          scripts/card-backfill-amortization-fixtures.mjs
+          PATHS
+          diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/actual.txt"
+          node scripts/card-backfill-amortization-fixtures.mjs
+          npm run gate
+
+      - name: Commit, exact-head push, and rearm the supervisor
+        run: |
+          set -euo pipefail
+          git config user.name 'undercast-card-backfill-runtime'
+          git config user.email 'undercast-card-backfill-runtime@users.noreply.github.com'
+          git commit -m 'Card backfill: replace distro OpenCV with pinned headless runtime'
+          remote_head=$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | awk '{print $1}')
+          if [ "$remote_head" != "$OPTIMIZE_HEAD" ]; then
+            echo "branch moved from optimization head $OPTIMIZE_HEAD to $remote_head; refusing stale runtime push" >&2
+            exit 1
+          fi
+          git push origin "HEAD:${HEAD_BRANCH}"
+          final_head=$(git rev-parse HEAD)
+          gh workflow run card-backfill-supervisor.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$HEAD_BRANCH" \
+            -f reason=local-desk-headless-runtime-activated
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${final_head}" \
+            -f state=success \
+            -f context='card-backfill/local-desk-runtime' \
+            -f description='pinned headless OpenCV activated; cached frontier rearmed' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo 'manual_continue_required=false'
+
+      - name: Publish observable optimization failure
+        if: failure()
+        run: |
+          set -euo pipefail
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${OPTIMIZE_HEAD}" \
+            -f state=failure \
+            -f context='card-backfill/local-desk-runtime' \
+            -f description="run ${GITHUB_RUN_ID}: repaired runtime optimization failed before a production commit" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
