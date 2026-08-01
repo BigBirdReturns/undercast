@@ -113,5 +113,15 @@ expect('preservation workflow does not swallow required receipt staging errors',
 expect('optional bootstrap marker is staged conditionally', workflow.includes('if [ -e preservation/BOOTSTRAP-PENDING ]; then\n            git add preservation/BOOTSTRAP-PENDING\n          fi'), true);
 expect('preservation workflow has no broad git-add error suppression', /git add preservation\/SNAPSHOTS\.json[\s\S]{0,400}\|\| true/.test(workflow), false);
 
+const retiredRecoveryPaths = [
+  fileURLToPath(new URL('../.github/workflows/reconcile-estate-preservation.yml', import.meta.url)),
+  fileURLToPath(new URL('../.github/workflows/repair-estate-preservation-reconciliation.yml', import.meta.url)),
+  fileURLToPath(new URL('../.github/workflows/repair-estate-preservation-reconciliation-v3.yml', import.meta.url)),
+  fileURLToPath(new URL('./repair-preservation-receipt-staging.py', import.meta.url)),
+];
+for (const retiredPath of retiredRecoveryPaths) {
+  await rejects(`retired preservation recovery path stays absent: ${retiredPath.split('/').pop()}`, () => readFile(retiredPath), /ENOENT/);
+}
+
 console.log(failures ? `\n${failures} preservation fixture(s) FAILED` : '\nall preservation fixtures pass');
 process.exit(failures ? 1 : 0);
