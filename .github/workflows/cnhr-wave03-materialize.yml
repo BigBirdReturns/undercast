@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Materialize, validate, and publish exact Wave 03 packet
+      - name: Recover, validate, and publish exact Wave 03 packet
         shell: bash
         env:
           PARENT_SHA: fdfdeade8b44d0c1af5442735a360761322dc109
@@ -42,8 +42,85 @@ jobs:
           test "$(git hash-object .cnhr-wave03/fixed-007.txt)" = d6acecb39e297ceef6a80acc55c37ee0d98e4195
           test "$(git hash-object .cnhr-wave03/fixed-008.txt)" = 23c20a8a38660b6825e04244401d6bb4e21f86fe
 
-          cat .cnhr-wave03/fixed-*.txt | tr -d '\n' | base64 --decode > /tmp/cnhr-wave03.tar.gz
-          printf '%s  %s\n' "$PAYLOAD_SHA256" /tmp/cnhr-wave03.tar.gz | sha256sum --check --strict
+          python - <<'PY'
+          import base64
+          import hashlib
+          from pathlib import Path
+
+          expected_payload = '716aff39d802f53594796edaee384cfd39ffedb0fa17e2cdfaadae45f00cce9d'
+          expected_part0 = 'f9b8955827b525d1a4038005dfe02e80bd929eb501b840a338a78f7be394043b'
+          expected_part1 = '49835aa28d7ef82d78e27e93232de029b0cb09106a4bac31b5671d50ef96b855'
+          expected_segments = {
+              '005': 'c48157afeade134a450b88bd64d046c21383125b',
+              '006': '2d149bb0b1103c22383150558d423f45cc3ad76c',
+          }
+
+          def clean(path):
+              return b''.join(Path(path).read_bytes().split())
+
+          def git_blob_sha(data):
+              header = f'blob {len(data)}\0'.encode()
+              return hashlib.sha1(header + data).hexdigest()
+
+          fixed = {f'{i:03d}': clean(f'.cnhr-wave03/fixed-{i:03d}.txt') for i in range(9)}
+          part0 = b''.join(fixed[f'{i:03d}'] for i in range(5))
+          suffix = fixed['007'] + fixed['008']
+          assert len(part0) == 30000, len(part0)
+          assert len(suffix) == 6264, len(suffix)
+          assert hashlib.sha256(part0).hexdigest() == expected_part0
+
+          source_buffers = {
+              'chunk-001': clean('.cnhr-wave03/chunk-001.txt'),
+              'fixed-005-through-008': b''.join(fixed[f'{i:03d}'] for i in range(5, 9)),
+          }
+          source_buffers['chunk-000-plus-001'] = clean('.cnhr-wave03/chunk-000.txt') + source_buffers['chunk-001']
+
+          recovered = {}
+          for label, target in expected_segments.items():
+              for source_name, source in source_buffers.items():
+                  for start in range(0, len(source) - 6000 + 1):
+                      candidate = source[start:start + 6000]
+                      if git_blob_sha(candidate) == target:
+                          recovered[label] = candidate
+                          print(f'recovered fixed-{label} from {source_name}@{start}')
+                          break
+                  if label in recovered:
+                      break
+              if label not in recovered:
+                  print(f'could not recover fixed-{label} by Git-blob identity')
+
+          part1 = None
+          if set(recovered) == set(expected_segments):
+              candidate = recovered['005'] + recovered['006'] + suffix
+              if len(candidate) == 18264 and hashlib.sha256(candidate).hexdigest() == expected_part1:
+                  part1 = candidate
+
+          if part1 is None:
+              for source_name, source in source_buffers.items():
+                  for start in range(0, len(source) - 18264 + 1):
+                      candidate = source[start:start + 18264]
+                      if hashlib.sha256(candidate).hexdigest() == expected_part1:
+                          part1 = candidate
+                          print(f'recovered complete second half from {source_name}@{start}')
+                          break
+                  if part1 is not None:
+                      break
+
+          print('source lengths:', {name: len(data) for name, data in source_buffers.items()})
+          print('published second-half sha256:', hashlib.sha256(b''.join(fixed[f'{i:03d}'] for i in range(5, 9))).hexdigest())
+          assert part1 is not None, 'exact second half was not recoverable from retained transport objects'
+          assert len(part1) == 18264
+          assert hashlib.sha256(part1).hexdigest() == expected_part1
+
+          encoded = part0 + part1
+          assert len(encoded) == 48264
+          payload = base64.b64decode(encoded, validate=True)
+          actual_payload = hashlib.sha256(payload).hexdigest()
+          print('reconstructed payload sha256:', actual_payload)
+          assert actual_payload == expected_payload
+          Path('/tmp/cnhr-wave03.tar.gz').write_bytes(payload)
+          PY
+
           tar -xzf /tmp/cnhr-wave03.tar.gz -C .
           rm -rf .cnhr-wave03 .github/workflows/cnhr-wave03-materialize.yml
 
