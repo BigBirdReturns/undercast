@@ -8,6 +8,7 @@ import { validateCanonicalAdoptionLedger } from "./estate-canonical-adoption-led
 const DEFAULTS = Object.freeze({
   vocabularyRuling: "data/review/estate-debt/COLLECT-010-NORMALIZED-REVIEW-VOCABULARY-RULING.json",
   semanticRuling: "data/review/estate-debt/COLLECT-010-PACKET-SEMANTIC-ADAPTER-RULING.json",
+  portraitRepair: "data/review/estate-debt/COLLECT-010-PORTRAIT-PROVENANCE-KIND-REPAIR.json",
   census: "data/review/estate-debt/COLLECT-005-ADOPTION-CENSUS.json",
   ledger: "data/review/estate-debt/CANONICAL-ADOPTION-LEDGER.json",
   specimens: "data/specimens.json",
@@ -102,7 +103,8 @@ function parseChecksums(text, label) {
 }
 function validateBinding(binding, side, key) {
   assert(binding && typeof binding === "object" && !Array.isArray(binding), `${key} proposed binding is missing`);
-  assert(binding.kind === side, `${key} proposed binding kind drifted`);
+  if (side === "still") assert(binding.kind === "still", `${key} still provenance kind drifted`);
+  else assert(new Set(["copyright", "free"]).has(binding.kind), `${key} portrait provenance kind drifted`);
   assert(/^images\/uc-\d+-(still|portrait)-[0-9a-f]{12}\.(?:jpg|jpeg|png|webp)$/i.test(binding.src || ""), `${key} destination is not versioned media`);
   assert(/^https?:\/\//.test(binding.origin || ""), `${key} origin must be HTTP(S)`);
   assert(binding.pin === true, `${key} binding is not pinned`);
@@ -129,9 +131,10 @@ function validateRulings(vocabulary, semantic) {
 async function inspectTransaction({ root = process.cwd() } = {}) {
   const resolvedRoot = path.resolve(root);
   await validateCanonicalAdoptionLedger({ root: resolvedRoot, ledgerPath: DEFAULTS.ledger });
-  const [vocabularyDoc, semanticDoc, censusDoc, ledgerDoc, specimensDoc, sourcesDoc] = await Promise.all([
+  const [vocabularyDoc, semanticDoc, portraitRepairDoc, censusDoc, ledgerDoc, specimensDoc, sourcesDoc] = await Promise.all([
     readDoc(resolvedRoot, DEFAULTS.vocabularyRuling, "normalized vocabulary ruling"),
     readDoc(resolvedRoot, DEFAULTS.semanticRuling, "semantic adapter ruling"),
+    readDoc(resolvedRoot, DEFAULTS.portraitRepair, "portrait provenance repair"),
     readDoc(resolvedRoot, DEFAULTS.census, "COLLECT-005 census"),
     readDoc(resolvedRoot, DEFAULTS.ledger, "canonical adoption ledger"),
     readDoc(resolvedRoot, DEFAULTS.specimens, "specimens"),
@@ -139,6 +142,10 @@ async function inspectTransaction({ root = process.cwd() } = {}) {
   ]);
   const vocabulary = vocabularyDoc.value;
   const semantic = semanticDoc.value;
+  const portraitRepair = portraitRepairDoc.value;
+  assert(portraitRepair?.transaction === "COLLECT-010" && portraitRepair.operation === "portrait-provenance-kind-schema-repair" && portraitRepair.status === "authorized", "portrait provenance repair identity drifted");
+  assert(portraitRepair.boundary?.candidate_bytes_changed === false && portraitRepair.boundary?.packet_evidence_rewritten === false && portraitRepair.boundary?.evidence_standard_changed === false, "portrait provenance repair escaped its boundary");
+  assert(sameJson(Object.keys(portraitRepair.correction || {}).sort(), ["UC-040/portrait", "UC-146/portrait"]), "portrait provenance repair set drifted");
   const authorizedKeys = validateRulings(vocabulary, semantic);
   const census = censusDoc.value;
   const ledger = ledgerDoc.value;
@@ -162,9 +169,13 @@ async function inspectTransaction({ root = process.cwd() } = {}) {
     assert(decision?.status === "authorized-semantic-adapter", `${key} lacks terminal semantic authorization`);
     assert(decision.packet?.candidate_path === row.candidate_path && decision.packet?.candidate_sha256 === row.candidate_sha256, `${key} candidate custody differs between ruling and census`);
     assert(decision.packet?.manifest_path === row.manifest_path && decision.packet?.manifest_sha256 === row.manifest_sha256, `${key} manifest custody differs between ruling and census`);
-    validateBinding(decision.proposed_binding, side, key);
-    assert(decision.proposed_binding.src === row.suggested_destination_path, `${key} destination differs from census`);
-    assert(decision.proposed_binding.origin === row.suggested_origin && sameJson(decision.proposed_binding.focus, row.suggested_focus), `${key} binding origin or focus differs from census`);
+    const provenanceRepair = portraitRepair.correction?.[key] || null;
+    const intended = provenanceRepair
+      ? { ...decision.proposed_binding, kind: provenanceRepair.kind, ...(provenanceRepair.author ? { author: provenanceRepair.author } : {}), ...(provenanceRepair.license ? { license: provenanceRepair.license } : {}), ...(provenanceRepair.year ? { year: provenanceRepair.year } : {}) }
+      : decision.proposed_binding;
+    validateBinding(intended, side, key);
+    assert(intended.src === row.suggested_destination_path, `${key} destination differs from census`);
+    assert(intended.origin === row.suggested_origin && sameJson(intended.focus, row.suggested_focus), `${key} binding origin or focus differs from census`);
 
     const specimen = specimenById.get(recordId);
     const source = sourceById.get(recordId);
@@ -177,7 +188,7 @@ async function inspectTransaction({ root = process.cwd() } = {}) {
     const manifestResolved = resolveInside(resolvedRoot, row.manifest_path, `${key} manifest`);
     const candidateResolved = resolveInside(resolvedRoot, row.candidate_path, `${key} candidate`);
     const checksumResolved = resolveInside(resolvedRoot, row.checksum_path, `${key} checksum ledger`);
-    const destination = resolveInside(resolvedRoot, decision.proposed_binding.src, `${key} destination`);
+    const destination = resolveInside(resolvedRoot, intended.src, `${key} destination`);
     const [manifestBytes, candidateBytes, checksumBytes] = await Promise.all([
       readFile(manifestResolved.absolute),
       readFile(candidateResolved.absolute),
@@ -197,18 +208,18 @@ async function inspectTransaction({ root = process.cwd() } = {}) {
       assert(!destinationExists, `${key} destination exists before adoption`);
       state = "pending";
     } else {
-      assert(sameJson(specimenCurrent, decision.proposed_binding) && sameJson(sourceCurrent, decision.proposed_binding), `${key} current binding is neither null nor the exact intended adoption`);
+      assert(sameJson(specimenCurrent, intended) && sameJson(sourceCurrent, intended), `${key} current binding is neither null nor the exact intended adoption`);
       assert(destinationExists, `${key} adopted destination is missing`);
       assert(sha256(await readFile(destination.absolute)) === row.candidate_sha256, `${key} adopted destination bytes drifted`);
       state = "already-adopted";
     }
-    contexts.push({ key, recordId, side, row, decision, specimen, source, candidateBytes, destination, intended: decision.proposed_binding, state });
+    contexts.push({ key, recordId, side, row, decision, specimen, source, candidateBytes, destination, intended, state });
   }
 
   assert(contexts.length === 12, `expected 12 COLLECT-010 contexts, found ${contexts.length}`);
   assert(contexts.filter((row) => row.side === "still").length === 10, "COLLECT-010 still denominator drifted");
   assert(contexts.filter((row) => row.side === "portrait").length === 2, "COLLECT-010 portrait denominator drifted");
-  return { resolvedRoot, vocabularyDoc, semanticDoc, censusDoc, ledgerDoc, specimensDoc, sourcesDoc, vocabulary, semantic, census, ledger, contexts };
+  return { resolvedRoot, vocabularyDoc, semanticDoc, portraitRepairDoc, censusDoc, ledgerDoc, specimensDoc, sourcesDoc, vocabulary, semantic, portraitRepair, census, ledger, contexts };
 }
 
 async function applyTransaction({ inspection, now = new Date().toISOString(), reportPath = null }) {
@@ -330,6 +341,11 @@ async function promoteTransaction({ inspection, beforeQualityPath, authorizedPar
         path: inspection.semanticDoc.safe,
         sha256: inspection.semanticDoc.sha256,
         git_blob: inspection.semanticDoc.git_blob,
+      },
+      portrait_provenance_repair: {
+        path: inspection.portraitRepairDoc.safe,
+        sha256: inspection.portraitRepairDoc.sha256,
+        git_blob: inspection.portraitRepairDoc.git_blob,
       },
       authorized: 12,
       structural_blockers: 4,
