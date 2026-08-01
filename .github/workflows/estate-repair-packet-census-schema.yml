@@ -1,0 +1,197 @@
+name: estate-repair-packet-census-schema
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+    paths:
+      - .github/workflows/estate-repair-packet-census-schema.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: estate-repair-packet-census-schema
+  cancel-in-progress: true
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  PR_NUMBER: ${{ github.event.pull_request.number || 132 }}
+  TARGET_BRANCH: agent/estate-consolidation-001
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+  CENSUS: data/review/estate-debt/COLLECT-005-ADOPTION-CENSUS.json
+
+jobs:
+  repair-and-census:
+    if: github.repository == 'BigBirdReturns/undercast' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - name: Establish exact-head repair custody
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Add exact rendered-permanent packet adapter
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/estate-packet-adoption-census.mjs')
+          text = path.read_text()
+
+          replacements = {
+            '''    manifest.selected_source?.page_url,
+    manifest.selected_source?.url,''': '''    manifest.selected_source?.source_page,
+    manifest.selected_source?.page_url,
+    manifest.selected_source?.url,''',
+            '''  const candidate = legacy
+    ? { path: raw.composition.file, sha256: raw.composition.sha256, mime: raw.composition.mime, width: raw.composition.width, height: raw.composition.height }
+    : raw.candidate;
+  assert(candidate?.path && /^[0-9a-f]{64}$/.test(candidate.sha256 || ""), `${key} candidate receipt is malformed`);''': '''  const renderedPermanent = Boolean(!legacy && !raw.candidate && raw.render?.candidate);
+  const candidate = legacy
+    ? { path: raw.composition.file, sha256: raw.composition.sha256, mime: raw.composition.mime, width: raw.composition.width, height: raw.composition.height }
+    : renderedPermanent
+      ? { ...raw.render.candidate, mime: raw.render.candidate.mime || null }
+      : raw.candidate;
+  assert(candidate?.path && /^[0-9a-f]{64}$/.test(candidate.sha256 || ""), `${key} candidate receipt is malformed`);''',
+            '''  const reviewDoc = legacy ? await readJson(root, `${imported.root}/review.json`, `${key} legacy review`, false) : null;
+  const modernReview = raw.exact_subject_review || null;
+  const reviewReady = legacy
+    ? legacyReviewPassed(reviewDoc?.value)
+    : Boolean(raw.reviewed_by && raw.reviewed_role
+      && new Set(["reviewed-evidence-candidate", "reviewed-evidence-ready-for-canonical-consideration"]).has(raw.disposition)
+      && acceptedIdentity(modernReview?.identity)
+      && acceptedPresentation(modernReview?.presentation)
+      && modernCropPassed(modernReview));''': '''  const reviewDoc = (legacy || renderedPermanent) ? await readJson(root, `${imported.root}/review.json`, `${key} packet review`, false) : null;
+  const modernReview = raw.exact_subject_review || null;
+  const renderedReview = reviewDoc?.value || null;
+  const renderedReviewReady = Boolean(renderedPermanent
+    && renderedReview?.disposition === "reviewed-evidence-candidate"
+    && renderedReview?.visual_second_desk?.status === "accepted-for-render"
+    && renderedReview?.render_result?.candidate?.path === candidate.path
+    && renderedReview?.render_result?.candidate?.sha256 === candidate.sha256
+    && renderedReview?.render_result?.wall_crop?.path
+    && renderedReview?.canonical_mutation === false
+    && Array.isArray(renderedReview?.duplicate_scan?.items)
+    && renderedReview.duplicate_scan.items.every((item) => Array.isArray(item.matches) && item.matches.length === 0));
+  const reviewReady = legacy
+    ? legacyReviewPassed(reviewDoc?.value)
+    : renderedPermanent
+      ? renderedReviewReady
+      : Boolean(raw.reviewed_by && raw.reviewed_role
+        && new Set(["reviewed-evidence-candidate", "reviewed-evidence-ready-for-canonical-consideration"]).has(raw.disposition)
+        && acceptedIdentity(modernReview?.identity)
+        && acceptedPresentation(modernReview?.presentation)
+        && modernCropPassed(modernReview));''',
+            '''  if (duplicateDoc) duplicatePass = String(duplicateDoc.value?.status || "").toLowerCase() === "pass";
+  else if (legacy) duplicatePass = String(reviewDoc?.value?.candidate?.duplicate_scan?.status || raw.duplicate_scan?.status || "").toLowerCase() === "pass";
+  else duplicatePass = String(raw.duplicate_scan?.status || "").toLowerCase() === "pass";''': '''  if (duplicateDoc) {
+    duplicatePass = String(duplicateDoc.value?.status || "").toLowerCase() === "pass"
+      || (Array.isArray(duplicateDoc.value?.items) && duplicateDoc.value.items.every((item) => Array.isArray(item.matches) && item.matches.length === 0));
+  } else if (legacy) duplicatePass = String(reviewDoc?.value?.candidate?.duplicate_scan?.status || raw.duplicate_scan?.status || "").toLowerCase() === "pass";
+  else if (renderedPermanent) duplicatePass = renderedReviewReady;
+  else duplicatePass = String(raw.duplicate_scan?.status || "").toLowerCase() === "pass";''',
+            '''    packet_generation: legacy ? "legacy-serial" : "normalized",''': '''    packet_generation: legacy ? "legacy-serial" : renderedPermanent ? "rendered-permanent" : "normalized",''',
+          }
+
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'exact census schema patch expected one match, found {count}: {old[:100]}')
+              text = text.replace(old, new)
+
+          path.write_text(text)
+          PY
+
+      - name: Re-run the complete retained-packet census
+        run: |
+          set -euo pipefail
+          node scripts/estate-packet-adoption-census.mjs \
+            --write \
+            --out "$CENSUS" \
+            --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            | tee /tmp/COLLECT-005-census.log
+          node --input-type=module - "$CENSUS" <<'NODE'
+          import fs from 'node:fs';
+          const census = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (census.counts.imported_packets !== 55) throw new Error(`expected 55 imported packets, found ${census.counts.imported_packets}`);
+          if (census.counts.already_paid !== 10) throw new Error(`expected 10 paid packets, found ${census.counts.already_paid}`);
+          if (census.counts.open_packets !== 45) throw new Error(`expected 45 open packets, found ${census.counts.open_packets}`);
+          if (census.counts.already_paid + census.counts.open_packets !== census.counts.imported_packets) throw new Error('packet census does not reconcile');
+          if (census.boundary.canonical_mutation !== false || census.boundary.discovery_performed !== false) throw new Error('census escaped the audit boundary');
+          console.log(`PASS — classified all 45 open packet objects; safe_direct=${census.counts.safe_direct_adoptions}`);
+          NODE
+
+      - name: Publish the census and retire both one-shot runners
+        run: |
+          set -euo pipefail
+          rm .github/workflows/estate-packet-adoption-census.yml
+          rm .github/workflows/estate-repair-packet-census-schema.yml
+          git add scripts/estate-packet-adoption-census.mjs "$CENSUS" \
+            .github/workflows/estate-packet-adoption-census.yml \
+            .github/workflows/estate-repair-packet-census-schema.yml
+          git diff --cached --check
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$AUTHORIZED_HEAD"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit \
+            -m 'Estate audit: normalize all retained packet generations' \
+            -m 'canonical_mutation=false' \
+            -m 'discovery_performed=false' \
+            -m 'imported_packets=55' \
+            -m 'paid_packets=10' \
+            -m 'open_packets=45' \
+            -m "authorized_parent=${AUTHORIZED_HEAD}" \
+            -m "audit_run=${GITHUB_RUN_ID}"
+          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}" origin "HEAD:refs/heads/${TARGET_BRANCH}"
+
+      - name: Report normalized census
+        if: success()
+        run: |
+          SAFE="$(node -p "require('./$CENSUS').counts.safe_direct_adoptions")"
+          CORRECTION="$(node -p "require('./$CENSUS').counts.correction_null_adoptions")"
+          ABSENCE="$(node -p "require('./$CENSUS').counts.clean_absence_adoptions")"
+          UNSTATED="$(node -p "require('./$CENSUS').counts.null_without_prior_state")"
+          ACTIVE="$(node -p "require('./$CENSUS').counts.active_binding_comparisons")"
+          INCOMPATIBLE="$(node -p "require('./$CENSUS').counts.packet_review_incompatible")"
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF_COMMENT
+          COLLECT-005 all-packet census passed on workflow run $GITHUB_RUN_ID.
+
+          The adapter now covers normalized packets, legacy serial packets with independent `review.json`, and rendered-permanent packets such as UC-176. Exact checksums and packet bytes remain unchanged.
+
+          ```text
+          safe direct adoptions:       $SAFE
+          correction-null:             $CORRECTION
+          clean absence:               $ABSENCE
+          null without prior state:    $UNSTATED
+          active binding comparisons:  $ACTIVE
+          incompatible packet review:  $INCOMPATIBLE
+          ```
+
+          The exact 55-object census is retained at `$CENSUS`. No discovery or canonical mutation occurred, and both one-shot census workflows retired themselves.
+          EOF_COMMENT
+
+      - name: Report adapter failure
+        if: failure()
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF_COMMENT
+          COLLECT-005 heterogeneous packet adapter failed closed on workflow run $GITHUB_RUN_ID.
+
+          No canonical mutation or adoption claim is authorized. Add only the exact next observed permanent packet schema; do not rewrite evidence or infer review readiness from candidate existence.
+          EOF_COMMENT
