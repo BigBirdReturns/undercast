@@ -525,6 +525,47 @@ jobs:
           git push origin "HEAD:${GITHUB_REF_NAME}"
           echo 'PASS — one reducer committed attempts, staging, and the next cost model'
 
+      - name: Yield the exact reduced head to the supervisor
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MUTATION_HEAD: ${{ steps.mutation.outputs.mutation_head }}
+        run: |
+          set -euo pipefail
+          reduced_head=$(git rev-parse HEAD)
+          remote_head=$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')
+          if [ "$remote_head" != "$reduced_head" ]; then
+            echo "branch moved from reduced head $reduced_head to $remote_head; refusing stale supervisor yield" >&2
+            exit 1
+          fi
+          if [ "$reduced_head" = "$MUTATION_HEAD" ]; then
+            echo 'PASS — reduction was already present; yielding the existing exact head'
+          else
+            echo "PASS — reduction committed $MUTATION_HEAD -> $reduced_head"
+          fi
+          active_json=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow card-backfill-supervisor.yml \
+            --branch "$GITHUB_REF_NAME" \
+            --limit 50 \
+            --json headSha,status)
+          active=$(node -e 'const rows=JSON.parse(process.argv[1]);const head=process.argv[2];const active=new Set(["queued","in_progress","waiting","pending","requested"]);process.stdout.write(String(rows.filter((row)=>row.headSha===head&&active.has(row.status)).length))' "$active_json" "$reduced_head")
+          if [ "$active" -gt 0 ]; then
+            echo "PASS — exact-head supervisor already active ($active); duplicate yield refused"
+          else
+            gh workflow run card-backfill-supervisor.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref "$GITHUB_REF_NAME" \
+              -f reason=amortized-wave-reduced
+            echo 'PASS — reducer yielded the exact current head to the supervisor'
+          fi
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/$reduced_head" \
+            -f state=success \
+            -f context='card-backfill/reducer-yield' \
+            -f description='exact reduced head yielded to supervisor; manual_continue_required=false' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo 'manual_continue_required=false'
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

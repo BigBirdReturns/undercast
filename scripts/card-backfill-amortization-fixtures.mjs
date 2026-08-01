@@ -186,6 +186,11 @@ for (const needle of [
   "card-backfill-local-adjudicate.mjs",
   "--amortization-plan",
   "rediscovery:false",
+  "Yield the exact reduced head to the supervisor",
+  "card-backfill-supervisor.yml",
+  "reason=amortized-wave-reduced",
+  "card-backfill/reducer-yield",
+  "manual_continue_required=false",
 ]) assert(files.workflow.includes(needle), `amortized workflow guard missing ${needle}`);
 assert(files.runtime.includes("profile=\"$REQUESTED_PROFILE\""));
 assert(files.runtime.includes("discover) profile=discovery"));
