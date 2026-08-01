@@ -1,0 +1,88 @@
+name: card-backfill-frontier-audit
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/card-backfill-frontier-audit.yml'
+      - 'scripts/card-backfill-frontier-audit.mjs'
+      - 'scripts/card-backfill-route-next.mjs'
+      - 'scripts/lib/card-backfill-attempt-index.mjs'
+      - 'scripts/lib/card-backfill-cohort.mjs'
+      - 'scripts/lib/card-backfill-staging.mjs'
+      - 'data/review/card-backfill/**'
+      - 'data/review/card-backfill-staging/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: card-backfill-frontier-audit-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      AUDIT_HEAD: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Measure every open obligation and prior attempt
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/card-backfill-frontier"
+          node scripts/card-backfill-frontier-audit.mjs --out "$out" | tee "$RUNNER_TEMP/frontier.log"
+          node --input-type=module - "$out/frontier.json" <<'NODE'
+          import fs from 'node:fs';
+          const path = process.argv[2];
+          const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const classes = Object.fromEntries((value.summary?.frontier_class || []).map((row) => [row.key, row.count]));
+          if (value.completed_packets + value.open_obligations !== value.selector_defined_estate) {
+            throw new Error(`estate accounting drift: ${value.completed_packets}+${value.open_obligations}!=${value.selector_defined_estate}`);
+          }
+          if (value.completed_packets >= 147) throw new Error('frontier audit was dispatched after the unattended target had already been reached');
+          if (!value.open_obligations) throw new Error('below-target frontier has no open obligations');
+          if (!Object.keys(classes).length) throw new Error('frontier classes are empty');
+          console.log(`PASS — frontier classified ${value.open_obligations} open obligations across ${Object.keys(classes).length} executable classes`);
+          console.log(`CLASSES — ${JSON.stringify(classes)}`);
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-frontier-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-frontier
+            ${{ runner.temp }}/frontier.log
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish observable frontier custody
+        if: always()
+        run: |
+          set -euo pipefail
+          state=success
+          if [ "${{ job.status }}" != success ]; then state=failure; fi
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${AUDIT_HEAD}" \
+            -f state="$state" \
+            -f context='card-backfill/frontier-audit' \
+            -f description="policy frontier audit ${state}; canonical_mutation=false" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo 'manual_continue_required=false'
+          echo 'canonical_mutation=false'
