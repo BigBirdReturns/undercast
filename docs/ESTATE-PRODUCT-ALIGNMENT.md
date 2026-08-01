@@ -91,4 +91,4 @@ UnderCast adopts the smallest strong primitive that solves an observed archive f
 4. Retire superseded packet branches and production machinery once their retained objects have one forward path.
 5. Merge the consolidation line, deploy it, verify the live site, and return ordinary growth to a small audit → adopt → release loop.
 
-COLLECT-003 is the first payment under this alignment. It adopts five clear single-subject stills from the retained packet estate and measures the resulting canonical quality delta. It does not open another discovery frontier.
+COLLECT-003 is the first payment under this alignment. It adopts five clear, independently reviewed replacement stills from the retained packet estate and measures the resulting canonical quality delta. It does not open another discovery frontier.
