@@ -1,0 +1,339 @@
+name: estate-adopt-current-null-whole-lane-008
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+    paths:
+      - .github/workflows/estate-adopt-current-null-whole-lane-008.yml
+      - scripts/estate-adopt-current-null-whole-lane.mjs
+      - data/review/estate-debt/COLLECT-007-CURRENT-NULL-WHOLE-LANE-ADJUDICATION.json
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: estate-adopt-current-null-whole-lane-008
+  cancel-in-progress: true
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  PR_NUMBER: ${{ github.event.pull_request.number || 132 }}
+  TARGET_BRANCH: agent/estate-consolidation-001
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+  EXECUTOR: scripts/estate-adopt-current-null-whole-lane.mjs
+  RULING: data/review/estate-debt/COLLECT-007-CURRENT-NULL-WHOLE-LANE-ADJUDICATION.json
+  RECEIPT: data/review/estate-debt/COLLECT-008-CANONICAL-ADOPTION.json
+  PUBLICATION: data/review/estate-debt/COLLECT-008-PUBLICATION.json
+  LEDGER: data/review/estate-debt/CANONICAL-ADOPTION-LEDGER.json
+
+jobs:
+  adopt:
+    if: github.repository == 'BigBirdReturns/undercast' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - name: Establish exact-head custody
+        id: custody
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "head=$AUTHORIZED_HEAD" >> "$GITHUB_OUTPUT"
+
+      - name: Announce evidence-sized whole-lane payment
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF_COMMENT
+          COLLECT-008 whole current-null lane adoption started on workflow run $GITHUB_RUN_ID.
+
+          Authorized head: ${{ steps.custody.outputs.head }}.
+          Corrected terminal ruling: 24 reviewed, 24 authorized, 0 blocked.
+          Expected payment: 15 → 39 canonical adoptions, 40 → 16 remaining packet obligations, 693 → 717 complete pairs, and 373 → 349 missing stills.
+
+          This is one evidence-sized tranche, not an arbitrary batch. The complete 24-record visitor-facing tree will pass the full repository and rendered-browser gate before any receipt exists. Publication custody will then pass the full gate again before final publication.
+          EOF_COMMENT
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Install rendered-browser dependency
+        run: npx playwright install --with-deps chromium
+
+      - name: Prove executor semantics and prior cumulative custody
+        run: |
+          set -euo pipefail
+          node --check "$EXECUTOR"
+          node "$EXECUTOR" --fixtures
+          node scripts/estate-canonical-adoption-ledger.mjs
+          cp data/quality.json /tmp/COLLECT-008-quality-before.json
+
+      - name: Prove the exact corrected 24-object denominator
+        run: |
+          set -euo pipefail
+          node "$EXECUTOR" --ruling "$RULING" | tee /tmp/COLLECT-008-preflight.json
+          test "$(node -p "require('/tmp/COLLECT-008-preflight.json').authorized")" = "24"
+          test "$(node -p "require('/tmp/COLLECT-008-preflight.json').pending")" = "24"
+          test "$(node -p "require('/tmp/COLLECT-008-preflight.json').already_adopted")" = "0"
+          test "$(node -p "require('/tmp/COLLECT-008-preflight.json').expected_cumulative_after")" = "39"
+          test "$(node -p "require('/tmp/COLLECT-008-preflight.json').expected_remaining_after")" = "16"
+
+      - name: Apply all ruled media without acceptance receipt
+        run: |
+          set -euo pipefail
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          node "$EXECUTOR" \
+            --ruling "$RULING" \
+            --now "$NOW" \
+            --report /tmp/COLLECT-008-apply.json \
+            --write
+          test ! -e "$RECEIPT"
+          test ! -e "$PUBLICATION"
+
+      - name: Rebuild audit, serving projections, and permanent records
+        run: |
+          set -euo pipefail
+          npm run media:audit -- sync
+          node scripts/shard.mjs
+          node scripts/build-record-pages.mjs
+
+      - name: Validate the exact quality payment before smoke
+        run: |
+          set -euo pipefail
+          node "$EXECUTOR" \
+            --ruling "$RULING" \
+            --before-quality /tmp/COLLECT-008-quality-before.json \
+            --validate | tee /tmp/COLLECT-008-validation.json
+          test ! -e "$RECEIPT"
+          test ! -e "$PUBLICATION"
+
+      - name: Stage only the 24-record visitor-facing candidate tree
+        id: candidate
+        run: |
+          set -euo pipefail
+          git status --porcelain | sed -E 's/^.. //' | sort -u > /tmp/COLLECT-008-changed-paths.txt
+          test -s /tmp/COLLECT-008-changed-paths.txt
+          node --input-type=module - /tmp/COLLECT-008-changed-paths.txt <<'NODE'
+          import fs from 'node:fs';
+          const ruling = JSON.parse(fs.readFileSync(process.env.RULING, 'utf8'));
+          const destinations = new Set(ruling.decisions.filter((row) => row.status === 'authorized-current-null').map((row) => row.current.destination_path));
+          if (destinations.size !== 24) throw new Error(`expected 24 ruled destinations, found ${destinations.size}`);
+          const paths = fs.readFileSync(process.argv[2], 'utf8').split(/\r?\n/).filter(Boolean);
+          const unexpected = paths.filter((file) => !file.startsWith('data/') && !file.startsWith('records/') && !destinations.has(file));
+          if (unexpected.length) throw new Error(`COLLECT-008 candidate escaped product boundary: ${unexpected.join(', ')}`);
+          if (!paths.includes('data/specimens.json') || !paths.includes('data/SOURCES.json')) throw new Error('canonical ledgers were not changed');
+          for (const destination of destinations) if (!paths.includes(destination)) throw new Error(`ruled destination was not materialized: ${destination}`);
+          console.log(`PASS — ${paths.length} candidate paths remain inside data/, records/, and 24 exact versioned images`);
+          NODE
+          test ! -e "$RECEIPT"
+          test ! -e "$PUBLICATION"
+          git add -A
+          git diff --cached --check
+          git diff --cached --binary > /tmp/COLLECT-008-candidate.patch
+          git write-tree > /tmp/COLLECT-008-candidate.tree
+          git diff --cached --quiet && { echo 'COLLECT-008 produced no candidate tree.' >&2; exit 1; }
+          echo "tree=$(cat /tmp/COLLECT-008-candidate.tree)" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-gate the exact 24-record candidate tree
+        run: npm run gate
+
+      - name: Refuse post-smoke drift
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          test "$(cat /tmp/COLLECT-008-candidate.tree)" = "$(git write-tree)"
+          test ! -e "$RECEIPT"
+          test ! -e "$PUBLICATION"
+          node "$EXECUTOR" \
+            --ruling "$RULING" \
+            --before-quality /tmp/COLLECT-008-quality-before.json \
+            --validate
+
+      - name: Promote acceptance receipt and cumulative ledger after smoke
+        run: |
+          set -euo pipefail
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          CANDIDATE_TREE="$(cat /tmp/COLLECT-008-candidate.tree)"
+          node "$EXECUTOR" \
+            --ruling "$RULING" \
+            --before-quality /tmp/COLLECT-008-quality-before.json \
+            --receipt "$RECEIPT" \
+            --ledger "$LEDGER" \
+            --authorized-parent "$AUTHORIZED_HEAD" \
+            --gated-tree "$CANDIDATE_TREE" \
+            --workflow-run "$GITHUB_RUN_ID" \
+            --now "$NOW" \
+            --promote | tee /tmp/COLLECT-008-promotion.json
+          node scripts/estate-canonical-adoption-ledger.mjs | tee /tmp/COLLECT-008-ledger-validation.json
+          git add -- "$RECEIPT" "$LEDGER"
+          git diff --exit-code
+
+      - name: Retire mutation workflow and stage adoption commit
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/estate-adopt-current-null-whole-lane-008.yml
+          git add -- "$RECEIPT" "$LEDGER"
+          PROMOTION_PATHS="$(git diff --cached --name-only "$(cat /tmp/COLLECT-008-candidate.tree)" | sort)"
+          EXPECTED_PATHS="$(printf '%s\n%s\n%s\n' \
+            '.github/workflows/estate-adopt-current-null-whole-lane-008.yml' \
+            "$LEDGER" \
+            "$RECEIPT" | sort)"
+          test "$PROMOTION_PATHS" = "$EXPECTED_PATHS"
+          git diff --cached --check
+          git diff --cached --binary > /tmp/COLLECT-008-adoption.patch
+          git write-tree > /tmp/COLLECT-008-adoption.tree
+
+      - name: Publish smoke-passed whole-lane adoption under lease
+        id: adoption
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$AUTHORIZED_HEAD"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit \
+            -m 'Estate collection: adopt the complete current-null packet lane' \
+            -m 'transaction=COLLECT-008' \
+            -m 'batch_adoptions=24' \
+            -m 'cumulative_adoptions=39' \
+            -m 'remaining_packet_review=16' \
+            -m 'complete_pairs_delta=24' \
+            -m 'missing_still_delta=-24' \
+            -m "authorized_parent=${AUTHORIZED_HEAD}" \
+            -m "workflow_run=${GITHUB_RUN_ID}" \
+            -m "gated_candidate_tree=$(cat /tmp/COLLECT-008-candidate.tree)" \
+            -m "published_tree=$(cat /tmp/COLLECT-008-adoption.tree)"
+          ADOPTION_HEAD="$(git rev-parse HEAD)"
+          ADOPTION_TREE="$(git rev-parse HEAD^{tree})"
+          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}" origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          echo "head=$ADOPTION_HEAD" >> "$GITHUB_OUTPUT"
+          echo "tree=$ADOPTION_TREE" >> "$GITHUB_OUTPUT"
+
+      - name: Reconcile publication and retire executor
+        run: |
+          set -euo pipefail
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          node "$EXECUTOR" \
+            --receipt "$RECEIPT" \
+            --publication "$PUBLICATION" \
+            --ledger "$LEDGER" \
+            --adoption-head "${{ steps.adoption.outputs.head }}" \
+            --adoption-tree "${{ steps.adoption.outputs.tree }}" \
+            --current-parent "${{ steps.adoption.outputs.head }}" \
+            --now "$NOW" \
+            --reconcile-publication | tee /tmp/COLLECT-008-publication.json
+          node scripts/estate-canonical-adoption-ledger.mjs | tee /tmp/COLLECT-008-publication-ledger-validation.json
+          git rm "$EXECUTOR"
+          git add -- "$LEDGER" "$PUBLICATION"
+          PATHS="$(git diff --cached --name-only | sort)"
+          EXPECTED="$(printf '%s\n%s\n%s\n' "$EXECUTOR" "$LEDGER" "$PUBLICATION" | sort)"
+          test "$PATHS" = "$EXPECTED"
+          git diff --cached --check
+          git diff --cached --binary > /tmp/COLLECT-008-publication.patch
+          git write-tree > /tmp/COLLECT-008-publication.tree
+
+      - name: Gate the final published-custody tree
+        run: npm run gate
+
+      - name: Refuse final-tree drift
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          test "$(cat /tmp/COLLECT-008-publication.tree)" = "$(git write-tree)"
+          node scripts/estate-canonical-adoption-ledger.mjs
+
+      - name: Publish final custody under adoption-head lease
+        id: final
+        run: |
+          set -euo pipefail
+          ADOPTION_HEAD="${{ steps.adoption.outputs.head }}"
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$ADOPTION_HEAD"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit \
+            -m 'Estate custody: reconcile COLLECT-008 publication and retire executor' \
+            -m "adoption_head=${ADOPTION_HEAD}" \
+            -m "adoption_tree=${{ steps.adoption.outputs.tree }}" \
+            -m "authorized_parent=${ADOPTION_HEAD}" \
+            -m "workflow_run=${GITHUB_RUN_ID}" \
+            -m "gated_publication_tree=$(cat /tmp/COLLECT-008-publication.tree)"
+          FINAL_HEAD="$(git rev-parse HEAD)"
+          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${ADOPTION_HEAD}" origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          echo "head=$FINAL_HEAD" >> "$GITHUB_OUTPUT"
+
+      - name: Report complete whole-lane payment
+        if: success()
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF_COMMENT
+          COLLECT-008 passed every gate and paid the complete current-null lane on workflow run $GITHUB_RUN_ID.
+
+          ```text
+          adoption head:       ${{ steps.adoption.outputs.head }}
+          final custody head:  ${{ steps.final.outputs.head }}
+          candidate tree:      $(cat /tmp/COLLECT-008-candidate.tree)
+          adoption tree:       ${{ steps.adoption.outputs.tree }}
+          final custody tree:  $(cat /tmp/COLLECT-008-publication.tree)
+          adopted objects:     24
+          cumulative:          39 / 55
+          remaining review:    16
+          complete pairs:      693 → 717
+          missing stills:      373 → 349
+          missing both:        109 → 109
+          ```
+
+          The absent-versus-null reducer defect was corrected before adoption. The complete candidate tree passed the full repository and rendered-browser gate before the receipt existed. The final published-custody tree passed the full gate again, and both the mutation workflow and executor retired themselves. Only the sixteen packet-review-incompatible objects remain in the imported estate.
+          EOF_COMMENT
+
+      - name: Report failed transaction
+        if: failure()
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF_COMMENT
+          COLLECT-008 failed closed on workflow run $GITHUB_RUN_ID.
+
+          No 24-object canonical payment claim is authorized unless both the smoke-passed adoption commit and final published-custody commit exist on the exact branch. Repair the exact packet, quality, gate, or lease failure without restoring strict undefined-versus-null blocking or rewriting retained evidence.
+          EOF_COMMENT
+
+      - name: Preserve exact transaction evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: COLLECT-008-whole-current-null-adoption-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/COLLECT-008-preflight.json
+            /tmp/COLLECT-008-apply.json
+            /tmp/COLLECT-008-validation.json
+            /tmp/COLLECT-008-quality-before.json
+            /tmp/COLLECT-008-changed-paths.txt
+            /tmp/COLLECT-008-candidate.patch
+            /tmp/COLLECT-008-candidate.tree
+            /tmp/COLLECT-008-promotion.json
+            /tmp/COLLECT-008-ledger-validation.json
+            /tmp/COLLECT-008-adoption.patch
+            /tmp/COLLECT-008-adoption.tree
+            /tmp/COLLECT-008-publication.json
+            /tmp/COLLECT-008-publication-ledger-validation.json
+            /tmp/COLLECT-008-publication.patch
+            /tmp/COLLECT-008-publication.tree
+            data/review/estate-debt/COLLECT-007-CURRENT-NULL-WHOLE-LANE-ADJUDICATION.json
+            data/review/estate-debt/COLLECT-008-CANONICAL-ADOPTION.json
+            data/review/estate-debt/COLLECT-008-PUBLICATION.json
+            data/review/estate-debt/CANONICAL-ADOPTION-LEDGER.json
+            data/quality.json
+          if-no-files-found: warn
+          retention-days: 30
