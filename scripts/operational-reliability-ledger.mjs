@@ -9,6 +9,7 @@ import { validateRollbackReceipt } from "./operational-reliability.mjs";
 export const OPERATIONAL_EVIDENCE_LEDGER_VERSION = 1;
 const COMMIT_RE = /^[0-9a-f]{40}$/;
 const SHA256_RE = /^(?:sha256:)?[0-9a-f]{64}$/;
+const REPOSITORY_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const HTTPS_RE = /^https:\/\//;
 
 function stable(value) {
@@ -39,6 +40,11 @@ function requireSha256(value, label) {
   if (!SHA256_RE.test(text)) throw new Error(`${label} must be a SHA-256 digest`);
   return text.startsWith("sha256:") ? text : `sha256:${text}`;
 }
+function requireRepository(value, label) {
+  const text = requireString(value, label);
+  if (!REPOSITORY_RE.test(text)) throw new Error(`${label} must use owner/name form`);
+  return text;
+}
 function requireHttps(value, label) {
   const text = requireString(value, label);
   if (!HTTPS_RE.test(text)) throw new Error(`${label} must use HTTPS`);
@@ -52,6 +58,12 @@ function requireDate(value, label) {
 function receiptHash(raw, label) {
   if (!Buffer.isBuffer(raw) && typeof raw !== "string") throw new Error(`${label} raw bytes are required`);
   return sha256(raw);
+}
+function assertReceiptWorkflow(receipt, label, { runId, runAttempt, eventName, repository }) {
+  if (receipt.workflow?.run_id !== runId) throw new Error(`${label} run id does not match the workflow run`);
+  if (receipt.workflow?.run_attempt !== runAttempt) throw new Error(`${label} run attempt does not match the workflow attempt`);
+  if (receipt.workflow?.event_name !== eventName) throw new Error(`${label} event does not match the workflow event`);
+  if (receipt.workflow?.repository !== repository) throw new Error(`${label} repository does not match the workflow repository`);
 }
 
 export function buildOperationalEvidenceIssue({
@@ -78,25 +90,28 @@ export function buildOperationalEvidenceIssue({
 
   runId = requirePositiveInteger(runId, "run id");
   runAttempt = requirePositiveInteger(runAttempt, "run attempt");
-  runUrl = requireHttps(runUrl, "run URL");
-  repository = requireString(repository, "repository");
+  repository = requireRepository(repository, "repository");
   eventName = requireString(eventName, "event name");
   headBranch = requireString(headBranch, "head branch");
   headSha = requireCommit(headSha, "head SHA");
   generatedAt = requireDate(generatedAt, "generated_at");
   artifactId = requirePositiveInteger(artifactId, "artifact id");
   artifactName = requireString(artifactName, "artifact name");
-  artifactUrl = requireHttps(artifactUrl, "artifact URL");
   artifactDigest = requireSha256(artifactDigest, "artifact digest");
+  runUrl = requireHttps(runUrl, "run URL");
+  artifactUrl = requireHttps(artifactUrl, "artifact URL");
 
   if (eventName !== "push") throw new Error(`ledger accepts only push evidence, found ${eventName}`);
   if (headBranch !== "main") throw new Error(`ledger accepts only main evidence, found ${headBranch}`);
+  const expectedRunUrl = `https://github.com/${repository}/actions/runs/${runId}`;
+  if (runUrl !== expectedRunUrl) throw new Error(`run URL ${runUrl} != ${expectedRunUrl}`);
   const expectedArtifactName = `operational-reliability-evidence-${runId}`;
   if (artifactName !== expectedArtifactName) throw new Error(`artifact name ${artifactName} != ${expectedArtifactName}`);
-  if (restoreReceipt.workflow?.run_id !== runId) throw new Error("restore receipt run id does not match the workflow run");
-  if (restoreReceipt.workflow?.run_attempt !== runAttempt) throw new Error("restore receipt run attempt does not match the workflow attempt");
-  if (restoreReceipt.workflow?.event_name !== eventName) throw new Error("restore receipt event does not match the workflow event");
-  if (restoreReceipt.workflow?.repository !== repository) throw new Error("restore receipt repository does not match the workflow repository");
+  const expectedArtifactUrl = `${expectedRunUrl}/artifacts/${artifactId}`;
+  if (artifactUrl !== expectedArtifactUrl) throw new Error(`artifact URL ${artifactUrl} != ${expectedArtifactUrl}`);
+
+  assertReceiptWorkflow(restoreReceipt, "restore receipt", { runId, runAttempt, eventName, repository });
+  assertReceiptWorkflow(rollbackReceipt, "rollback receipt", { runId, runAttempt, eventName, repository });
   if (restoreReceipt.forward_recovery?.target_head !== headSha) throw new Error("restore receipt target does not match the exact main head");
   if (rollbackReceipt.known_good?.target_head !== headSha) throw new Error("rollback receipt target does not match the exact main head");
   if (rollbackReceipt.known_good?.snapshot_id !== restoreReceipt.source_snapshot?.id) throw new Error("restore and rollback receipts use different snapshots");
@@ -173,6 +188,8 @@ export function buildOperationalEvidenceIssue({
       roadmap_milestone_completed: false,
       operational_metrics_populated: false,
       live_publication_mutated: false,
+      discovery_issue_is_mutable: true,
+      artifact_and_receipt_hashes_are_authoritative: true,
       review_required: true,
       next_authorized_work: "second-desk review followed by a separate reviewed waterline receipt lane",
     },
@@ -181,7 +198,7 @@ export function buildOperationalEvidenceIssue({
   const body = [
     "## Exact-main operational reliability evidence",
     "",
-    "This issue is an immutable discovery surface for a successful exact-main recovery run. The workflow produced the evidence; it did not review or admit its own receipts.",
+    "This issue is a durable discovery surface for a successful exact-main recovery run. The workflow produced the evidence; it did not review or admit its own receipts. The issue may be updated on a rerun, while the artifact digest and receipt hashes remain the authoritative custody identifiers.",
     "",
     `- Evidence tier: \`${facts.evidence_tier}\``,
     `- Review status: \`${facts.review_status}\``,
