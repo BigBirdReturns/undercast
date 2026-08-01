@@ -87,6 +87,7 @@ const stepDefinitions = [
   { id: "gate-fixtures", label: "Validate canonical gate fixtures", action: () => runNpmScript("Gate fixtures", "gate:fixtures") },
   { id: "lockfile", label: "Verify package-lock consistency", action: () => runCommand("Lockfile consistency", npmCommand, [...npmPrefixArgs, "ci", "--dry-run"], { cwd: ROOT }) },
   { id: "projections", label: "Rebuild projection and refuse drift", action: runProjectedSteps },
+  { id: "quality-baseline", label: "Validate truth-correction quality baseline custody", action: () => { runNodeScript("Quality baseline fixtures", "scripts/estate-quality-baseline-fixtures.mjs"); runNodeScript("Quality baseline custody", "scripts/estate-quality-baseline.mjs", ["--validate"]); } },
   { id: "archive", label: "Validate archive invariants", action: () => runNodeScript("Archive invariants", "scripts/validate.mjs") },
   { id: "species-fixtures", label: "Validate exact species wall and role-ledger semantics", action: () => runNpmScript("Species fixtures", "species:fixtures") },
   { id: "autopilot", label: "Validate Autopilot queue and fixtures", action: () => { runNodeScript("Autopilot state", "scripts/autopilot.mjs", ["validate"]); runNpmScript("Autopilot fixtures", "autopilot:fixtures"); } },
