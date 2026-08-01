@@ -37,6 +37,13 @@ export function normalize(value) {
     .replace(/[’‘]/g, "'").replace(/[^a-zA-Z0-9']+/g, " ").trim().toLowerCase();
 }
 
+export function scopeForSpecimen(scopes, specimen) {
+  return scopes.find((scope) =>
+    scope.status !== "retired"
+    && (!scope.match?.universe || normalize(scope.match.universe) === normalize(specimen.universe)),
+  );
+}
+
 export function mediaItemId(scope, wallId, side) {
   return `ma_${sha256(`${scope}|${wallId}|${side}`).slice(0, 24)}`;
 }
@@ -59,6 +66,9 @@ export function validateVote(vote, item = null) {
   if (!Number.isFinite(Date.parse(vote.at || ""))) throw new Error("media-audit vote needs an ISO timestamp");
   if (vote.enforced === true && REVIEWER_ROLES[vote.role].rank < REVIEWER_ROLES["second-desk"].rank) {
     throw new Error("only second-desk or owner votes may be enforced");
+  }
+  if (vote.enforced === true && (!Array.isArray(vote.evidence) || !vote.evidence.length)) {
+    throw new Error("enforced media-audit votes require evidence");
   }
   if (item && vote.asset_sha256.toLowerCase() !== item.asset?.sha256) throw new Error(`vote for ${item.id} targets a stale asset`);
   return true;
