@@ -154,7 +154,7 @@ async function inspectTransaction({ root = process.cwd() } = {}) {
   const adopted = new Set(ledger.adopted_obligations.map((row) => row.obligation_id));
   const contexts = [];
 
-  for (const decision of ruling.decisions) {
+  for (const decision of ruling.decisions.filter((row) => row.decision_id !== "UC-338/still")) {
     const key = decision.decision_id;
     assert(!adopted.has(key), `${key} was already paid`);
     const [recordId, side] = key.split("/");
@@ -204,7 +204,7 @@ async function inspectTransaction({ root = process.cwd() } = {}) {
     }
     contexts.push({ key, recordId, side, decision, censusRow, specimen, source, candidateBytes, destination, intended, state });
   }
-  assert(contexts.length === 24, `expected 24 COLLECT-008 contexts, found ${contexts.length}`);
+  assert(contexts.length === 23, `expected 23 corrected COLLECT-008 contexts, found ${contexts.length}`);
   return { resolvedRoot, rulingDoc, censusDoc, ledgerDoc, specimensDoc, sourcesDoc, ruling, census, ledger, contexts };
 }
 
@@ -265,8 +265,8 @@ async function validateAdopted({ inspection, beforeQualityPath }) {
   const before = beforeDoc.value.metrics;
   const after = afterDoc.value.metrics;
   assert(beforeDoc.value.total === 1313 && afterDoc.value.total === 1313, "quality denominator drifted");
-  assert(after.complete_pairs === before.complete_pairs + 24, "complete-pair delta is not +24");
-  assert(after.missing_still === before.missing_still - 24, "missing-still delta is not -24");
+  assert(after.complete_pairs === before.complete_pairs + 23, "complete-pair delta is not +23");
+  assert(after.missing_still === before.missing_still - 23, "missing-still delta is not -23");
   assert(after.missing_portrait === before.missing_portrait, "missing portraits changed");
   assert(after.missing_both === before.missing_both, "missing-both count changed");
   assert(after.complete_pair_ratio === round6(after.complete_pairs / afterDoc.value.total), "complete-pair ratio is not exact");
@@ -276,7 +276,7 @@ async function validateAdopted({ inspection, beforeQualityPath }) {
     after_doc: afterDoc,
     before,
     after,
-    deltas: { complete_pairs: 24, missing_still: -24, missing_portrait: 0, missing_both: 0 },
+    deltas: { complete_pairs: 23, missing_still: -23, missing_portrait: 0, missing_both: 0 },
   };
 }
 
@@ -310,8 +310,10 @@ async function promoteTransaction({ inspection, beforeQualityPath, authorizedPar
       sha256: inspection.rulingDoc.sha256,
       git_blob: inspection.rulingDoc.git_blob,
       reviewed: 24,
-      authorized: 24,
-      blocked: 0,
+      authorized: 23,
+      blocked: 1,
+      cross_card_duplicate_ruling: "data/review/estate-debt/COLLECT-008-K9-CROSS-CARD-DUPLICATE-RULING.json",
+      deferred_obligation: "UC-338/still",
     },
     authorization: {
       authorized_parent: authorizedParent,
@@ -320,10 +322,10 @@ async function promoteTransaction({ inspection, beforeQualityPath, authorizedPar
       exact_head_publication_lease_required: true,
     },
     counts: {
-      canonical_adoptions: 24,
-      cumulative_canonical_adoptions: 39,
-      imported_packets_remaining_for_adoption_review: 16,
-      stills: 24,
+      canonical_adoptions: 23,
+      cumulative_canonical_adoptions: 38,
+      imported_packets_remaining_for_adoption_review: 17,
+      stills: 23,
       portraits: 0,
     },
     quality: {
@@ -336,16 +338,17 @@ async function promoteTransaction({ inspection, beforeQualityPath, authorizedPar
     },
     adoptions: adoptionRows,
     boundary: {
-      visitor_visible_media_improvements: 24,
+      visitor_visible_media_improvements: 23,
       arbitrary_batch_size_used: false,
-      complete_authorized_lane_exhausted: true,
+      corrected_authorized_set_exhausted: true,
+      deferred_distinct_media_debt: 1,
       discovery_performed: false,
       packet_evidence_rewritten: false,
       source_policy_created: false,
       supervisor_created: false,
       quality_baseline_reset: false,
       canonical_mutation: true,
-      next_authorized_work: "normalize or terminally reject all 16 packet-review-incompatible objects",
+      next_authorized_work: "normalize or terminally reject all 16 packet-review-incompatible objects and resolve UC-338/still with a distinct era-specific still",
     },
   };
 
@@ -360,9 +363,9 @@ async function promoteTransaction({ inspection, beforeQualityPath, authorizedPar
     authorized_parent: authorizedParent,
     published_head: null,
     gated_tree: gatedTree,
-    adoption_count: 24,
+    adoption_count: 23,
     obligations: inspection.contexts.map((context) => context.key),
-    quality_delta: { complete_pairs: 24, missing_still: -24, missing_portrait: 0, missing_both: 0 },
+    quality_delta: { complete_pairs: 23, missing_still: -23, missing_portrait: 0, missing_both: 0 },
   });
   for (const context of inspection.contexts) {
     ledger.adopted_obligations.push({
@@ -374,30 +377,31 @@ async function promoteTransaction({ inspection, beforeQualityPath, authorizedPar
     });
   }
   ledger.cumulative = {
-    canonical_adoptions: 39,
-    remaining_for_canonical_review: 16,
-    stills: 39,
+    canonical_adoptions: 38,
+    remaining_for_canonical_review: 17,
+    stills: 38,
     portraits: 0,
-    visitor_visible_media_improvements: 39,
+    visitor_visible_media_improvements: 38,
   };
   ledger.next_batch_contract = {
     batch: 6,
-    prior_canonical_adoptions: 39,
+    prior_canonical_adoptions: 38,
     maximum_new_adoptions: 0,
-    expected_cumulative_after_full_batch: 39,
-    expected_remaining_after_full_batch: 16,
+    expected_cumulative_after_full_batch: 38,
+    expected_remaining_after_full_batch: 17,
     must_append_batch_and_obligations_atomically: true,
     must_refuse_already_adopted_obligations: true,
     must_reconcile_against_all_prior_paid_receipts: true,
     requires_packet_review_normalization_or_terminal_rejection: true,
+    requires_distinct_era_media: true,
     census: DEFAULTS.census,
-    remaining_lane_counts: { null_binding_without_prior_state: 0, packet_review_incompatible: 16 },
+    remaining_lane_counts: { null_binding_without_prior_state: 0, packet_review_incompatible: 16, distinct_media_debt: 1 },
   };
 
   await atomicWrite(receiptResolved.absolute, Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`, "utf8"));
   await atomicWrite(inspection.ledgerDoc.absolute, jsonLike(inspection.ledgerDoc.bytes, ledger));
   await validateCanonicalAdoptionLedger({ root: inspection.resolvedRoot, ledgerPath: DEFAULTS.ledger });
-  return { receipt: receiptResolved.safe, ledger: DEFAULTS.ledger, cumulative_adoptions: 39, remaining: 16 };
+  return { receipt: receiptResolved.safe, ledger: DEFAULTS.ledger, cumulative_adoptions: 38, remaining: 17 };
 }
 
 async function reconcilePublication({ root = process.cwd(), adoptionHead, adoptionTree, gatedTree, workflowRun, reconciliationParent, now }) {
@@ -416,7 +420,7 @@ async function reconcilePublication({ root = process.cwd(), adoptionHead, adopti
   assert(receipt.authorization?.workflow_run === Number(workflowRun), "COLLECT-008 workflow run drifted");
   assert(receipt.authorization?.gated_tree === gatedTree, "COLLECT-008 gated tree drifted");
   const batch = exactRow(ledger.batches, (row) => row.transaction === "COLLECT-008" && row.batch === 5, "COLLECT-008 ledger batch");
-  assert(batch.status === "paid" && batch.receipt === DEFAULTS.receipt && batch.adoption_count === 24, "COLLECT-008 ledger batch drifted");
+  assert(batch.status === "paid" && batch.receipt === DEFAULTS.receipt && batch.adoption_count === 23, "COLLECT-008 ledger batch drifted");
   assert(batch.published_head === null || batch.published_head === adoptionHead, "COLLECT-008 published head conflicts");
   batch.published_head = adoptionHead;
   batch.receipt_git_blob = receiptDoc.git_blob;
@@ -441,11 +445,12 @@ async function reconcilePublication({ root = process.cwd(), adoptionHead, adopti
       receipt_git_blob: receiptDoc.git_blob,
     },
     cumulative: {
-      canonical_adoptions: 39,
-      remaining_for_canonical_review: 16,
-      visitor_visible_media_improvements: 39,
-      complete_pairs: 717,
-      missing_stills: 349,
+      canonical_adoptions: 38,
+      remaining_for_canonical_review: 17,
+      visitor_visible_media_improvements: 38,
+      complete_pairs: 716,
+      missing_stills: 350,
+      deferred_distinct_media_debt: 1,
     },
     boundary: {
       canonical_mutation: false,
@@ -458,7 +463,7 @@ async function reconcilePublication({ root = process.cwd(), adoptionHead, adopti
   await atomicWrite(ledgerDoc.absolute, jsonLike(ledgerDoc.bytes, ledger));
   await atomicWrite(publicationResolved.absolute, Buffer.from(`${JSON.stringify(publication, null, 2)}\n`, "utf8"));
   await validateCanonicalAdoptionLedger({ root: resolvedRoot, ledgerPath: DEFAULTS.ledger });
-  return { publication: publicationResolved.safe, adoption_head: adoptionHead, canonical_adoptions: 39, remaining: 16 };
+  return { publication: publicationResolved.safe, adoption_head: adoptionHead, canonical_adoptions: 38, remaining: 17 };
 }
 
 async function main() {
@@ -485,7 +490,7 @@ async function main() {
   }
   if (has("--validate")) {
     const result = await validateAdopted({ inspection, beforeQualityPath: option("--before-quality") });
-    console.log(JSON.stringify({ transaction: "COLLECT-008", status: "validated", adoptions: 24, quality: result.deltas }, null, 2));
+    console.log(JSON.stringify({ transaction: "COLLECT-008", status: "validated", adoptions: 23, quality: result.deltas }, null, 2));
     return;
   }
   if (has("--promote")) {
@@ -506,9 +511,9 @@ async function main() {
     pending: inspection.contexts.filter((context) => context.state === "pending").length,
     already_adopted: inspection.contexts.filter((context) => context.state === "already-adopted").length,
     prior_canonical_adoptions: inspection.ledger.cumulative.canonical_adoptions,
-    expected_cumulative_after: 39,
-    expected_remaining_after: 16,
-    expected_quality: { complete_pairs: 24, missing_still: -24, missing_portrait: 0, missing_both: 0 },
+    expected_cumulative_after: 38,
+    expected_remaining_after: 17,
+    expected_quality: { complete_pairs: 23, missing_still: -23, missing_portrait: 0, missing_both: 0 },
     obligations: inspection.contexts.map((context) => context.key),
   }, null, 2));
 }
