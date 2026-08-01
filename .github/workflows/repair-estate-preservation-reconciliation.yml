@@ -1,0 +1,218 @@
+name: repair-estate-preservation-reconciliation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/repair-estate-preservation-reconciliation.yml
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: repair-estate-preservation-reconciliation
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  TARGET_BRANCH: main
+  AUTHORIZED_HEAD: ${{ github.sha }}
+  TARGET_WORKFLOW: .github/workflows/reconcile-estate-preservation.yml
+  PRESERVE_WORKFLOW: .github/workflows/preserve.yml
+  FIXTURES: scripts/preservation-fixtures.mjs
+  SELF: .github/workflows/repair-estate-preservation-reconciliation.yml
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Correct source-run semantics and fail-closed receipt staging
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          target_path = Path('.github/workflows/reconcile-estate-preservation.yml')
+          target = target_path.read_text(encoding='utf-8')
+
+          def replace_one(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one match, found {count}')
+              return text.replace(old, new)
+
+          target = replace_one(
+              target,
+              'on:\n  push:\n',
+              'on:\n  workflow_dispatch:\n  push:\n',
+              'manual recovery dispatch',
+          )
+          target = replace_one(
+              target,
+              "          if (run.status !== 'completed' || run.conclusion !== 'failure') throw new Error(`expected completed failed preservation run, found ${run.status}/${run.conclusion}`);\n",
+              "          if (run.status !== 'completed' || !new Set(['success', 'failure']).has(run.conclusion)) throw new Error(`expected a completed preservation source run, found ${run.status}/${run.conclusion}`);\n",
+              'source run conclusion contract',
+          )
+          target = replace_one(
+              target,
+              "          if (!failed_steps.length) throw new Error('failed preservation run exposes no failed step');\n",
+              "          if (run.conclusion === 'failure' && !failed_steps.length) throw new Error('failed preservation run exposes no failed step');\n",
+              'conditional failed-step contract',
+          )
+          target = replace_one(
+              target,
+              '              original_workflow: failure,\n',
+              '              source_workflow: failure,\n',
+              'source workflow receipt label',
+          )
+          target = replace_one(
+              target,
+              '              failed_run_treated_as_acceptance: false,\n',
+              '              source_run_success_treated_as_registry_publication: false,\n',
+              'source success boundary',
+          )
+          target = replace_one(
+              target,
+              '            -m "failed_preservation_run=${{ steps.published.outputs.preserve_run }}" \\\n',
+              '            -m "source_preservation_run=${{ steps.published.outputs.preserve_run }}" \\\n',
+              'commit custody label',
+          )
+          target = replace_one(
+              target,
+              '          Exact live-byte checks passed for the wall, quality ledger, preservation registry, both repository receipts, UC-178, UC-684, UC-338, and all three representative adopted media assets. The recovery workflow removed itself before publication. The failed preservation run was retained as failure evidence and was not treated as acceptance; its already-published immutable bytes were independently reverified before their registry receipt was adopted.\n',
+              '          Exact live-byte checks passed for the wall, quality ledger, preservation registry, both repository receipts, UC-178, UC-684, UC-338, and all three representative adopted media assets. The recovery workflow removed itself before publication. The successful preservation export was retained as source evidence but was not treated as proof that its registry reached main; its already-published immutable bytes were independently reverified before their registry receipt was adopted.\n',
+              'terminal explanation',
+          )
+          target_path.write_text(target, encoding='utf-8')
+
+          preserve_path = Path('.github/workflows/preserve.yml')
+          preserve = preserve_path.read_text(encoding='utf-8')
+          old_stage = '''          git add preservation/SNAPSHOTS.json data/AUTOPILOT-CERTIFICATIONS.json \\
+            data/AUTOPILOT-SCOPES.json data/AUTOPILOT.json data/journal/autopilot.jsonl \\
+            preservation/BOOTSTRAP-PENDING 2>/dev/null || true
+'''
+          new_stage = '''          git add preservation/SNAPSHOTS.json data/AUTOPILOT-CERTIFICATIONS.json \\
+            data/AUTOPILOT-SCOPES.json data/AUTOPILOT.json data/journal/autopilot.jsonl
+          if [ -e preservation/BOOTSTRAP-PENDING ]; then
+            git add preservation/BOOTSTRAP-PENDING
+          fi
+'''
+          preserve = replace_one(preserve, old_stage, new_stage, 'preservation receipt staging')
+          preserve_path.write_text(preserve, encoding='utf-8')
+
+          fixture_path = Path('scripts/preservation-fixtures.mjs')
+          fixture = fixture_path.read_text(encoding='utf-8')
+          marker = "console.log(failures ? `\\n${failures} preservation fixture(s) FAILED` : '\\nall preservation fixtures pass');\n"
+          addition = '''const workflowPath = fileURLToPath(new URL('../.github/workflows/preserve.yml', import.meta.url));
+const workflow = await readFile(workflowPath, 'utf8');
+expect('preservation workflow does not swallow required receipt staging errors', /git add preservation\\/SNAPSHOTS\\.json[\\s\\S]*data\\/journal\\/autopilot\\.jsonl\\n\\s*if \[ -e preservation\\/BOOTSTRAP-PENDING \]; then/.test(workflow), true);
+expect('optional bootstrap marker is staged conditionally', workflow.includes('if [ -e preservation/BOOTSTRAP-PENDING ]; then\\n            git add preservation/BOOTSTRAP-PENDING\\n          fi'), true);
+expect('preservation workflow has no broad git-add error suppression', /git add preservation\\/SNAPSHOTS\\.json[\\s\\S]{0,400}\\|\\| true/.test(workflow), false);
+
+'''
+          fixture = replace_one(fixture, marker, addition + marker, 'workflow staging fixtures')
+          fixture_path.write_text(fixture, encoding='utf-8')
+          PY
+
+          node --check "$FIXTURES"
+          npm run preserve:fixtures
+          grep -Fq 'workflow_dispatch:' "$TARGET_WORKFLOW"
+          grep -Fq "new Set(['success', 'failure'])" "$TARGET_WORKFLOW"
+          grep -Fq 'source_run_success_treated_as_registry_publication' "$TARGET_WORKFLOW"
+          grep -Fq 'if [ -e preservation/BOOTSTRAP-PENDING ]; then' "$PRESERVE_WORKFLOW"
+          ! grep -Fq 'preservation/BOOTSTRAP-PENDING 2>/dev/null || true' "$PRESERVE_WORKFLOW"
+          git diff --check -- "$TARGET_WORKFLOW" "$PRESERVE_WORKFLOW" "$FIXTURES"
+
+      - name: Gate the durable repair
+        run: |
+          set -euo pipefail
+          git rm "$SELF"
+          git add "$TARGET_WORKFLOW" "$PRESERVE_WORKFLOW" "$FIXTURES"
+          git diff --cached --check
+          npm run gate -- --skip-rendered
+
+      - name: Publish the exact repair under lease
+        id: publish
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report
+          git checkout -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          paths="$(git diff --cached --name-only | sort)"
+          expected="$(printf '%s\n%s\n%s\n%s\n' "$SELF" "$TARGET_WORKFLOW" "$PRESERVE_WORKFLOW" "$FIXTURES" | sort)"
+          test "$paths" = "$expected"
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$AUTHORIZED_HEAD"
+          git config user.name 'undercast-preservation-repair'
+          git config user.email 'undercast-preservation-repair@users.noreply.github.com'
+          git commit \
+            -m 'Preservation: make receipt staging fail closed' \
+            -m 'source_export_success_is_not_registry_publication=true' \
+            -m 'required_git_add_errors_are_not_suppressed=true' \
+            -m 'optional_bootstrap_path_is_conditional=true' \
+            -m "authorized_parent=${AUTHORIZED_HEAD}" \
+            -m "repair_workflow_run=${GITHUB_RUN_ID}"
+          repair_head="$(git rev-parse HEAD)"
+          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}" \
+            origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          echo "repair_head=$repair_head" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch the repaired preservation reconciliation
+        id: dispatch
+        env:
+          REPAIR_HEAD: ${{ steps.publish.outputs.repair_head }}
+        run: |
+          set -euo pipefail
+          dispatch_after="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run reconcile-estate-preservation.yml --repo "$GITHUB_REPOSITORY" --ref "$TARGET_BRANCH"
+          run_id=""
+          for attempt in $(seq 1 180); do
+            gh run list --repo "$GITHUB_REPOSITORY" --workflow reconcile-estate-preservation.yml \
+              --branch "$TARGET_BRANCH" --event workflow_dispatch --limit 100 \
+              --json databaseId,headSha,status,conclusion,event,url,createdAt \
+              > /tmp/repaired-preservation-runs.json
+            run_id="$(DISPATCH_AFTER="$dispatch_after" node - <<'NODE'
+          const fs = require('fs');
+          const runs = JSON.parse(fs.readFileSync('/tmp/repaired-preservation-runs.json', 'utf8'));
+          const floor = Date.parse(process.env.DISPATCH_AFTER);
+          const row = runs.find((run) => run.headSha === process.env.REPAIR_HEAD && run.event === 'workflow_dispatch' && Date.parse(run.createdAt) >= floor - 5000);
+          if (row) process.stdout.write(String(row.databaseId));
+          NODE
+            )"
+            if [ -n "$run_id" ]; then break; fi
+            sleep 5
+          done
+          test -n "$run_id"
+          run_url="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json url --jq .url)"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "run_url=$run_url" >> "$GITHUB_OUTPUT"
+
+      - name: Record the repair and replay custody
+        env:
+          REPAIR_HEAD: ${{ steps.publish.outputs.repair_head }}
+          RECOVERY_RUN: ${{ steps.dispatch.outputs.run_id }}
+          RECOVERY_URL: ${{ steps.dispatch.outputs.run_url }}
+        run: |
+          gh pr comment 132 --repo "$GITHUB_REPOSITORY" --body "Preservation receipt staging is now fail-closed on main head ${REPAIR_HEAD}. Workflow run ${GITHUB_RUN_ID} passed the repository gate, removed its launcher, and fixed the swallowed optional-path error with fixture coverage. Repaired reconciliation run ${RECOVERY_RUN} is bound to the exact repaired head: ${RECOVERY_URL}"
