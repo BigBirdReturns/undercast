@@ -1,0 +1,132 @@
+name: estate-packet-adoption-census
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+    paths:
+      - .github/workflows/estate-packet-adoption-census.yml
+      - scripts/estate-packet-adoption-census.mjs
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: estate-packet-adoption-census
+  cancel-in-progress: true
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  PR_NUMBER: ${{ github.event.pull_request.number || 132 }}
+  TARGET_BRANCH: agent/estate-consolidation-001
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+  CENSUS: data/review/estate-debt/COLLECT-005-ADOPTION-CENSUS.json
+
+jobs:
+  census:
+    if: github.repository == 'BigBirdReturns/undercast' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - name: Establish exact-head audit custody
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Classify all imported packet objects against current canonical truth
+        run: |
+          set -euo pipefail
+          node scripts/estate-packet-adoption-census.mjs \
+            --write \
+            --out "$CENSUS" \
+            --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            | tee /tmp/COLLECT-005-census.log
+          node --input-type=module - "$CENSUS" <<'NODE'
+          import fs from 'node:fs';
+          const census = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (census.counts.imported_packets !== 55) throw new Error(`expected 55 imported packets, found ${census.counts.imported_packets}`);
+          if (census.counts.already_paid !== 10) throw new Error(`expected 10 paid packets, found ${census.counts.already_paid}`);
+          if (census.counts.open_packets !== 45) throw new Error(`expected 45 open packets, found ${census.counts.open_packets}`);
+          if (census.counts.already_paid + census.counts.open_packets !== census.counts.imported_packets) throw new Error('packet census does not reconcile');
+          if (census.boundary.canonical_mutation !== false || census.boundary.discovery_performed !== false) throw new Error('census escaped the audit boundary');
+          console.log(`PASS — classified all 45 open packet objects; safe_direct=${census.counts.safe_direct_adoptions}`);
+          NODE
+
+      - name: Publish immutable census and retire one-shot runner
+        run: |
+          set -euo pipefail
+          rm .github/workflows/estate-packet-adoption-census.yml
+          git add "$CENSUS" .github/workflows/estate-packet-adoption-census.yml
+          git diff --cached --check
+          test "$(git diff --cached --name-only | sort)" = $'.github/workflows/estate-packet-adoption-census.yml\ndata/review/estate-debt/COLLECT-005-ADOPTION-CENSUS.json'
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$AUTHORIZED_HEAD"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit \
+            -m 'Estate audit: publish retained packet adoption census' \
+            -m 'canonical_mutation=false' \
+            -m 'discovery_performed=false' \
+            -m 'imported_packets=55' \
+            -m 'paid_packets=10' \
+            -m 'open_packets=45' \
+            -m "authorized_parent=${AUTHORIZED_HEAD}" \
+            -m "audit_run=${GITHUB_RUN_ID}"
+          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}" origin "HEAD:refs/heads/${TARGET_BRANCH}"
+
+      - name: Report census result
+        if: success()
+        run: |
+          SAFE="$(node -p "require('./$CENSUS').counts.safe_direct_adoptions")"
+          CORRECTION="$(node -p "require('./$CENSUS').counts.correction_null_adoptions")"
+          ABSENCE="$(node -p "require('./$CENSUS').counts.clean_absence_adoptions")"
+          ACTIVE="$(node -p "require('./$CENSUS').counts.active_binding_comparisons")"
+          INCOMPATIBLE="$(node -p "require('./$CENSUS').counts.packet_review_incompatible")"
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF_COMMENT
+          COLLECT-005 retained-packet census passed on workflow run $GITHUB_RUN_ID.
+
+          All 45 unpaid imported packets were classified against current canonical specimens, source rows, packet checksums, candidate bytes, independent review, duplicate custody, correction history, and media-audit state.
+
+          ```text
+          safe direct adoptions: $SAFE
+          correction-null:       $CORRECTION
+          clean absence:         $ABSENCE
+          active comparisons:    $ACTIVE
+          incompatible review:   $INCOMPATIBLE
+          ```
+
+          The exact census is retained at `$CENSUS`. No discovery or canonical mutation occurred, and this one-shot runner deleted itself. The next transaction must select the largest homogeneous safe tranche from that census rather than restore a five-card cadence by default.
+          EOF_COMMENT
+
+      - name: Report census failure
+        if: failure()
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF_COMMENT
+          COLLECT-005 retained-packet census failed closed on workflow run $GITHUB_RUN_ID.
+
+          No canonical mutation, packet rewrite, or adoption claim is authorized. Repair only the heterogeneous packet adapter or current-state classification; do not lower exact checksum, review, duplicate, or canonical-row agreement requirements.
+          EOF_COMMENT
+
+      - name: Preserve audit output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: COLLECT-005-adoption-census-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/COLLECT-005-census.log
+            data/review/estate-debt/COLLECT-005-ADOPTION-CENSUS.json
+          if-no-files-found: warn
+          retention-days: 30
