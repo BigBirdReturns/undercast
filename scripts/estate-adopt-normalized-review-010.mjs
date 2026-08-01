@@ -171,11 +171,13 @@ async function inspectTransaction({ root = process.cwd() } = {}) {
     assert(decision.packet?.manifest_path === row.manifest_path && decision.packet?.manifest_sha256 === row.manifest_sha256, `${key} manifest custody differs between ruling and census`);
     const provenanceRepair = portraitRepair.correction?.[key] || null;
     const intended = provenanceRepair
-      ? { ...decision.proposed_binding, kind: provenanceRepair.kind, ...(provenanceRepair.author ? { author: provenanceRepair.author } : {}), ...(provenanceRepair.license ? { license: provenanceRepair.license } : {}), ...(provenanceRepair.year ? { year: provenanceRepair.year } : {}) }
+      ? { ...decision.proposed_binding, kind: provenanceRepair.kind, ...(provenanceRepair.origin ? { origin: provenanceRepair.origin } : {}), ...(provenanceRepair.author ? { author: provenanceRepair.author } : {}), ...(provenanceRepair.license ? { license: provenanceRepair.license } : {}), ...(provenanceRepair.year ? { year: provenanceRepair.year } : {}) }
       : decision.proposed_binding;
     validateBinding(intended, side, key);
     assert(intended.src === row.suggested_destination_path, `${key} destination differs from census`);
-    assert(intended.origin === row.suggested_origin && sameJson(intended.focus, row.suggested_focus), `${key} binding origin or focus differs from census`);
+    const expectedOrigin = provenanceRepair?.origin || row.suggested_origin;
+    assert(intended.origin === expectedOrigin && sameJson(intended.focus, row.suggested_focus), `${key} binding origin or focus differs from authorized custody`);
+    if (key === "UC-146/portrait") assert(intended.origin === "https://commons.wikimedia.org/wiki/File:Tim_Rose_by_Gage_Skidmore.jpg", `${key} free image does not cite the exact Commons File page`);
 
     const specimen = specimenById.get(recordId);
     const source = sourceById.get(recordId);
