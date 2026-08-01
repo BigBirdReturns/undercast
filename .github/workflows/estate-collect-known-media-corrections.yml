@@ -1,72 +1,20 @@
-name: estate-collect-known-media-corrections
+name: estate-collect-known-media-corrections-retired
 
 on:
   workflow_dispatch:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    branches: [main]
-    paths:
-      - .github/workflows/estate-collect-known-media-corrections.yml
-      - data/MEDIA-AUDIT-SCOPES.json
-      - data/quality-baseline.json
-      - data/review/ferengi-gold/final-portraits-correction-2026-07-25.json
-      - data/review/sitewide-actor-origin-vlm-correction-2026-07-25.json
-      - data/review/sitewide-media-correction-2026-07-25.json
-      - data/review/sitewide-near-duplicate-correction-2026-07-25.json
-      - scripts/estate-collect-known-media-corrections.mjs
-      - scripts/estate-known-media-corrections-fixtures.mjs
-      - scripts/estate-quality-baseline-fixtures.mjs
-      - scripts/estate-quality-baseline.mjs
-      - scripts/gate.mjs
-      - scripts/lib/estate-known-media-corrections.mjs
-      - scripts/lib/media-audit.mjs
-      - scripts/media-audit-fixtures.mjs
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
-  group: estate-collect-known-media-corrections
+  group: estate-collect-known-media-corrections-retired
   cancel-in-progress: true
 
-env:
-  PR_NUMBER: ${{ github.event.pull_request.number || 132 }}
-  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  TARGET_BRANCH: agent/estate-consolidation-001
-  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-
 jobs:
-  collect:
-    if: github.repository == 'BigBirdReturns/undercast' && github.actor != 'github-actions[bot]'
+  verify-paid-transaction:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.AUTHORIZED_HEAD }}
-          fetch-depth: 0
-
-      - name: Establish exact-head custody
-        id: custody
-        run: |
-          set -euo pipefail
-          CURRENT_HEAD="$(git rev-parse HEAD)"
-          test "$CURRENT_HEAD" = "$AUTHORIZED_HEAD"
-          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
-          REMOTE_HEAD="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
-          test "$REMOTE_HEAD" = "$AUTHORIZED_HEAD"
-          echo "head=$CURRENT_HEAD" >> "$GITHUB_OUTPUT"
-
-      - name: Announce exact collection run
-        run: |
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF
-          COLLECT-001 correction transaction started on workflow run $GITHUB_RUN_ID.
-
-          Authorized branch head: ${{ steps.custody.outputs.head }}.
-
-          The run will classify 10 invalid Ferengi portraits as unmerged PR #86 debt, test 61 active current-main corrections, reset the occupancy baseline to exact corrected truth with zero margin, rebuild every affected projection and route, run the complete gate, and publish only a leased descendant of that authorized head.
-          EOF
 
       - uses: actions/setup-node@v4
         with:
@@ -76,138 +24,13 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
-      - name: Install rendered-browser dependency
-        run: npx playwright install --with-deps chromium
-
-      - name: Prove correction transaction fixtures
-        run: node scripts/estate-known-media-corrections-fixtures.mjs
-
-      - name: Prove quality reset fixtures
-        run: node scripts/estate-quality-baseline-fixtures.mjs
-
-      - name: Capture exact pre-correction quality projection
-        run: git show "${AUTHORIZED_HEAD}:data/quality.json" > /tmp/COLLECT-001-quality-before.json
-
-      - name: Prove exact current-head correction denominator
-        id: preflight
+      - name: Verify COLLECT-001 corrected state remains durable
         run: |
           set -euo pipefail
-          node scripts/estate-collect-known-media-corrections.mjs | tee /tmp/COLLECT-001-preflight.json
-          PENDING="$(node -e "const x=JSON.parse(require('fs').readFileSync('/tmp/COLLECT-001-preflight.json','utf8')); process.stdout.write(String(x.estate_denominator.active_current_main_result.collected))")"
-          test "$PENDING" = "61" -o "$PENDING" = "0"
-          echo "pending=$PENDING" >> "$GITHUB_OUTPUT"
-
-      - name: Apply active current-main corrections
-        if: steps.preflight.outputs.pending != '0'
-        run: |
-          set -euo pipefail
-          trap 'git reset --hard HEAD; git clean -fd' ERR
-          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          node scripts/estate-collect-known-media-corrections.mjs --write --now "$NOW"
-
-      - name: Rebuild media audit and first serving projection
-        run: |
-          set -euo pipefail
-          npm run media:audit -- sync
-          node scripts/shard.mjs
-
-      - name: Reset quality floor to exact corrected truth
-        id: quality
-        run: |
-          set -euo pipefail
-          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          node scripts/estate-quality-baseline.mjs --write --before-quality /tmp/COLLECT-001-quality-before.json --now "$NOW" | tee /tmp/COLLECT-001-quality-rebase.json
-          node scripts/shard.mjs
-          node scripts/build-record-pages.mjs
-          PAIR_RATIO="$(node -p "require('./data/quality.json').metrics.complete_pair_ratio")"
-          MISSING_BOTH_RATIO="$(node -p "require('./data/quality.json').metrics.missing_both_ratio")"
-          echo "pair_ratio=$PAIR_RATIO" >> "$GITHUB_OUTPUT"
-          echo "missing_both_ratio=$MISSING_BOTH_RATIO" >> "$GITHUB_OUTPUT"
-
-      - name: Stage exact intended tree
-        id: staged
-        run: |
-          set -euo pipefail
-          git add -A
-          git diff --cached --check
-          git diff --cached --name-status
-          git diff --cached --binary > /tmp/COLLECT-001-known-media-corrections.patch
-          git write-tree > /tmp/COLLECT-001-known-media-corrections.tree
-          if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Run complete canonical gate on staged tree
-        run: npm run gate
-
-      - name: Refuse post-gate drift
-        run: |
-          set -euo pipefail
-          git diff --exit-code
-          git diff --cached --check
-          PRE_TREE="$(cat /tmp/COLLECT-001-known-media-corrections.tree)"
-          POST_TREE="$(git write-tree)"
-          test "$PRE_TREE" = "$POST_TREE"
-
-      - name: Commit and publish exact gated tree under lease
-        if: steps.staged.outputs.changed == 'true'
-        run: |
-          set -euo pipefail
-          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
-          REMOTE_HEAD="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
-          test "$REMOTE_HEAD" = "$AUTHORIZED_HEAD"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          TREE_SHA="$(cat /tmp/COLLECT-001-known-media-corrections.tree)"
-          git commit -m "Estate collection: retire 61 active invalid media bindings" -m "active_current_main_nullifications=61" -m "unmerged_pr86_rejections=10" -m "quality_floor_reset=exact_corrected_truth" -m "authorized_parent=${AUTHORIZED_HEAD}" -m "workflow_run=${GITHUB_RUN_ID}" -m "gated_tree=${TREE_SHA}"
-          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}" origin "HEAD:refs/heads/${TARGET_BRANCH}"
-
-      - name: Report successful payment
-        if: success()
-        run: |
-          PUBLISHED_HEAD="$(git rev-parse HEAD)"
-          TREE_SHA="$(cat /tmp/COLLECT-001-known-media-corrections.tree)"
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF
-          COLLECT-001 correction transaction passed on workflow run $GITHUB_RUN_ID.
-
-          Authorized parent: ${{ steps.custody.outputs.head }}.
-          Published descendant: $PUBLISHED_HEAD.
-          Active current-main corrections pending at preflight: ${{ steps.preflight.outputs.pending }}.
-          Exact staged tree changed: ${{ steps.staged.outputs.changed }}.
-          Corrected complete-pair floor: ${{ steps.quality.outputs.pair_ratio }}.
-          Corrected missing-both ceiling: ${{ steps.quality.outputs.missing_both_ratio }}.
-          Gated tree: $TREE_SHA.
-
-          Ten false Ferengi portraits remain classified as never-landed PR #86 debt. Sixty-one active current-main bindings were nullified under exact path and byte custody. The media audit, serving projections, record routes, zero-margin quality reset, complete canonical gate, and exact-head publication lease all passed.
-          EOF
-
-      - name: Report failed payment attempt
-        if: failure()
-        run: |
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF
-          COLLECT-001 correction transaction failed closed on workflow run $GITHUB_RUN_ID.
-
-          Authorized parent: ${{ steps.custody.outputs.head || env.AUTHORIZED_HEAD }}.
-
-          No completion claim is authorized. Inspect the failed step and retained artifact before changing the denominator, evidence requirement, current binding, quality receipt, branch custody, or gate.
-          EOF
-
-      - name: Preserve exact transaction patch
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: COLLECT-001-known-media-corrections-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            /tmp/COLLECT-001-preflight.json
-            /tmp/COLLECT-001-quality-before.json
-            /tmp/COLLECT-001-quality-rebase.json
-            /tmp/COLLECT-001-known-media-corrections.patch
-            /tmp/COLLECT-001-known-media-corrections.tree
-            data/quality-baseline.json
-            data/quality.json
-            data/review/estate-debt/COLLECT-001-KNOWN-MEDIA-CORRECTIONS-APPLY.json
-            data/review/estate-debt/COLLECT-001-QUALITY-BASELINE-RESET.json
-          if-no-files-found: warn
-          retention-days: 30
+          test "$(node -p "require('./data/review/estate-debt/COLLECT-001-PAYMENT-BOUNDARY.json').status")" = paid
+          test "$(node -p "require('./data/review/estate-debt/COLLECT-001-PAYMENT-BOUNDARY.json').denominator.active_current_main_nullifications")" = 61
+          test "$(node -p "require('./data/review/estate-debt/COLLECT-001-PAYMENT-BOUNDARY.json').denominator.never_landed_pr86_rejections")" = 10
+          test "$(node -p "require('./data/quality-baseline.json').version")" = 2
+          node scripts/estate-collect-known-media-corrections.mjs > /tmp/COLLECT-001-retired-preflight.json
+          test "$(node -p "require('/tmp/COLLECT-001-retired-preflight.json').estate_denominator.active_current_main_result.collected")" = 0
+          echo 'PASS — COLLECT-001 mutation authority is retired; all known invalid bindings remain collected under the paid receipt.'
