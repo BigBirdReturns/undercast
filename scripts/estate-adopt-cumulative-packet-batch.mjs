@@ -78,8 +78,14 @@ function parseChecksums(text, label) {
 function assertJpeg(bytes, label) {
   assert(bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes.at(-2) === 0xff && bytes.at(-1) === 0xd9, `${label} is not a complete JPEG`);
 }
-function acceptedIdentity(value) { return /^expected-subject(?:$|-)/.test(String(value || "")); }
-function acceptedPresentation(value) { return /(?:^|-)character-depiction$/.test(String(value || "")); }
+function acceptedIdentity(value) {
+  return /^(?:expected-subject(?:$|-)|expected-subjects$)/.test(String(value || ""));
+}
+function acceptedPresentation(value) {
+  const typed = String(value || "");
+  return /(?:^|-)character-depiction$/.test(typed)
+    || /^(?:two|three)-role-character-composite$/.test(typed);
+}
 function acceptedDisposition(value) {
   return new Set(["reviewed-evidence-candidate", "reviewed-evidence-ready-for-canonical-consideration"]).has(value);
 }
@@ -389,10 +395,13 @@ async function promoteReceiptAndLedger({ inspection, beforeQualityPath, receiptP
 async function runFixtures() {
   assert(acceptedIdentity("expected-subject"), "expected-subject must pass");
   assert(acceptedIdentity("expected-subject-set"), "expected-subject-set must pass");
+  assert(acceptedIdentity("expected-subjects"), "permanent expected-subjects enum must pass");
   assert(!acceptedIdentity("probable-subject"), "probable-subject must fail");
   assert(acceptedPresentation("character-depiction"), "character-depiction must pass");
   assert(acceptedPresentation("two-role-character-depiction"), "two-role character depiction must pass");
   assert(acceptedPresentation("three-role-character-depiction"), "three-role character depiction must pass");
+  assert(acceptedPresentation("two-role-character-composite"), "permanent two-role character composite must pass");
+  assert(acceptedPresentation("three-role-character-composite"), "permanent three-role character composite must pass");
   assert(!acceptedPresentation("performer-portrait"), "performer portrait must fail the still lane");
   assert(cropPassed({ crop_ruling: "pass-three-panel-center" }), "typed crop pass must pass");
   assert(cropPassed({ notes: ["The wall crop retains every required face."] }), "retained wall-crop note must pass");
