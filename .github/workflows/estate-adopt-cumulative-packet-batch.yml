@@ -1,0 +1,260 @@
+name: estate-adopt-cumulative-packet-batch
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+    paths:
+      - .github/workflows/estate-adopt-cumulative-packet-batch.yml
+      - scripts/estate-adopt-cumulative-packet-batch.mjs
+      - scripts/estate-canonical-adoption-ledger.mjs
+      - data/review/estate-debt/COLLECT-004-CANONICAL-ADOPTION-PLAN.json
+      - data/review/estate-debt/CANONICAL-ADOPTION-LEDGER.json
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: estate-adopt-cumulative-packet-batch
+  cancel-in-progress: true
+
+env:
+  PR_NUMBER: ${{ github.event.pull_request.number || 132 }}
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  TARGET_BRANCH: agent/estate-consolidation-001
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+  PLAN: data/review/estate-debt/COLLECT-004-CANONICAL-ADOPTION-PLAN.json
+  RECEIPT: data/review/estate-debt/COLLECT-004-CANONICAL-ADOPTION.json
+  LEDGER: data/review/estate-debt/CANONICAL-ADOPTION-LEDGER.json
+
+jobs:
+  adopt:
+    if: github.repository == 'BigBirdReturns/undercast' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - name: Establish exact-head custody
+        id: custody
+        run: |
+          set -euo pipefail
+          CURRENT_HEAD="$(git rev-parse HEAD)"
+          test "$CURRENT_HEAD" = "$AUTHORIZED_HEAD"
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          REMOTE_HEAD="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
+          test "$REMOTE_HEAD" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "head=$CURRENT_HEAD" >> "$GITHUB_OUTPUT"
+
+      - name: Announce cumulative product payment
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF_COMMENT
+          COLLECT-004 cumulative canonical adoption batch 002 started on workflow run $GITHUB_RUN_ID.
+
+          Authorized branch head: ${{ steps.custody.outputs.head }}.
+          Prior paid adoptions: 5 of 55 imported packets.
+          Authorized new adoptions: UC-071/still, UC-076/still, UC-116/still, UC-117/still, and UC-118/still.
+          Expected cumulative payment after smoke: 10 adopted, 45 remaining for canonical review.
+
+          The candidate tree will contain visitor-facing media and generated truth only. The COLLECT-004 receipt and cumulative ledger update remain absent until the complete canonical gate and post-gate tree identity pass.
+          EOF_COMMENT
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Install rendered-browser dependency
+        run: npx playwright install --with-deps chromium
+
+      - name: Prove typed multi-role semantics
+        run: node scripts/estate-adopt-cumulative-packet-batch.mjs --fixtures
+
+      - name: Prove prior cumulative ledger
+        run: node scripts/estate-canonical-adoption-ledger.mjs
+
+      - name: Capture exact pre-adoption quality
+        run: cp data/quality.json /tmp/COLLECT-004-quality-before.json
+
+      - name: Prove exact batch denominator and packet custody
+        run: |
+          set -euo pipefail
+          node scripts/estate-adopt-cumulative-packet-batch.mjs --plan "$PLAN" | tee /tmp/COLLECT-004-preflight.json
+
+      - name: Apply exact multi-role packet winners
+        run: |
+          set -euo pipefail
+          trap 'git reset --hard "$AUTHORIZED_HEAD"; git clean -fd' ERR
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          node scripts/estate-adopt-cumulative-packet-batch.mjs \
+            --plan "$PLAN" \
+            --now "$NOW" \
+            --report /tmp/COLLECT-004-apply.json \
+            --write
+          test ! -e "$RECEIPT"
+
+      - name: Rebuild audit, serving projections, and permanent records
+        run: |
+          set -euo pipefail
+          npm run media:audit -- sync
+          node scripts/shard.mjs
+          node scripts/build-record-pages.mjs
+
+      - name: Validate exact quality payment before smoke
+        run: |
+          set -euo pipefail
+          node scripts/estate-adopt-cumulative-packet-batch.mjs \
+            --plan "$PLAN" \
+            --before-quality /tmp/COLLECT-004-quality-before.json \
+            --validate | tee /tmp/COLLECT-004-validation.json
+          test ! -e "$RECEIPT"
+
+      - name: Stage only the product-paying candidate tree
+        id: candidate
+        run: |
+          set -euo pipefail
+          CHANGED="$(git status --porcelain | sed -E 's/^.. //' | sort -u)"
+          test -n "$CHANGED"
+          while IFS= read -r changed_path; do
+            case "$changed_path" in
+              data/*|records/*|images/uc-071-still-c94da4922b13.jpg|images/uc-076-still-b8f452ae7a22.jpg|images/uc-116-still-dcf3ccd535be.jpg|images/uc-117-still-92962ecfa101.jpg|images/uc-118-still-ee2ac06aeefd.jpg) ;;
+              *) echo "Unexpected COLLECT-004 candidate path: $changed_path" >&2; exit 1 ;;
+            esac
+          done <<< "$CHANGED"
+          test ! -e "$RECEIPT"
+          git add -A
+          git diff --cached --check
+          git diff --cached --binary > /tmp/COLLECT-004-candidate.patch
+          git write-tree > /tmp/COLLECT-004-candidate.tree
+          git diff --cached --quiet && { echo 'COLLECT-004 produced no candidate tree.' >&2; exit 1; }
+          echo "tree=$(cat /tmp/COLLECT-004-candidate.tree)" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-gate exact cumulative candidate tree
+        run: npm run gate
+
+      - name: Refuse post-gate drift
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          PRE_TREE="$(cat /tmp/COLLECT-004-candidate.tree)"
+          POST_TREE="$(git write-tree)"
+          test "$PRE_TREE" = "$POST_TREE"
+          test ! -e "$RECEIPT"
+          node scripts/estate-adopt-cumulative-packet-batch.mjs \
+            --plan "$PLAN" \
+            --before-quality /tmp/COLLECT-004-quality-before.json \
+            --validate
+
+      - name: Promote receipt and cumulative ledger only after smoke
+        run: |
+          set -euo pipefail
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          CANDIDATE_TREE="$(cat /tmp/COLLECT-004-candidate.tree)"
+          node scripts/estate-adopt-cumulative-packet-batch.mjs \
+            --plan "$PLAN" \
+            --before-quality /tmp/COLLECT-004-quality-before.json \
+            --receipt "$RECEIPT" \
+            --ledger "$LEDGER" \
+            --authorized-parent "$AUTHORIZED_HEAD" \
+            --gated-tree "$CANDIDATE_TREE" \
+            --workflow-run "$GITHUB_RUN_ID" \
+            --now "$NOW" \
+            --promote | tee /tmp/COLLECT-004-promotion.json
+          node scripts/estate-canonical-adoption-ledger.mjs | tee /tmp/COLLECT-004-ledger-validation.json
+          git add -- "$RECEIPT" "$LEDGER"
+          git diff --exit-code
+          PROMOTION_PATHS="$(git diff --cached --name-only "$CANDIDATE_TREE")"
+          EXPECTED_PATHS="$(printf '%s\n%s\n' "$LEDGER" "$RECEIPT" | sort)"
+          test "$PROMOTION_PATHS" = "$EXPECTED_PATHS"
+          git diff --cached --binary > /tmp/COLLECT-004-final.patch
+          git write-tree > /tmp/COLLECT-004-final.tree
+
+      - name: Refuse stale target publication
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          REMOTE_HEAD="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
+          test "$REMOTE_HEAD" = "$AUTHORIZED_HEAD"
+
+      - name: Commit and publish exact gated cumulative payment
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          CANDIDATE_TREE="$(cat /tmp/COLLECT-004-candidate.tree)"
+          FINAL_TREE="$(cat /tmp/COLLECT-004-final.tree)"
+          git commit -m "Estate collection: adopt cumulative packet batch 002" \
+            -m "transaction=COLLECT-004" \
+            -m "batch_adoptions=5" \
+            -m "cumulative_adoptions=10" \
+            -m "remaining_packet_review=45" \
+            -m "complete_pairs_delta=5" \
+            -m "missing_still_delta=-5" \
+            -m "authorized_parent=${AUTHORIZED_HEAD}" \
+            -m "workflow_run=${GITHUB_RUN_ID}" \
+            -m "gated_candidate_tree=${CANDIDATE_TREE}" \
+            -m "published_tree=${FINAL_TREE}"
+          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}" origin "HEAD:refs/heads/${TARGET_BRANCH}"
+
+      - name: Report cumulative product payment
+        if: success()
+        run: |
+          PUBLISHED_HEAD="$(git rev-parse HEAD)"
+          CANDIDATE_TREE="$(cat /tmp/COLLECT-004-candidate.tree)"
+          FINAL_TREE="$(cat /tmp/COLLECT-004-final.tree)"
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF_COMMENT
+          COLLECT-004 cumulative canonical adoption batch 002 passed and published on workflow run $GITHUB_RUN_ID.
+
+          Published commit: $PUBLISHED_HEAD.
+          Gated candidate tree: $CANDIDATE_TREE.
+          Published tree with post-smoke receipt and cumulative ledger: $FINAL_TREE.
+          New visitor-facing adoptions: 5.
+          Cumulative packet adoptions: 10 of 55.
+          Remaining imported packets for canonical review: 45.
+          Complete pairs: 683 → 688.
+          Missing stills: 383 → 378.
+          Missing-both count: 109 → 109.
+
+          Multi-role typed evidence was admitted without weakening identity, checksum, duplicate, crop, correction, or historical-byte custody. The receipt and cumulative ledger were created only after the complete canonical gate, rendered-browser checks, post-gate tree identity, and exact-head lease passed. Merge and deployment remain separate debts.
+          EOF_COMMENT
+
+      - name: Report failed cumulative payment
+        if: failure()
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF_COMMENT
+          COLLECT-004 cumulative adoption batch 002 failed on workflow run $GITHUB_RUN_ID.
+
+          No batch-002 canonical payment claim is authorized. The prior cumulative ledger remains 5 adopted and 50 awaiting review unless a post-smoke receipt and ledger update were published together. Repair the exact failed evidence, schema, quality, gate, or lease boundary without lowering the substantive standard.
+          EOF_COMMENT
+
+      - name: Preserve exact transaction evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: COLLECT-004-cumulative-adoption-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/COLLECT-004-preflight.json
+            /tmp/COLLECT-004-apply.json
+            /tmp/COLLECT-004-validation.json
+            /tmp/COLLECT-004-quality-before.json
+            /tmp/COLLECT-004-candidate.patch
+            /tmp/COLLECT-004-candidate.tree
+            /tmp/COLLECT-004-promotion.json
+            /tmp/COLLECT-004-ledger-validation.json
+            /tmp/COLLECT-004-final.patch
+            /tmp/COLLECT-004-final.tree
+            data/review/estate-debt/COLLECT-004-CANONICAL-ADOPTION-PLAN.json
+            data/review/estate-debt/COLLECT-004-CANONICAL-ADOPTION.json
+            data/review/estate-debt/CANONICAL-ADOPTION-LEDGER.json
+            data/quality.json
+          if-no-files-found: warn
+          retention-days: 30
