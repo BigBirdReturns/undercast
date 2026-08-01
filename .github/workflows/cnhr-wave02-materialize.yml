@@ -1,0 +1,64 @@
+name: materialize-clifford-number-hr-wave-02
+
+on:
+  push:
+    branches:
+      - agent/clifford-number-hr-source-adjudication-wave-02
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.event.head_commit.message == 'research: launch Clifford Number HR-source Wave 02 materializer'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Materialize, validate, and publish exact packet
+        shell: bash
+        env:
+          PARENT_SHA: b1b4dbc40e8b295b8f6a5d4fe7d252f0e791926e
+          PAYLOAD_SHA256: 27d329af4f065d7bef64aafe16655c53922de6aa534b5d8e356dc0bc2590f267
+        run: |
+          set -euo pipefail
+          cat .cnhr-wave02/chunk-*.txt | tr -d '\n' | base64 --decode > /tmp/cnhr-wave02.tar.gz
+          printf '%s  %s\n' "$PAYLOAD_SHA256" /tmp/cnhr-wave02.tar.gz | sha256sum --check --strict
+          tar -xzf /tmp/cnhr-wave02.tar.gz -C .
+          rm -rf .cnhr-wave02 .github/workflows/cnhr-wave02-materialize.yml
+
+          node --check scripts/clifford-number-hr-source-adjudication.mjs
+          node --check test/clifford-number-hr-source-adjudication-fixtures.mjs
+          node scripts/clifford-number-hr-source-adjudication.mjs --check
+          node test/clifford-number-hr-source-adjudication-fixtures.mjs
+          git diff --check
+
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          parent = 'b1b4dbc40e8b295b8f6a5d4fe7d252f0e791926e'
+          manifest_path = Path('data/review/clifford-number/hr-selection/wave-02/MANIFEST.json')
+          manifest = json.loads(manifest_path.read_text())
+          expected = {row['path'] for row in manifest['files']} | {str(manifest_path)}
+          lines = subprocess.check_output(['git', 'diff', '--name-status', parent, '--'], text=True).splitlines()
+          observed = {}
+          for line in lines:
+              status, path = line.split('\t', 1)
+              observed[path] = status
+          assert set(observed) == expected, (sorted(expected - set(observed)), sorted(set(observed) - expected))
+          assert all(status == 'A' for status in observed.values()), observed
+          assert len(observed) == 19, len(observed)
+          print('exact candidate delta: 19 added, 0 modified, 0 deleted')
+          PY
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'research: fan out Clifford Number HR-source Wave 02'
+          git push origin HEAD:${GITHUB_REF_NAME}
