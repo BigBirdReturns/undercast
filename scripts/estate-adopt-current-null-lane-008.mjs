@@ -216,7 +216,9 @@ async function applyTransaction({ inspection, now = new Date().toISOString(), re
     await mkdir(path.dirname(context.destination.absolute), { recursive: true });
     await writeFile(context.destination.absolute, context.candidateBytes, { flag: "wx" });
     specimenById.get(context.recordId)[context.side] = context.intended;
-    sourceById.get(context.recordId)[context.side] = context.intended;
+    const source = sourceById.get(context.recordId);
+    source[context.side] = context.intended;
+    source.fetched_at = String(now).slice(0, 10);
   }
   if (pending.length) {
     await atomicWrite(inspection.specimensDoc.absolute, jsonLike(inspection.specimensDoc.bytes, inspection.specimensDoc.value));
