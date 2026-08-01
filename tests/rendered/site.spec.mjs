@@ -5,6 +5,11 @@ const sitePath=path=>`/undercast/${String(path).replace(/^\//,"")}`;
 const open=(page,path)=>page.goto(sitePath(path),{waitUntil:"domcontentloaded"});
 const pixel=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+Xh9WAAAAAElFTkSuQmCC","base64");
 const jpeg=await readFile(new URL("../../images/uc-035-portrait.jpg",import.meta.url));
+const specimens=JSON.parse(await readFile(new URL("../../data/specimens.json",import.meta.url),"utf8"));
+const mediaLive=JSON.parse(await readFile(new URL("../../data/media-live.json",import.meta.url),"utf8"));
+const releaseImage=/^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\/[^/]+\/[^/?#]+$/;
+const missingPortraitFixture=specimens.find(record=>record.still?.src&&!record.portrait?.src&&releaseImage.test(mediaLive.urls?.[record.still.src]||""));
+if(!missingPortraitFixture) throw new Error("rendered fixture requires one filed Release still paired with a missing portrait");
 const waitForWall=async page=>expect(page.locator("#result-status")).toContainText(/specimens? match/);
 const channels=color=>(color.match(/[\d.]+/g)||[]).slice(0,3).map(Number);
 const luminance=color=>{
@@ -290,9 +295,11 @@ test.describe("permanent records without JavaScript",()=>{
 
   test("distinguishes a filed image load failure from evidence not on file",async({page})=>{
     await page.route("**/releases/download/**",route=>route.abort());
-    await open(page,"records/UC-040/");
-    const failed=page.locator(".record-absence.load-failed");
-    const notFiled=page.locator(".record-absence.not-filed");
+    await open(page,`records/${missingPortraitFixture.id}/`);
+    const failed=page.locator(".record-image:not(.absent) .record-absence.load-failed");
+    const notFiled=page.locator(".record-image.is-portrait.absent .record-absence.not-filed");
+    await expect(failed).toHaveCount(1);
+    await expect(notFiled).toHaveCount(1);
     await expect(failed).toBeVisible();
     await expect(failed).toHaveAttribute("aria-label",/could not be loaded/);
     await expect(notFiled).toBeVisible();
@@ -420,21 +427,23 @@ test("Recognition and permanent-record missing portraits stay full-bleed",async(
 
   for(const viewport of [{width:1280,height:900},{width:390,height:844}]){
     await page.setViewportSize(viewport);
-    await open(page,"recognition.html#UC-040");
-    await expect(page.getByRole("heading",{name:"Zathras",exact:true}).first()).toBeVisible();
+    await open(page,`recognition.html#${missingPortraitFixture.id}`);
+    await expect(page.getByRole("heading",{name:missingPortraitFixture.character,exact:true}).first()).toBeVisible();
     await expect(page.locator('[data-plate="portrait"] .uc-absence')).toHaveAttribute("aria-label",/not on file/);
     expectFullBleed(await measure());
 
-    await open(page,"records/UC-040/");
-    const permanent=await page.locator(".record-image.absent").evaluate(well=>{
-      const image=well.querySelector(".record-absence");
+    await open(page,`records/${missingPortraitFixture.id}/`);
+    const permanentWell=page.locator(".record-image.is-portrait.absent");
+    await expect(permanentWell).toHaveCount(1);
+    const permanent=await permanentWell.evaluate(well=>{
+      const image=well.querySelector(".record-absence.not-filed");
       const rect=node=>{
         const box=node.getBoundingClientRect();
         return {top:box.top,right:box.right,bottom:box.bottom,left:box.left};
       };
       return {well:rect(well),image:rect(image)};
     });
-    await expect(page.locator(".record-image.absent .record-absence")).toHaveAttribute("aria-label",/not on file/);
+    await expect(permanentWell.locator(".record-absence.not-filed")).toHaveAttribute("aria-label",/not on file/);
     for(const edge of ["top","right","bottom","left"]){
       expect(Math.abs(permanent.image[edge]-permanent.well[edge])).toBeLessThanOrEqual(1);
     }
