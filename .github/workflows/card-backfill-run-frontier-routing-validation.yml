@@ -1,0 +1,84 @@
+name: card-backfill-run-frontier-routing-validation
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/card-backfill-run-frontier-routing-validation.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CONTROL_HEAD: ${{ github.sha }}
+      CANDIDATE_REF: agent/card-backfill-frontier-routing-001
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_REF }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - uses: ./.github/actions/card-backfill-runtime
+        with:
+          profile: local-desk
+
+      - name: Install rendered-gate runtime
+        run: npx playwright install --with-deps chromium
+
+      - name: Classify the exact frozen composite denominator
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/card-backfill-composite-census"
+          node scripts/card-backfill-composite-census.mjs --out "$out" | tee "$RUNNER_TEMP/composite-census.log"
+          node --input-type=module - "$out/composite-census.json" <<'NODE'
+          import fs from 'node:fs';
+          const census = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (census.composite_obligations !== 53) throw new Error(`expected 53 composite-class obligations, got ${census.composite_obligations}`);
+          if (census.completed_packets !== 55 || census.open_obligations !== 417) throw new Error(`frontier accounting drift: completed=${census.completed_packets}; open=${census.open_obligations}`);
+          const classes = Object.fromEntries(census.summary.census_class.map((row) => [row.key, row.count]));
+          for (const key of ['finite-composite-candidate','alias-equivalence-review','open-denominator-review']) {
+            if (!classes[key]) throw new Error(`required class ${key} is empty`);
+          }
+          console.log(`PASS — exact composite frontier classes ${JSON.stringify(classes)}`);
+          NODE
+
+      - name: Run complete repository gate
+        run: npm run gate
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: card-backfill-frontier-routing-validation-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-composite-census
+            ${{ runner.temp }}/composite-census.log
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Publish observable validation status
+        if: always()
+        run: |
+          set -euo pipefail
+          state=success
+          if [ "${{ job.status }}" != success ]; then state=failure; fi
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${CONTROL_HEAD}" \
+            -f state="$state" \
+            -f context='card-backfill/frontier-routing-validation' \
+            -f description="candidate frontier routing ${state}; canonical_mutation=false" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo 'canonical_mutation=false'
