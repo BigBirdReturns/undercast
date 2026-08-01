@@ -8,11 +8,13 @@ let workflow = fs.readFileSync(workflowPath, "utf8");
 const marker = "Yield the exact reduced head to the supervisor";
 
 if (!workflow.includes(marker)) {
-  const anchor = `          git push origin "HEAD:${GITHUB_REF_NAME}"
-          echo 'PASS — one reducer committed attempts, staging, and the next cost model'
-
-      - uses: actions/upload-artifact@v4
-        if: always()`;
+  const anchor = [
+    '          git push origin "HEAD:${GITHUB_REF_NAME}"',
+    "          echo 'PASS — one reducer committed attempts, staging, and the next cost model'",
+    "",
+    "      - uses: actions/upload-artifact@v4",
+    "        if: always()",
+  ].join("\n");
 
   const stepTemplate = String.raw`          git push origin "HEAD:__DOLLAR__{GITHUB_REF_NAME}"
           echo 'PASS — one reducer committed attempts, staging, and the next cost model'
