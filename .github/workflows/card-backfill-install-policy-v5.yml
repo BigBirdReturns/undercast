@@ -1,0 +1,148 @@
+name: card-backfill-install-policy-v5
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/card-backfill-install-policy-v5.yml'
+
+permissions:
+  contents: write
+  actions: write
+  statuses: write
+
+concurrency:
+  group: card-backfill-install-policy-v5-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      INSTALL_HEAD: ${{ github.sha }}
+      HEAD_BRANCH: ${{ github.ref_name }}
+    steps:
+      - name: Publish installation heartbeat
+        run: |
+          set -euo pipefail
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${INSTALL_HEAD}" \
+            -f state=pending \
+            -f context='card-backfill/policy-v5-install' \
+            -f description='installing v5 two-source recovery frontier' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Construct the v5 frontier transaction
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-install-policy-v5-frontier.mjs
+          rm scripts/card-backfill-install-policy-v5-frontier.mjs
+          git add -A -- \
+            package.json \
+            scripts/card-backfill-install-policy-v5-frontier.mjs \
+            scripts/card-backfill-source-policy-v5-fixtures.mjs \
+            scripts/card-backfill-source-v2-cached.mjs \
+            scripts/card-backfill-source-v2.mjs \
+            scripts/card-backfill-source-v3-wave-plan.mjs \
+            scripts/lib/card-backfill-source-policy-v3.mjs \
+            scripts/lib/card-backfill-source-policy-v5.mjs
+          git diff --cached --check
+          test -z "$(git diff --name-only)"
+          echo 'PASS — exact v5 source-policy transaction staged'
+
+      - uses: ./.github/actions/card-backfill-runtime
+        with:
+          profile: local-desk
+
+      - name: Install rendered-gate runtime
+        run: npx playwright install --with-deps chromium
+
+      - name: Prove the new policy and planner before the full gate
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-source-policy-v4-fixtures.mjs
+          node scripts/card-backfill-source-policy-v5-fixtures.mjs
+          node scripts/card-backfill-source-policy-v2-fixtures.mjs
+          node scripts/card-backfill-attempt-index-fixtures.mjs
+          node scripts/card-backfill-wave-fixtures.mjs
+          node scripts/card-backfill-amortization-fixtures.mjs
+          node scripts/card-backfill-lessons.mjs validate
+
+      - name: Prove the real frontier selects v5 work
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/policy-v5-frontier-plan"
+          node scripts/card-backfill-source-v3-wave-plan.mjs \
+            --control .github/CARD-BACKFILL-COHORT.json \
+            --out "$out" \
+            --batch-limit 40 \
+            --wave-batches 4 \
+            --workers-per-batch 4 | tee "$RUNNER_TEMP/policy-v5-plan.log"
+          node --input-type=module - "$out/wave.json" <<'NODE'
+          import fs from 'node:fs';
+          const wave = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (wave.source_policy_version !== 5) throw new Error(`expected policy v5, got ${wave.source_policy_version}`);
+          if (wave.source_policy_id !== 'card-backfill-policy-v5-two-source-recovery-1') throw new Error(`unexpected policy ${wave.source_policy_id}`);
+          if (wave.selected_count < 1 || wave.selected_count > 160) throw new Error(`invalid selected count ${wave.selected_count}`);
+          if (!wave.batches?.every((batch) => batch.obligations.every((row) => !/[&,;/]|\band\b/i.test(String(row.expected_subject || ''))))) {
+            throw new Error('composite obligation entered policy-v5 single-subject wave');
+          }
+          console.log(`PASS — real frontier selected ${wave.selected_count} policy-v5 obligations; composites excluded`);
+          NODE
+
+      - name: Run the complete repository gate
+        run: npm run gate
+
+      - name: Commit the exact transaction and yield to the supervisor
+        run: |
+          set -euo pipefail
+          git diff --cached --check
+          test -z "$(git diff --name-only)"
+          git config user.name 'undercast-card-backfill-policy-v5'
+          git config user.email 'undercast-card-backfill-policy-v5@users.noreply.github.com'
+          git commit -m 'Card backfill: advance exhausted singles to policy v5'
+          remote_head=$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | awk '{print $1}')
+          if [ "$remote_head" != "$INSTALL_HEAD" ]; then
+            echo "branch moved from installation head $INSTALL_HEAD to $remote_head; refusing stale v5 push" >&2
+            exit 1
+          fi
+          git push origin "HEAD:${HEAD_BRANCH}"
+          final_head=$(git rev-parse HEAD)
+          gh workflow run card-backfill-supervisor.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$HEAD_BRANCH" \
+            -f reason=policy-v5-frontier-installed
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${final_head}" \
+            -f state=success \
+            -f context='card-backfill/policy-v5-install' \
+            -f description='v5 frontier installed; supervisor dispatched; manual_continue_required=false' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo 'manual_continue_required=false'
+          echo 'canonical_mutation=false'
+
+      - name: Publish installation failure
+        if: failure()
+        run: |
+          set -euo pipefail
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${INSTALL_HEAD}" \
+            -f state=failure \
+            -f context='card-backfill/policy-v5-install' \
+            -f description='policy-v5 installation failed before permanent push' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
