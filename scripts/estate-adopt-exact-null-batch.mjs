@@ -217,13 +217,23 @@ async function inspectTransaction({ root = process.cwd(), planPath = DEFAULTS.pl
     const source = exactRow(sourcesDoc.value, (item) => item.id === row.record_id, `${key} source`);
     const specimenCurrent = specimen[row.side] ?? null;
     const sourceCurrent = source[row.side] ?? null;
-    assert(specimenCurrent === null && sourceCurrent === null, `${key} current canonical binding is no longer exact null`);
     const otherSide = row.side === "still" ? "portrait" : "still";
     assert(specimen[otherSide]?.src && source[otherSide]?.src && sameJson(specimen[otherSide], source[otherSide]), `${key} other side is not complete and consistent`);
     const intended = intendedImage(row);
     const destination = resolveInside(resolvedRoot, row.destination_path, `${key} destination`);
-    assert(!(await exists(destination.absolute)), `${key} versioned destination already exists before adoption`);
-    contexts.push({ key, row, manifest, candidateBytes, destination, state: "pending", intended });
+    const destinationExists = await exists(destination.absolute);
+    let state;
+    if (specimenCurrent === null && sourceCurrent === null) {
+      assert(!destinationExists, `${key} versioned destination already exists before adoption`);
+      state = "pending";
+    } else {
+      assert(sameJson(specimenCurrent, intended) && sameJson(sourceCurrent, intended), `${key} current binding is neither null nor the exact planned adoption`);
+      assert(destinationExists, `${key} exact adopted destination is missing`);
+      const destinationBytes = await readFile(destination.absolute);
+      assert(sha256(destinationBytes) === row.candidate_sha256, `${key} adopted destination bytes drifted`);
+      state = "already-adopted";
+    }
+    contexts.push({ key, row, manifest, candidateBytes, destination, state, intended });
   }
   return { root: resolvedRoot, plan, planDoc, adjudicationDoc, censusDoc, importDoc, ledgerDoc, specimensDoc, sourcesDoc, contexts };
 }
@@ -256,6 +266,7 @@ async function atomicWrite(entries) {
 }
 
 async function applyTransaction({ inspection, now, reportPath }) {
+  const pending = inspection.contexts.filter((context) => context.state === "pending");
   const date = String(now || new Date().toISOString()).slice(0, 10);
   assert(/^\d{4}-\d{2}-\d{2}$/.test(date), "adoption date must be ISO-8601");
   const specimens = structuredClone(inspection.specimensDoc.value);
@@ -263,7 +274,7 @@ async function applyTransaction({ inspection, now, reportPath }) {
   const specimenById = new Map(specimens.map((row) => [row.id, row]));
   const sourceById = new Map(sources.map((row) => [row.id, row]));
   const entries = [];
-  for (const context of inspection.contexts) {
+  for (const context of pending) {
     specimenById.get(context.row.record_id)[context.row.side] = context.intended;
     const source = sourceById.get(context.row.record_id);
     source[context.row.side] = context.intended;
@@ -279,9 +290,9 @@ async function applyTransaction({ inspection, now, reportPath }) {
     batch: inspection.plan.batch,
     operation: "exact-current-null-canonical-media-adoption-apply",
     generated_at: now,
-    counts: { authorized: inspection.contexts.length, adopted: inspection.contexts.length },
-    adoptions: inspection.contexts.map((context) => ({ obligation_id: context.key, destination_path: context.row.destination_path, candidate_sha256: context.row.candidate_sha256 })),
-    boundary: { discovery_performed: false, packet_evidence_rewritten: false, quality_baseline_reset: false, complete_gate_required_before_receipt: true, canonical_mutation: true },
+    counts: { authorized: inspection.contexts.length, adopted: pending.length, already_adopted: inspection.contexts.length - pending.length },
+    adoptions: inspection.contexts.map((context) => ({ obligation_id: context.key, state: context.state === "pending" ? "adopted" : "already-adopted", destination_path: context.row.destination_path, candidate_sha256: context.row.candidate_sha256 })),
+    boundary: { discovery_performed: false, packet_evidence_rewritten: false, quality_baseline_reset: false, complete_gate_required_before_receipt: true, canonical_mutation: pending.length > 0 },
   };
   if (reportPath) {
     const absolute = path.resolve(reportPath);
@@ -316,6 +327,8 @@ async function validateQuality({ inspection, beforeQualityPath }) {
 }
 
 async function validateAdopted({ inspection, beforeQualityPath }) {
+  const pending = inspection.contexts.filter((context) => context.state === "pending");
+  assert(pending.length === 0, `COLLECT-006 still has ${pending.length} pending adoption(s)`);
   for (const context of inspection.contexts) {
     const bytes = await readFile(context.destination.absolute);
     assert(sha256(bytes) === context.row.candidate_sha256, `${context.key} canonical bytes drifted`);
@@ -540,7 +553,8 @@ async function main() {
     transaction: inspection.plan.transaction,
     batch: inspection.plan.batch,
     authorized: inspection.contexts.length,
-    pending: inspection.contexts.length,
+    pending: inspection.contexts.filter((context) => context.state === "pending").length,
+    already_adopted: inspection.contexts.filter((context) => context.state === "already-adopted").length,
     prior_cumulative_adoptions: inspection.plan.custody.prior_canonical_adoptions,
     expected_cumulative_after: inspection.plan.cumulative_contract.expected_canonical_adoptions_after,
     expected_remaining_after: inspection.plan.cumulative_contract.expected_remaining_for_review_after,
