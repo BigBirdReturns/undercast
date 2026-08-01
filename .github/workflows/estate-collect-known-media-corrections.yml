@@ -2,25 +2,43 @@ name: estate-collect-known-media-corrections
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - agent/estate-consolidation-001
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
     paths:
       - .github/workflows/estate-collect-known-media-corrections.yml
+      - data/MEDIA-AUDIT-SCOPES.json
+      - data/review/ferengi-gold/final-portraits-correction-2026-07-25.json
+      - data/review/sitewide-actor-origin-vlm-correction-2026-07-25.json
+      - data/review/sitewide-media-correction-2026-07-25.json
+      - data/review/sitewide-near-duplicate-correction-2026-07-25.json
+      - scripts/estate-collect-known-media-corrections.mjs
+      - scripts/estate-known-media-corrections-fixtures.mjs
+      - scripts/lib/estate-known-media-corrections.mjs
+      - scripts/lib/media-audit.mjs
+      - scripts/media-audit-fixtures.mjs
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: estate-collect-known-media-corrections
   cancel-in-progress: false
 
+env:
+  PR_NUMBER: ${{ github.event.pull_request.number || 132 }}
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 jobs:
   collect:
-    if: github.repository == 'BigBirdReturns/undercast'
+    if: github.repository == 'BigBirdReturns/undercast' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
+      - name: Announce exact collection run
+        run: gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "COLLECT-001 correction transaction started on workflow run $GITHUB_RUN_ID. The run will classify 10 invalid Ferengi portraits as unmerged PR #86 debt, test 61 active current-main corrections, rebuild the audit and serving projections, run the complete gate, and push only the exact gated tree."
+
       - uses: actions/checkout@v4
         with:
           ref: agent/estate-consolidation-001
@@ -41,23 +59,40 @@ jobs:
         run: node scripts/estate-known-media-corrections-fixtures.mjs
 
       - name: Prove exact current-head correction denominator
-        run: node scripts/estate-collect-known-media-corrections.mjs
+        id: preflight
+        run: |
+          set -euo pipefail
+          node scripts/estate-collect-known-media-corrections.mjs | tee /tmp/COLLECT-001-preflight.json
+          PENDING="$(node -e "const x=JSON.parse(require('fs').readFileSync('/tmp/COLLECT-001-preflight.json','utf8')); process.stdout.write(String(x.estate_denominator.active_current_main_result.collected))")"
+          test "$PENDING" = "61" -o "$PENDING" = "0"
+          echo "pending=$PENDING" >> "$GITHUB_OUTPUT"
 
-      - name: Apply 71 known invalid binding corrections
+      - name: Apply active current-main corrections
+        if: steps.preflight.outputs.pending != '0'
         run: |
           set -euo pipefail
           trap 'git reset --hard HEAD; git clean -fd' ERR
-          node scripts/estate-collect-known-media-corrections.mjs --write --now "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          node scripts/estate-collect-known-media-corrections.mjs --write --now "$NOW"
+
+      - name: Rebuild media audit and serving projections
+        run: |
+          set -euo pipefail
           npm run media:audit -- sync
           node scripts/shard.mjs
 
       - name: Stage exact intended tree
+        id: staged
         run: |
           set -euo pipefail
           git add -A
           git diff --cached --check
           git diff --cached --name-status
-          git diff --cached --quiet && { echo 'Expected a correction transaction, but the exact branch produced no staged change.' >&2; exit 1; }
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Run complete canonical gate on staged tree
         run: npm run gate
@@ -71,13 +106,25 @@ jobs:
           git write-tree > /tmp/COLLECT-001-known-media-corrections.tree
 
       - name: Commit exact gated tree
+        if: steps.staged.outputs.changed == 'true'
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           TREE_SHA="$(cat /tmp/COLLECT-001-known-media-corrections.tree)"
-          git commit -m "Estate collection: null 71 known invalid media bindings" -m "workflow_run=${GITHUB_RUN_ID}" -m "gated_tree=${TREE_SHA}"
+          git commit -m "Estate collection: retire 71 known invalid media bindings" -m "active_current_main_nullifications=61" -m "unmerged_pr86_rejections=10" -m "workflow_run=${GITHUB_RUN_ID}" -m "gated_tree=${TREE_SHA}"
           git push origin HEAD:agent/estate-consolidation-001
+
+      - name: Report successful payment
+        if: success()
+        run: |
+          HEAD_SHA="$(git rev-parse HEAD)"
+          TREE_SHA="$(cat /tmp/COLLECT-001-known-media-corrections.tree)"
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "COLLECT-001 correction transaction passed on workflow run $GITHUB_RUN_ID. Active current-main corrections pending at preflight: ${{ steps.preflight.outputs.pending }}. Exact staged tree changed: ${{ steps.staged.outputs.changed }}. Validated checkout head: $HEAD_SHA. Gated tree: $TREE_SHA. Ten false Ferengi portraits remain classified as never-landed PR #86 debt; the active current-main correction lane and synchronized projections passed the complete canonical gate."
+
+      - name: Report failed payment attempt
+        if: failure()
+        run: gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "COLLECT-001 correction transaction failed closed on workflow run $GITHUB_RUN_ID. No completion claim is authorized. Inspect the failed step and retained artifact before changing the denominator, evidence requirement, current binding, or gate."
 
       - name: Preserve exact transaction patch
         if: always()
@@ -85,6 +132,7 @@ jobs:
         with:
           name: COLLECT-001-known-media-corrections-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            /tmp/COLLECT-001-preflight.json
             /tmp/COLLECT-001-known-media-corrections.patch
             /tmp/COLLECT-001-known-media-corrections.tree
           if-no-files-found: warn
