@@ -8,7 +8,9 @@ This lane produces two workflow-executed, unreviewed artifacts. It does not writ
 
 The restore drill selects an immutable repository snapshot from `preservation/SNAPSHOTS.json`, downloads the exact release asset, verifies its byte count and SHA-256, rejects unsafe archive paths and link entries, and extracts it into a fresh workspace. Because the preservation package records a specific historical commit, the drill constructs the exact text-only forward delta from that commit to the workflow head, applies it outside a Git worktree, and compares every tracked file and executable bit against the exact target tree.
 
-Only after the recovered tree is byte-for-byte current does the drill install dependencies with `npm ci` and run the complete canonical `npm run gate`, including rendered-browser tests. A passing artifact therefore proves both preservation recovery and exact-head operability.
+Only after the recovered tree is byte-for-byte current does the drill initialize a disposable local Git repository and commit that exact tree as a verification baseline. The baseline supplies the index required by the canonical projection-drift checks. It does not restore source history, replace the preserved commit, or weaken the prior byte comparison. The receipt binds the local baseline commit to the exact target head and records `source_history_restored: false`.
+
+The drill then installs dependencies with `npm ci` and runs the complete canonical `npm run gate`, including rendered-browser tests. A passing artifact therefore proves both preservation recovery and exact-head operability. Dependency and gate stdout and stderr are written before a failing exit is raised, so a failed drill remains diagnosable without becoming a passing receipt.
 
 Binary forward deltas fail closed. A later snapshot must absorb such a delta before the restore can pass. This prevents UTF-8 patch transport from being misrepresented as a byte-exact binary recovery mechanism.
 
@@ -38,10 +40,10 @@ Metrics remain `null` until an observed denominator exists. One gate duration is
 
 ```text
 npm run operational:fixtures
-node scripts/operational-reliability.mjs select-snapshot
-node scripts/operational-reliability.mjs restore-drill ...
-node scripts/operational-reliability.mjs rollback-drill ...
-node scripts/operational-reliability.mjs validate-bundle ...
+node scripts/operational-reliability-execute.mjs select-snapshot
+node scripts/operational-reliability-execute.mjs restore-drill ...
+node scripts/operational-reliability-execute.mjs rollback-drill ...
+node scripts/operational-reliability-execute.mjs validate-bundle ...
 ```
 
 The canonical gate runs the operational-reliability fixtures through `waterline:fixtures`.
