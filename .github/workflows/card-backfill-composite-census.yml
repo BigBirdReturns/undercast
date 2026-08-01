@@ -1,0 +1,75 @@
+name: card-backfill-composite-census
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-composite-frontier-001
+    paths:
+      - '.github/workflows/card-backfill-composite-census.yml'
+      - 'scripts/card-backfill-composite-census.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CENSUS_HEAD: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Classify the exact repository frontier
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/card-backfill-composite-census"
+          node scripts/card-backfill-composite-census.mjs --out "$out" | tee "$RUNNER_TEMP/composite-census.log"
+          node --input-type=module - "$out/composite-census.json" <<'NODE'
+          import fs from 'node:fs';
+          const census = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (census.composite_obligations !== 53) throw new Error(`expected frozen composite frontier 53, got ${census.composite_obligations}`);
+          if (census.canonical_mutation !== false) throw new Error('composite census attempted canonical mutation');
+          const classes = new Map((census.summary?.census_class || []).map((row) => [row.key, row.count]));
+          if (!classes.get('finite-composite-candidate')) throw new Error('no finite composite candidates classified');
+          if (!classes.get('alias-equivalence-review')) throw new Error('no alias-equivalence cases classified');
+          if (!classes.get('open-denominator-review')) throw new Error('no open-denominator cases classified');
+          console.log(`PASS — frozen composite denominator classified into ${classes.size} semantic lanes`);
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: card-backfill-composite-census-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/card-backfill-composite-census
+            ${{ runner.temp }}/composite-census.log
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish observable census custody
+        if: always()
+        run: |
+          set -euo pipefail
+          state=success
+          if [ "${{ job.status }}" != success ]; then state=failure; fi
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${CENSUS_HEAD}" \
+            -f state="$state" \
+            -f context='card-backfill/composite-census' \
+            -f description="composite frontier census ${state}; canonical_mutation=false" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo 'manual_continue_required=false'
+          echo 'canonical_mutation=false'
