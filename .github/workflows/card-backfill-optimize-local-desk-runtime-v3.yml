@@ -1,5 +1,5 @@
-# registered-trigger: 1
-name: card-backfill-optimize-local-desk-runtime-v3
+# validation-rearm: 1
+name: card-backfill-validate-headless-runtime
 
 on:
   push:
@@ -9,31 +9,31 @@ on:
       - '.github/workflows/card-backfill-optimize-local-desk-runtime-v3.yml'
 
 permissions:
-  contents: write
+  contents: read
   actions: write
   statuses: write
 
 concurrency:
-  group: card-backfill-optimize-local-desk-runtime-v3-${{ github.ref_name }}
+  group: card-backfill-validate-headless-runtime-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
-  optimize:
+  validate-and-rearm:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       HEAD_BRANCH: ${{ github.ref_name }}
-      OPTIMIZE_HEAD: ${{ github.sha }}
+      VALIDATION_HEAD: ${{ github.sha }}
     steps:
-      - name: Publish observable optimization heartbeat
+      - name: Publish observable validation heartbeat
         run: |
           set -euo pipefail
           gh api -X POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${OPTIMIZE_HEAD}" \
+            "repos/${GITHUB_REPOSITORY}/statuses/${VALIDATION_HEAD}" \
             -f state=pending \
             -f context='card-backfill/local-desk-runtime' \
-            -f description="run ${GITHUB_RUN_ID}: deterministic headless runtime migration started" \
+            -f description="run ${GITHUB_RUN_ID}: validating pinned headless runtime and complete gate" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
       - uses: actions/checkout@v4
@@ -41,11 +41,11 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 1
 
-      - name: Bind the deterministic runtime migration head
+      - name: Bind the exact validation head
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$OPTIMIZE_HEAD"
-          echo "PASS — deterministic runtime migration bound to $OPTIMIZE_HEAD"
+          test "$(git rev-parse HEAD)" = "$VALIDATION_HEAD"
+          echo "PASS — headless runtime validation bound to $VALIDATION_HEAD"
 
       - uses: actions/setup-node@v4
         with:
@@ -54,67 +54,56 @@ jobs:
 
       - run: npm ci
 
-      - name: Construct the permanent runtime transaction
-        run: |
-          set -euo pipefail
-          node scripts/card-backfill-optimize-headless-runtime.mjs
-          grep -F 'REQUESTED_PROFILE: ${{ inputs.profile }}' .github/actions/card-backfill-runtime/action.yml
+      - name: Measure the permanent local-desk runtime
+        run: echo "runtime_started_at=$(date +%s)" >> "$GITHUB_ENV"
 
       - uses: ./.github/actions/card-backfill-runtime
         with:
           profile: local-desk
 
+      - name: Record runtime setup duration
+        run: |
+          set -euo pipefail
+          elapsed=$(( $(date +%s) - runtime_started_at ))
+          echo "PASS — pinned local-desk runtime ready in ${elapsed}s"
+          echo "runtime_elapsed_seconds=${elapsed}" >> "$GITHUB_ENV"
+
       - name: Install complete rendered-gate runtime
         run: npx playwright install --with-deps chromium
 
-      - name: Stage and prove the exact two-file transaction
-        run: |
-          set -euo pipefail
-          git add -- \
-            .github/actions/card-backfill-runtime/action.yml \
-            scripts/card-backfill-amortization-fixtures.mjs
-          git diff --cached --check
-          git diff --cached --name-only | sort > "$RUNNER_TEMP/actual.txt"
-          cat > "$RUNNER_TEMP/expected.txt" <<'PATHS'
-          .github/actions/card-backfill-runtime/action.yml
-          scripts/card-backfill-amortization-fixtures.mjs
-          PATHS
-          diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/actual.txt"
-          node scripts/card-backfill-amortization-fixtures.mjs
-          npm run gate
+      - name: Prove the focused amortization contract
+        run: node scripts/card-backfill-amortization-fixtures.mjs
 
-      - name: Commit, exact-head push, and rearm the supervisor
+      - name: Run the complete repository gate
+        run: npm run gate
+
+      - name: Rearm the exact-current-head supervisor
         run: |
           set -euo pipefail
-          git config user.name 'undercast-card-backfill-runtime'
-          git config user.email 'undercast-card-backfill-runtime@users.noreply.github.com'
-          git commit -m 'Card backfill: replace distro OpenCV with pinned headless runtime'
-          remote_head=$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | awk '{print $1}')
-          if [ "$remote_head" != "$OPTIMIZE_HEAD" ]; then
-            echo "branch moved from optimization head $OPTIMIZE_HEAD to $remote_head; refusing stale runtime push" >&2
+          remote_head=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${HEAD_BRANCH}" --jq .object.sha)
+          if [ "$remote_head" != "$VALIDATION_HEAD" ]; then
+            echo "branch moved from validation head $VALIDATION_HEAD to $remote_head; refusing stale rearm" >&2
             exit 1
           fi
-          git push origin "HEAD:${HEAD_BRANCH}"
-          final_head=$(git rev-parse HEAD)
           gh workflow run card-backfill-supervisor.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$HEAD_BRANCH" \
-            -f reason=local-desk-headless-runtime-activated
+            -f reason=headless-runtime-full-gate-pass
           gh api -X POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${final_head}" \
+            "repos/${GITHUB_REPOSITORY}/statuses/${VALIDATION_HEAD}" \
             -f state=success \
             -f context='card-backfill/local-desk-runtime' \
-            -f description='pinned headless OpenCV activated; cached frontier rearmed' \
+            -f description="headless runtime ready in ${runtime_elapsed_seconds}s; full gate passed; supervisor rearmed" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           echo 'manual_continue_required=false'
 
-      - name: Publish observable optimization failure
+      - name: Publish observable validation failure
         if: failure()
         run: |
           set -euo pipefail
           gh api -X POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${OPTIMIZE_HEAD}" \
+            "repos/${GITHUB_REPOSITORY}/statuses/${VALIDATION_HEAD}" \
             -f state=failure \
             -f context='card-backfill/local-desk-runtime' \
-            -f description="run ${GITHUB_RUN_ID}: deterministic runtime migration failed before a production commit" \
+            -f description="run ${GITHUB_RUN_ID}: headless runtime or complete gate failed before supervisor rearm" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
