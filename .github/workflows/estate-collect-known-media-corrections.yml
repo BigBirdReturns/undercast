@@ -1,0 +1,91 @@
+name: estate-collect-known-media-corrections
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/estate-consolidation-001
+    paths:
+      - .github/workflows/estate-collect-known-media-corrections.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: estate-collect-known-media-corrections
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    if: github.repository == 'BigBirdReturns/undercast'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/estate-consolidation-001
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Install rendered-browser dependency
+        run: npx playwright install --with-deps chromium
+
+      - name: Prove correction transaction fixtures
+        run: node scripts/estate-known-media-corrections-fixtures.mjs
+
+      - name: Prove exact current-head correction denominator
+        run: node scripts/estate-collect-known-media-corrections.mjs
+
+      - name: Apply 71 known invalid binding corrections
+        run: |
+          set -euo pipefail
+          trap 'git reset --hard HEAD; git clean -fd' ERR
+          node scripts/estate-collect-known-media-corrections.mjs --write --now "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          npm run media:audit -- sync
+          node scripts/shard.mjs
+
+      - name: Stage exact intended tree
+        run: |
+          set -euo pipefail
+          git add -A
+          git diff --cached --check
+          git diff --cached --name-status
+          git diff --cached --quiet && { echo 'Expected a correction transaction, but the exact branch produced no staged change.' >&2; exit 1; }
+
+      - name: Run complete canonical gate on staged tree
+        run: npm run gate
+
+      - name: Refuse post-gate drift
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git diff --cached --check
+          git diff --cached --binary > /tmp/COLLECT-001-known-media-corrections.patch
+          git write-tree > /tmp/COLLECT-001-known-media-corrections.tree
+
+      - name: Commit exact gated tree
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          TREE_SHA="$(cat /tmp/COLLECT-001-known-media-corrections.tree)"
+          git commit -m "Estate collection: null 71 known invalid media bindings" -m "workflow_run=${GITHUB_RUN_ID}" -m "gated_tree=${TREE_SHA}"
+          git push origin HEAD:agent/estate-consolidation-001
+
+      - name: Preserve exact transaction patch
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: COLLECT-001-known-media-corrections-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/COLLECT-001-known-media-corrections.patch
+            /tmp/COLLECT-001-known-media-corrections.tree
+          if-no-files-found: warn
+          retention-days: 30
