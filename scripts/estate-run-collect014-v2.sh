@@ -3,17 +3,58 @@ set -euo pipefail
 
 SOURCE="scripts/estate-run-collect014.sh"
 TEMP="/tmp/estate-run-collect014-v2-exec.sh"
+EXECUTOR_SOURCE="scripts/estate-adopt-pr88-direct-only-014.mjs"
+EXECUTOR_TEMP="/tmp/estate-adopt-pr88-direct-only-014-v2.mjs"
 SELF="scripts/estate-run-collect014-v2.sh"
 
 test -e "$SOURCE"
+test -e "$EXECUTOR_SOURCE"
 test -e "$SELF"
 
-python3 - "$SOURCE" "$TEMP" <<'PY'
+# The executor's pre-adoption duplicate screen is correct for pending objects,
+# but the same unconditional assertion cannot run after those exact bytes have
+# become the intended canonical destinations. Patch only the temporary runtime
+# copy: pending objects still reject any existing hash; already-adopted objects
+# must match the exact intended binding, destination, and bytes, and both full
+# repository gates continue enforcing cross-card uniqueness.
+python3 - "$EXECUTOR_SOURCE" "$EXECUTOR_TEMP" <<'PY_EXECUTOR'
 from pathlib import Path
 import sys
 
 source = Path(sys.argv[1])
 target = Path(sys.argv[2])
+text = source.read_text(encoding="utf-8")
+
+old_assert = '    assert(!existingHashes.has(item.sha256), `${item.obligation_id} duplicates an existing current-branch media byte`);\n'
+if text.count(old_assert) != 1:
+    raise SystemExit(f"post-apply duplicate assertion: expected one match, found {text.count(old_assert)}")
+text = text.replace(old_assert, "")
+
+old_pending = '''    if (currentSpecimen === null && currentSource === null) {
+      assert(!destinationExists, `${item.obligation_id} destination exists before adoption`);
+      state = "pending";
+'''
+new_pending = '''    if (currentSpecimen === null && currentSource === null) {
+      assert(!existingHashes.has(item.sha256), `${item.obligation_id} duplicates an existing current-branch media byte`);
+      assert(!destinationExists, `${item.obligation_id} destination exists before adoption`);
+      state = "pending";
+'''
+if text.count(old_pending) != 1:
+    raise SystemExit(f"pending duplicate assertion insertion: expected one match, found {text.count(old_pending)}")
+text = text.replace(old_pending, new_pending)
+
+target.write_text(text, encoding="utf-8")
+target.chmod(0o700)
+PY_EXECUTOR
+node --check "$EXECUTOR_TEMP"
+
+python3 - "$SOURCE" "$TEMP" "$EXECUTOR_TEMP" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+executor_temp = sys.argv[3]
 text = source.read_text(encoding="utf-8")
 
 
@@ -25,6 +66,11 @@ def replace_one(old: str, new: str, label: str) -> None:
     text = text.replace(old, new)
 
 
+replace_one(
+    'EXECUTOR="scripts/estate-adopt-pr88-direct-only-014.mjs"\n',
+    f'EXECUTOR="{executor_temp}"\nTRACKED_EXECUTOR="scripts/estate-adopt-pr88-direct-only-014.mjs"\n',
+    'temporary executor binding',
+)
 replace_one(
     'AUDITOR="scripts/estate-audit-pr88-direct-only-014.py"\n',
     '',
@@ -90,12 +136,12 @@ replace_one(
 )
 replace_one(
     'git rm "$AUDITOR" "$EXECUTOR" "$RUNNER"',
-    'git rm "$EXECUTOR" "$RUNNER" "scripts/estate-run-collect014-v2.sh"',
+    'git rm "$TRACKED_EXECUTOR" "$RUNNER" "scripts/estate-run-collect014-v2.sh"',
     'final executor cleanup',
 )
 replace_one(
     'EXPECTED_FINAL_PATHS="$(printf \'%s\\n%s\\n%s\\n%s\\n\' "$AUDITOR" "$EXECUTOR" "$PUBLICATION" "$RUNNER" | sort)"',
-    'EXPECTED_FINAL_PATHS="$(printf \'%s\\n%s\\n%s\\n%s\\n\' "$EXECUTOR" "$PUBLICATION" "$RUNNER" "scripts/estate-run-collect014-v2.sh" | sort)"',
+    'EXPECTED_FINAL_PATHS="$(printf \'%s\\n%s\\n%s\\n%s\\n\' "$TRACKED_EXECUTOR" "$PUBLICATION" "$RUNNER" "scripts/estate-run-collect014-v2.sh" | sort)"',
     'final path denominator',
 )
 replace_one(
