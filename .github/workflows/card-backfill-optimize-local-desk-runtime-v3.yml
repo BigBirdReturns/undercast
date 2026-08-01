@@ -1,4 +1,4 @@
-# validation-rearm: 1
+# validation-rearm: 2
 name: card-backfill-validate-headless-runtime
 
 on:
@@ -33,7 +33,7 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/statuses/${VALIDATION_HEAD}" \
             -f state=pending \
             -f context='card-backfill/local-desk-runtime' \
-            -f description="run ${GITHUB_RUN_ID}: validating pinned headless runtime and complete gate" \
+            -f description="run ${GITHUB_RUN_ID}: validating package-free discovery, pinned local desk, and complete gate" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
       - uses: actions/checkout@v4
@@ -45,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$VALIDATION_HEAD"
-          echo "PASS — headless runtime validation bound to $VALIDATION_HEAD"
+          echo "PASS — runtime validation bound to $VALIDATION_HEAD"
 
       - uses: actions/setup-node@v4
         with:
@@ -53,6 +53,21 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - name: Prove discovery exits before every package manager
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          REQUESTED_PROFILE=discovery GITHUB_JOB=discover RUNNER_TEMP="$RUNNER_TEMP" GITHUB_PATH="$GITHUB_PATH" \
+            bash --noprofile --norc -e -o pipefail < <(python3 - <<'PY'
+          import pathlib, yaml
+          value=yaml.safe_load(pathlib.Path('.github/actions/card-backfill-runtime/action.yml').read_text())
+          print(value['runs']['steps'][0]['run'])
+          PY
+            )
+          elapsed=$(( $(date +%s) - started ))
+          test "$elapsed" -le 5
+          echo "PASS — package-free discovery runtime ready in ${elapsed}s"
 
       - name: Measure the permanent local-desk runtime
         run: echo "runtime_started_at=$(date +%s)" >> "$GITHUB_ENV"
@@ -88,12 +103,12 @@ jobs:
           gh workflow run card-backfill-supervisor.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$HEAD_BRANCH" \
-            -f reason=headless-runtime-full-gate-pass
+            -f reason=package-free-discovery-full-gate-pass
           gh api -X POST \
             "repos/${GITHUB_REPOSITORY}/statuses/${VALIDATION_HEAD}" \
             -f state=success \
             -f context='card-backfill/local-desk-runtime' \
-            -f description="headless runtime ready in ${runtime_elapsed_seconds}s; full gate passed; supervisor rearmed" \
+            -f description="package-free discovery and ${runtime_elapsed_seconds}s local desk; full gate passed; supervisor rearmed" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           echo 'manual_continue_required=false'
 
@@ -105,5 +120,5 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/statuses/${VALIDATION_HEAD}" \
             -f state=failure \
             -f context='card-backfill/local-desk-runtime' \
-            -f description="run ${GITHUB_RUN_ID}: headless runtime or complete gate failed before supervisor rearm" \
+            -f description="run ${GITHUB_RUN_ID}: package-free discovery, headless runtime, or complete gate failed" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
