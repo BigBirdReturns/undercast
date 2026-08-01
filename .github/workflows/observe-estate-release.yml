@@ -1,0 +1,41 @@
+name: observe-estate-release
+
+on:
+  push:
+    branches: [agent/estate-release-finalize-001]
+    paths:
+      - .github/workflows/observe-estate-release.yml
+
+permissions:
+  actions: read
+  pull-requests: write
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Capture authoritative release runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow finalize-estate-release.yml --branch main --limit 20 \
+            --json databaseId,headSha,status,conclusion,event,url,createdAt,updatedAt > /tmp/finalizer-runs.json
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow preserve.yml --branch main --limit 20 \
+            --json databaseId,headSha,status,conclusion,event,url,createdAt,updatedAt > /tmp/preservation-runs.json
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow pages.yml --branch main --limit 20 \
+            --json databaseId,headSha,status,conclusion,event,url,createdAt,updatedAt > /tmp/pages-runs.json
+          node - <<'NODE' > /tmp/estate-release-observation.md
+          const fs = require('fs');
+          const rows = (path) => JSON.parse(fs.readFileSync(path, 'utf8'));
+          const choose = (items, predicate) => items.find(predicate) || null;
+          const finalizer = choose(rows('/tmp/finalizer-runs.json'), (run) => run.headSha === 'fc6da3b408d9763ed34c84640c91fd747fcd4bf9');
+          const preservation = choose(rows('/tmp/preservation-runs.json'), (run) => run.headSha === 'd723f84bc17a1f0561b9e54bb8238e1bffeb075f' && run.event === 'workflow_dispatch');
+          const pages = rows('/tmp/pages-runs.json').slice(0, 5);
+          console.log('## Read-only release observation');
+          console.log('');
+          console.log('```json');
+          console.log(JSON.stringify({ observed_at: new Date().toISOString(), finalizer, preservation, recent_pages: pages }, null, 2));
+          console.log('```');
+          NODE
+          gh pr comment 138 --repo "$GITHUB_REPOSITORY" --body-file /tmp/estate-release-observation.md
