@@ -32,17 +32,17 @@ function normalizedSource(source) {
 `  const candidate = legacy
     ? { path: raw.composition.file, sha256: raw.composition.sha256, mime: raw.composition.mime, width: raw.composition.width, height: raw.composition.height }
     : raw.candidate;
-  assert(candidate?.path && /^[0-9a-f]{64}$/.test(candidate.sha256 || ""), \`${key} candidate receipt is malformed\`);`,
+  assert(candidate?.path && /^[0-9a-f]{64}$/.test(candidate.sha256 || ""), \`\${key} candidate receipt is malformed\`);`,
 `  const renderedPermanent = Boolean(!legacy && !raw.candidate && raw.render?.candidate);
   const candidate = legacy
     ? { path: raw.composition.file, sha256: raw.composition.sha256, mime: raw.composition.mime, width: raw.composition.width, height: raw.composition.height }
     : renderedPermanent
       ? { ...raw.render.candidate, mime: raw.render.candidate.mime || null }
       : raw.candidate;
-  assert(candidate?.path && /^[0-9a-f]{64}$/.test(candidate.sha256 || ""), \`${key} candidate receipt is malformed\`);`,
+  assert(candidate?.path && /^[0-9a-f]{64}$/.test(candidate.sha256 || ""), \`\${key} candidate receipt is malformed\`);`,
 "rendered candidate adapter");
   text = replaceExactly(text,
-`  const reviewDoc = legacy ? await readJson(root, \`${imported.root}/review.json\`, \`${key} legacy review\`, false) : null;
+`  const reviewDoc = legacy ? await readJson(root, \`\${imported.root}/review.json\`, \`\${key} legacy review\`, false) : null;
   const modernReview = raw.exact_subject_review || null;
   const reviewReady = legacy
     ? legacyReviewPassed(reviewDoc?.value)
@@ -51,7 +51,7 @@ function normalizedSource(source) {
       && acceptedIdentity(modernReview?.identity)
       && acceptedPresentation(modernReview?.presentation)
       && modernCropPassed(modernReview));`,
-`  const reviewDoc = (legacy || renderedPermanent) ? await readJson(root, \`${imported.root}/review.json\`, \`${key} packet review\`, false) : null;
+`  const reviewDoc = (legacy || renderedPermanent) ? await readJson(root, \`\${imported.root}/review.json\`, \`\${key} packet review\`, false) : null;
   const modernReview = raw.exact_subject_review || null;
   const renderedReview = reviewDoc?.value || null;
   const renderedReviewReady = Boolean(renderedPermanent
