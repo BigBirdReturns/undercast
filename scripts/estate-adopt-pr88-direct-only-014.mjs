@@ -411,12 +411,19 @@ async function inspectTransaction({ root = process.cwd(), sourceRoot = DEFAULTS.
   assert(cropManifest.items?.length === 9, "PR #88 crop manifest denominator drifted");
   const cropByKey = new Map(cropManifest.items.map((row) => [row.obligation_id, row]));
 
-  const existingHashes = new Set();
-  for (const asset of Object.values(mediaManifestDoc.value.assets || {})) if (/^[0-9a-f]{64}$/.test(asset?.sha256 || "")) existingHashes.add(asset.sha256);
-  for (const absolute of await listFilesRecursively(path.join(resolvedRoot, "images"))) {
-    const bytes = await readFile(absolute);
-    existingHashes.add(sha256(bytes));
-  }
+  const existingByHash = new Map();
+const addExisting = (hash, label) => {
+  if (!/^[0-9a-f]{64}$/.test(hash || "")) return;
+  const rows = existingByHash.get(hash) || [];
+  rows.push(label);
+  existingByHash.set(hash, rows);
+};
+for (const [src, asset] of Object.entries(mediaManifestDoc.value.assets || {})) addExisting(asset?.sha256, `manifest:${src}`);
+for (const absolute of await listFilesRecursively(path.join(resolvedRoot, "images"))) {
+  const bytes = await readFile(absolute);
+  const relative = path.relative(resolvedRoot, absolute).split(path.sep).join("/");
+  addExisting(sha256(bytes), relative);
+}
   assert(new Set(ITEMS.map((item) => item.sha256)).size === ITEMS.length, "PR #88 candidate set contains duplicate bytes");
 
   const specimenById = new Map(specimensDoc.value.map((row) => [row.id, row]));
@@ -431,7 +438,6 @@ async function inspectTransaction({ root = process.cwd(), sourceRoot = DEFAULTS.
     assert(candidateStat.isFile(), `${item.obligation_id} source candidate is not a file`);
     assert(candidateBytes.length === item.bytes, `${item.obligation_id} candidate byte count drifted`);
     assert(sha256(candidateBytes) === item.sha256, `${item.obligation_id} candidate SHA-256 drifted`);
-    assert(!existingHashes.has(item.sha256), `${item.obligation_id} duplicates an existing current-branch media byte`);
 
     const provenanceDoc = evidenceDocs.get(item.provenance)?.value;
     const resolutionDoc = evidenceDocs.get(item.resolution)?.value;
@@ -471,15 +477,20 @@ async function inspectTransaction({ root = process.cwd(), sourceRoot = DEFAULTS.
     const currentSpecimen = specimen[item.side] ?? null;
     const currentSource = source[item.side] ?? null;
     const destinationExists = await exists(destination.absolute);
+    const duplicateMatches = existingByHash.get(item.sha256) || [];
+    const forbiddenMatches = duplicateMatches.filter((match) => match !== item.destination);
+    assert(forbiddenMatches.length === 0, `${item.obligation_id} duplicates existing current-branch media outside its intended destination: ${forbiddenMatches.join(", ")}`);
     let state;
     if (currentSpecimen === null && currentSource === null) {
       assert(!destinationExists, `${item.obligation_id} destination exists before adoption`);
-      state = "pending";
+    assert(duplicateMatches.length === 0, `${item.obligation_id} candidate bytes already exist before adoption: ${duplicateMatches.join(", ")}`);
+    state = "pending";
     } else {
       assert(sameJson(currentSpecimen, intended) && sameJson(currentSource, intended), `${item.obligation_id} current binding is neither null nor the exact intended adoption`);
       assert(destinationExists, `${item.obligation_id} adopted destination is missing`);
       assert(sha256(await readFile(destination.absolute)) === item.sha256, `${item.obligation_id} adopted destination bytes drifted`);
-      state = "already-adopted";
+    assert(duplicateMatches.length === 1 && duplicateMatches[0] === item.destination, `${item.obligation_id} adopted hash custody is not exactly its intended destination: ${duplicateMatches.join(", ")}`);
+    state = "already-adopted";
     }
     contexts.push({ item, specimen, source, candidateBytes, destination, intended, state, provenance, identityVote, presentationVote, crop });
   }
