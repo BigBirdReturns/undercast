@@ -107,5 +107,11 @@ try {
   await rm(receiptRoot, { recursive: true, force: true });
 }
 
+const workflowPath = fileURLToPath(new URL('../.github/workflows/preserve.yml', import.meta.url));
+const workflow = await readFile(workflowPath, 'utf8');
+expect('preservation workflow does not swallow required receipt staging errors', /git add preservation\/SNAPSHOTS\.json[\s\S]*data\/journal\/autopilot\.jsonl\n\s*if \[ -e preservation\/BOOTSTRAP-PENDING \]; then/.test(workflow), true);
+expect('optional bootstrap marker is staged conditionally', workflow.includes('if [ -e preservation/BOOTSTRAP-PENDING ]; then\n            git add preservation/BOOTSTRAP-PENDING\n          fi'), true);
+expect('preservation workflow has no broad git-add error suppression', /git add preservation\/SNAPSHOTS\.json[\s\S]{0,400}\|\| true/.test(workflow), false);
+
 console.log(failures ? `\n${failures} preservation fixture(s) FAILED` : '\nall preservation fixtures pass');
 process.exit(failures ? 1 : 0);
