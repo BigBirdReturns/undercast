@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { collectKnownMediaCorrections } from "./lib/estate-known-media-corrections.mjs";
+import {
+  applyKnownMediaCorrectionPlan,
+  loadKnownMediaCorrectionPlan,
+} from "./lib/estate-known-media-corrections.mjs";
+
+const FERENGI_ROOT_LEDGER = "data/review/ferengi-gold/final-portraits-correction-2026-07-25.json";
 
 function option(args, name, fallback = null) {
   const index = args.indexOf(name);
@@ -14,8 +19,16 @@ function option(args, name, fallback = null) {
 export async function main(argv = process.argv.slice(2)) {
   const root = path.resolve(option(argv, "--root", "."));
   const write = argv.includes("--write");
-  const report = await collectKnownMediaCorrections({
+  const declaredPlan = await loadKnownMediaCorrectionPlan({ root });
+  const rootOnly = declaredPlan.filter((row) => row.ledger === FERENGI_ROOT_LEDGER);
+  const activePlan = declaredPlan.filter((row) => row.ledger !== FERENGI_ROOT_LEDGER);
+  if (declaredPlan.length !== 71 || activePlan.length !== 61 || rootOnly.length !== 10) {
+    throw new Error(`correction classification drifted: declared=${declaredPlan.length} active=${activePlan.length} root-only=${rootOnly.length}`);
+  }
+
+  const report = await applyKnownMediaCorrectionPlan({
     root,
+    plan: activePlan,
     write,
     specimensPath: option(argv, "--specimens", "data/specimens.json"),
     sourcesPath: option(argv, "--sources", "data/SOURCES.json"),
@@ -26,7 +39,13 @@ export async function main(argv = process.argv.slice(2)) {
     transaction: report.transaction,
     operation: report.operation,
     mode: report.mode,
-    denominator: report.denominator,
+    estate_denominator: {
+      declared_invalid_bindings: declaredPlan.length,
+      active_current_main_obligations: activePlan.length,
+      unmerged_pr86_only_obligations: rootOnly.length,
+      active_current_main_result: report.denominator,
+    },
+    root_only: rootOnly.map(({ id, side, preserved_path, sha256, ledger }) => ({ id, side, preserved_path, sha256, ledger, state: "never-landed-on-current-main" })),
     specimens: report.source.specimens,
     sources: report.source.sources,
     next: write
