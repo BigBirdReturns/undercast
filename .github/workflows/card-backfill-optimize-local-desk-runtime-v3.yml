@@ -1,0 +1,119 @@
+name: card-backfill-optimize-local-desk-runtime-v3
+
+on:
+  push:
+    branches:
+      - agent/card-backfill-next-041
+    paths:
+      - '.github/workflows/card-backfill-optimize-local-desk-runtime-v3.yml'
+
+permissions:
+  contents: write
+  actions: write
+  statuses: write
+
+concurrency:
+  group: card-backfill-optimize-local-desk-runtime-v3-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HEAD_BRANCH: ${{ github.ref_name }}
+      OPTIMIZE_HEAD: ${{ github.sha }}
+    steps:
+      - name: Publish observable optimization heartbeat
+        run: |
+          set -euo pipefail
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${OPTIMIZE_HEAD}" \
+            -f state=pending \
+            -f context='card-backfill/local-desk-runtime' \
+            -f description="run ${GITHUB_RUN_ID}: deterministic headless runtime migration started" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Bind the deterministic runtime migration head
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$OPTIMIZE_HEAD"
+          echo "PASS — deterministic runtime migration bound to $OPTIMIZE_HEAD"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Construct the permanent runtime transaction
+        run: |
+          set -euo pipefail
+          node scripts/card-backfill-optimize-headless-runtime.mjs
+          grep -F 'REQUESTED_PROFILE: ${{ inputs.profile }}' .github/actions/card-backfill-runtime/action.yml
+
+      - uses: ./.github/actions/card-backfill-runtime
+        with:
+          profile: local-desk
+
+      - name: Install complete rendered-gate runtime
+        run: npx playwright install --with-deps chromium
+
+      - name: Stage and prove the exact two-file transaction
+        run: |
+          set -euo pipefail
+          git add -- \
+            .github/actions/card-backfill-runtime/action.yml \
+            scripts/card-backfill-amortization-fixtures.mjs
+          git diff --cached --check
+          git diff --cached --name-only | sort > "$RUNNER_TEMP/actual.txt"
+          cat > "$RUNNER_TEMP/expected.txt" <<'PATHS'
+          .github/actions/card-backfill-runtime/action.yml
+          scripts/card-backfill-amortization-fixtures.mjs
+          PATHS
+          diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/actual.txt"
+          node scripts/card-backfill-amortization-fixtures.mjs
+          npm run gate
+
+      - name: Commit, exact-head push, and rearm the supervisor
+        run: |
+          set -euo pipefail
+          git config user.name 'undercast-card-backfill-runtime'
+          git config user.email 'undercast-card-backfill-runtime@users.noreply.github.com'
+          git commit -m 'Card backfill: replace distro OpenCV with pinned headless runtime'
+          remote_head=$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | awk '{print $1}')
+          if [ "$remote_head" != "$OPTIMIZE_HEAD" ]; then
+            echo "branch moved from optimization head $OPTIMIZE_HEAD to $remote_head; refusing stale runtime push" >&2
+            exit 1
+          fi
+          git push origin "HEAD:${HEAD_BRANCH}"
+          final_head=$(git rev-parse HEAD)
+          gh workflow run card-backfill-supervisor.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$HEAD_BRANCH" \
+            -f reason=local-desk-headless-runtime-activated
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${final_head}" \
+            -f state=success \
+            -f context='card-backfill/local-desk-runtime' \
+            -f description='pinned headless OpenCV activated; cached frontier rearmed' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo 'manual_continue_required=false'
+
+      - name: Publish observable optimization failure
+        if: failure()
+        run: |
+          set -euo pipefail
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${OPTIMIZE_HEAD}" \
+            -f state=failure \
+            -f context='card-backfill/local-desk-runtime' \
+            -f description="run ${GITHUB_RUN_ID}: deterministic runtime migration failed before a production commit" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
