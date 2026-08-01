@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   initializeDisposableVerificationIndex,
+  selectExecutablePublicationPaths,
   validateExecutedRestoreReceipt,
 } from "./operational-reliability-execute.mjs";
 import { EVIDENCE_TIER, sha256 } from "./operational-reliability.mjs";
@@ -24,6 +25,27 @@ try {
   assert.equal(verificationIndex.initialized_after_exact_tree_proof, true);
   assert.equal(verificationIndex.source_history_restored, false);
   assert.ok((await stat(path.join(root, ".git"))).isDirectory());
+
+  const publicationRoot = path.join(root, "publication-surface");
+  for (const directory of ["data", "records/UC-001", "records/UC-002", "images"]) await mkdir(path.join(publicationRoot, directory), { recursive: true });
+  await writeFile(path.join(publicationRoot, "index.html"), "<!doctype html><title>publication</title>\n");
+  await writeFile(path.join(publicationRoot, "data", "quality.json"), '{"total":2}\n');
+  await writeFile(path.join(publicationRoot, "data", "specimens.json"), JSON.stringify([{ id: "UC-002" }, { id: "UC-001" }]) + "\n");
+  await writeFile(path.join(publicationRoot, "records", "UC-001", "index.html"), "UC-001\n");
+  await writeFile(path.join(publicationRoot, "records", "UC-002", "index.html"), "UC-002\n");
+  await writeFile(path.join(publicationRoot, "images", "README.md"), "not an image\n");
+  await writeFile(path.join(publicationRoot, "images", "a.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+  await writeFile(path.join(publicationRoot, "images", "b.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const publicationPaths = await selectExecutablePublicationPaths(publicationRoot, 2, 2);
+  assert.deepEqual(publicationPaths, [
+    "data/quality.json",
+    "images/a.jpg",
+    "images/b.png",
+    "index.html",
+    "records/UC-001/index.html",
+    "records/UC-002/index.html",
+  ]);
+  assert.ok(!publicationPaths.includes("images/README.md"));
 
   const receipt = {
     version: 1,
