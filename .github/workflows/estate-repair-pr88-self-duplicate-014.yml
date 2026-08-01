@@ -58,12 +58,12 @@ jobs:
           path = Path('scripts/estate-adopt-pr88-direct-only-014.mjs')
           text = path.read_text(encoding='utf-8')
 
-          old_index = '''  const existingHashes = new Set();
-          for (const asset of Object.values(mediaManifestDoc.value.assets || {})) if (/^[0-9a-f]{64}$/.test(asset?.sha256 || "")) existingHashes.add(asset.sha256);
-          for (const absolute of await listFilesRecursively(path.join(resolvedRoot, "images"))) {
-            const bytes = await readFile(absolute);
-            existingHashes.add(sha256(bytes));
-          }'''
+          index_start = '  const existingHashes = new Set();'
+          index_end = '  assert(new Set(ITEMS.map((item) => item.sha256)).size === ITEMS.length, "PR #88 candidate set contains duplicate bytes");'
+          start = text.find(index_start)
+          end = text.find(index_end, start)
+          if start < 0 or end < 0:
+              raise SystemExit(f'existing-hash index boundaries missing: start={start}, end={end}')
           new_index = '''  const existingByHash = new Map();
           const addExisting = (hash, label) => {
             if (!/^[0-9a-f]{64}$/.test(hash || "")) return;
@@ -76,48 +76,40 @@ jobs:
             const bytes = await readFile(absolute);
             const relative = path.relative(resolvedRoot, absolute).split(path.sep).join("/");
             addExisting(sha256(bytes), relative);
-          }'''
-          if text.count(old_index) != 1:
-              raise SystemExit(f'existing-hash index expected one match, found {text.count(old_index)}')
-          text = text.replace(old_index, new_index)
+          }
+          '''
+          text = text[:start] + new_index + text[end:]
 
-          old_assert = '''    assert(sha256(candidateBytes) === item.sha256, `${item.obligation_id} candidate SHA-256 drifted`);
-              assert(!existingHashes.has(item.sha256), `${item.obligation_id} duplicates an existing current-branch media byte`);'''
-          new_assert = '''    assert(sha256(candidateBytes) === item.sha256, `${item.obligation_id} candidate SHA-256 drifted`);'''
-          if text.count(old_assert) != 1:
-              raise SystemExit(f'early duplicate assertion expected one match, found {text.count(old_assert)}')
-          text = text.replace(old_assert, new_assert)
+          early_assert = '    assert(!existingHashes.has(item.sha256), `${item.obligation_id} duplicates an existing current-branch media byte`);\n'
+          if text.count(early_assert) != 1:
+              raise SystemExit(f'early duplicate assertion expected one match, found {text.count(early_assert)}')
+          text = text.replace(early_assert, '')
 
-          old_state = '''    const destinationExists = await exists(destination.absolute);
-              let state;
-              if (currentSpecimen === null && currentSource === null) {
-                assert(!destinationExists, `${item.obligation_id} destination exists before adoption`);
-                state = "pending";
-              } else {
-                assert(sameJson(currentSpecimen, intended) && sameJson(currentSource, intended), `${item.obligation_id} current binding is neither null nor the exact intended adoption`);
-                assert(destinationExists, `${item.obligation_id} adopted destination is missing`);
-                assert(sha256(await readFile(destination.absolute)) === item.sha256, `${item.obligation_id} adopted destination bytes drifted`);
-                state = "already-adopted";
-              }'''
-          new_state = '''    const destinationExists = await exists(destination.absolute);
+          state_anchor = '    const destinationExists = await exists(destination.absolute);\n    let state;'
+          state_insert = '''    const destinationExists = await exists(destination.absolute);
               const duplicateMatches = existingByHash.get(item.sha256) || [];
               const forbiddenMatches = duplicateMatches.filter((match) => match !== item.destination);
               assert(forbiddenMatches.length === 0, `${item.obligation_id} duplicates existing current-branch media outside its intended destination: ${forbiddenMatches.join(", ")}`);
-              let state;
-              if (currentSpecimen === null && currentSource === null) {
-                assert(!destinationExists, `${item.obligation_id} destination exists before adoption`);
-                assert(duplicateMatches.length === 0, `${item.obligation_id} candidate bytes already exist before adoption: ${duplicateMatches.join(", ")}`);
-                state = "pending";
-              } else {
-                assert(sameJson(currentSpecimen, intended) && sameJson(currentSource, intended), `${item.obligation_id} current binding is neither null nor the exact intended adoption`);
-                assert(destinationExists, `${item.obligation_id} adopted destination is missing`);
-                assert(sha256(await readFile(destination.absolute)) === item.sha256, `${item.obligation_id} adopted destination bytes drifted`);
-                assert(duplicateMatches.length === 1 && duplicateMatches[0] === item.destination, `${item.obligation_id} adopted hash custody is not exactly its intended destination: ${duplicateMatches.join(", ")}`);
-                state = "already-adopted";
-              }'''
-          if text.count(old_state) != 1:
-              raise SystemExit(f'state transition block expected one match, found {text.count(old_state)}')
-          text = text.replace(old_state, new_state)
+              let state;'''
+          if text.count(state_anchor) != 1:
+              raise SystemExit(f'state insertion point expected one match, found {text.count(state_anchor)}')
+          text = text.replace(state_anchor, state_insert)
+
+          pending_anchor = '      assert(!destinationExists, `${item.obligation_id} destination exists before adoption`);\n      state = "pending";'
+          pending_insert = '''      assert(!destinationExists, `${item.obligation_id} destination exists before adoption`);
+              assert(duplicateMatches.length === 0, `${item.obligation_id} candidate bytes already exist before adoption: ${duplicateMatches.join(", ")}`);
+              state = "pending";'''
+          if text.count(pending_anchor) != 1:
+              raise SystemExit(f'pending-state insertion point expected one match, found {text.count(pending_anchor)}')
+          text = text.replace(pending_anchor, pending_insert)
+
+          adopted_anchor = '      assert(sha256(await readFile(destination.absolute)) === item.sha256, `${item.obligation_id} adopted destination bytes drifted`);\n      state = "already-adopted";'
+          adopted_insert = '''      assert(sha256(await readFile(destination.absolute)) === item.sha256, `${item.obligation_id} adopted destination bytes drifted`);
+              assert(duplicateMatches.length === 1 && duplicateMatches[0] === item.destination, `${item.obligation_id} adopted hash custody is not exactly its intended destination: ${duplicateMatches.join(", ")}`);
+              state = "already-adopted";'''
+          if text.count(adopted_anchor) != 1:
+              raise SystemExit(f'adopted-state insertion point expected one match, found {text.count(adopted_anchor)}')
+          text = text.replace(adopted_anchor, adopted_insert)
 
           path.write_text(text, encoding='utf-8')
           PY
@@ -127,6 +119,7 @@ jobs:
           grep -Fq 'forbiddenMatches.length === 0' "$EXECUTOR"
           grep -Fq 'duplicateMatches.length === 0' "$EXECUTOR"
           grep -Fq 'duplicateMatches.length === 1 && duplicateMatches[0] === item.destination' "$EXECUTOR"
+          ! grep -Fq 'existingHashes.has' "$EXECUTOR"
           git diff --check -- "$EXECUTOR"
 
       - name: Gate executor repair
