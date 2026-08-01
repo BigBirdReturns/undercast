@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -50,6 +51,14 @@ try {
   runGit(["commit", "-m", "base"]);
   await writeFile(fixture, "changed\n");
   expectThrows("dirty working tree is observable", () => runCommand("drift", "git", ["diff", "--exit-code"], { cwd: driftRoot, stdio: "pipe" }), /failed with code/);
+
+  const residualWave = path.join(process.cwd(), "data/review/residual-denominator/wave-01.json");
+  expect("residual-denominator wave packet is present", existsSync(residualWave), true);
+  if (existsSync(residualWave)) {
+    runCommand("Residual-denominator exact-byte check", process.execPath, [path.join(process.cwd(), "scripts/residual-denominator.mjs"), "--check"], { cwd: process.cwd(), stdio: "pipe" });
+    runCommand("Residual-denominator adversarial fixtures", process.execPath, [path.join(process.cwd(), "test/residual-denominator-fixtures.mjs")], { cwd: process.cwd(), stdio: "pipe" });
+    pass("canonical gate fixtures execute residual-denominator exact-byte and adversarial checks");
+  }
 
   const steps = listSteps();
   expect("canonical gate has one media-audit step", steps.filter((step) => step.id === "media-audit").length, 1);
