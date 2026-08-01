@@ -8,12 +8,16 @@ on:
     paths:
       - .github/workflows/estate-collect-known-media-corrections.yml
       - data/MEDIA-AUDIT-SCOPES.json
+      - data/quality-baseline.json
       - data/review/ferengi-gold/final-portraits-correction-2026-07-25.json
       - data/review/sitewide-actor-origin-vlm-correction-2026-07-25.json
       - data/review/sitewide-media-correction-2026-07-25.json
       - data/review/sitewide-near-duplicate-correction-2026-07-25.json
       - scripts/estate-collect-known-media-corrections.mjs
       - scripts/estate-known-media-corrections-fixtures.mjs
+      - scripts/estate-quality-baseline-fixtures.mjs
+      - scripts/estate-quality-baseline.mjs
+      - scripts/gate.mjs
       - scripts/lib/estate-known-media-corrections.mjs
       - scripts/lib/media-audit.mjs
       - scripts/media-audit-fixtures.mjs
@@ -41,7 +45,7 @@ jobs:
           gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF
           COLLECT-001 correction transaction started on workflow run $GITHUB_RUN_ID.
 
-          The run will classify 10 invalid Ferengi portraits as unmerged PR #86 debt, test 61 active current-main corrections, rebuild the audit and serving projections, run the complete gate, and push only the exact gated tree.
+          The run will classify 10 invalid Ferengi portraits as unmerged PR #86 debt, test 61 active current-main corrections, reset the occupancy baseline to exact corrected truth with zero margin, rebuild every affected projection and route, run the complete gate, and push only the exact gated tree.
           EOF
 
       - uses: actions/checkout@v4
@@ -63,6 +67,12 @@ jobs:
       - name: Prove correction transaction fixtures
         run: node scripts/estate-known-media-corrections-fixtures.mjs
 
+      - name: Prove quality reset fixtures
+        run: node scripts/estate-quality-baseline-fixtures.mjs
+
+      - name: Capture exact pre-correction quality projection
+        run: git show HEAD:data/quality.json > /tmp/COLLECT-001-quality-before.json
+
       - name: Prove exact current-head correction denominator
         id: preflight
         run: |
@@ -80,11 +90,24 @@ jobs:
           NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           node scripts/estate-collect-known-media-corrections.mjs --write --now "$NOW"
 
-      - name: Rebuild media audit and serving projections
+      - name: Rebuild media audit and first serving projection
         run: |
           set -euo pipefail
           npm run media:audit -- sync
           node scripts/shard.mjs
+
+      - name: Reset quality floor to exact corrected truth
+        id: quality
+        run: |
+          set -euo pipefail
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          node scripts/estate-quality-baseline.mjs --write --before-quality /tmp/COLLECT-001-quality-before.json --now "$NOW" | tee /tmp/COLLECT-001-quality-rebase.json
+          node scripts/shard.mjs
+          node scripts/build-record-pages.mjs
+          PAIR_RATIO="$(node -p "require('./data/quality.json').metrics.complete_pair_ratio")"
+          MISSING_BOTH_RATIO="$(node -p "require('./data/quality.json').metrics.missing_both_ratio")"
+          echo "pair_ratio=$PAIR_RATIO" >> "$GITHUB_OUTPUT"
+          echo "missing_both_ratio=$MISSING_BOTH_RATIO" >> "$GITHUB_OUTPUT"
 
       - name: Stage exact intended tree
         id: staged
@@ -93,6 +116,8 @@ jobs:
           git add -A
           git diff --cached --check
           git diff --cached --name-status
+          git diff --cached --binary > /tmp/COLLECT-001-known-media-corrections.patch
+          git write-tree > /tmp/COLLECT-001-known-media-corrections.tree
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
@@ -107,8 +132,9 @@ jobs:
           set -euo pipefail
           git diff --exit-code
           git diff --cached --check
-          git diff --cached --binary > /tmp/COLLECT-001-known-media-corrections.patch
-          git write-tree > /tmp/COLLECT-001-known-media-corrections.tree
+          PRE_TREE="$(cat /tmp/COLLECT-001-known-media-corrections.tree)"
+          POST_TREE="$(git write-tree)"
+          test "$PRE_TREE" = "$POST_TREE"
 
       - name: Commit exact gated tree
         if: steps.staged.outputs.changed == 'true'
@@ -117,7 +143,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           TREE_SHA="$(cat /tmp/COLLECT-001-known-media-corrections.tree)"
-          git commit -m "Estate collection: retire 71 known invalid media bindings" -m "active_current_main_nullifications=61" -m "unmerged_pr86_rejections=10" -m "workflow_run=${GITHUB_RUN_ID}" -m "gated_tree=${TREE_SHA}"
+          git commit -m "Estate collection: retire 71 known invalid media bindings" -m "active_current_main_nullifications=61" -m "unmerged_pr86_rejections=10" -m "quality_floor_reset=exact_corrected_truth" -m "workflow_run=${GITHUB_RUN_ID}" -m "gated_tree=${TREE_SHA}"
           git push origin HEAD:agent/estate-consolidation-001
 
       - name: Report successful payment
@@ -130,10 +156,12 @@ jobs:
 
           Active current-main corrections pending at preflight: ${{ steps.preflight.outputs.pending }}.
           Exact staged tree changed: ${{ steps.staged.outputs.changed }}.
+          Corrected complete-pair floor: ${{ steps.quality.outputs.pair_ratio }}.
+          Corrected missing-both ceiling: ${{ steps.quality.outputs.missing_both_ratio }}.
           Validated checkout head: $HEAD_SHA.
           Gated tree: $TREE_SHA.
 
-          Ten false Ferengi portraits remain classified as never-landed PR #86 debt. The active current-main correction lane and synchronized projections passed the complete canonical gate.
+          Ten false Ferengi portraits remain classified as never-landed PR #86 debt. Sixty-one active current-main bindings were nullified under exact path and byte custody. The media audit, serving projections, record routes, zero-margin quality reset, and complete canonical gate all passed.
           EOF
 
       - name: Report failed payment attempt
@@ -142,7 +170,7 @@ jobs:
           gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF
           COLLECT-001 correction transaction failed closed on workflow run $GITHUB_RUN_ID.
 
-          No completion claim is authorized. Inspect the failed step and retained artifact before changing the denominator, evidence requirement, current binding, or gate.
+          No completion claim is authorized. Inspect the failed step and retained artifact before changing the denominator, evidence requirement, current binding, quality receipt, or gate.
           EOF
 
       - name: Preserve exact transaction patch
@@ -152,7 +180,13 @@ jobs:
           name: COLLECT-001-known-media-corrections-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             /tmp/COLLECT-001-preflight.json
+            /tmp/COLLECT-001-quality-before.json
+            /tmp/COLLECT-001-quality-rebase.json
             /tmp/COLLECT-001-known-media-corrections.patch
             /tmp/COLLECT-001-known-media-corrections.tree
+            data/quality-baseline.json
+            data/quality.json
+            data/review/estate-debt/COLLECT-001-KNOWN-MEDIA-CORRECTIONS-APPLY.json
+            data/review/estate-debt/COLLECT-001-QUALITY-BASELINE-RESET.json
           if-no-files-found: warn
           retention-days: 30
