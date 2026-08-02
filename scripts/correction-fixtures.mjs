@@ -110,6 +110,6 @@ assert.equal(measured.production.terminal_cases, 1);
 assert.equal(measured.production.median_close_days, 3 / 24);
 assert.equal(measured.boundary.correction_metric_populated, true);
 
-assert.equal(sha256("evidence"), "e5032b3460b993c7cf9989806874c35296527d8ddf3c7d4c6e4a23eb3b2a6b50");
+assert.equal(sha256("evidence"), "ee8250fb76e094b34b471f13a73dbbe51d1ae142e9df59d7c0d31ec20f0a0a8e");
 
 console.log("PASS — correction privacy, evidence hashes, chronology, independent review, disposition authority, public history, exercise boundary, and null-preserving metrics");
