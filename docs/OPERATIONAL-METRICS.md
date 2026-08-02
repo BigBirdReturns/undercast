@@ -59,3 +59,7 @@ node scripts/operational-metrics-ledger.mjs issue-payload ...
 ```
 
 Both metric fixture suites execute inside the canonical waterline gate.
+
+### Observation-source migration
+
+Historical numeric receipts retain their recorded source as immutable evidence. A reviewed `observation_source` migration does not make those receipts structurally invalid. Readiness compares the latest receipt with the current configured source, reports `measured-against-wrong-ledger`, and blocks until `record-metrics` binds the validated replacement ledger.

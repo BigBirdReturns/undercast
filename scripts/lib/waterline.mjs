@@ -151,7 +151,7 @@ export function validateWaterlineState(doc, config) {
       const binding = bindings[key];
       if (value !== null && policy?.mode === "when-observed") {
         if (!binding || typeof binding !== "object" || Array.isArray(binding)) throw new Error(`metric receipt ${receipt.id} needs observation binding for ${key}`);
-        if (requireString(binding.source, `metric receipt ${receipt.id}.observation_bindings.${key}.source`) !== policy.observation_source) throw new Error(`metric receipt ${receipt.id}.${key} binds the wrong observation source`);
+        requireString(binding.source, `metric receipt ${receipt.id}.observation_bindings.${key}.source`);
         if (!/^[0-9a-f]{64}$/.test(String(binding.sha256 || ""))) throw new Error(`metric receipt ${receipt.id}.${key}.sha256 must be a sha256`);
         if (!Number.isSafeInteger(binding.population) || binding.population < 1) throw new Error(`metric receipt ${receipt.id}.${key}.population must be positive`);
         if (!Number.isFinite(binding.value) || binding.value < 0) throw new Error(`metric receipt ${receipt.id}.${key}.value must be non-negative`);

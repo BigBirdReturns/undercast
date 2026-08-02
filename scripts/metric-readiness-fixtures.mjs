@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { makeMetricsReceipt } from "./lib/waterline.mjs";
+import {
+  emptyWaterlineState,
+  makeMetricsReceipt,
+  validateWaterlineState,
+} from "./lib/waterline.mjs";
 import {
   applyMetricReadinessPolicy,
   metricObservationSnapshotsFromLedgers,
@@ -10,6 +14,14 @@ import {
 
 const config = {
   version: 1,
+  scopes: [{
+    id: "star-trek",
+    label: "Star Trek",
+    roadmap_milestone: "star-trek-gold-shard",
+    required_closed_cycles: 3,
+    max_tasks_per_cycle: 12,
+    minimum_resolved_per_cycle: 1,
+  }],
   operations: {
     required_drills: ["repository-restore", "publication-rollback"],
     slo_targets: {
@@ -274,6 +286,61 @@ assert.throws(() => makeMetricsReceipt({
   observationSnapshots: emptySnapshots,
 }), /requires a populated validated observation snapshot/);
 
+const migratedCostSource = "data/operational-reliability/COST-OBSERVATIONS-V2.json";
+const migratedConfig = structuredClone(config);
+migratedConfig.operations.metric_readiness.cost_per_verified_record_usd.observation_source = migratedCostSource;
+const migrationState = emptyWaterlineState();
+migrationState.metrics = { ...baseState().metrics };
+const historicalResult = makeMetricsReceipt({
+  metrics: { cost_per_verified_record_usd: 4.25 },
+  reviewed_by: "second-desk",
+  reviewed_role: "second-desk",
+  reviewed_at: "2026-08-02T03:15:00Z",
+  note: "Measured the original configured cost ledger before source migration.",
+  evidence: [{ type: "report", value: "cost-original.json" }],
+}, migrationState.metrics, {
+  metricReadiness: config.operations.metric_readiness,
+  observationSnapshots: oneCostSnapshots,
+});
+migrationState.metrics = historicalResult.metrics;
+migrationState.metric_receipts.push(historicalResult.receipt);
+assert.doesNotThrow(() => validateWaterlineState(migrationState, migratedConfig));
+const migratedSnapshots = {
+  ...oneCostSnapshots,
+  cost_per_verified_record_usd: {
+    ...oneCostSnapshots.cost_per_verified_record_usd,
+    source: migratedCostSource,
+  },
+};
+status = applyMetricReadinessPolicy(baseStatus(), {
+  config: migratedConfig,
+  state: migrationState,
+  observationSnapshots: migratedSnapshots,
+});
+assert.equal(status.evidence_readiness.operational_reliability, false);
+assert.deepEqual(status.evidence_readiness.metric_ledger_regressions, ["cost_per_verified_record_usd"]);
+assert.equal(status.evidence_readiness.metric_states.cost_per_verified_record_usd.status, "measured-against-wrong-ledger");
+const reboundResult = makeMetricsReceipt({
+  metrics: { cost_per_verified_record_usd: 4.25 },
+  reviewed_by: "second-desk",
+  reviewed_role: "second-desk",
+  reviewed_at: "2026-08-02T03:20:00Z",
+  note: "Rebound the measured value to the reviewed replacement observation source.",
+  evidence: [{ type: "report", value: "cost-migrated.json" }],
+}, migrationState.metrics, {
+  metricReadiness: migratedConfig.operations.metric_readiness,
+  observationSnapshots: migratedSnapshots,
+});
+migrationState.metrics = reboundResult.metrics;
+migrationState.metric_receipts.push(reboundResult.receipt);
+assert.doesNotThrow(() => validateWaterlineState(migrationState, migratedConfig));
+status = applyMetricReadinessPolicy(baseStatus(), {
+  config: migratedConfig,
+  state: migrationState,
+  observationSnapshots: migratedSnapshots,
+});
+assert.equal(status.evidence_readiness.operational_reliability, true);
+assert.equal(status.evidence_readiness.metric_states.cost_per_verified_record_usd.status, "measured");
 status = applyMetricReadinessPolicy({
   ...baseStatus(),
   evidence_readiness: { ...baseStatus().evidence_readiness, missing_drills: ["publication-rollback"] },
@@ -302,4 +369,4 @@ status = applyMetricReadinessPolicy(baseStatus(), {
 });
 assert.deepEqual(status.evidence_readiness.missing_required_metrics, ["source_freshness_p95_days"]);
 
-console.log("PASS — configured ledger sources, validated rows, exact byte/population/value bindings, mismatched-value refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");
+console.log("PASS — configured ledger sources, historical source migration and rebind, validated rows, exact byte/population/value bindings, mismatched-value refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");
