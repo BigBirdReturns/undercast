@@ -12,6 +12,14 @@ Trusted performer parameters are limited to `actor`, `actors`, `performer`, `per
 
 An explicit voice-actor field maps to `voice`. An explicit suit-actor field maps to `physical-prosthetic`. A generic actor field establishes the performer-role join but does not establish which designed form, incarnation, suit, archive reuse, or physical-versus-voice mode the source means, so its performance mode remains `unresolved`. This preserves useful source evidence without manufacturing a stronger claim.
 
+## Current-source receipt
+
+The first current-source execution under this contract ran against exact main `af5289fdf1a6945e996d196de334072ce7fe3662` in workflow run `30734448125`. It published product head `a28957a024aa3b1324c27c04adeb51df6bf7545d` after the complete 26-step repository and rendered-browser gate passed in 64 seconds. Artifact `8829089607` carries digest `sha256:2f3da55e60d1e82f02aa51ed55960c6a0cea70efaddcf29cdfceea3a40778f16`.
+
+The live denominator contained 1,560 exact observations over 1,550 unique source revisions. The adapter classified 298 pages as credited, 18 as explicitly out of scope, and 1,244 as unresolved. It recovered 316 exact performer-role credits across 110 performers. Of those credits, 225 came from explicit voice fields and 91 retained unresolved performance mode because their generic actor fields did not establish the designed-form mechanism. Target identity came from explicit species fields for 295 credited pages and exact target-bearing titles for three. No non-empty trusted performer field was silently rejected.
+
+The refreshed Doctor Who slice remains collection debt rather than wall coverage. All 316 recovered roles are absent from the current canonical wall. Certification, estate activation, Luna leasing, and canonical record creation remain separate transactions.
+
 ## Operating sequence
 
 ```text
