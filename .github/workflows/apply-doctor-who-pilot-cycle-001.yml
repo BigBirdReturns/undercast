@@ -1,0 +1,205 @@
+name: apply-doctor-who-pilot-cycle-001
+
+on:
+  push:
+    branches:
+      - agent/doctor-who-pilot-cycle-001
+    paths:
+      - ".github/workflows/apply-doctor-who-pilot-cycle-001.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-doctor-who-pilot-cycle-001
+  cancel-in-progress: true
+
+env:
+  TARGET_BRANCH: agent/doctor-who-pilot-cycle-001
+  AUTHORIZED_HEAD: ${{ github.sha }}
+  EXACT_MAIN: 23396ffd06280030a397bee891b13695237c6706
+  SELF: .github/workflows/apply-doctor-who-pilot-cycle-001.yml
+  INSPECTOR: .github/workflows/inspect-doctor-who-pilot-cycle-001.yml
+  MATERIALIZER: scripts/apply-doctor-who-pilot-cycle-001.mjs
+  FINALIZER: scripts/apply-doctor-who-pilot-cycle-finalize-001.mjs
+  GH_TOKEN: ${{ github.token }}
+  PILOT_CONTEXT: /tmp/doctor-who-pilot-cycle-001-context.json
+
+jobs:
+  complete:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind exact branch, rebase to live main, and preserve the finalizer
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          cp "$FINALIZER" /tmp/doctor-who-pilot-cycle-finalize-001.mjs
+          node --check "$MATERIALIZER"
+          node --check /tmp/doctor-who-pilot-cycle-finalize-001.mjs
+          node --check scripts/doctor-who-pilot-cycle.mjs
+          git rebase refs/remotes/origin/main
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+          pilot_at="$(git show -s --format=%cI "$AUTHORIZED_HEAD")"
+          echo "PILOT_AT=$pilot_at" >> "$GITHUB_ENV"
+          echo "rebased_launcher=$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "pilot_at=$pilot_at" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Materialize exactly one resolved and media-honest Doctor Who candidate
+        run: |
+          set -euo pipefail
+          node "$MATERIALIZER"
+          node scripts/autopilot.mjs validate
+          node scripts/media-audit.mjs gate --scope doctor-who
+          node scripts/waterline.mjs validate
+          test -s "$PILOT_CONTEXT"
+
+      - name: Commit and gate the workflow-free resolved candidate
+        run: |
+          set -euo pipefail
+          git rm "$SELF" "$INSPECTOR" "$MATERIALIZER" "$FINALIZER"
+          git add -A
+          git diff --cached --check
+          if git diff --cached --name-only | grep -q '^images/'; then
+            echo 'Doctor Who audio pilot attempted to publish image bytes' >&2
+            exit 1
+          fi
+          candidate_at="$(node -e 'console.log(new Date(Date.parse(process.env.PILOT_AT) + 5 * 60000).toISOString())')"
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          GIT_AUTHOR_DATE="$candidate_at" GIT_COMMITTER_DATE="$candidate_at" git commit \
+            -m 'Pilot: resolve the first Doctor Who canonical candidate' \
+            -m 'add the exact Dan Starkey voice record and close both media facets as honest absence' \
+            -m 'retain the reviewed cycle receipt as a separate payment'
+          candidate_head="$(git rev-parse HEAD)"
+          echo "CANDIDATE_COMMIT=$candidate_head" >> "$GITHUB_ENV"
+          echo "$candidate_head" > /tmp/doctor-who-pilot-candidate-head.txt
+
+          npm run gate 2>&1 | tee /tmp/doctor-who-pilot-candidate-gate.log
+          rm -rf records test-results playwright-report .ci/projection-drift
+          git restore --worktree -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          test -z "$(git status --porcelain)"
+          echo "candidate_head=$candidate_head" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record the reviewed cycle and advance durable custody
+        run: |
+          set -euo pipefail
+          reviewed_at="$(node -e 'console.log(new Date(Date.parse(process.env.PILOT_AT) + 6 * 60000).toISOString())')"
+          export REVIEWED_AT="$reviewed_at"
+          export CANDIDATE_COMMIT
+          node /tmp/doctor-who-pilot-cycle-finalize-001.mjs
+          node scripts/doctor-who-pilot-cycle.mjs check
+          node scripts/estate-certification-fixtures.mjs
+          node scripts/census-adapter.mjs check
+          node scripts/media-audit.mjs gate --scope doctor-who
+          node scripts/waterline.mjs validate
+          cp data/review/adapter-sdk/doctor-who-pilot-cycle-001.json /tmp/doctor-who-pilot-cycle-001.json
+          cp /tmp/doctor-who-pilot-cycle-001-receipt-input.json /tmp/doctor-who-pilot-cycle-001-receipt-input-copy.json
+          echo "reviewed_at=$reviewed_at" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit, gate, and publish the exact final product under lease
+        run: |
+          set -euo pipefail
+          git add -A
+          git diff --cached --check
+          final_at="$(node -e 'console.log(new Date(Date.parse(process.env.PILOT_AT) + 7 * 60000).toISOString())')"
+          GIT_AUTHOR_DATE="$final_at" GIT_COMMITTER_DATE="$final_at" git commit \
+            -m 'Pilot: complete the first Doctor Who corpus cycle' \
+            -m 'retain one source-bound voice record, two honest media absences, and one reviewed cycle receipt' \
+            -m 'leave 315 queued obligations and issue no second lease'
+          final_head="$(git rev-parse HEAD)"
+          echo "$final_head" > /tmp/doctor-who-pilot-final-head.txt
+
+          npm run gate 2>&1 | tee /tmp/doctor-who-pilot-final-gate.log
+          rm -rf records test-results playwright-report .ci/projection-drift
+          git restore --worktree -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          test -z "$(git status --porcelain)"
+          node scripts/doctor-who-pilot-cycle.mjs check
+          node scripts/media-audit.mjs gate --scope doctor-who
+          node scripts/waterline.mjs validate
+
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+
+          git diff --name-only refs/remotes/origin/main...HEAD | sort > /tmp/doctor-who-pilot-final-paths.txt
+          test -s /tmp/doctor-who-pilot-final-paths.txt
+          if grep -Eq '^(\.github/|scripts/apply-doctor-who-pilot-cycle)' /tmp/doctor-who-pilot-final-paths.txt; then
+            echo 'temporary Doctor Who pilot transport survived in the final product' >&2
+            cat /tmp/doctor-who-pilot-final-paths.txt >&2
+            exit 1
+          fi
+          if grep -q '^images/' /tmp/doctor-who-pilot-final-paths.txt; then
+            echo 'audio-only Doctor Who pilot published image bytes' >&2
+            exit 1
+          fi
+          for required in \
+            data/AUTOPILOT.json \
+            data/ESTATE-REGISTRY.json \
+            data/MEDIA-AUDIT-SCOPES.json \
+            data/MEDIA-AUDIT.json \
+            data/SOURCES.json \
+            data/WATERLINE-STATE.json \
+            data/review/adapter-sdk/doctor-who-pilot-cycle-001.json \
+            data/specimens.json \
+            scripts/doctor-who-pilot-cycle.mjs \
+            scripts/lib/media-audit.mjs \
+            scripts/media-audit.mjs; do
+            grep -Fxq "$required" /tmp/doctor-who-pilot-final-paths.txt || {
+              echo "required permanent path missing from final product: $required" >&2
+              exit 1
+            }
+          done
+
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+          echo "final_head=$final_head" >> "$GITHUB_STEP_SUMMARY"
+          echo "final_paths=$(wc -l < /tmp/doctor-who-pilot-final-paths.txt)" >> "$GITHUB_STEP_SUMMARY"
+          cat data/review/adapter-sdk/doctor-who-pilot-cycle-001.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload candidate, receipt, final gate, and path evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-pilot-cycle-001-${{ github.run_id }}
+          path: |
+            /tmp/doctor-who-pilot-cycle-001-context.json
+            /tmp/doctor-who-pilot-cycle-001-receipt-input-copy.json
+            /tmp/doctor-who-pilot-cycle-001.json
+            /tmp/doctor-who-pilot-candidate-head.txt
+            /tmp/doctor-who-pilot-final-head.txt
+            /tmp/doctor-who-pilot-candidate-gate.log
+            /tmp/doctor-who-pilot-final-gate.log
+            /tmp/doctor-who-pilot-final-paths.txt
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
