@@ -52,14 +52,16 @@ const state = {
 };
 
 validateMetricReadinessConfig(config);
+const {
+  rights_response_sla_days: omittedRightsPolicy,
+  ...missingMetricReadiness
+} = config.operations.metric_readiness;
+assert.equal(omittedRightsPolicy.mode, "when-observed");
 assert.throws(() => validateMetricReadinessConfig({
   ...config,
   operations: {
     ...config.operations,
-    metric_readiness: {
-      ...config.operations.metric_readiness,
-      rights_response_sla_days: undefined,
-    },
+    metric_readiness: missingMetricReadiness,
   },
 }), /must define exactly/);
 assert.throws(() => validateMetricReadinessConfig({
