@@ -58,14 +58,68 @@ jobs:
 
           node - <<'NODE'
           const fs = require('fs');
+          const TASK_ID = 'ap_6dfcb7b9254c26dc3f4b46b8';
+          const LEASE_ID = 'lease_51e3223a4810f3681aff9df4';
+          const SOURCE_FINGERPRINT = 'f272dd90028ca998792a461c1547a334d58f7976484ff7ee2d299306763e0879';
           const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
-          const task = state.jobs.find((row) => row.id === 'ap_6dfcb7b9254c26dc3f4b46b8');
-          if (!task || task.scope !== 'doctor-who' || task.status !== 'leased') throw new Error('exact Doctor Who pilot is not leased');
-          if ((task.lease?.id || task.lease?.lease_id) !== 'lease_51e3223a4810f3681aff9df4') throw new Error('Doctor Who pilot lease drifted');
-          if (task.performer !== 'Dan Starkey' || task.character !== 'Commander (The Sontarans)') throw new Error('Doctor Who pilot identity drifted');
-          if (task.source_fingerprint !== 'f272dd90028ca998792a461c1547a334d58f7976484ff7ee2d299306763e0879') throw new Error('Doctor Who pilot source drifted');
+          const task = state.jobs.find((row) => row.id === TASK_ID);
           const doctor = state.jobs.filter((row) => row.scope === 'doctor-who');
-          if (doctor.length !== 316 || doctor.filter((row) => row.status === 'leased').length !== 1) throw new Error('Doctor Who activation denominator drifted');
+          const observed = task ? {
+            id: task.id,
+            scope: task.scope,
+            status: task.status,
+            queueable: task.queueable,
+            performer: task.performer,
+            character: task.character,
+            source_fingerprint: task.source_fingerprint,
+            lease: task.lease || null,
+            attempt: task.attempt,
+            draft: task.draft || null,
+            result: task.result || null,
+          } : null;
+          const report = {
+            expected: {
+              task_id: TASK_ID,
+              lease_id: LEASE_ID,
+              scope: 'doctor-who',
+              status: 'leased',
+              performer: 'Dan Starkey',
+              character: 'Commander (The Sontarans)',
+              source_fingerprint: SOURCE_FINGERPRINT,
+              total_doctor_who_tasks: 316,
+              leased_doctor_who_tasks: 1,
+            },
+            observed,
+            doctor_who: {
+              total: doctor.length,
+              statuses: doctor.reduce((out, row) => {
+                out[row.status] = (out[row.status] || 0) + 1;
+                return out;
+              }, {}),
+              leased: doctor.filter((row) => row.status === 'leased').map((row) => ({
+                id: row.id,
+                performer: row.performer,
+                character: row.character,
+                lease: row.lease || null,
+              })),
+            },
+          };
+          fs.writeFileSync('/tmp/doctor-who-live-lease-diagnostic.json', JSON.stringify(report, null, 2) + '\n');
+          console.log(JSON.stringify(report, null, 2));
+
+          const failures = [];
+          if (!task) failures.push(`task ${TASK_ID} is missing`);
+          if (task && task.scope !== 'doctor-who') failures.push(`scope=${task.scope}`);
+          if (task && task.status !== 'leased') failures.push(`status=${task.status}`);
+          const observedLease = task && (task.lease?.id || task.lease?.lease_id || null);
+          if (task && observedLease !== LEASE_ID) failures.push(`lease=${observedLease}`);
+          if (task && task.performer !== 'Dan Starkey') failures.push(`performer=${task.performer}`);
+          if (task && task.character !== 'Commander (The Sontarans)') failures.push(`character=${task.character}`);
+          if (task && task.source_fingerprint !== SOURCE_FINGERPRINT) failures.push(`source_fingerprint=${task.source_fingerprint}`);
+          if (doctor.length !== 316) failures.push(`doctor_who_total=${doctor.length}`);
+          const leased = doctor.filter((row) => row.status === 'leased');
+          if (leased.length !== 1) failures.push(`doctor_who_leased=${leased.length}`);
+          if (failures.length) throw new Error(`live Doctor Who lease binding failed: ${failures.join('; ')}`);
           NODE
 
       - name: Apply one exact terminal and reviewed Doctor Who cycle
@@ -132,6 +186,7 @@ jobs:
         with:
           name: doctor-who-pilot-cycle-001-${{ github.run_id }}
           path: |
+            /tmp/doctor-who-live-lease-diagnostic.json
             /tmp/doctor-who-pilot-cycle-materializer.log
             /tmp/doctor-who-pre-cycle-gate.log
             /tmp/doctor-who-product-gate-1.log
