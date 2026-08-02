@@ -1,0 +1,173 @@
+name: apply-operational-metrics-001
+
+on:
+  push:
+    branches:
+      - agent/operational-reliability-metrics-001
+    paths:
+      - ".github/workflows/apply-operational-metrics-001.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: apply-operational-metrics-001
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: agent/operational-reliability-metrics-001
+  AUTHORIZED_HEAD: ${{ github.sha }}
+  SELF: .github/workflows/apply-operational-metrics-001.yml
+  INPUT: data/review/operational-reliability/metrics-2026-08-02/waterline-input.json
+
+jobs:
+  apply:
+    if: github.repository == 'BigBirdReturns/undercast'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Validate frozen observations and capture the unpaid state
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+
+          npm run operational:metrics:fixtures
+          npm run operational:metrics -- check
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const hash = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+          const stateBytes = fs.readFileSync('data/WATERLINE-STATE.json');
+          const state = JSON.parse(stateBytes);
+          const roadmapBytes = fs.readFileSync('data/ROADMAP-STATE.json');
+          const journal = fs.readFileSync('data/journal/waterline.jsonl', 'utf8').split(/\r?\n/).filter(Boolean);
+          const expectedNull = [
+            'build_minutes_p95',
+            'cost_per_verified_record_usd',
+            'source_freshness_p95_days',
+            'rights_response_sla_days',
+          ];
+          for (const key of expectedNull) {
+            if (state.metrics?.[key] !== null) throw new Error(`precondition ${key} is already ${state.metrics?.[key]}`);
+          }
+          const passed = new Set((state.drills || []).filter((row) => row.passed).map((row) => row.kind));
+          for (const kind of ['repository-restore', 'publication-rollback']) {
+            if (!passed.has(kind)) throw new Error(`required drill ${kind} is unpaid`);
+          }
+          if ((state.metric_receipts || []).length !== 0) throw new Error('initial metric receipt denominator is not empty');
+          fs.writeFileSync('/tmp/operational-metrics-preflight.json', JSON.stringify({
+            state_sha256: hash(stateBytes),
+            roadmap_sha256: hash(roadmapBytes),
+            drills_sha256: hash(Buffer.from(JSON.stringify(state.drills))),
+            metric_receipts: state.metric_receipts.length,
+            journal_lines: journal.length,
+          }, null, 2));
+          NODE
+
+      - name: Record exactly the measured metrics and prove the residual balance
+        run: |
+          set -euo pipefail
+          node scripts/waterline.mjs record-metrics --input "$INPUT"
+          node scripts/waterline.mjs validate
+          node scripts/waterline.mjs status --scope star-trek --json > /tmp/operational-metrics-waterline-status.json
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const hash = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+          const pre = JSON.parse(fs.readFileSync('/tmp/operational-metrics-preflight.json', 'utf8'));
+          const state = JSON.parse(fs.readFileSync('data/WATERLINE-STATE.json', 'utf8'));
+          const status = JSON.parse(fs.readFileSync('/tmp/operational-metrics-waterline-status.json', 'utf8'));
+          const roadmapBytes = fs.readFileSync('data/ROADMAP-STATE.json');
+          const journal = fs.readFileSync('data/journal/waterline.jsonl', 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse);
+          if (state.metrics.build_minutes_p95 !== 1.226667) throw new Error('build metric drifted');
+          if (state.metrics.source_freshness_p95_days !== 3.496823) throw new Error('source freshness metric drifted');
+          if (state.metrics.cost_per_verified_record_usd !== null) throw new Error('cost was invented');
+          if (state.metrics.rights_response_sla_days !== null) throw new Error('rights response was invented');
+          if (state.metric_receipts.length !== pre.metric_receipts + 1) throw new Error('metric receipt count drifted');
+          const receipt = state.metric_receipts.at(-1);
+          if (JSON.stringify(receipt.metrics) !== JSON.stringify({ build_minutes_p95: 1.226667, source_freshness_p95_days: 3.496823 })) throw new Error('metric receipt scope drifted');
+          if (hash(Buffer.from(JSON.stringify(state.drills))) !== pre.drills_sha256) throw new Error('drill receipts changed');
+          if (hash(roadmapBytes) !== pre.roadmap_sha256) throw new Error('roadmap state changed');
+          if (journal.length !== pre.journal_lines + 1) throw new Error('waterline journal count drifted');
+          const event = journal.at(-1);
+          if (event.op !== 'metrics.receipted' || event.receipt_id !== receipt.id) throw new Error('waterline journal receipt drifted');
+          if (JSON.stringify(event.metrics) !== JSON.stringify(receipt.metrics)) throw new Error('waterline journal metrics drifted');
+          if (status.evidence_readiness.missing_drills.length !== 0) throw new Error('required drills reopened');
+          const missing = status.evidence_readiness.missing_metrics;
+          if (JSON.stringify(missing) !== JSON.stringify(['cost_per_verified_record_usd', 'rights_response_sla_days'])) throw new Error(`residual metric balance drifted: ${JSON.stringify(missing)}`);
+          if (status.evidence_readiness.slo_target_failures.length !== 0) throw new Error('measured SLO target failed');
+          if (status.evidence_readiness.operational_reliability !== false) throw new Error('milestone became ready before cost and rights measurements');
+          NODE
+
+      - name: Install the rendered runtime
+        run: npx playwright install --with-deps chromium
+
+      - name: Gate the exact state-changing candidate
+        run: |
+          set -euo pipefail
+          git rm "$SELF"
+          git add data/WATERLINE-STATE.json data/journal/waterline.jsonl
+          paths="$(git diff --cached --name-only | sort)"
+          expected="$(printf '%s\n%s\n%s\n' "$SELF" data/WATERLINE-STATE.json data/journal/waterline.jsonl | sort)"
+          test "$paths" = "$expected"
+          git diff --cached --check
+          npm run gate 2>&1 | tee /tmp/operational-metrics-gate.log
+
+      - name: Publish the exact gated receipt under lease
+        run: |
+          set -euo pipefail
+          rm -rf test-results playwright-report .ci/projection-drift
+          git restore --worktree -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          paths="$(git diff --cached --name-only | sort)"
+          expected="$(printf '%s\n%s\n%s\n' "$SELF" data/WATERLINE-STATE.json data/journal/waterline.jsonl | sort)"
+          test "$paths" = "$expected"
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$AUTHORIZED_HEAD"
+          git config user.name 'undercast-operational-metrics'
+          git config user.email 'undercast-operational-metrics@users.noreply.github.com'
+          git commit \
+            -m 'Operations: receipt initial build and freshness metrics' \
+            -m 'build_minutes_p95=1.226667' \
+            -m 'source_freshness_p95_days=3.496823' \
+            -m 'cost_per_verified_record_usd=null' \
+            -m 'rights_response_sla_days=null' \
+            -m "authorized_parent=${AUTHORIZED_HEAD}" \
+            -m "workflow_run=${GITHUB_RUN_ID}"
+          new_head="$(git rev-parse HEAD)"
+          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}" \
+            origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          echo "published_head=${new_head}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload measurement and gate diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-metrics-001-${{ github.run_id }}
+          path: |
+            /tmp/operational-metrics-preflight.json
+            /tmp/operational-metrics-waterline-status.json
+            /tmp/operational-metrics-gate.log
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
