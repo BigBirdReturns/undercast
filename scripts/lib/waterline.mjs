@@ -131,7 +131,15 @@ export function validateWaterlineState(doc, config) {
   if (!doc || doc.version !== WATERLINE_VERSION) throw new Error(`WATERLINE state must be version ${WATERLINE_VERSION}`);
   for (const key of ["cycles", "drills", "accounting", "metric_receipts", "incidents"]) if (!Array.isArray(doc[key])) throw new Error(`WATERLINE state needs ${key}[]`);
   ensureUnique(doc.cycles, "id", "cycle receipts");
-  ensureUnique(doc.cycles, "lease_id", "cycle receipts");
+  const cycleReceiptKeys = new Set();
+  for (const cycle of doc.cycles) {
+    const scopeId = requireString(cycle.scope_id, `cycle ${cycle.id || "<missing>"}.scope_id`);
+    const leaseId = requireString(cycle.lease_id, `cycle ${cycle.id || "<missing>"}.lease_id`);
+    if (!config.scopes.some((row) => row.id === scopeId)) throw new Error(`cycle ${cycle.id || "<missing>"} references unknown scope ${scopeId}`);
+    const key = cycleReceiptKey(scopeId, leaseId);
+    if (cycleReceiptKeys.has(key)) throw new Error(`cycle receipts contain duplicate scope/lease ${scopeId}/${leaseId}`);
+    cycleReceiptKeys.add(key);
+  }
   ensureUnique(doc.drills, "id", "drill receipts");
   ensureUnique(doc.accounting, "id", "accounting receipts");
   ensureUnique(doc.metric_receipts, "id", "metric receipts");
@@ -237,6 +245,7 @@ function latestIncidents(events) {
 }
 function hasEvidenceType(evidence, type) { return (evidence || []).some((row) => row.type === type); }
 function completedMilestones(roadmapState) { return new Set((roadmapState.completed || []).map((row) => row.milestone)); }
+function cycleReceiptKey(scopeId, leaseId) { return `${scopeId}\u0000${leaseId}`; }
 
 export function deriveWaterlineStatus({ config, state, mediaAudit, autopilot, autopilotJournal = [], roadmapState, preservation, scopeId, requestedTasks = 0 }) {
   validateWaterlineState(state, config);
@@ -249,9 +258,9 @@ export function deriveWaterlineStatus({ config, state, mediaAudit, autopilot, au
   const jobById = new Map(jobs.map((job) => [job.id, job]));
   const inFlight = jobs.filter((job) => ACTIVE_JOB_STATUSES.has(job.status));
   const groups = leaseGroups(autopilotJournal, scopeId);
+  const cycleReceiptKeys = new Set(state.cycles.map((row) => cycleReceiptKey(row.scope_id, row.lease_id)));
   const scopeCycles = state.cycles.filter((row) => row.scope_id === scopeId);
-  const cycleByLease = new Map(scopeCycles.map((row) => [row.lease_id, row]));
-  const unreceipted = groups.filter((group) => !cycleByLease.has(group.lease_id));
+  const unreceipted = groups.filter((group) => !cycleReceiptKeys.has(cycleReceiptKey(group.scope_id, group.lease_id)));
   const successfulCycles = scopeCycles.filter((row) => row.outcome === "completed");
   const initialPilot = scope.initial_pilot || null;
   const initialPilotEligible = Boolean(initialPilot?.allow_without_media_baseline === true
@@ -259,11 +268,10 @@ export function deriveWaterlineStatus({ config, state, mediaAudit, autopilot, au
     && groups.length === 0
     && scopeCycles.length === 0);
   const otherScopeInFlight = allJobs.filter((job) => ACTIVE_JOB_STATUSES.has(job.status) && job.scope !== scopeId);
-  const cycleReceiptByLease = new Map(state.cycles.map((row) => [row.lease_id, row]));
   const otherScopeUnreceipted = config.scopes
     .filter((row) => row.id !== scopeId)
     .flatMap((row) => leaseGroups(autopilotJournal, row.id))
-    .filter((group) => !cycleReceiptByLease.has(group.lease_id))
+    .filter((group) => !cycleReceiptKeys.has(cycleReceiptKey(group.scope_id, group.lease_id)))
     .map((group) => ({
       ...group,
       task_statuses: Object.fromEntries(group.task_ids.map((id) => [id, allJobById.get(id)?.status || "missing"])),
@@ -360,7 +368,8 @@ export function makeCycleReceipt(input, context) {
   const evidence = requireEvidence(input.evidence);
   const group = context.groups.find((row) => row.lease_id === input.lease_id && row.scope_id === input.scope_id);
   if (!group) throw new Error(`unknown lease ${input.lease_id} for ${input.scope_id}`);
-  if (context.state.cycles.some((row) => row.lease_id === input.lease_id)) throw new Error(`lease ${input.lease_id} is already receipted`);
+  const inputReceiptKey = cycleReceiptKey(input.scope_id, input.lease_id);
+  if (context.state.cycles.some((row) => cycleReceiptKey(row.scope_id, row.lease_id) === inputReceiptKey)) throw new Error(`lease ${input.scope_id}/${input.lease_id} is already receipted`);
   const jobs = new Map((context.autopilot.jobs || []).map((job) => [job.id, job]));
   const statuses = Object.fromEntries(group.task_ids.map((id) => [id, jobs.get(id)?.status || "missing"]));
   if (Object.values(statuses).some((status) => ACTIVE_JOB_STATUSES.has(status))) throw new Error(`lease ${input.lease_id} still has active work`);

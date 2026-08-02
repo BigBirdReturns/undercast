@@ -345,7 +345,44 @@ function verifyGlobalCycleCustodyContract() {
   assert.equal(terminal.cycles.other_scope_unreceipted.length, 1);
   assert.equal(terminal.cycles.other_scope_unreceipted[0].task_statuses.ap_doctor, "resolved");
 
-  const receiptedState = structuredClone(state);
+  const collidingReceiptEvents = [{ ...doctorEvents[0], scope: "star-trek", task_id: "ap_star_collision" }];
+  const collidingScopeState = structuredClone(state);
+  collidingScopeState.cycles.push(makeCycleReceipt({
+    version: 1,
+    scope_id: "star-trek",
+    lease_id: "lease_doctor",
+    outcome: "aborted",
+    reviewed_by: "second-desk",
+    reviewed_role: "second-desk",
+    reviewed_at: "2026-08-02T16:55:00Z",
+    note: "A receipt from another scope deliberately collides on lease ID and must not release Doctor Who custody.",
+    evidence: [{ type: "incident", value: "cross-scope-lease-id-collision" }],
+  }, {
+    config,
+    state: collidingScopeState,
+    autopilot: { jobs: [{ ...starJob, id: "ap_star_collision", status: "resolved" }] },
+    mediaAudit: starMedia,
+    groups: leaseGroups(collidingReceiptEvents, "star-trek"),
+  }));
+  const collidingReceipt = deriveWaterlineStatus({
+    config,
+    state: collidingScopeState,
+    mediaAudit: starMedia,
+    autopilot: { jobs: [starJob, doctorJob("resolved")] },
+    autopilotJournal: doctorEvents,
+    roadmapState,
+    preservation,
+    scopeId: "star-trek",
+    requestedTasks: 1,
+  });
+  assert.equal(collidingReceipt.phase, "other-cycle-receipt-required");
+  assert.equal(collidingReceipt.claim_allowed, false);
+  assert.ok(collidingReceipt.claim_reasons.includes("other_scope_cycle_receipt_required"));
+  assert.equal(collidingReceipt.cycles.other_scope_unreceipted.length, 1);
+  assert.equal(collidingReceipt.cycles.other_scope_unreceipted[0].scope_id, "doctor-who");
+  assert.equal(collidingReceipt.cycles.other_scope_unreceipted[0].lease_id, "lease_doctor");
+
+  const receiptedState = structuredClone(collidingScopeState);
   receiptedState.cycles.push(makeCycleReceipt({
     version: 1,
     scope_id: "doctor-who",
@@ -363,6 +400,27 @@ function verifyGlobalCycleCustodyContract() {
     mediaAudit: doctorMedia,
     groups: leaseGroups(doctorEvents, "doctor-who"),
   }));
+  assert.equal(receiptedState.cycles.length, 2);
+  assert.ok(receiptedState.cycles.some((row) => row.scope_id === "star-trek" && row.lease_id === "lease_doctor"));
+  assert.ok(receiptedState.cycles.some((row) => row.scope_id === "doctor-who" && row.lease_id === "lease_doctor"));
+  validateWaterlineState(receiptedState, config);
+  assert.throws(() => makeCycleReceipt({
+    version: 1,
+    scope_id: "doctor-who",
+    lease_id: "lease_doctor",
+    outcome: "aborted",
+    reviewed_by: "second-desk",
+    reviewed_role: "second-desk",
+    reviewed_at: "2026-08-02T17:01:00Z",
+    note: "The exact composite receipt may not be duplicated.",
+    evidence: [{ type: "incident", value: "duplicate-exact-cycle-receipt" }],
+  }, {
+    config,
+    state: receiptedState,
+    autopilot: { jobs: [doctorJob("resolved")] },
+    mediaAudit: doctorMedia,
+    groups: leaseGroups(doctorEvents, "doctor-who"),
+  }), /doctor-who\/lease_doctor is already receipted/);
   const receipted = deriveWaterlineStatus({
     config,
     state: receiptedState,
@@ -390,9 +448,20 @@ function verifyGlobalCycleCustodyContract() {
       blocker: "other_scope_cycle_receipt_required",
       other_scope_unreceipted: terminal.cycles.other_scope_unreceipted.length,
     },
+    mismatched_scope_receipt: {
+      phase: collidingReceipt.phase,
+      claim_allowed: collidingReceipt.claim_allowed,
+      blocker: "other_scope_cycle_receipt_required",
+      other_scope_unreceipted: collidingReceipt.cycles.other_scope_unreceipted.length,
+      required_scope_id: collidingReceipt.cycles.other_scope_unreceipted[0].scope_id,
+      colliding_lease_id: collidingReceipt.cycles.other_scope_unreceipted[0].lease_id,
+    },
     receipted: {
       claim_allowed: receipted.claim_allowed,
       other_scope_unreceipted: receipted.cycles.other_scope_unreceipted.length,
+      cycle_receipt_count: receiptedState.cycles.length,
+      colliding_scope_receipt_preserved: receiptedState.cycles.some((row) => row.scope_id === "star-trek" && row.lease_id === "lease_doctor"),
+      exact_scope_receipt_present: receiptedState.cycles.some((row) => row.scope_id === "doctor-who" && row.lease_id === "lease_doctor"),
     },
   };
 }
@@ -420,12 +489,13 @@ async function checkReceipt(root, report) {
   assert.equal(report.global_cycle_custody?.status, "behaviorally-recomputed");
   assert.equal(
     report.global_cycle_custody?.verification_method,
-    "permanent-checker-recomputes-active-terminal-unreceipted-and-receipted-transitions",
+    "permanent-checker-recomputes-active-terminal-unreceipted-mismatched-scope-collision-recovery-and-receipted-transitions",
   );
   assert.match(report.global_cycle_custody?.repair?.workflow_run || "", /^[0-9]+$/);
   assert.match(report.global_cycle_custody?.repair?.base_main || "", /^[0-9a-f]{40}$/);
   assert.match(report.global_cycle_custody?.repair?.launcher_head || "", /^[0-9a-f]{40}$/);
-  assert.equal(report.global_cycle_custody?.repair?.review_comment_id, 3700209880);
+  assert.equal(report.global_cycle_custody?.repair?.review_comment_id, 3700382887);
+  assert.equal(report.global_cycle_custody?.receipt_match_key, "scope_id+lease_id");
   const requiredCodeFiles = [
     "scripts/doctor-who-activation.mjs",
     "scripts/lib/waterline.mjs",
