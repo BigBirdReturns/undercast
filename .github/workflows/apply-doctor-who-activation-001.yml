@@ -1,0 +1,331 @@
+name: apply-doctor-who-activation-001
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/apply-doctor-who-activation-001.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-doctor-who-activation-001-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXACT_MAIN: ${{ github.event.pull_request.base.sha }}
+  SELF: .github/workflows/apply-doctor-who-activation-001.yml
+  PATCHER: scripts/apply-doctor-who-activation-001.py
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  activate:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind exact branch, current main, and paid preservation preflight
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+
+          node scripts/doctor-who-activation-preflight.mjs check
+          node - <<'NODE'
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync('data/review/adapter-sdk/doctor-who-activation-preflight-001.json', 'utf8'));
+          if (report.current.estate_state !== 'certified-paused' || report.current.scope_status !== 'paused') throw new Error('Doctor Who is not certified-paused');
+          if (report.current.queue.total !== 316 || report.current.queue.claimable !== 0) throw new Error('paused queue denominator drifted');
+          if (report.simulated_active.queue.claimable !== 316 || report.isolation.non_doctor_changes !== 0 || report.isolation.star_trek_changes !== 0) throw new Error('activation isolation proof drifted');
+          if (report.decision.code !== 'queue-and-preservation-preflight-passed') throw new Error(`activation preflight is not paid: ${report.decision.code}`);
+          if (!report.preservation.require_source_snapshot || !report.preservation.matching_receipt_present) throw new Error('source preservation is not effective');
+          NODE
+
+          sha256sum \
+            data/specimens.json \
+            data/SOURCES.json \
+            data/CENSUS-COVERAGE.json \
+            data/CENSUS-MANIFEST.json \
+            data/MEDIA-AUDIT.json > /tmp/canonical-before.sha256
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const stable = (rows) => JSON.stringify([...rows].sort((a, b) => a.id.localeCompare(b.id)));
+          const digest = (rows) => crypto.createHash('sha256').update(stable(rows)).digest('hex');
+          const summary = (rows) => {
+            const statuses = {};
+            for (const row of rows) statuses[row.status] = (statuses[row.status] || 0) + 1;
+            return {
+              total: rows.length,
+              claimable: rows.filter((row) => row.status === 'queued' && row.queueable).length,
+              statuses: Object.fromEntries(Object.entries(statuses).sort()),
+            };
+          };
+          const doctor = state.jobs.filter((row) => row.scope === 'doctor-who');
+          if (doctor.length !== 316 || summary(doctor).claimable !== 0) throw new Error(`unexpected paused Doctor Who queue: ${JSON.stringify(summary(doctor))}`);
+          fs.writeFileSync('/tmp/doctor-who-activation-context.json', JSON.stringify({
+            version: 1,
+            transaction: 'DOCTOR-WHO-ACTIVATION-001',
+            base_sha: process.env.EXACT_MAIN,
+            launcher_head: process.env.AUTHORIZED_HEAD,
+            workflow_run: String(process.env.GITHUB_RUN_ID),
+            before: {
+              doctor_queue: summary(doctor),
+              non_doctor_jobs_sha256: digest(state.jobs.filter((row) => row.scope !== 'doctor-who')),
+              star_trek_jobs_sha256: digest(state.jobs.filter((row) => row.scope === 'star-trek')),
+            },
+          }, null, 2) + '\n');
+          NODE
+
+      - name: Apply generic first-pilot and global single-cycle controls
+        run: |
+          set -euo pipefail
+          python "$PATCHER"
+          node --check scripts/doctor-who-activation.mjs
+          node --check scripts/lib/waterline.mjs
+          node --check scripts/lib/corpus-ops.mjs
+          node scripts/waterline-fixtures.mjs
+          node scripts/corpus-ops-fixtures.mjs
+
+      - name: Activate preserved scope and issue exactly one Luna pilot
+        run: |
+          set -euo pipefail
+          activated_at="$(git show -s --format=%cI "$AUTHORIZED_HEAD")"
+          echo "ACTIVATED_AT=$activated_at" >> "$GITHUB_ENV"
+
+          node scripts/autopilot.mjs certify \
+            --scope doctor-who \
+            --reviewed-by chatgpt-second-desk \
+            --activate \
+            --now "$activated_at"
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const registry = JSON.parse(fs.readFileSync('data/ESTATE-REGISTRY.json', 'utf8'));
+          const estate = registry.estates.find((row) => row.id === 'doctor-who');
+          if (!estate || estate.state !== 'certified-paused') throw new Error('Doctor Who estate is not certified-paused at activation');
+          estate.state = 'active-corpus';
+          estate.next_gate = 'Issue exactly one bounded Luna pilot from the preserved 316-task queue; no canonical adoption, media review, or second lease is authorized in the activation payment.';
+          fs.writeFileSync('data/ESTATE-REGISTRY.json', JSON.stringify(registry, null, 2) + '\n');
+          NODE
+
+          node scripts/census-adapter.mjs write
+          node scripts/census-adapter.mjs check
+          node scripts/autopilot.mjs sync --scope doctor-who --now "$activated_at"
+          node scripts/autopilot.mjs candidates \
+            --scope doctor-who \
+            --capability-profile text-vision \
+            --limit 10 \
+            --json > /tmp/doctor-who-activation-candidates.json
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const context = JSON.parse(fs.readFileSync('/tmp/doctor-who-activation-context.json', 'utf8'));
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const jobs = state.jobs.filter((row) => row.scope === 'doctor-who');
+          const statuses = {};
+          for (const row of jobs) statuses[row.status] = (statuses[row.status] || 0) + 1;
+          const queue = {
+            total: jobs.length,
+            claimable: jobs.filter((row) => row.status === 'queued' && row.queueable).length,
+            statuses: Object.fromEntries(Object.entries(statuses).sort()),
+          };
+          if (queue.total !== 316 || queue.claimable !== 316 || queue.statuses.queued !== 316) throw new Error(`active queue is not 316/316: ${JSON.stringify(queue)}`);
+          context.activated_at = process.env.ACTIVATED_AT;
+          context.active_before_lease = { doctor_queue: queue };
+          fs.writeFileSync('/tmp/doctor-who-activation-context.json', JSON.stringify(context, null, 2) + '\n');
+          NODE
+
+          node scripts/waterline.mjs gate \
+            --scope doctor-who \
+            --operation claim \
+            --requested 1 > /tmp/doctor-who-waterline-before.txt
+
+          node scripts/autopilot.mjs claim \
+            --agent luna \
+            --scope doctor-who \
+            --capability-profile text-vision \
+            --limit 1 \
+            --lease-minutes 1440 \
+            --now "$activated_at" \
+            --out /tmp/doctor-who-activation-batch.json \
+            --prompt /tmp/doctor-who-activation-prompt.md
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const context = JSON.parse(fs.readFileSync('/tmp/doctor-who-activation-context.json', 'utf8'));
+          const batch = JSON.parse(fs.readFileSync('/tmp/doctor-who-activation-batch.json', 'utf8'));
+          if (batch.tasks.length !== 1 || batch.agent !== 'luna' || batch.selection.profile_id !== 'text-vision') throw new Error('bounded Luna batch contract drifted');
+          context.batch = batch;
+          fs.writeFileSync('/tmp/doctor-who-activation-context.json', JSON.stringify(context, null, 2) + '\n');
+
+          const registry = JSON.parse(fs.readFileSync('data/ESTATE-REGISTRY.json', 'utf8'));
+          const estate = registry.estates.find((row) => row.id === 'doctor-who');
+          const task = batch.tasks[0];
+          estate.next_gate = `Complete the one bounded Doctor Who pilot lease ${batch.lease_id} for ${task.performer} — ${task.character} within the preserved 316-task denominator. Submission, canonical adoption, exact-subject media review or honest absence, and the reviewed cycle receipt are separate payments; no second lease may issue first.`;
+          fs.writeFileSync('data/ESTATE-REGISTRY.json', JSON.stringify(registry, null, 2) + '\n');
+          NODE
+
+          set +e
+          node scripts/waterline.mjs gate \
+            --scope doctor-who \
+            --operation claim \
+            --requested 1 > /tmp/doctor-who-waterline-after.txt 2>&1
+          second_claim_status=$?
+          set -e
+          if [ "$second_claim_status" -eq 0 ]; then
+            echo 'Doctor Who bootstrap exception remained open after the first lease' >&2
+            exit 1
+          fi
+          grep -Eq 'cycle_in_flight|media_baseline_missing|cycle_receipt_required' /tmp/doctor-who-waterline-after.txt
+
+          set +e
+          node scripts/waterline.mjs gate \
+            --scope star-trek \
+            --operation claim \
+            --requested 1 > /tmp/star-trek-cross-scope-waterline.txt 2>&1
+          cross_scope_status=$?
+          set -e
+          if [ "$cross_scope_status" -eq 0 ]; then
+            echo 'Star Trek remained claimable while the Doctor Who pilot was in flight' >&2
+            exit 1
+          fi
+          grep -q 'other_scope_cycle_in_flight' /tmp/star-trek-cross-scope-waterline.txt
+
+          node scripts/doctor-who-activation.mjs write \
+            --context /tmp/doctor-who-activation-context.json
+          node scripts/doctor-who-activation.mjs check
+          node scripts/estate-certification-fixtures.mjs
+          node scripts/waterline-fixtures.mjs
+          node scripts/corpus-ops-fixtures.mjs
+          node scripts/autopilot.mjs validate
+          node scripts/corpus-ops.mjs validate
+          sha256sum -c /tmp/canonical-before.sha256
+
+      - name: Smoke complete activation candidate
+        run: |
+          set -euo pipefail
+          git rm "$SELF" "$PATCHER"
+          git add \
+            data/AUTOPILOT-CERTIFICATIONS.json \
+            data/AUTOPILOT-SCOPES.json \
+            data/AUTOPILOT.json \
+            data/ESTATE-REGISTRY.json \
+            data/ROADMAP-STATE.json \
+            data/WATERLINE.json \
+            data/journal/autopilot.jsonl \
+            data/review/adapter-sdk/BASELINE.json \
+            data/review/adapter-sdk/doctor-who-activation-001.json \
+            docs/AUTOPILOT.md \
+            package.json \
+            scripts/corpus-ops-fixtures.mjs \
+            scripts/doctor-who-activation.mjs \
+            scripts/estate-certification-fixtures.mjs \
+            scripts/lib/corpus-ops.mjs \
+            scripts/lib/waterline.mjs \
+            scripts/waterline-fixtures.mjs
+          git diff --cached --check
+          npm run gate 2>&1 | tee /tmp/doctor-who-activation-gate.log
+
+      - name: Revalidate and publish workflow-free activation product under lease
+        run: |
+          set -euo pipefail
+          node scripts/doctor-who-activation.mjs check
+          node scripts/estate-certification-fixtures.mjs
+          node scripts/autopilot.mjs validate
+          node scripts/corpus-ops.mjs validate
+          sha256sum -c /tmp/canonical-before.sha256
+
+          rm -rf records test-results playwright-report .ci/projection-drift
+          git restore --worktree -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          git diff --cached --check
+
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git commit \
+            -m 'Activation: issue one bounded Doctor Who pilot' \
+            -m 'activate the preserved 316-task scope and lease one Luna task' \
+            -m 'close the bootstrap exception and enforce one global cycle'
+          new_head="$(git rev-parse HEAD)"
+
+          cat > /tmp/expected-final-paths.txt <<'PATHS'
+          data/AUTOPILOT-CERTIFICATIONS.json
+          data/AUTOPILOT-SCOPES.json
+          data/AUTOPILOT.json
+          data/ESTATE-REGISTRY.json
+          data/ROADMAP-STATE.json
+          data/WATERLINE.json
+          data/journal/autopilot.jsonl
+          data/review/adapter-sdk/BASELINE.json
+          data/review/adapter-sdk/doctor-who-activation-001.json
+          docs/AUTOPILOT.md
+          package.json
+          scripts/corpus-ops-fixtures.mjs
+          scripts/doctor-who-activation.mjs
+          scripts/estate-certification-fixtures.mjs
+          scripts/lib/corpus-ops.mjs
+          scripts/lib/waterline.mjs
+          scripts/waterline-fixtures.mjs
+          PATHS
+          git diff --name-only refs/remotes/origin/main...HEAD | sort > /tmp/final-paths.txt
+          diff -u /tmp/expected-final-paths.txt /tmp/final-paths.txt
+
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+          echo "published_head=${new_head}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload activation, lease, waterline, gate, and path evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-activation-001-${{ github.run_id }}
+          path: |
+            /tmp/doctor-who-activation-context.json
+            /tmp/doctor-who-activation-candidates.json
+            /tmp/doctor-who-activation-batch.json
+            /tmp/doctor-who-activation-prompt.md
+            /tmp/doctor-who-waterline-before.txt
+            /tmp/doctor-who-waterline-after.txt
+            /tmp/star-trek-cross-scope-waterline.txt
+            /tmp/doctor-who-activation-gate.log
+            /tmp/final-paths.txt
+            data/review/adapter-sdk/doctor-who-activation-001.json
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
