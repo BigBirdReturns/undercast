@@ -29,6 +29,12 @@ Rights response is measured only from populated `data/operational-reliability/RI
 
 An empty rights ledger produces `no-observations` and `null`. A populated valid ledger must produce `measured`.
 
+## Readiness without a golden cage
+
+Build time and source freshness are required numeric readiness metrics because their denominators exist whenever the operating system runs. Cost and rights response are observation-triggered. When the current admissible ledger is empty, `null` remains an explicit, reviewed debt state and does not freeze an otherwise smoke-passed milestone. The first admissible ledger row immediately changes the metric to `measurement-due` until a reviewed numeric receipt is recorded. A numeric value whose observation ledger has been erased is a blocking custody regression.
+
+This rule never converts absence into zero, never waives a measured SLO failure, and never closes the cost or rights debt. It removes only the circular requirement to manufacture an event before the system may prove that it is ready to handle the event.
+
 ## Exact-main discovery
 
 Pull-request runs prove the candidate. Only a successful `push` run on `main` publishes a discovery issue. The issue binds:
