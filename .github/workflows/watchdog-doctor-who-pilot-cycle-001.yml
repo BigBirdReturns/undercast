@@ -1,0 +1,155 @@
+name: watchdog-doctor-who-pilot-cycle-001
+
+on:
+  push:
+    branches:
+      - agent/doctor-who-pilot-cycle-001-current
+    paths:
+      - ".github/workflows/watchdog-doctor-who-pilot-cycle-001.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  TARGET_BRANCH: agent/doctor-who-pilot-cycle-001-current
+  PR_NUMBER: "184"
+  SELF: .github/workflows/watchdog-doctor-who-pilot-cycle-001.yml
+  PRIMARY: .github/workflows/apply-doctor-who-pilot-cycle-001.yml
+  FINALIZER: .github/workflows/finalize-doctor-who-pilot-cycle-001.yml
+  MATERIALIZER: scripts/apply-doctor-who-pilot-cycle-001.mjs
+  RECEIPT: data/review/adapter-sdk/doctor-who-pilot-cycle-001.json
+  CHECKER: scripts/doctor-who-pilot-cycle.mjs
+  GH_TOKEN: ${{ github.token }}
+
+concurrency:
+  group: doctor-who-pilot-cycle-001
+  cancel-in-progress: true
+
+jobs:
+  close-cycle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind the exact branch and current main
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$GITHUB_SHA"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$(git rev-parse refs/remotes/origin/main)"
+          echo "EXACT_MAIN=$(git rev-parse refs/remotes/origin/main)" >> "$GITHUB_ENV"
+          echo "AUTHORIZED_HEAD=$GITHUB_SHA" >> "$GITHUB_ENV"
+          echo "CYCLE_AT=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_ENV"
+
+      - name: Resume and close the exact Doctor Who cycle
+        run: |
+          set -euo pipefail
+          if [ ! -f "$RECEIPT" ] || [ ! -f "$CHECKER" ]; then
+            test -f "$MATERIALIZER"
+            python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/apply-doctor-who-pilot-cycle-001.mjs')
+          s = p.read_text()
+          old = "const abs = (p) => path.join(ROOT, p);"
+          new = "const abs = (p) => path.isAbsolute(p) ? p : path.join(ROOT, p);"
+          if old in s:
+              p.write_text(s.replace(old, new))
+          elif new not in s:
+              raise SystemExit('materializer path helper drifted')
+          PY
+            node --check "$MATERIALIZER"
+            node "$MATERIALIZER" 2>&1 | tee /tmp/doctor-who-cycle-watchdog-materializer.log
+          fi
+          test -f "$RECEIPT"
+          test -f "$CHECKER"
+          npm run doctor-who:pilot-cycle:check
+
+      - name: Build and qualify the workflow-free product
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          git rm -f --ignore-unmatch "$SELF" "$PRIMARY" "$FINALIZER" "$MATERIALIZER"
+          git add -A
+          git diff --cached --check
+          test -z "$(git ls-files --others --exclude-standard)"
+          npm run doctor-who:pilot-cycle:check
+          npm run gate 2>&1 | tee /tmp/doctor-who-cycle-watchdog-gate.log
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          git add -A
+          git diff --cached --check
+          test -z "$(git ls-files --others --exclude-standard)"
+          if grep -Eq '^\.github/|^scripts/apply-doctor-who-pilot-cycle-001\.mjs$|^records/|^test-results/|^playwright-report/' < <(git diff --cached --name-only); then
+            echo 'transport or generated runtime survived the product diff' >&2
+            exit 1
+          fi
+
+      - name: Publish, merge, and verify exact main tree
+        run: |
+          set -euo pipefail
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git commit \
+            -m 'Pilot: complete the first Doctor Who corpus cycle' \
+            -m 'resolve the exact Dan Starkey voice task with honest null media' \
+            -m 'seal the reviewed cycle receipt and issue no second lease'
+          product="$(git rev-parse HEAD)"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+
+          paths="$(gh pr diff "$PR_NUMBER" --name-only)"
+          if grep -Eq '^\.github/|^scripts/apply-doctor-who-pilot-cycle-001\.mjs$' <<< "$paths"; then
+            echo 'transport survived the published PR diff' >&2
+            exit 1
+          fi
+          gh pr ready "$PR_NUMBER" || true
+          gh pr merge "$PR_NUMBER" --squash --match-head-commit "$product" \
+            --subject 'Pilot: complete the first Doctor Who corpus cycle' \
+            --body 'Resolve the exact Dan Starkey Commander voice lease, retain honest null media, seal the reviewed cycle receipt, and issue no second lease.'
+
+          sleep 5
+          git fetch origin "refs/heads/main:refs/remotes/origin/main"
+          git diff --exit-code "$product" refs/remotes/origin/main
+          echo "merged_main=$(git rev-parse refs/remotes/origin/main)" >> "$GITHUB_STEP_SUMMARY"
+          echo "product=$product" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact watchdog evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-pilot-cycle-watchdog-${{ github.run_id }}
+          path: |
+            /tmp/doctor-who-cycle-watchdog-materializer.log
+            /tmp/doctor-who-cycle-watchdog-gate.log
+            /tmp/doctor-who-pre-cycle-gate.log
+            /tmp/doctor-who-product-gate-1.log
+            /tmp/doctor-who-product-gate-final.log
+            data/review/adapter-sdk/doctor-who-pilot-cycle-001.json
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
