@@ -29,6 +29,7 @@ const config = {
     minimum_resolved_per_cycle: 1,
   }],
   operations: {
+    one_cycle_at_a_time: true,
     required_drills: ["repository-restore", "publication-rollback"],
     slo_targets: {
       build_minutes_p95: 20,

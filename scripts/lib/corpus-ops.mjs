@@ -53,15 +53,21 @@ export function auditCounts(items,scope){
 export function nextOperation({registry,jobs,audit,claimAllowed}){
   const active=(registry.estates||[]).filter(row=>["active-corpus","gold-reference"].includes(row.state)).sort((a,b)=>b.priority-a.priority);
   for(const estate of active){
-    const counts=jobCounts(jobs,estate.autopilot_scope),media=auditCounts(audit,estate.autopilot_scope);
+    const counts=jobCounts(jobs,estate.autopilot_scope);
     if(counts.in_flight)return {kind:"close-cycle",estate:estate.id,reason:`${counts.in_flight} task(s) in flight`,command:`npm run waterline -- status --scope ${estate.autopilot_scope}`};
+  }
+  for(const estate of active){
+    const media=auditCounts(audit,estate.autopilot_scope);
     if(media.debt)return {kind:"close-media-debt",estate:estate.id,reason:`${media.debt} media facet(s) open`,command:`npm run media:audit -- status --scope ${estate.autopilot_scope}`};
+  }
+  for(const estate of active){
+    const counts=jobCounts(jobs,estate.autopilot_scope);
     if(counts.queued){
       if(claimAllowed===false)return {kind:"inspect-waterline",estate:estate.id,reason:"queue exists but the rolling waterline refuses a claim",command:`npm run waterline -- status --scope ${estate.autopilot_scope}`};
-      return {kind:"lease-one-cycle",estate:estate.id,reason:`${counts.queued} queued task(s), zero in flight and zero media debt`,command:`npm run autopilot -- next --agent luna --scope ${estate.autopilot_scope} --capability-profile text-vision --limit 1 --out .luna/batch.json --prompt .luna/PROMPT.md`};
+      return {kind:"lease-one-cycle",estate:estate.id,reason:`${counts.queued} queued task(s), zero global in-flight work and zero media debt`,command:`npm run autopilot -- next --agent luna --scope ${estate.autopilot_scope} --capability-profile text-vision --limit 1 --out .luna/batch.json --prompt .luna/PROMPT.md`};
     }
   }
-  const frontier=(registry.estates||[]).filter(row=>!['active-corpus','gold-reference','retired'].includes(row.state)).sort((a,b)=>b.priority-a.priority)[0];
+  const frontier=(registry.estates||[]).filter(row=>!["active-corpus","gold-reference","retired"].includes(row.state)).sort((a,b)=>b.priority-a.priority)[0];
   return frontier?{kind:"advance-estate-gate",estate:frontier.id,reason:frontier.next_gate,command:"npm run corpus -- status"}:{kind:"collection-complete",estate:null,reason:"No active queue or registered estate frontier remains",command:"npm run corpus -- status"};
 }
 

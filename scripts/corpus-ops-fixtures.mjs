@@ -13,4 +13,9 @@ assert.deepEqual(validateEstateRegistry(registry,{scopes:[{scope_id:"star-trek",
 assert.equal(nextOperation({registry,jobs:[{scope:"star-trek",status:"queued"}],audit:[],claimAllowed:true}).kind,"lease-one-cycle");
 assert.equal(nextOperation({registry,jobs:[{scope:"star-trek",status:"merged"}],audit:[],claimAllowed:false}).kind,"close-cycle");
 assert.equal(nextOperation({registry,jobs:[],audit:[{scope:"star-trek",status:"attention"}],claimAllowed:false}).kind,"close-media-debt");
+const twoEstateRegistry={version:1,estates:[{id:"star-trek",state:"active-corpus",priority:2,autopilot_scope:"star-trek",source_hosts:["example.test"],next_gate:"continue"},{id:"doctor-who",state:"active-corpus",priority:1,autopilot_scope:"doctor-who",source_hosts:["example.test"],next_gate:"close pilot"}]};
+assert.deepEqual(validateEstateRegistry(twoEstateRegistry,{scopes:[{scope_id:"star-trek",status:"active"},{scope_id:"doctor-who",status:"active"}]}),[]);
+const crossScopeNext=nextOperation({registry:twoEstateRegistry,jobs:[{scope:"star-trek",status:"queued"},{scope:"doctor-who",status:"leased"}],audit:[],claimAllowed:true});
+assert.equal(crossScopeNext.kind,"close-cycle");
+assert.equal(crossScopeNext.estate,"doctor-who");
 console.log("corpus operations fixtures: PASS");

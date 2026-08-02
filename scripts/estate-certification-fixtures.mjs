@@ -16,6 +16,7 @@ const adaptersDoc = readJson("data/CENSUS-ADAPTERS.json");
 const coverage = readJson("data/CENSUS-COVERAGE.json");
 const manifest = readJson("data/CENSUS-MANIFEST.json");
 const doctorReport = readJson("data/review/adapter-sdk/doctor-who-semantic-001.json");
+const activationReport = readJson("data/review/adapter-sdk/doctor-who-activation-001.json");
 
 const estates = new Map(registry.estates.map((row) => [row.id, row]));
 const scopes = new Map(scopesDoc.scopes.map((row) => [row.id, row]));
@@ -43,15 +44,26 @@ const certificate = certifications.get("doctor-who");
 const adapter = adapters.get("doctor-who");
 
 assert.ok(estate && scope && certificate && adapter, "Doctor Who cross-ledger custody is incomplete");
-assert.equal(estate.state, "certified-paused");
+assert.equal(estate.state, "active-corpus");
 assert.equal(estate.autopilot_scope, "doctor-who");
-assert.equal(scope.status, "paused");
+assert.equal(scope.status, "active");
 assert.equal(adapter.id, "doctor-who-v1");
 assert.equal(adapter.certification_effect, false, "adapter registration acquired certification authority");
 assert.equal(doctorReport.boundary.estate_activated, false, "semantic report claims activation");
 assert.equal(doctorReport.boundary.luna_lease_issued, false, "semantic report claims a lease");
 assert.equal(doctorReport.boundary.canonical_specimen_mutated, false, "semantic report claims canonical mutation");
 assert.equal(doctorReport.extraction.rejected_nonempty_trusted_fields, 0, "trusted performer fields were silently discarded");
+assert.equal(activationReport.decision.code, "doctor-who-activated-one-bounded-pilot", "Doctor Who activation receipt is missing");
+assert.equal(activationReport.lease.task_count, 1, "Doctor Who activation issued more than one pilot task");
+assert.equal(activationReport.lease.agent, "luna", "Doctor Who activation lease is not assigned to Luna");
+assert.equal(activationReport.queue.paused_before_activation.total, certificate.snapshot.rows, "activation receipt lost the paused denominator");
+assert.equal(activationReport.queue.active_before_lease.claimable, certificate.snapshot.rows, "activation did not expose the complete queue");
+assert.equal(activationReport.queue.after_lease.statuses.leased, 1, "activation did not retain exactly one leased task");
+assert.equal(activationReport.isolation.star_trek_changes, 0, "Doctor Who activation changed Star Trek state");
+assert.equal(activationReport.isolation.non_doctor_changes, 0, "Doctor Who activation changed another scope");
+assert.equal(activationReport.waterline.claim_allowed_after_claim, false, "Doctor Who activation left a second lease claimable");
+assert.equal(activationReport.boundary.canonical_adoption_performed, false, "activation receipt claims canonical adoption");
+assert.equal(activationReport.boundary.media_review_performed, false, "activation receipt claims media closure");
 
 same(certificate.producer_files, adapter.producer_files, "certificate producer files drifted from the registered adapter");
 assert.ok(certificate.checks.length >= 2 && certificate.checks.every((row) => row.status === "passed"), "Doctor Who certificate lacks passed producer checks");
@@ -74,6 +86,7 @@ assert.equal(doctorReport.extraction.exact_performer_role_credits, doctorCoverag
 assert.equal(doctorReport.extraction.credited_pages, creditedReceipts.size, "semantic receipt and credited source denominator disagree");
 assert.deepEqual(doctorReport.extraction.performance_modes, modeCounts, "performance-mode custody drifted");
 assert.equal(doctorReport.extraction.missing_roles, doctorCoverage.filter((row) => !row.role_on_wall).length, "missing-role denominator drifted");
-assert.ok(estate.next_gate.includes(String(certificate.snapshot.rows)), "estate next gate does not carry the current unpaid role denominator");
+assert.ok(estate.next_gate.includes(String(certificate.snapshot.rows)), "estate next gate does not carry the current role denominator");
+assert.ok(estate.next_gate.includes(activationReport.lease.lease_id), "estate next gate does not name the only authorized pilot lease");
 
-console.log(`PASS — Doctor Who is certified-paused with ${certificate.snapshot.rows} exact roles, ${certificate.snapshot.complete_receipts} complete source receipts, and no lease authority`);
+console.log(`PASS — Doctor Who is active-corpus with ${certificate.snapshot.rows} exact roles, ${certificate.snapshot.complete_receipts} complete source receipts, one bounded Luna lease, and no canonical adoption`);
