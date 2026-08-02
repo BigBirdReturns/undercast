@@ -1,0 +1,159 @@
+name: apply-adapter-sdk-baseline-001
+
+on:
+  push:
+    branches:
+      - agent/adapter-sdk-baseline-001
+    paths:
+      - ".github/workflows/apply-adapter-sdk-baseline-001.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-adapter-sdk-baseline-001
+  cancel-in-progress: true
+
+env:
+  TARGET_BRANCH: agent/adapter-sdk-baseline-001
+  AUTHORIZED_HEAD: ${{ github.sha }}
+  SELF: .github/workflows/apply-adapter-sdk-baseline-001.yml
+  BASELINE: data/review/adapter-sdk/BASELINE.json
+
+jobs:
+  apply:
+    if: github.repository == 'BigBirdReturns/undercast'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Bind exact branch and current main
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$(git rev-parse refs/remotes/origin/main)"
+          test -z "$(git status --porcelain)"
+
+      - name: Validate adapter contracts and generate the exact baseline
+        run: |
+          set -euo pipefail
+          node --check scripts/census-adapter.mjs
+          node --check scripts/census-adapter-fixtures.mjs
+          node scripts/census-adapter-fixtures.mjs
+          node scripts/census-adapter.mjs write
+          node scripts/census-adapter.mjs check
+          node scripts/census-adapter.mjs status > /tmp/adapter-sdk-status.json
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const status = JSON.parse(fs.readFileSync('/tmp/adapter-sdk-status.json', 'utf8'));
+          const byId = new Map(status.adapters.map((row) => [row.adapter_id, row]));
+          const trek = byId.get('star-trek-v1');
+          const doctor = byId.get('doctor-who-v1');
+          if (!trek || !doctor) throw new Error('reference and candidate adapter denominator is incomplete');
+          if (trek.declared_status !== 'certified-reference') throw new Error('Star Trek reference status drifted');
+          if (doctor.declared_status !== 'review-candidate') throw new Error('Doctor Who candidate status drifted');
+          if (trek.certification_authorized || doctor.certification_authorized) throw new Error('baseline acquired certification authority');
+          if (status.boundary.network_access || status.boundary.source_refresh_executed || status.boundary.estate_activated || status.boundary.luna_lease_issued) {
+            throw new Error('adapter baseline exceeded its authority');
+          }
+          NODE
+
+      - name: Wire the adapter contract into the permanent gate
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('fs');
+          const file = 'package.json';
+          const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+          pkg.scripts['adapter:write'] = 'node scripts/census-adapter.mjs write';
+          pkg.scripts['adapter:check'] = 'node scripts/census-adapter.mjs check';
+          pkg.scripts['adapter:status'] = 'node scripts/census-adapter.mjs status';
+          pkg.scripts['adapter:fixtures'] = 'node scripts/census-adapter-fixtures.mjs && node scripts/census-adapter.mjs check';
+          const command = 'node scripts/census-adapter-fixtures.mjs && node scripts/census-adapter.mjs check';
+          if (!pkg.scripts['autopilot:fixtures'].includes(command)) pkg.scripts['autopilot:fixtures'] += ` && ${command}`;
+          fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
+          NODE
+          npm run adapter:fixtures
+
+      - name: Smoke the complete candidate before publication
+        run: |
+          set -euo pipefail
+          git rm "$SELF"
+          git add package.json "$BASELINE"
+          git diff --cached --check
+
+          git diff --cached --name-only | sort > /tmp/staged-paths.txt
+          printf '%s\n' "$SELF" package.json "$BASELINE" | sort > /tmp/expected-staged-paths.txt
+          diff -u /tmp/expected-staged-paths.txt /tmp/staged-paths.txt
+
+          npx playwright install --with-deps chromium
+          npm run gate 2>&1 | tee /tmp/adapter-sdk-gate.log
+
+      - name: Publish the exact clean baseline under lease
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report .ci/projection-drift
+          git restore --worktree -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          diff -u /tmp/expected-staged-paths.txt <(git diff --cached --name-only | sort)
+          node scripts/census-adapter.mjs check
+
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$(git rev-parse refs/remotes/origin/main)"
+
+          git config user.name undercast-adapter-sdk
+          git config user.email undercast-adapter-sdk@users.noreply.github.com
+          git commit \
+            -m 'Adapter SDK: publish reference and Doctor Who baseline' \
+            -m 'registration does not certify or activate' \
+            -m 'Doctor Who remains regeneration and semantic review debt'
+          new_head="$(git rev-parse HEAD)"
+
+          git diff --name-only refs/remotes/origin/main...HEAD | sort > /tmp/final-paths.txt
+          printf '%s\n' \
+            data/CENSUS-ADAPTERS.json \
+            "$BASELINE" \
+            docs/CENSUS-ADAPTER-SDK.md \
+            package.json \
+            schema/census-adapter.schema.json \
+            scripts/census-adapter-fixtures.mjs \
+            scripts/census-adapter.mjs \
+            | sort > /tmp/expected-final-paths.txt
+          diff -u /tmp/expected-final-paths.txt /tmp/final-paths.txt
+
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+          echo "published_head=${new_head}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload baseline and gate diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adapter-sdk-baseline-001-${{ github.run_id }}
+          path: |
+            /tmp/adapter-sdk-status.json
+            /tmp/adapter-sdk-gate.log
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
