@@ -116,6 +116,7 @@ const emptyCost = { version: 1, observations: [] };
 const emptyRights = { version: 1, cases: [] };
 const emptySnapshots = snapshotsFor(emptyCost, emptyRights);
 assert.equal(emptySnapshots.cost_per_verified_record_usd.population, 0);
+assert.equal(emptySnapshots.cost_per_verified_record_usd.value, null);
 assert.equal(emptySnapshots.cost_per_verified_record_usd.measurement_status, "no-observations");
 
 let status = applyMetricReadinessPolicy(baseStatus(), {
@@ -160,6 +161,7 @@ assert.deepEqual(metricResult.receipt.observation_bindings.cost_per_verified_rec
   source: costSource,
   sha256: oneCostSnapshots.cost_per_verified_record_usd.sha256,
   population: 1,
+  value: 4.25,
 });
 current.metrics = metricResult.metrics;
 current.metric_receipts.push(metricResult.receipt);
@@ -170,6 +172,16 @@ status = applyMetricReadinessPolicy(baseStatus(), {
 });
 assert.equal(status.evidence_readiness.operational_reliability, true);
 assert.equal(status.evidence_readiness.metric_states.cost_per_verified_record_usd.status, "measured");
+status = applyMetricReadinessPolicy(baseStatus(), {
+  config,
+  state: {
+    ...current,
+    metrics: { ...current.metrics, cost_per_verified_record_usd: 1 },
+  },
+  observationSnapshots: oneCostSnapshots,
+});
+assert.deepEqual(status.evidence_readiness.metric_ledger_regressions, ["cost_per_verified_record_usd"]);
+assert.equal(status.evidence_readiness.metric_states.cost_per_verified_record_usd.status, "measured-value-does-not-match-ledger");
 
 const appendedCost = { version: 1, observations: [costRow(), costRow("cost-2", 3.5)] };
 status = applyMetricReadinessPolicy(baseStatus(), {
@@ -202,6 +214,18 @@ assert.equal(status.evidence_readiness.metric_states.cost_per_verified_record_us
 
 const oneRights = { version: 1, cases: [rightsRow("rights-slow", 20)] };
 const rightsSnapshots = snapshotsFor(emptyCost, oneRights);
+assert.equal(rightsSnapshots.rights_response_sla_days.value, 20);
+assert.throws(() => makeMetricsReceipt({
+  metrics: { rights_response_sla_days: 1 },
+  reviewed_by: "second-desk",
+  reviewed_role: "second-desk",
+  reviewed_at: "2026-08-02T01:30:00Z",
+  note: "Attempted to record a value unrelated to the validated ledger result.",
+  evidence: [{ type: "report", value: "rights.json" }],
+}, baseState().metrics, {
+  metricReadiness: config.operations.metric_readiness,
+  observationSnapshots: rightsSnapshots,
+}), /does not match validated ledger measurement 20/);
 const rightsState = baseState();
 const rightsResult = makeMetricsReceipt({
   metrics: { rights_response_sla_days: 20 },
@@ -278,4 +302,4 @@ status = applyMetricReadinessPolicy(baseStatus(), {
 });
 assert.deepEqual(status.evidence_readiness.missing_required_metrics, ["source_freshness_p95_days"]);
 
-console.log("PASS — configured ledger sources, validated rows, exact byte/population bindings, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");
+console.log("PASS — configured ledger sources, validated rows, exact byte/population/value bindings, mismatched-value refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");

@@ -29,6 +29,11 @@ function requireCount(value, label) {
   return value;
 }
 
+function requireMetricValue(value, label) {
+  if (!Number.isFinite(value) || value < 0) throw new Error(`${label} must be a non-negative number`);
+  return value;
+}
+
 function requireHash(value, label) {
   const text = String(value || "").toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(text)) throw new Error(`${label} must be a sha256`);
@@ -107,12 +112,14 @@ export function metricObservationSnapshotsFromLedgers({
       source: requireString(costSource, "cost observation source"),
       sha256: sha256(exactBytes(costLedgerBytes, "cost ledger bytes")),
       population: requireCount(costMeasurement.population, "cost observation population"),
+      value: costMeasurement.value,
       measurement_status: costMeasurement.status,
     },
     rights_response_sla_days: {
       source: requireString(rightsSource, "rights observation source"),
       sha256: sha256(exactBytes(rightsLedgerBytes, "rights ledger bytes")),
       population: requireCount(rightsMeasurement.population, "rights observation population"),
+      value: rightsMeasurement.value,
       measurement_status: rightsMeasurement.status,
     },
   };
@@ -121,6 +128,10 @@ export function metricObservationSnapshotsFromLedgers({
     if (snapshot.measurement_status !== expectedStatus) {
       throw new Error(`${metric} ledger status ${snapshot.measurement_status} disagrees with population ${snapshot.population}`);
     }
+    if (snapshot.population === 0 && snapshot.value !== null) {
+      throw new Error(`${metric} empty ledger must have null measurement value`);
+    }
+    if (snapshot.population > 0) requireMetricValue(snapshot.value, `${metric} ledger measurement value`);
   }
   return snapshots;
 }
@@ -135,10 +146,14 @@ function validatedSnapshot(value, metric, policy) {
   const measurementStatus = requireString(snapshot.measurement_status, `observation snapshot for ${metric}.measurement_status`);
   const expectedStatus = population === 0 ? "no-observations" : "measured";
   if (measurementStatus !== expectedStatus) throw new Error(`${metric} snapshot status ${measurementStatus} disagrees with population ${population}`);
+  const measuredValue = snapshot.value;
+  if (population === 0 && measuredValue !== null) throw new Error(`${metric} empty snapshot must have null measurement value`);
+  if (population > 0) requireMetricValue(measuredValue, `observation snapshot for ${metric}.value`);
   return {
     source,
     sha256: requireHash(snapshot.sha256, `observation snapshot for ${metric}.sha256`),
     population,
+    value: measuredValue,
     measurement_status: measurementStatus,
   };
 }
@@ -156,6 +171,7 @@ function bindingFor(receipt, metric) {
     source: requireString(binding.source, `${receipt.id}.${metric}.source`),
     sha256: requireHash(binding.sha256, `${receipt.id}.${metric}.sha256`),
     population: requireCount(binding.population, `${receipt.id}.${metric}.population`),
+    value: requireMetricValue(binding.value, `${receipt.id}.${metric}.value`),
   };
 }
 
@@ -238,6 +254,18 @@ export function applyMetricReadinessPolicy(status, { config, state, observationS
       metricStates[key] = {
         mode: policy.mode,
         status: "measurement-stale-after-ledger-change",
+        value,
+        receipt_id: receipt.id,
+        observation_snapshot: snapshot,
+        observation_binding: binding,
+      };
+      continue;
+    }
+    if (binding.value !== snapshot.value || value !== snapshot.value) {
+      ledgerRegressions.push(key);
+      metricStates[key] = {
+        mode: policy.mode,
+        status: "measured-value-does-not-match-ledger",
         value,
         receipt_id: receipt.id,
         observation_snapshot: snapshot,

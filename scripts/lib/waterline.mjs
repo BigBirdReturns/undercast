@@ -154,6 +154,8 @@ export function validateWaterlineState(doc, config) {
         if (requireString(binding.source, `metric receipt ${receipt.id}.observation_bindings.${key}.source`) !== policy.observation_source) throw new Error(`metric receipt ${receipt.id}.${key} binds the wrong observation source`);
         if (!/^[0-9a-f]{64}$/.test(String(binding.sha256 || ""))) throw new Error(`metric receipt ${receipt.id}.${key}.sha256 must be a sha256`);
         if (!Number.isSafeInteger(binding.population) || binding.population < 1) throw new Error(`metric receipt ${receipt.id}.${key}.population must be positive`);
+        if (!Number.isFinite(binding.value) || binding.value < 0) throw new Error(`metric receipt ${receipt.id}.${key}.value must be non-negative`);
+        if (binding.value !== value) throw new Error(`metric receipt ${receipt.id}.${key} value does not match its observation binding`);
       } else if (binding) throw new Error(`metric receipt ${receipt.id} has unauthorized observation binding for ${key}`);
     }
     for (const key of Object.keys(bindings)) if (!Object.prototype.hasOwnProperty.call(receipt.metrics, key)) throw new Error(`metric receipt ${receipt.id} binds unrecorded metric ${key}`);
@@ -354,10 +356,13 @@ export function makeMetricsReceipt(input, currentMetrics, context = {}) {
       if (snapshot.source !== policy.observation_source) throw new Error(`metric ${key} snapshot source does not match configured observation source`);
       if (!/^[0-9a-f]{64}$/.test(String(snapshot.sha256 || ""))) throw new Error(`metric ${key} snapshot sha256 is invalid`);
       if (!Number.isSafeInteger(snapshot.population) || snapshot.population < 1 || snapshot.measurement_status !== "measured") throw new Error(`metric ${key} requires a populated validated observation snapshot`);
+      if (!Number.isFinite(snapshot.value) || snapshot.value < 0) throw new Error(`metric ${key} validated ledger measurement is invalid`);
+      if (value !== snapshot.value) throw new Error(`metrics.${key} value ${value} does not match validated ledger measurement ${snapshot.value}`);
       observation_bindings[key] = {
         source: snapshot.source,
         sha256: snapshot.sha256,
         population: snapshot.population,
+        value: snapshot.value,
       };
     }
     metrics[key] = value;
