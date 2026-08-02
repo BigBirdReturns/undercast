@@ -19,6 +19,7 @@ env:
   AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
   EXACT_MAIN: ${{ github.event.pull_request.base.sha }}
   SELF: .github/workflows/apply-doctor-who-regeneration-001.yml
+  DIAGNOSTIC: .github/workflows/diagnose-doctor-who-projection-drift.yml
   REPORT: data/review/adapter-sdk/doctor-who-regeneration-001.json
   CONTACT: undercast-doctor-who-adapter-review
 
@@ -199,10 +200,10 @@ jobs:
 
           node -e "const r=require('./$REPORT'); if(r.after.observation_rows<1||r.boundary.adapter_certification_created) process.exit(1)"
 
-      - name: Smoke the complete current-source product before publication
+      - name: Materialize projections and smoke the complete current-source product
         run: |
           set -euo pipefail
-          git rm "$SELF"
+          git rm "$SELF" "$DIAGNOSTIC"
           git add \
             data/CENSUS.json \
             data/CENSUS-UNRESOLVED.json \
@@ -212,6 +213,12 @@ jobs:
             data/CENSUS-GAPS.json \
             data/review/adapter-sdk/BASELINE.json \
             "$REPORT"
+
+          node scripts/shard.mjs
+          git add \
+            data/CENSUS-FERENGI-TEST.json \
+            data/archive.json \
+            data/species.json
           git diff --cached --check
           npm run adapter:fixtures
           npm run autopilot:fixtures
@@ -237,19 +244,19 @@ jobs:
           git config user.email undercast-doctor-who-adapter@users.noreply.github.com
           git commit \
             -m 'Adapter SDK: regenerate Doctor Who from current receipts' \
-            -m 'preserve the non-Doctor-Who denominator' \
+            -m 'preserve 1,560 unresolved rows and the non-Doctor-Who denominator' \
             -m 'retain certification and activation as separate review authority'
           new_head="$(git rev-parse HEAD)"
 
           cat > /tmp/expected-final-paths.txt <<'PATHS'
-          data/CENSUS-COVERAGE.json
-          data/CENSUS-GAPS.json
+          data/CENSUS-FERENGI-TEST.json
           data/CENSUS-MANIFEST.json
           data/CENSUS-SUMMARY.json
           data/CENSUS-UNRESOLVED.json
-          data/CENSUS.json
+          data/archive.json
           data/review/adapter-sdk/BASELINE.json
           data/review/adapter-sdk/doctor-who-regeneration-001.json
+          data/species.json
           PATHS
           sort -u /tmp/expected-final-paths.txt -o /tmp/expected-final-paths.txt
           git diff --name-only refs/remotes/origin/main...HEAD | sort > /tmp/final-paths.txt
@@ -268,7 +275,9 @@ jobs:
             /tmp/doctor-who-before.json
             /tmp/doctor-who-census.log
             /tmp/doctor-who-gate.log
+            /tmp/final-paths.txt
             data/review/adapter-sdk/doctor-who-regeneration-001.json
+            .ci/projection-drift/**
           if-no-files-found: warn
           retention-days: 30
           compression-level: 0
