@@ -15,7 +15,7 @@ import {
 const config = {
   version: 1,
   scopes: [{ id: "star-trek", label: "Star Trek", roadmap_milestone: "star-trek-gold-shard", required_closed_cycles: 3, max_tasks_per_cycle: 8, minimum_resolved_per_cycle: 1 }],
-  operations: { required_drills: ["repository-restore", "publication-rollback"], slo_targets: { build_minutes_p95: 20, source_freshness_p95_days: 14, rights_response_sla_days: 14 } },
+  operations: { one_cycle_at_a_time: true, required_drills: ["repository-restore", "publication-rollback"], slo_targets: { build_minutes_p95: 20, source_freshness_p95_days: 14, rights_response_sla_days: 14 } },
 };
 const roadmapState = { completed: [{ milestone: "trusted-foundation" }] };
 const preservation = { history_guard: { precondition_met: true, status: "offsite-verified" } };
@@ -82,4 +82,46 @@ state.incidents.push(makeIncidentEvent({ incident_id: "inc-1", status: "closed",
 status = deriveWaterlineStatus({ config, state, mediaAudit: media(), autopilot: { jobs: allJobs }, roadmapState, preservation, scopeId: "star-trek", requestedTasks: 1 });
 assert.equal(status.claim_allowed, true);
 
-console.log("PASS — rolling gold cycles, receipts, drills, metrics, incident authority, stop/reopen, and natural unlocks");
+
+const bootstrapConfig = structuredClone(config);
+bootstrapConfig.scopes.push({
+  id: "doctor-who",
+  label: "Doctor Who",
+  roadmap_milestone: "adapter-sdk-and-second-gold-shard",
+  required_closed_cycles: 1,
+  max_tasks_per_cycle: 1,
+  minimum_resolved_per_cycle: 1,
+  initial_pilot: { allow_without_media_baseline: true, max_tasks: 1 },
+});
+const bootstrapState = emptyWaterlineState();
+validateWaterlineState(bootstrapState, bootstrapConfig);
+const doctorJob = (status = "queued") => ({ id: "ap_doctor", scope: "doctor-who", status, source_fingerprint: "d".repeat(64), wall_ids: [] });
+const doctorMedia = { source: { item_set_sha256: "e".repeat(64) }, items: [] };
+const doctorEvents = [{ op: "lease.claimed", task_id: "ap_doctor", at: "2026-08-02T16:40:00Z", scope: "doctor-who", lease_id: "lease_doctor", readiness_token: "f".repeat(64) }];
+let doctorStatus = deriveWaterlineStatus({ config: bootstrapConfig, state: bootstrapState, mediaAudit: doctorMedia, autopilot: { jobs: [doctorJob()] }, autopilotJournal: [], roadmapState, preservation, scopeId: "doctor-who", requestedTasks: 1 });
+assert.equal(doctorStatus.phase, "initial-pilot-ready");
+assert.equal(doctorStatus.claim_allowed, true);
+assert.equal(doctorStatus.capacity.initial_pilot.eligible, true);
+doctorStatus = deriveWaterlineStatus({ config: bootstrapConfig, state: bootstrapState, mediaAudit: doctorMedia, autopilot: { jobs: [doctorJob()] }, autopilotJournal: [], roadmapState, preservation, scopeId: "doctor-who", requestedTasks: 2 });
+assert.ok(doctorStatus.claim_reasons.includes("initial_pilot_exceeds_capacity"));
+doctorStatus = deriveWaterlineStatus({ config: bootstrapConfig, state: bootstrapState, mediaAudit: doctorMedia, autopilot: { jobs: [doctorJob("leased")] }, autopilotJournal: doctorEvents, roadmapState, preservation, scopeId: "doctor-who", requestedTasks: 1 });
+assert.equal(doctorStatus.phase, "cycle-in-flight");
+assert.equal(doctorStatus.claim_allowed, false);
+assert.ok(doctorStatus.claim_reasons.includes("cycle_in_flight"));
+assert.ok(doctorStatus.claim_reasons.includes("media_baseline_missing"));
+const noBootstrapConfig = structuredClone(bootstrapConfig);
+delete noBootstrapConfig.scopes.find((row) => row.id === "doctor-who").initial_pilot;
+doctorStatus = deriveWaterlineStatus({ config: noBootstrapConfig, state: bootstrapState, mediaAudit: doctorMedia, autopilot: { jobs: [doctorJob()] }, autopilotJournal: [], roadmapState, preservation, scopeId: "doctor-who", requestedTasks: 1 });
+assert.equal(doctorStatus.claim_allowed, false);
+assert.equal(doctorStatus.phase, "media-baseline-required");
+assert.ok(doctorStatus.claim_reasons.includes("media_baseline_missing"));
+const invalidBootstrapConfig = structuredClone(bootstrapConfig);
+invalidBootstrapConfig.scopes.find((row) => row.id === "doctor-who").initial_pilot.max_tasks = 2;
+assert.throws(() => validateWaterlineState(emptyWaterlineState(), invalidBootstrapConfig), /initial_pilot.max_tasks/);
+const crossScopeStatus = deriveWaterlineStatus({ config: bootstrapConfig, state: bootstrapState, mediaAudit: media(), autopilot: { jobs: [job("ap_star", "queued"), doctorJob("leased")] }, autopilotJournal: doctorEvents, roadmapState, preservation, scopeId: "star-trek", requestedTasks: 1 });
+assert.equal(crossScopeStatus.phase, "other-cycle-in-flight");
+assert.equal(crossScopeStatus.claim_allowed, false);
+assert.ok(crossScopeStatus.claim_reasons.includes("other_scope_cycle_in_flight"));
+assert.equal(crossScopeStatus.jobs.other_scope_in_flight.length, 1);
+
+console.log("PASS — rolling gold cycles, first-pilot bootstrap, global single-cycle custody, receipts, drills, metrics, incident authority, stop/reopen, and natural unlocks");

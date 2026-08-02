@@ -351,3 +351,10 @@ priority and attempt count unchanged. The capability policy SHA-256, profile,
 requirements, and selection basis are persisted in both the lease state and batch.
 A stale exact-task override is fail-closed until reviewed again. Capability is an
 operating constraint, never an eligibility disposition.
+
+
+## Second-shard first-pilot bootstrap
+
+A newly active, independently certified scope normally has no canonical media baseline because its first accepted record has not yet been adopted. Such a scope may declare `initial_pilot.allow_without_media_baseline: true` in `data/WATERLINE.json`, with an explicit `max_tasks` no greater than the ordinary cycle capacity. This exception is legal only before the scope has any lease event or cycle receipt. It authorizes one bounded research lease, never a canonical write.
+
+The first lease closes the exception immediately. Global one-cycle custody then blocks every scope from issuing another lease while any task is leased, drafted, or awaiting canonical/media closure. The pilot must proceed through submission, canonical adoption, exact-subject media review or honest absence, and a reviewed waterline receipt before the second shard can claim more work.

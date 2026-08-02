@@ -112,7 +112,13 @@ export function validateWaterlineConfig(doc) {
       if (!Number.isInteger(scope[key]) || scope[key] < 0) throw new Error(`scope ${scope.id}.${key} must be a non-negative integer`);
     }
     if (scope.required_closed_cycles < 1 || scope.max_tasks_per_cycle < 1 || scope.max_tasks_per_cycle > 50) throw new Error(`scope ${scope.id} has invalid cycle bounds`);
+    if (scope.initial_pilot !== undefined) {
+      if (!scope.initial_pilot || typeof scope.initial_pilot !== "object" || Array.isArray(scope.initial_pilot)) throw new Error(`scope ${scope.id}.initial_pilot must be an object`);
+      if (scope.initial_pilot.allow_without_media_baseline !== true) throw new Error(`scope ${scope.id}.initial_pilot must explicitly allow_without_media_baseline`);
+      if (!Number.isInteger(scope.initial_pilot.max_tasks) || scope.initial_pilot.max_tasks < 1 || scope.initial_pilot.max_tasks > scope.max_tasks_per_cycle) throw new Error(`scope ${scope.id}.initial_pilot.max_tasks must be from 1 to max_tasks_per_cycle`);
+    }
   }
+  if (doc.operations.one_cycle_at_a_time !== true) throw new Error("operations.one_cycle_at_a_time must be true");
   if (!Array.isArray(doc.operations.required_drills) || !doc.operations.required_drills.length) throw new Error("operations.required_drills must be non-empty");
   if (new Set(doc.operations.required_drills).size !== doc.operations.required_drills.length) throw new Error("operations.required_drills contains duplicates");
   const targets = doc.operations.slo_targets || {};
@@ -241,9 +247,16 @@ export function deriveWaterlineStatus({ config, state, mediaAudit, autopilot, au
   const jobById = new Map(jobs.map((job) => [job.id, job]));
   const inFlight = jobs.filter((job) => ACTIVE_JOB_STATUSES.has(job.status));
   const groups = leaseGroups(autopilotJournal, scopeId);
-  const cycleByLease = new Map(state.cycles.filter((row) => row.scope_id === scopeId).map((row) => [row.lease_id, row]));
+  const scopeCycles = state.cycles.filter((row) => row.scope_id === scopeId);
+  const cycleByLease = new Map(scopeCycles.map((row) => [row.lease_id, row]));
   const unreceipted = groups.filter((group) => !cycleByLease.has(group.lease_id));
-  const successfulCycles = state.cycles.filter((row) => row.scope_id === scopeId && row.outcome === "completed");
+  const successfulCycles = scopeCycles.filter((row) => row.outcome === "completed");
+  const initialPilot = scope.initial_pilot || null;
+  const initialPilotEligible = Boolean(initialPilot?.allow_without_media_baseline === true
+    && media.total === 0
+    && groups.length === 0
+    && scopeCycles.length === 0);
+  const otherScopeInFlight = (autopilot.jobs || []).filter((job) => ACTIVE_JOB_STATUSES.has(job.status) && job.scope !== scopeId);
   const incidents = latestIncidents(state.incidents);
   const blockingIncidents = incidents.filter((row) => row.status === "open" && BLOCKING_INCIDENT_SEVERITIES.has(row.severity));
   const preservationReady = preservation?.history_guard?.precondition_met === true && preservation?.history_guard?.status === "offsite-verified";
@@ -254,16 +267,21 @@ export function deriveWaterlineStatus({ config, state, mediaAudit, autopilot, au
   const claimReasons = [];
   if (!foundationComplete) claimReasons.push("trusted_foundation_incomplete");
   if (!preservationReady) claimReasons.push("preservation_not_offsite_verified");
-  if (media.total === 0) claimReasons.push("media_baseline_missing");
+  if (media.total === 0 && !initialPilotEligible) claimReasons.push("media_baseline_missing");
   else if (media.debt > 0) claimReasons.push("media_debt_open");
   if (inFlight.length) claimReasons.push("cycle_in_flight");
+  if (config.operations.one_cycle_at_a_time === true && otherScopeInFlight.length) claimReasons.push("other_scope_cycle_in_flight");
   if (unreceipted.length) claimReasons.push("cycle_receipt_required");
   if (blockingIncidents.length) claimReasons.push("blocking_incident_open");
   if (requestedTasks && requestedTasks > scope.max_tasks_per_cycle) claimReasons.push("requested_batch_exceeds_capacity");
+  if (initialPilotEligible && requestedTasks && requestedTasks > initialPilot.max_tasks) claimReasons.push("initial_pilot_exceeds_capacity");
 
-  let phase = "ready-for-cycle";
+  let phase = initialPilotEligible ? "initial-pilot-ready" : "ready-for-cycle";
   if (blockingIncidents.length) phase = "incident-stop";
   else if (inFlight.length) phase = "cycle-in-flight";
+  else if (config.operations.one_cycle_at_a_time === true && otherScopeInFlight.length) phase = "other-cycle-in-flight";
+  else if (media.total === 0 && groups.length) phase = "pilot-closure-required";
+  else if (media.total === 0 && !initialPilotEligible) phase = "media-baseline-required";
   else if (media.debt > 0) phase = groups.length ? "media-catch-up" : "baseline-review";
   else if (unreceipted.length) phase = "receipt-required";
 
@@ -284,11 +302,21 @@ export function deriveWaterlineStatus({ config, state, mediaAudit, autopilot, au
     phase,
     claim_allowed: claimReasons.length === 0,
     claim_reasons: claimReasons,
-    capacity: { requested_tasks: requestedTasks || null, max_tasks_per_cycle: scope.max_tasks_per_cycle },
+    capacity: {
+      requested_tasks: requestedTasks || null,
+      max_tasks_per_cycle: scope.max_tasks_per_cycle,
+      initial_pilot: initialPilot ? {
+        eligible: initialPilotEligible,
+        max_tasks: initialPilot.max_tasks,
+        prior_leases: groups.length,
+        prior_cycle_receipts: scopeCycles.length,
+      } : null,
+    },
     media,
     jobs: {
       total: jobs.length,
       in_flight: inFlight.length,
+      other_scope_in_flight: otherScopeInFlight.map((job) => ({ id: job.id, scope: job.scope, status: job.status })),
       statuses: Object.fromEntries([...new Set(jobs.map((job) => job.status))].sort().map((status) => [status, jobs.filter((job) => job.status === status).length])),
       job_set_sha256: currentJobDigest,
     },

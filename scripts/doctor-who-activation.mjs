@@ -120,8 +120,9 @@ async function buildReceipt(root, context) {
   const leaseEvents = current.autopilotJournal.filter((row) => row.op === "lease.claimed" && row.scope === SCOPE_ID && row.lease_id === batch.lease_id);
   assert.equal(leaseEvents.length, 1, "activation lease must contain exactly one journaled task");
   assert.equal(leaseEvents[0].task_id, task.id, "activation lease event targets another task");
-  const activationEvents = current.autopilotJournal.filter((row) => row.op === "scope.certified" && row.scope === SCOPE_ID && row.activated === true && row.at === context.activated_at);
+  const activationEvents = current.autopilotJournal.filter((row) => row.op === "scope.certified" && row.scope === SCOPE_ID && row.activated === true && (!context.activated_at || row.at === context.activated_at));
   assert.equal(activationEvents.length, 1, "activation certification event is missing or duplicated");
+  context.activated_at ||= activationEvents[0].at;
 
   const waterline = deriveWaterlineStatus({
     config: current.waterlineConfig,
