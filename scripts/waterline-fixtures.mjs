@@ -123,5 +123,32 @@ assert.equal(crossScopeStatus.phase, "other-cycle-in-flight");
 assert.equal(crossScopeStatus.claim_allowed, false);
 assert.ok(crossScopeStatus.claim_reasons.includes("other_scope_cycle_in_flight"));
 assert.equal(crossScopeStatus.jobs.other_scope_in_flight.length, 1);
+const terminalCrossScopeStatus = deriveWaterlineStatus({ config: bootstrapConfig, state: bootstrapState, mediaAudit: media(), autopilot: { jobs: [job("ap_star", "queued"), doctorJob("resolved")] }, autopilotJournal: doctorEvents, roadmapState, preservation, scopeId: "star-trek", requestedTasks: 1 });
+assert.equal(terminalCrossScopeStatus.phase, "other-cycle-receipt-required");
+assert.equal(terminalCrossScopeStatus.claim_allowed, false);
+assert.ok(terminalCrossScopeStatus.claim_reasons.includes("other_scope_cycle_receipt_required"));
+assert.equal(terminalCrossScopeStatus.cycles.other_scope_unreceipted.length, 1);
+assert.equal(terminalCrossScopeStatus.cycles.other_scope_unreceipted[0].task_statuses.ap_doctor, "resolved");
+const receiptedDoctorState = structuredClone(bootstrapState);
+receiptedDoctorState.cycles.push(makeCycleReceipt({
+  version: 1,
+  scope_id: "doctor-who",
+  lease_id: "lease_doctor",
+  outcome: "aborted",
+  reviewed_by: "second-desk",
+  reviewed_role: "second-desk",
+  reviewed_at: "2026-08-02T17:00:00Z",
+  note: "The first pilot closed without canonical adoption; its incident and honest absence are separately receipted.",
+  evidence: [{ type: "incident", value: "doctor-who-first-pilot-blocked" }],
+}, {
+  config: bootstrapConfig,
+  state: receiptedDoctorState,
+  autopilot: { jobs: [doctorJob("resolved")] },
+  mediaAudit: doctorMedia,
+  groups: leaseGroups(doctorEvents, "doctor-who"),
+}));
+const releasedCrossScopeStatus = deriveWaterlineStatus({ config: bootstrapConfig, state: receiptedDoctorState, mediaAudit: media(), autopilot: { jobs: [job("ap_star", "queued"), doctorJob("resolved")] }, autopilotJournal: doctorEvents, roadmapState, preservation, scopeId: "star-trek", requestedTasks: 1 });
+assert.equal(releasedCrossScopeStatus.claim_allowed, true);
+assert.equal(releasedCrossScopeStatus.cycles.other_scope_unreceipted.length, 0);
 
-console.log("PASS — rolling gold cycles, first-pilot bootstrap, global single-cycle custody, receipts, drills, metrics, incident authority, stop/reopen, and natural unlocks");
+console.log("PASS — rolling gold cycles, first-pilot bootstrap, global single-cycle custody through reviewed receipt, drills, metrics, incident authority, stop/reopen, and natural unlocks");

@@ -243,7 +243,9 @@ export function deriveWaterlineStatus({ config, state, mediaAudit, autopilot, au
   const scope = config.scopes.find((row) => row.id === scopeId);
   if (!scope) throw new Error(`unknown waterline scope ${scopeId}`);
   const media = mediaSummary(mediaAudit, scopeId);
-  const jobs = (autopilot.jobs || []).filter((job) => job.scope === scopeId);
+  const allJobs = autopilot.jobs || [];
+  const jobs = allJobs.filter((job) => job.scope === scopeId);
+  const allJobById = new Map(allJobs.map((job) => [job.id, job]));
   const jobById = new Map(jobs.map((job) => [job.id, job]));
   const inFlight = jobs.filter((job) => ACTIVE_JOB_STATUSES.has(job.status));
   const groups = leaseGroups(autopilotJournal, scopeId);
@@ -256,7 +258,16 @@ export function deriveWaterlineStatus({ config, state, mediaAudit, autopilot, au
     && media.total === 0
     && groups.length === 0
     && scopeCycles.length === 0);
-  const otherScopeInFlight = (autopilot.jobs || []).filter((job) => ACTIVE_JOB_STATUSES.has(job.status) && job.scope !== scopeId);
+  const otherScopeInFlight = allJobs.filter((job) => ACTIVE_JOB_STATUSES.has(job.status) && job.scope !== scopeId);
+  const cycleReceiptByLease = new Map(state.cycles.map((row) => [row.lease_id, row]));
+  const otherScopeUnreceipted = config.scopes
+    .filter((row) => row.id !== scopeId)
+    .flatMap((row) => leaseGroups(autopilotJournal, row.id))
+    .filter((group) => !cycleReceiptByLease.has(group.lease_id))
+    .map((group) => ({
+      ...group,
+      task_statuses: Object.fromEntries(group.task_ids.map((id) => [id, allJobById.get(id)?.status || "missing"])),
+    }));
   const incidents = latestIncidents(state.incidents);
   const blockingIncidents = incidents.filter((row) => row.status === "open" && BLOCKING_INCIDENT_SEVERITIES.has(row.severity));
   const preservationReady = preservation?.history_guard?.precondition_met === true && preservation?.history_guard?.status === "offsite-verified";
@@ -271,6 +282,7 @@ export function deriveWaterlineStatus({ config, state, mediaAudit, autopilot, au
   else if (media.debt > 0) claimReasons.push("media_debt_open");
   if (inFlight.length) claimReasons.push("cycle_in_flight");
   if (config.operations.one_cycle_at_a_time === true && otherScopeInFlight.length) claimReasons.push("other_scope_cycle_in_flight");
+  else if (config.operations.one_cycle_at_a_time === true && otherScopeUnreceipted.length) claimReasons.push("other_scope_cycle_receipt_required");
   if (unreceipted.length) claimReasons.push("cycle_receipt_required");
   if (blockingIncidents.length) claimReasons.push("blocking_incident_open");
   if (requestedTasks && requestedTasks > scope.max_tasks_per_cycle) claimReasons.push("requested_batch_exceeds_capacity");
@@ -280,6 +292,7 @@ export function deriveWaterlineStatus({ config, state, mediaAudit, autopilot, au
   if (blockingIncidents.length) phase = "incident-stop";
   else if (inFlight.length) phase = "cycle-in-flight";
   else if (config.operations.one_cycle_at_a_time === true && otherScopeInFlight.length) phase = "other-cycle-in-flight";
+  else if (config.operations.one_cycle_at_a_time === true && otherScopeUnreceipted.length) phase = "other-cycle-receipt-required";
   else if (media.total === 0 && groups.length) phase = "pilot-closure-required";
   else if (media.total === 0 && !initialPilotEligible) phase = "media-baseline-required";
   else if (media.debt > 0) phase = groups.length ? "media-catch-up" : "baseline-review";
@@ -324,6 +337,7 @@ export function deriveWaterlineStatus({ config, state, mediaAudit, autopilot, au
       observed_leases: groups.length,
       successful_receipts: successfulCycles.length,
       required_successful_receipts: scope.required_closed_cycles,
+      other_scope_unreceipted: otherScopeUnreceipted,
       unreceipted: unreceipted.map((group) => ({ ...group, task_statuses: Object.fromEntries(group.task_ids.map((id) => [id, jobById.get(id)?.status || "missing"])) })),
     },
     incidents: { blocking_open: blockingIncidents },
