@@ -16,6 +16,11 @@ import {
   validateWaterlineConfig,
   validateWaterlineState,
 } from "./lib/waterline.mjs";
+import {
+  applyMetricReadinessPolicy,
+  metricObservationCountsFromLedgers,
+  validateMetricReadinessConfig,
+} from "./lib/metric-readiness.mjs";
 
 const args = process.argv.slice(2);
 const command = args.shift() || "status";
@@ -39,6 +44,8 @@ const paths = {
   autopilotJournal: pathAt("autopilot-journal", "data/journal/autopilot.jsonl"),
   roadmap: pathAt("roadmap-state", "data/ROADMAP-STATE.json"),
   preservation: pathAt("preservation", "preservation/SNAPSHOTS.json"),
+  costLedger: pathAt("cost-ledger", "data/operational-reliability/COST-OBSERVATIONS.json"),
+  rightsLedger: pathAt("rights-ledger", "data/operational-reliability/RIGHTS-CASES.json"),
 };
 async function readJson(path, fallback) {
   try { return JSON.parse(await readFile(path, "utf8")); }
@@ -106,7 +113,7 @@ async function withLock(action) {
   finally { await handle?.close().catch(() => {}); await rm(paths.lock, { force: true }); }
 }
 async function load() {
-  const [config, state, mediaAudit, autopilot, autopilotJournalText, roadmapState, preservation, waterlineJournal] = await Promise.all([
+  const [config, state, mediaAudit, autopilot, autopilotJournalText, roadmapState, preservation, costLedger, rightsLedger, waterlineJournal] = await Promise.all([
     readJson(paths.config),
     readJson(paths.state, emptyWaterlineState()),
     readJson(paths.media),
@@ -114,15 +121,33 @@ async function load() {
     readText(paths.autopilotJournal),
     readJson(paths.roadmap),
     readJson(paths.preservation),
+    readJson(paths.costLedger),
+    readJson(paths.rightsLedger),
     readText(paths.journal),
   ]);
   validateWaterlineConfig(config);
+  validateMetricReadinessConfig(config);
   validateWaterlineState(state, config);
   parseJsonl(waterlineJournal);
-  return { config, state, mediaAudit, autopilot, autopilotJournal: parseJsonl(autopilotJournalText), roadmapState, preservation, waterlineJournal };
+  return {
+    config,
+    state,
+    mediaAudit,
+    autopilot,
+    autopilotJournal: parseJsonl(autopilotJournalText),
+    roadmapState,
+    preservation,
+    metricObservationCounts: metricObservationCountsFromLedgers({ costLedger, rightsLedger }),
+    waterlineJournal,
+  };
 }
 function statusFor(inputs) {
-  return deriveWaterlineStatus({ ...inputs, scopeId: option("scope", "star-trek"), requestedTasks: Number(option("requested", "0")) });
+  const base = deriveWaterlineStatus({ ...inputs, scopeId: option("scope", "star-trek"), requestedTasks: Number(option("requested", "0")) });
+  return applyMetricReadinessPolicy(base, {
+    config: inputs.config,
+    state: inputs.state,
+    observationCounts: inputs.metricObservationCounts,
+  });
 }
 async function save(inputs, state, event) {
   state.updated_at = event.at || event.reviewed_at || new Date().toISOString();
@@ -163,6 +188,8 @@ async function main() {
       console.log(`  media ${status.media.complete}/${status.media.total} complete; debt=${status.media.debt}`);
       console.log(`  cycles ${status.cycles.successful_receipts}/${status.cycles.required_successful_receipts} successful; unreceipted=${status.cycles.unreceipted.length}`);
       console.log(`  gold evidence=${status.evidence_readiness.star_trek_gold_shard}; operations evidence=${status.evidence_readiness.operational_reliability}`);
+      if (status.evidence_readiness.unobserved_nonblocking_metrics.length) console.log(`  observation-triggered debt: ${status.evidence_readiness.unobserved_nonblocking_metrics.join(", ")} (nonblocking until first observation)`);
+      if (status.evidence_readiness.measurement_due_metrics.length) console.log(`  measurements due: ${status.evidence_readiness.measurement_due_metrics.join(", ")}`);
       if (status.claim_reasons.length) console.log(`  blockers: ${status.claim_reasons.join(", ")}`);
       if (status.natural_unlocks_when_receipted.length) console.log(`  next after reviewed milestone receipts: ${status.natural_unlocks_when_receipted.join(", ")}`);
     }

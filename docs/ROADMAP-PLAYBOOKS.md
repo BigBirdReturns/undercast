@@ -92,7 +92,7 @@ Turn a working pipeline into an operating system with service levels, cost bound
 
 ### Build sequence
 
-1. Define measured source-freshness, build, cost, correction, publication, and rights baselines; retain `null` until observed.
+1. Define source-freshness, build, cost, correction, publication, and rights baseline states. Required metrics need numeric measurements; event-dependent metrics retain `null` with a reviewed zero-observation ledger until the first real or controlled observation reopens measurement.
 2. Enforce waterline capacity, cycle receipts, and high/critical incident stops.
 3. Run and receipt a fresh repository restore through the canonical gate.
 4. Run and receipt an isolated bad-publication rollback to the known-good release.
@@ -102,8 +102,9 @@ Turn a working pipeline into an operating system with service levels, cost bound
 
 - reviewed repository-restore drill passes
 - reviewed publication-rollback drill passes
-- build, cost-per-verified-record, source-freshness, and rights-response baselines measured
-- configured SLO targets pass
+- build and source-freshness baselines measured
+- cost and rights baselines either measured from admissible observations or retained as reviewed zero-observation `null` states with automatic reopen on the first observation
+- every measured configured SLO target passes
 - incident authority and stop/reopen behavior fixture-covered
 
 ### Do not
