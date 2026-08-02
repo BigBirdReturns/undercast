@@ -345,6 +345,43 @@ function verifyGlobalCycleCustodyContract() {
   assert.equal(terminal.cycles.other_scope_unreceipted.length, 1);
   assert.equal(terminal.cycles.other_scope_unreceipted[0].task_statuses.ap_doctor, "resolved");
 
+  const collidingReceiptEvents = [{ ...doctorEvents[0], scope: "star-trek", task_id: "ap_star_collision" }];
+  const collidingScopeState = structuredClone(state);
+  collidingScopeState.cycles.push(makeCycleReceipt({
+    version: 1,
+    scope_id: "star-trek",
+    lease_id: "lease_doctor",
+    outcome: "aborted",
+    reviewed_by: "second-desk",
+    reviewed_role: "second-desk",
+    reviewed_at: "2026-08-02T16:55:00Z",
+    note: "A receipt from another scope deliberately collides on lease ID and must not release Doctor Who custody.",
+    evidence: [{ type: "incident", value: "cross-scope-lease-id-collision" }],
+  }, {
+    config,
+    state: collidingScopeState,
+    autopilot: { jobs: [{ ...starJob, id: "ap_star_collision", status: "resolved" }] },
+    mediaAudit: starMedia,
+    groups: leaseGroups(collidingReceiptEvents, "star-trek"),
+  }));
+  const collidingReceipt = deriveWaterlineStatus({
+    config,
+    state: collidingScopeState,
+    mediaAudit: starMedia,
+    autopilot: { jobs: [starJob, doctorJob("resolved")] },
+    autopilotJournal: doctorEvents,
+    roadmapState,
+    preservation,
+    scopeId: "star-trek",
+    requestedTasks: 1,
+  });
+  assert.equal(collidingReceipt.phase, "other-cycle-receipt-required");
+  assert.equal(collidingReceipt.claim_allowed, false);
+  assert.ok(collidingReceipt.claim_reasons.includes("other_scope_cycle_receipt_required"));
+  assert.equal(collidingReceipt.cycles.other_scope_unreceipted.length, 1);
+  assert.equal(collidingReceipt.cycles.other_scope_unreceipted[0].scope_id, "doctor-who");
+  assert.equal(collidingReceipt.cycles.other_scope_unreceipted[0].lease_id, "lease_doctor");
+
   const receiptedState = structuredClone(state);
   receiptedState.cycles.push(makeCycleReceipt({
     version: 1,
@@ -390,6 +427,14 @@ function verifyGlobalCycleCustodyContract() {
       blocker: "other_scope_cycle_receipt_required",
       other_scope_unreceipted: terminal.cycles.other_scope_unreceipted.length,
     },
+    mismatched_scope_receipt: {
+      phase: collidingReceipt.phase,
+      claim_allowed: collidingReceipt.claim_allowed,
+      blocker: "other_scope_cycle_receipt_required",
+      other_scope_unreceipted: collidingReceipt.cycles.other_scope_unreceipted.length,
+      required_scope_id: collidingReceipt.cycles.other_scope_unreceipted[0].scope_id,
+      colliding_lease_id: collidingReceipt.cycles.other_scope_unreceipted[0].lease_id,
+    },
     receipted: {
       claim_allowed: receipted.claim_allowed,
       other_scope_unreceipted: receipted.cycles.other_scope_unreceipted.length,
@@ -420,12 +465,13 @@ async function checkReceipt(root, report) {
   assert.equal(report.global_cycle_custody?.status, "behaviorally-recomputed");
   assert.equal(
     report.global_cycle_custody?.verification_method,
-    "permanent-checker-recomputes-active-terminal-unreceipted-and-receipted-transitions",
+    "permanent-checker-recomputes-active-terminal-unreceipted-mismatched-scope-and-receipted-transitions",
   );
   assert.match(report.global_cycle_custody?.repair?.workflow_run || "", /^[0-9]+$/);
   assert.match(report.global_cycle_custody?.repair?.base_main || "", /^[0-9a-f]{40}$/);
   assert.match(report.global_cycle_custody?.repair?.launcher_head || "", /^[0-9a-f]{40}$/);
-  assert.equal(report.global_cycle_custody?.repair?.review_comment_id, 3700209880);
+  assert.equal(report.global_cycle_custody?.repair?.review_comment_id, 3700334878);
+  assert.equal(report.global_cycle_custody?.receipt_match_key, "scope_id+lease_id");
   const requiredCodeFiles = [
     "scripts/doctor-who-activation.mjs",
     "scripts/lib/waterline.mjs",

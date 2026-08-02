@@ -237,6 +237,7 @@ function latestIncidents(events) {
 }
 function hasEvidenceType(evidence, type) { return (evidence || []).some((row) => row.type === type); }
 function completedMilestones(roadmapState) { return new Set((roadmapState.completed || []).map((row) => row.milestone)); }
+function cycleReceiptKey(scopeId, leaseId) { return `${scopeId}\u0000${leaseId}`; }
 
 export function deriveWaterlineStatus({ config, state, mediaAudit, autopilot, autopilotJournal = [], roadmapState, preservation, scopeId, requestedTasks = 0 }) {
   validateWaterlineState(state, config);
@@ -249,9 +250,9 @@ export function deriveWaterlineStatus({ config, state, mediaAudit, autopilot, au
   const jobById = new Map(jobs.map((job) => [job.id, job]));
   const inFlight = jobs.filter((job) => ACTIVE_JOB_STATUSES.has(job.status));
   const groups = leaseGroups(autopilotJournal, scopeId);
+  const cycleReceiptKeys = new Set(state.cycles.map((row) => cycleReceiptKey(row.scope_id, row.lease_id)));
   const scopeCycles = state.cycles.filter((row) => row.scope_id === scopeId);
-  const cycleByLease = new Map(scopeCycles.map((row) => [row.lease_id, row]));
-  const unreceipted = groups.filter((group) => !cycleByLease.has(group.lease_id));
+  const unreceipted = groups.filter((group) => !cycleReceiptKeys.has(cycleReceiptKey(group.scope_id, group.lease_id)));
   const successfulCycles = scopeCycles.filter((row) => row.outcome === "completed");
   const initialPilot = scope.initial_pilot || null;
   const initialPilotEligible = Boolean(initialPilot?.allow_without_media_baseline === true
@@ -259,11 +260,10 @@ export function deriveWaterlineStatus({ config, state, mediaAudit, autopilot, au
     && groups.length === 0
     && scopeCycles.length === 0);
   const otherScopeInFlight = allJobs.filter((job) => ACTIVE_JOB_STATUSES.has(job.status) && job.scope !== scopeId);
-  const cycleReceiptByLease = new Map(state.cycles.map((row) => [row.lease_id, row]));
   const otherScopeUnreceipted = config.scopes
     .filter((row) => row.id !== scopeId)
     .flatMap((row) => leaseGroups(autopilotJournal, row.id))
-    .filter((group) => !cycleReceiptByLease.has(group.lease_id))
+    .filter((group) => !cycleReceiptKeys.has(cycleReceiptKey(group.scope_id, group.lease_id)))
     .map((group) => ({
       ...group,
       task_statuses: Object.fromEntries(group.task_ids.map((id) => [id, allJobById.get(id)?.status || "missing"])),

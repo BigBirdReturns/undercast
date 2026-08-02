@@ -129,6 +129,32 @@ assert.equal(terminalCrossScopeStatus.claim_allowed, false);
 assert.ok(terminalCrossScopeStatus.claim_reasons.includes("other_scope_cycle_receipt_required"));
 assert.equal(terminalCrossScopeStatus.cycles.other_scope_unreceipted.length, 1);
 assert.equal(terminalCrossScopeStatus.cycles.other_scope_unreceipted[0].task_statuses.ap_doctor, "resolved");
+const collidingReceiptEvents = [{ ...doctorEvents[0], scope: "star-trek", task_id: "ap_star_collision" }];
+const collidingScopeState = structuredClone(bootstrapState);
+collidingScopeState.cycles.push(makeCycleReceipt({
+  version: 1,
+  scope_id: "star-trek",
+  lease_id: "lease_doctor",
+  outcome: "aborted",
+  reviewed_by: "second-desk",
+  reviewed_role: "second-desk",
+  reviewed_at: "2026-08-02T16:55:00Z",
+  note: "A receipt from another scope deliberately collides on lease ID and must not release Doctor Who custody.",
+  evidence: [{ type: "incident", value: "cross-scope-lease-id-collision" }],
+}, {
+  config: bootstrapConfig,
+  state: collidingScopeState,
+  autopilot: { jobs: [job("ap_star_collision", "resolved")] },
+  mediaAudit: media(),
+  groups: leaseGroups(collidingReceiptEvents, "star-trek"),
+}));
+const collidingReceiptStatus = deriveWaterlineStatus({ config: bootstrapConfig, state: collidingScopeState, mediaAudit: media(), autopilot: { jobs: [job("ap_star", "queued"), doctorJob("resolved")] }, autopilotJournal: doctorEvents, roadmapState, preservation, scopeId: "star-trek", requestedTasks: 1 });
+assert.equal(collidingReceiptStatus.phase, "other-cycle-receipt-required");
+assert.equal(collidingReceiptStatus.claim_allowed, false);
+assert.ok(collidingReceiptStatus.claim_reasons.includes("other_scope_cycle_receipt_required"));
+assert.equal(collidingReceiptStatus.cycles.other_scope_unreceipted.length, 1);
+assert.equal(collidingReceiptStatus.cycles.other_scope_unreceipted[0].scope_id, "doctor-who");
+assert.equal(collidingReceiptStatus.cycles.other_scope_unreceipted[0].lease_id, "lease_doctor");
 const receiptedDoctorState = structuredClone(bootstrapState);
 receiptedDoctorState.cycles.push(makeCycleReceipt({
   version: 1,
@@ -151,4 +177,4 @@ const releasedCrossScopeStatus = deriveWaterlineStatus({ config: bootstrapConfig
 assert.equal(releasedCrossScopeStatus.claim_allowed, true);
 assert.equal(releasedCrossScopeStatus.cycles.other_scope_unreceipted.length, 0);
 
-console.log("PASS — rolling gold cycles, first-pilot bootstrap, global single-cycle custody through reviewed receipt, drills, metrics, incident authority, stop/reopen, and natural unlocks");
+console.log("PASS — rolling gold cycles, scope-bound receipts, first-pilot bootstrap, global single-cycle custody through reviewed receipt, drills, metrics, incident authority, stop/reopen, and natural unlocks");
