@@ -22,7 +22,7 @@ The restored slot is then served over HTTP. Every selected route must match the 
 
 This representative surface proves the rollback mechanism and byte checks. It is not a claim that every production file was fault-injected.
 
-## Evidence boundary
+## Evidence custody and discovery
 
 The workflow uploads:
 
@@ -32,7 +32,11 @@ The workflow uploads:
 - dependency and gate logs
 - the exact forward-recovery patch
 
-Every receipt is marked `workflow-executed-unreviewed`. A second-desk reviewer must inspect the workflow run, receipts, logs, target commit, snapshot, and failure boundary before authoring `waterline record-drill` inputs. The evidence producer cannot review itself.
+A successful `push` run on `main` then creates or updates one exact-title GitHub issue after the artifact upload succeeds. The issue binds the repository, event, branch, exact target SHA, workflow run and attempt, artifact ID, artifact URL, Actions artifact digest, snapshot identity, target-tree manifest, forward-patch hash, receipt hashes, canonical-gate duration, and rollback result. Pull-request runs and non-main runs cannot publish this ledger.
+
+The issue is a durable discovery index, not the evidence authority. A rerun may update it. The Actions artifact digest and the SHA-256 values of the two receipt files identify the evidence that must be reviewed. Exact-title lookup prevents duplicate issues for the same run and target, while multiple exact matches fail closed.
+
+Every receipt remains `workflow-executed-unreviewed`. A second-desk reviewer must inspect the workflow run, artifact, receipts, logs, target commit, snapshot, and failure boundary before authoring `waterline record-drill` inputs. The evidence producer cannot review itself, populate metrics, or complete the roadmap milestone.
 
 Metrics remain `null` until an observed denominator exists. One gate duration is an observation, not a p95. No cost, source-freshness, or rights-response value may be inferred from absence.
 
@@ -44,6 +48,7 @@ node scripts/operational-reliability-execute.mjs select-snapshot
 node scripts/operational-reliability-execute.mjs restore-drill ...
 node scripts/operational-reliability-execute.mjs rollback-drill ...
 node scripts/operational-reliability-execute.mjs validate-bundle ...
+node scripts/operational-reliability-ledger.mjs issue-payload ...
 ```
 
-The canonical gate runs the operational-reliability fixtures through `waterline:fixtures`.
+The canonical gate runs the operational-reliability restore, rollback, workflow-path, disposable-index, and exact-main ledger fixtures through `waterline:fixtures`.
