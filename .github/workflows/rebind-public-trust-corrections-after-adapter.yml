@@ -1,0 +1,155 @@
+name: rebind-public-trust-corrections-after-adapter
+
+on:
+  push:
+    branches:
+      - agent/public-trust-corrections-001
+    paths:
+      - ".github/workflows/rebind-public-trust-corrections-after-adapter.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rebind-public-trust-corrections-after-adapter
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: agent/public-trust-corrections-001
+  EXACT_MAIN: bb42d4386774a6c627d82c66c2bc06f73146aef3
+  SELF: .github/workflows/rebind-public-trust-corrections-after-adapter.yml
+
+jobs:
+  rebind:
+    if: github.repository == 'BigBirdReturns/undercast'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind branch and exact current main
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$GITHUB_SHA"
+          git merge-base --is-ancestor 0e20d87f1c10cbc4d734b5c1247d88b55b82b3d6 HEAD
+          cp package.json /tmp/corrections-package.json
+          git show refs/remotes/origin/main:package.json > /tmp/main-package.json
+
+      - name: Merge main and resolve only the shared package seam
+        run: |
+          set -euo pipefail
+          set +e
+          git merge --no-commit --no-ff refs/remotes/origin/main
+          merge_status=$?
+          set -e
+          test "$merge_status" -eq 1
+          git diff --name-only --diff-filter=U | sort > /tmp/unmerged.txt
+          printf '%s\n' package.json > /tmp/expected-unmerged.txt
+          diff -u /tmp/expected-unmerged.txt /tmp/unmerged.txt
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const main = JSON.parse(fs.readFileSync('/tmp/main-package.json', 'utf8'));
+          const corrections = JSON.parse(fs.readFileSync('/tmp/corrections-package.json', 'utf8'));
+          const correctionCommand = 'node scripts/correction-fixtures.mjs && node scripts/corrections.mjs check';
+          if (!main.scripts['corpus:fixtures'].includes(correctionCommand)) {
+            main.scripts['corpus:fixtures'] += ` && ${correctionCommand}`;
+          }
+          for (const key of ['corrections:write', 'corrections:check', 'corrections:status', 'corrections:fixtures']) {
+            if (!corrections.scripts[key]) throw new Error(`missing correction script ${key}`);
+            main.scripts[key] = corrections.scripts[key];
+          }
+          if (!main.scripts['autopilot:fixtures'].includes('node scripts/census-adapter.mjs check')) {
+            throw new Error('main adapter gate is missing');
+          }
+          fs.writeFileSync('package.json', JSON.stringify(main, null, 2) + '\n');
+          NODE
+
+          git add package.json
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git rm "$SELF"
+          git diff --cached --check
+
+      - name: Prove both permanent control planes and the complete repository
+        run: |
+          set -euo pipefail
+          npm run adapter:fixtures
+          npm run corrections:fixtures
+          node scripts/census-adapter.mjs check
+          node scripts/corrections.mjs check
+          npm run gate 2>&1 | tee /tmp/rebound-gate.log
+
+      - name: Publish the exact two-parent correction product under lease
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report .ci/projection-drift
+          git restore --worktree -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          git diff --cached --check
+
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$GITHUB_SHA"
+
+          git config user.name undercast-corrections
+          git config user.email undercast-corrections@users.noreply.github.com
+          git commit \
+            -m 'Corrections: reconcile public intake with adapter mainline' \
+            -m 'preserve both permanent fixture chains' \
+            -m 'complete rendered gate passed on the two-parent product'
+          new_head="$(git rev-parse HEAD)"
+
+          cat > /tmp/expected-final-paths.txt <<'PATHS'
+          .github/ISSUE_TEMPLATE/correction.yml
+          data/CORRECTIONS.json
+          data/review/corrections/BASELINE.json
+          data/review/corrections/controlled-exercise-001.json
+          docs/CORRECTIONS.md
+          package.json
+          schema/correction.schema.json
+          scripts/correction-fixtures.mjs
+          scripts/corrections.mjs
+          PATHS
+          sort -u /tmp/expected-final-paths.txt -o /tmp/expected-final-paths.txt
+          git diff --name-only refs/remotes/origin/main...HEAD | sort > /tmp/final-paths.txt
+          diff -u /tmp/expected-final-paths.txt /tmp/final-paths.txt
+
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${GITHUB_SHA}"
+          echo "published_head=${new_head}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload rebound diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-trust-corrections-rebind-${{ github.run_id }}
+          path: |
+            /tmp/unmerged.txt
+            /tmp/rebound-gate.log
+            /tmp/final-paths.txt
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
