@@ -256,6 +256,12 @@ async function checkReceipt(root, report) {
   assert.equal(report.waterline.claim_allowed_after_claim, false);
   assert.ok(report.waterline.claim_reasons_after_claim.includes("cycle_in_flight"));
   assert.ok(report.waterline.claim_reasons_after_claim.includes("media_baseline_missing"));
+  assert.equal(report.global_cycle_custody?.status, "smoke-passed");
+  assert.equal(report.global_cycle_custody?.other_scope_active_work_blocked, true);
+  assert.equal(report.global_cycle_custody?.other_scope_terminal_unreceipted_blocked, true);
+  assert.equal(report.global_cycle_custody?.global_claim_release_requires_cycle_receipt, true);
+  assert.equal(report.global_cycle_custody?.candidate_complete_gate_passed, true);
+  assert.equal(report.global_cycle_custody?.final_complete_gate_passed, true);
   assert.ok(Object.values(report.boundary).every((value) => value === false), "activation boundary contains an unauthorized payment");
 
   const current = await loadCurrent(root);
