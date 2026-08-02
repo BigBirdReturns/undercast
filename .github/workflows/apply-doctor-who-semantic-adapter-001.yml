@@ -1,0 +1,318 @@
+name: apply-doctor-who-semantic-adapter-001
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/apply-doctor-who-semantic-adapter-001.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-doctor-who-semantic-adapter-001-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXACT_MAIN: ${{ github.event.pull_request.base.sha }}
+  SELF: .github/workflows/apply-doctor-who-semantic-adapter-001.yml
+  REPORT: data/review/adapter-sdk/doctor-who-semantic-001.json
+  CONTACT: undercast-doctor-who-semantic-adapter
+
+jobs:
+  apply:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind exact branch and freeze the non-Doctor-Who denominator
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const hash = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+          const census = JSON.parse(fs.readFileSync('data/CENSUS.json', 'utf8'));
+          const unresolved = JSON.parse(fs.readFileSync('data/CENSUS-UNRESOLVED.json', 'utf8'));
+          const manifest = JSON.parse(fs.readFileSync('data/CENSUS-MANIFEST.json', 'utf8'));
+          const coverage = JSON.parse(fs.readFileSync('data/CENSUS-COVERAGE.json', 'utf8'));
+          const frozen = {
+            census: hash(census.filter((row) => row.franchise !== 'Doctor Who')),
+            unresolved: hash(unresolved.filter((row) => row.franchise !== 'Doctor Who')),
+            manifest: hash((manifest.observations || []).filter((row) => row.franchise !== 'Doctor Who')),
+            coverage: hash(coverage.filter((row) => row.franchise !== 'Doctor Who')),
+          };
+          fs.writeFileSync('/tmp/doctor-who-nontarget-before.json', JSON.stringify(frozen, null, 2) + '\n');
+          NODE
+
+      - name: Install the source-specific adapter contract
+        run: |
+          set -euo pipefail
+          node --check scripts/lib/census-doctor-who.mjs
+          node --check scripts/census-doctor-who.mjs
+          node --check scripts/census-doctor-who-fixtures.mjs
+          node scripts/census-doctor-who-fixtures.mjs
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const producerFiles = [
+            'scripts/census-doctor-who-fixtures.mjs',
+            'scripts/census-doctor-who.mjs',
+            'scripts/lib/census-doctor-who.mjs',
+            'scripts/census.mjs',
+            'scripts/census-key.mjs',
+            'scripts/lib/census-core.mjs',
+          ];
+
+          const adapterPath = 'data/CENSUS-ADAPTERS.json';
+          const adapters = JSON.parse(fs.readFileSync(adapterPath, 'utf8'));
+          const adapter = adapters.adapters.find((row) => row.id === 'doctor-who-v1');
+          if (!adapter) throw new Error('Doctor Who adapter contract is missing');
+          adapter.command = { executable: 'node', args: ['scripts/census-doctor-who.mjs'] };
+          adapter.producer_files = producerFiles;
+          adapter.semantic_controls = [
+            'plain-text names are admitted only inside the closed performer-field set',
+            'target identity requires numbered species fields or an exact target-bearing title',
+            'explicit non-target species is out of scope and category membership is never performer evidence',
+            'voice-actor fields map to voice while generic actor fields retain unresolved designed-form mode',
+            'unparseable non-empty trusted fields stop publication rather than silently disappearing',
+          ];
+          adapter.next_gate = 'Run complete current-source smoke, then issue a separate second-desk certification or retain an explicit blocked disposition.';
+          fs.writeFileSync(adapterPath, JSON.stringify(adapters, null, 2) + '\n');
+
+          const scopesPath = 'data/AUTOPILOT-SCOPES.json';
+          const scopes = JSON.parse(fs.readFileSync(scopesPath, 'utf8'));
+          const scope = scopes.scopes.find((row) => row.id === 'doctor-who');
+          if (!scope) throw new Error('Doctor Who Autopilot scope is missing');
+          scope.refresh = {
+            executable: 'node',
+            args: ['scripts/census-doctor-who.mjs'],
+            cadence_days: 30,
+          };
+          scope.certification = {
+            ...scope.certification,
+            producer_files: producerFiles,
+            checks: [
+              { label: 'generic census regression fixtures', executable: 'node', args: ['scripts/census-fixtures.mjs'] },
+              { label: 'Doctor Who source adapter fixtures', executable: 'node', args: ['scripts/census-doctor-who-fixtures.mjs'] },
+            ],
+            require_manifest_receipts: true,
+          };
+          scope.note = 'Paused source-specific adapter. Exact plain-text performer fields and target identity must remain current; certification and activation are separate transactions.';
+          fs.writeFileSync(scopesPath, JSON.stringify(scopes, null, 2) + '\n');
+
+          const packagePath = 'package.json';
+          const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+          pkg.scripts['census:doctor-who'] = 'node scripts/census-doctor-who.mjs';
+          pkg.scripts['census:doctor-who:fixtures'] = 'node scripts/census-doctor-who-fixtures.mjs';
+          const fixture = 'node scripts/census-doctor-who-fixtures.mjs';
+          for (const key of ['adapter:fixtures', 'autopilot:fixtures']) {
+            if (!pkg.scripts[key]) throw new Error(`missing permanent fixture chain ${key}`);
+            if (!pkg.scripts[key].includes(fixture)) pkg.scripts[key] += ` && ${fixture}`;
+          }
+          fs.writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + '\n');
+          NODE
+
+      - name: Regenerate current Doctor Who evidence and adapter baseline
+        run: |
+          set -euo pipefail
+          CONTACT="$CONTACT" node scripts/census-doctor-who.mjs 2>&1 | tee /tmp/doctor-who-semantic-census.log
+          node scripts/census-adapter.mjs write
+          node scripts/census-adapter.mjs check
+          npm run adapter:fixtures
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const hash = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+          const before = JSON.parse(fs.readFileSync('/tmp/doctor-who-nontarget-before.json', 'utf8'));
+          const census = JSON.parse(fs.readFileSync('data/CENSUS.json', 'utf8'));
+          const unresolved = JSON.parse(fs.readFileSync('data/CENSUS-UNRESOLVED.json', 'utf8'));
+          const manifest = JSON.parse(fs.readFileSync('data/CENSUS-MANIFEST.json', 'utf8'));
+          const coverage = JSON.parse(fs.readFileSync('data/CENSUS-COVERAGE.json', 'utf8'));
+          const after = {
+            census: hash(census.filter((row) => row.franchise !== 'Doctor Who')),
+            unresolved: hash(unresolved.filter((row) => row.franchise !== 'Doctor Who')),
+            manifest: hash((manifest.observations || []).filter((row) => row.franchise !== 'Doctor Who')),
+            coverage: hash(coverage.filter((row) => row.franchise !== 'Doctor Who')),
+          };
+          for (const [key, value] of Object.entries(after)) {
+            if (value !== before[key]) throw new Error(`Doctor Who adapter changed non-target denominator ${key}`);
+          }
+
+          const report = JSON.parse(fs.readFileSync(process.env.REPORT, 'utf8'));
+          if (report.source.observation_rows < 1500) throw new Error('current source denominator unexpectedly narrowed');
+          if (report.extraction.exact_performer_role_credits < 250) throw new Error('source-specific adapter recovered too few exact performer-role credits');
+          if ((report.extraction.performance_modes.voice || 0) < 150) throw new Error('explicit voice-credit denominator unexpectedly narrowed');
+          if (report.extraction.rejected_nonempty_trusted_fields !== 0) throw new Error('trusted source values were silently rejected');
+          if (!(report.source.dispositions['out-of-scope'] > 0 && report.source.dispositions.unresolved > 0)) throw new Error('adapter erased explicit non-target or unresolved states');
+          if (Object.values(report.boundary).some((value) => value === true)) throw new Error('semantic adapter exceeded its authority');
+          NODE
+
+      - name: Materialize projections and smoke the complete candidate
+        run: |
+          set -euo pipefail
+          node scripts/shard.mjs
+          git rm "$SELF"
+          git add -A
+          git diff --cached --check
+
+          cat > /tmp/allowed-staged-paths.txt <<'PATHS'
+          .github/workflows/apply-doctor-who-semantic-adapter-001.yml
+          data/AUTOPILOT-SCOPES.json
+          data/CENSUS-ADAPTERS.json
+          data/CENSUS-COVERAGE.json
+          data/CENSUS-FERENGI-TEST.json
+          data/CENSUS-GAPS.json
+          data/CENSUS-MANIFEST.json
+          data/CENSUS-SUMMARY.json
+          data/CENSUS-UNRESOLVED.json
+          data/CENSUS.json
+          data/archive.json
+          data/index.json
+          data/media-live.json
+          data/review/adapter-sdk/BASELINE.json
+          data/review/adapter-sdk/doctor-who-semantic-001.json
+          data/shard-manifest.json
+          data/shards/0000.json
+          data/shards/0001.json
+          data/species.json
+          package.json
+          PATHS
+          sort -u /tmp/allowed-staged-paths.txt -o /tmp/allowed-staged-paths.txt
+          git diff --cached --name-only | sort > /tmp/staged-paths.txt
+          comm -23 /tmp/staged-paths.txt /tmp/allowed-staged-paths.txt > /tmp/unexpected-staged-paths.txt
+          test ! -s /tmp/unexpected-staged-paths.txt
+          for required in \
+            "$SELF" \
+            data/AUTOPILOT-SCOPES.json \
+            data/CENSUS-ADAPTERS.json \
+            data/CENSUS-COVERAGE.json \
+            data/CENSUS-MANIFEST.json \
+            data/CENSUS-UNRESOLVED.json \
+            data/CENSUS.json \
+            data/review/adapter-sdk/BASELINE.json \
+            "$REPORT" \
+            package.json; do
+            grep -Fxq "$required" /tmp/staged-paths.txt
+          done
+
+          npm run gate 2>&1 | tee /tmp/doctor-who-semantic-gate.log
+
+      - name: Publish the workflow-free exact product under lease
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report .ci/projection-drift
+          git restore --worktree -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          node scripts/census-doctor-who-fixtures.mjs
+          node scripts/census-adapter.mjs check
+
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+
+          git config user.name undercast-doctor-who-adapter
+          git config user.email undercast-doctor-who-adapter@users.noreply.github.com
+          git commit \
+            -m 'Adapter SDK: recover exact Doctor Who performer fields' \
+            -m 'isolate source-specific plain-text grammar from Star Trek' \
+            -m 'retain certification and activation as separate authority'
+          new_head="$(git rev-parse HEAD)"
+
+          cat > /tmp/allowed-final-paths.txt <<'PATHS'
+          data/AUTOPILOT-SCOPES.json
+          data/CENSUS-ADAPTERS.json
+          data/CENSUS-COVERAGE.json
+          data/CENSUS-FERENGI-TEST.json
+          data/CENSUS-GAPS.json
+          data/CENSUS-MANIFEST.json
+          data/CENSUS-SUMMARY.json
+          data/CENSUS-UNRESOLVED.json
+          data/CENSUS.json
+          data/archive.json
+          data/index.json
+          data/media-live.json
+          data/review/adapter-sdk/BASELINE.json
+          data/review/adapter-sdk/doctor-who-semantic-001.json
+          data/shard-manifest.json
+          data/shards/0000.json
+          data/shards/0001.json
+          data/species.json
+          docs/DOCTOR-WHO-CENSUS-ADAPTER.md
+          package.json
+          scripts/census-doctor-who-fixtures.mjs
+          scripts/census-doctor-who.mjs
+          scripts/lib/census-doctor-who.mjs
+          PATHS
+          sort -u /tmp/allowed-final-paths.txt -o /tmp/allowed-final-paths.txt
+          git diff --name-only refs/remotes/origin/main...HEAD | sort > /tmp/final-paths.txt
+          comm -23 /tmp/final-paths.txt /tmp/allowed-final-paths.txt > /tmp/unexpected-final-paths.txt
+          test ! -s /tmp/unexpected-final-paths.txt
+          test -z "$(grep '^\.github/workflows/' /tmp/final-paths.txt || true)"
+          for required in \
+            data/AUTOPILOT-SCOPES.json \
+            data/CENSUS-ADAPTERS.json \
+            data/CENSUS-COVERAGE.json \
+            data/CENSUS-MANIFEST.json \
+            data/CENSUS.json \
+            data/review/adapter-sdk/doctor-who-semantic-001.json \
+            docs/DOCTOR-WHO-CENSUS-ADAPTER.md \
+            scripts/census-doctor-who-fixtures.mjs \
+            scripts/census-doctor-who.mjs \
+            scripts/lib/census-doctor-who.mjs; do
+            grep -Fxq "$required" /tmp/final-paths.txt
+          done
+
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+          echo "published_head=${new_head}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload source, report, path, and gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-semantic-adapter-001-${{ github.run_id }}
+          path: |
+            /tmp/doctor-who-nontarget-before.json
+            /tmp/doctor-who-semantic-census.log
+            /tmp/doctor-who-semantic-gate.log
+            /tmp/staged-paths.txt
+            /tmp/final-paths.txt
+            /tmp/unexpected-staged-paths.txt
+            /tmp/unexpected-final-paths.txt
+            data/review/adapter-sdk/doctor-who-semantic-001.json
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
