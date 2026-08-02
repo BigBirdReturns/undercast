@@ -171,6 +171,18 @@ status = applyMetricReadinessPolicy(baseStatus(), {
 });
 assert.equal(status.evidence_readiness.operational_reliability, false);
 assert.deepEqual(status.evidence_readiness.measurement_due_metrics, ["cost_per_verified_record_usd"]);
+assert.throws(() => makeMetricsReceipt({
+  metrics: { cost_per_verified_record_usd: null },
+  reviewed_by: "second-desk",
+  reviewed_role: "second-desk",
+  reviewed_at: "2026-08-02T00:30:00Z",
+  note: "Attempted to preserve null after the validated ledger became populated.",
+  evidence: [{ type: "report", value: "cost-null-after-observation.json" }],
+}, baseState().metrics, {
+  metricReadiness: config.operations.metric_readiness,
+  observationSnapshots: oneCostSnapshots,
+  metricReceipts: [],
+}), /cannot record null against a populated validated observation snapshot/);
 
 const current = baseState();
 const metricResult = makeMetricsReceipt({
@@ -588,4 +600,4 @@ try {
   await rm(isolationRoot, { recursive: true, force: true });
 }
 
-console.log("PASS — normalized source identity, migration/reset custody, non-metric writer isolation during malformed metric ledgers, exact byte/population/value bindings, mismatch refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");
+console.log("PASS — normalized source identity, populated-ledger null refusal, migration/reset custody, non-metric writer isolation during malformed metric ledgers, exact byte/population/value bindings, mismatch refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");

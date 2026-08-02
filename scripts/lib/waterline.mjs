@@ -414,6 +414,10 @@ export function makeMetricsReceipt(input, currentMetrics, context = {}) {
           population: 0,
           value: null,
         };
+      } else if (value === null) {
+        if (snapshot.population > 0 || snapshot.measurement_status !== "no-observations" || snapshot.value !== null) {
+          throw new Error(`metrics.${key} cannot record null against a populated validated observation snapshot`);
+        }
       } else if (value !== null) {
         if (snapshot.population < 1 || snapshot.measurement_status !== "measured") throw new Error(`metric ${key} requires a populated validated observation snapshot`);
         if (value !== snapshot.value) throw new Error(`metrics.${key} value ${value} does not match validated ledger measurement ${snapshot.value}`);

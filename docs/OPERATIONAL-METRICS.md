@@ -74,3 +74,8 @@ Source identity is a normalized, safe, repository-relative POSIX path. Dot segme
 Observation-ledger parsing remains mandatory for `status`, `validate`, `gate`, and `record-metrics`. It is not a prerequisite for non-metric receipt writers: `record-cycle`, `record-drill`, `record-accounting`, and `record-incident` load and validate durable waterline state without interpreting cost or rights rows.
 
 A malformed observation row therefore cannot prevent an operator from opening a high/critical incident stop or from receipting already-completed work. Metric-aware commands continue to fail closed until the ledger is repaired, and non-metric writers cannot alter metric values or metric receipts.
+
+
+### Populated-ledger null refusal
+
+A when-observed metric cannot remain or be re-receipted as `null` after its validated ledger has a positive population. The writer must record the exact ledger-derived numeric value and binding, or refuse the transaction. The only numeric-to-null path remains the separately constrained source-migration reset against a genuinely different, exact zero-population replacement ledger.
