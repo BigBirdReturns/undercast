@@ -65,3 +65,5 @@ Both metric fixture suites execute inside the canonical waterline gate.
 Historical numeric receipts retain their recorded source as immutable evidence. A reviewed `observation_source` migration does not make those receipts structurally invalid. Readiness compares the latest receipt with the current configured source, reports `measured-against-wrong-ledger`, and blocks until `record-metrics` binds the validated replacement ledger.
 
 If the reviewed replacement ledger is empty, `record-metrics` may retire the historical numeric value to `null` only when the latest measured receipt names a different source. The reset receipt binds the replacement source, exact hash, zero population, and derived null value. Emptying the same source never authorizes erasure.
+
+Source identity is a normalized, safe, repository-relative POSIX path. Dot segments, repeated separators, and backslash spellings are canonicalized before duplicate detection, snapshot construction, receipt binding, readiness comparison, and migration authorization. A spelling-only alias such as `data/ledger.json` → `./data/ledger.json` is the same source and cannot authorize a null reset.

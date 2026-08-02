@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
-import { METRIC_KEYS } from "./waterline.mjs";
+import { METRIC_KEYS, normalizeMetricObservationSource } from "./waterline.mjs";
 import {
   measureCostPerVerifiedRecord,
   measureRightsResponse,
@@ -63,7 +63,7 @@ export function validateMetricReadinessConfig(config) {
     const mode = requireString(policy.mode, `operations.metric_readiness.${key}.mode`);
     if (!METRIC_READINESS_MODES.has(mode)) throw new Error(`operations.metric_readiness.${key}.mode is invalid`);
     if (mode === "when-observed") {
-      const source = requireString(policy.observation_source, `operations.metric_readiness.${key}.observation_source`);
+      const source = normalizeMetricObservationSource(policy.observation_source, `operations.metric_readiness.${key}.observation_source`);
       if (!OBSERVATION_METRICS[key]) throw new Error(`no validated observation adapter exists for ${key}`);
       if (observationSources.has(source)) throw new Error(`observation source ${source} is assigned to multiple metrics`);
       observationSources.add(source);
@@ -83,11 +83,12 @@ export function resolveMetricObservationSources(config, { root = ".", overrides 
   for (const [metric] of Object.entries(OBSERVATION_METRICS)) {
     const policy = config.operations.metric_readiness[metric];
     if (policy.mode !== "when-observed") throw new Error(`${metric} must remain when-observed`);
-    const source = requireString(policy.observation_source, `${metric}.observation_source`);
+    const source = normalizeMetricObservationSource(policy.observation_source, `${metric}.observation_source`);
     const configuredPath = resolve(root, source);
     const override = overrides[metric];
     if (override != null) {
-      const overridePath = resolve(root, requireString(override, `${metric} override`));
+      const overrideSource = normalizeMetricObservationSource(override, `${metric} override`);
+      const overridePath = resolve(root, overrideSource);
       if (overridePath !== configuredPath) {
         throw new Error(`${metric} override ${overridePath} does not match configured observation source ${configuredPath}`);
       }
@@ -109,14 +110,14 @@ export function metricObservationSnapshotsFromLedgers({
   const rightsMeasurement = measureRightsResponse(rightsLedger);
   const snapshots = {
     cost_per_verified_record_usd: {
-      source: requireString(costSource, "cost observation source"),
+      source: normalizeMetricObservationSource(costSource, "cost observation source"),
       sha256: sha256(exactBytes(costLedgerBytes, "cost ledger bytes")),
       population: requireCount(costMeasurement.population, "cost observation population"),
       value: costMeasurement.value,
       measurement_status: costMeasurement.status,
     },
     rights_response_sla_days: {
-      source: requireString(rightsSource, "rights observation source"),
+      source: normalizeMetricObservationSource(rightsSource, "rights observation source"),
       sha256: sha256(exactBytes(rightsLedgerBytes, "rights ledger bytes")),
       population: requireCount(rightsMeasurement.population, "rights observation population"),
       value: rightsMeasurement.value,
@@ -138,9 +139,10 @@ export function metricObservationSnapshotsFromLedgers({
 
 function validatedSnapshot(value, metric, policy) {
   const snapshot = requireObject(value, `observation snapshot for ${metric}`);
-  const source = requireString(snapshot.source, `observation snapshot for ${metric}.source`);
-  if (source !== policy.observation_source) {
-    throw new Error(`${metric} snapshot source ${source} does not match configured source ${policy.observation_source}`);
+  const source = normalizeMetricObservationSource(snapshot.source, `observation snapshot for ${metric}.source`);
+  const configuredSource = normalizeMetricObservationSource(policy.observation_source, `configured observation source for ${metric}`);
+  if (source !== configuredSource) {
+    throw new Error(`${metric} snapshot source ${source} does not match configured source ${configuredSource}`);
   }
   const population = requireCount(snapshot.population, `observation snapshot for ${metric}.population`);
   const measurementStatus = requireString(snapshot.measurement_status, `observation snapshot for ${metric}.measurement_status`);
@@ -172,7 +174,7 @@ function bindingFor(receipt, metric) {
   if (population === 0 && boundValue !== null) throw new Error(`${receipt.id}.${metric} empty binding must have null value`);
   if (population > 0) requireMetricValue(boundValue, `${receipt.id}.${metric}.value`);
   return {
-    source: requireString(binding.source, `${receipt.id}.${metric}.source`),
+    source: normalizeMetricObservationSource(binding.source, `${receipt.id}.${metric}.source`),
     sha256: requireHash(binding.sha256, `${receipt.id}.${metric}.sha256`),
     population,
     value: boundValue,

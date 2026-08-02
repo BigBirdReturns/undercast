@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   emptyWaterlineState,
   makeMetricsReceipt,
+  normalizeMetricObservationSource,
   validateWaterlineState,
 } from "./lib/waterline.mjs";
 import {
@@ -115,10 +116,19 @@ assert.throws(() => validateMetricReadinessConfig({
 const resolved = resolveMetricObservationSources(config, { root: "/repo" });
 assert.equal(resolved.cost_per_verified_record_usd.path, "/repo/data/operational-reliability/COST-OBSERVATIONS.json");
 assert.equal(resolved.rights_response_sla_days.source, rightsSource);
+assert.equal(normalizeMetricObservationSource(`./${costSource}`), costSource);
+assert.equal(normalizeMetricObservationSource(`data/operational-reliability/../operational-reliability/COST-OBSERVATIONS.json`), costSource);
+assert.throws(() => normalizeMetricObservationSource("../outside.json"), /must stay within the repository/);
 resolveMetricObservationSources(config, {
   root: "/repo",
-  overrides: { cost_per_verified_record_usd: costSource },
+  overrides: { cost_per_verified_record_usd: `./${costSource}` },
 });
+const aliasedSourceConfig = structuredClone(config);
+aliasedSourceConfig.operations.metric_readiness.cost_per_verified_record_usd.observation_source = `./${costSource}`;
+assert.equal(resolveMetricObservationSources(aliasedSourceConfig, { root: "/repo" }).cost_per_verified_record_usd.source, costSource);
+const duplicateAliasConfig = structuredClone(config);
+duplicateAliasConfig.operations.metric_readiness.rights_response_sla_days.observation_source = `./${costSource}`;
+assert.throws(() => validateMetricReadinessConfig(duplicateAliasConfig), /assigned to multiple metrics/);
 assert.throws(() => resolveMetricObservationSources(config, {
   root: "/repo",
   overrides: { cost_per_verified_record_usd: "data/other-cost.json" },
@@ -286,6 +296,44 @@ assert.throws(() => makeMetricsReceipt({
   observationSnapshots: emptySnapshots,
 }), /requires a populated validated observation snapshot/);
 
+const aliasedEmptySnapshots = {
+  ...emptySnapshots,
+  cost_per_verified_record_usd: {
+    ...emptySnapshots.cost_per_verified_record_usd,
+    source: `./${costSource}`,
+  },
+};
+assert.throws(() => makeMetricsReceipt({
+  metrics: { cost_per_verified_record_usd: null },
+  reviewed_by: "second-desk",
+  reviewed_role: "second-desk",
+  reviewed_at: "2026-08-02T03:10:00Z",
+  note: "Attempted to erase a measured value through a spelling-only source alias.",
+  evidence: [{ type: "report", value: "cost-source-alias.json" }],
+}, current.metrics, {
+  metricReadiness: aliasedSourceConfig.operations.metric_readiness,
+  observationSnapshots: aliasedEmptySnapshots,
+  metricReceipts: current.metric_receipts,
+}), /only after the configured observation source changes/);
+const aliasedPopulatedSnapshots = {
+  ...oneCostSnapshots,
+  cost_per_verified_record_usd: {
+    ...oneCostSnapshots.cost_per_verified_record_usd,
+    source: `./${costSource}`,
+  },
+};
+const aliasedMeasurement = makeMetricsReceipt({
+  metrics: { cost_per_verified_record_usd: 4.25 },
+  reviewed_by: "second-desk",
+  reviewed_role: "second-desk",
+  reviewed_at: "2026-08-02T03:11:00Z",
+  note: "Bound an aliased configured path to its canonical repository identity.",
+  evidence: [{ type: "report", value: "cost-source-alias-measured.json" }],
+}, baseState().metrics, {
+  metricReadiness: aliasedSourceConfig.operations.metric_readiness,
+  observationSnapshots: aliasedPopulatedSnapshots,
+});
+assert.equal(aliasedMeasurement.receipt.observation_bindings.cost_per_verified_record_usd.source, costSource);
 const migratedCostSource = "data/operational-reliability/COST-OBSERVATIONS-V2.json";
 const migratedConfig = structuredClone(config);
 migratedConfig.operations.metric_readiness.cost_per_verified_record_usd.observation_source = migratedCostSource;
@@ -427,4 +475,4 @@ status = applyMetricReadinessPolicy(baseStatus(), {
 });
 assert.deepEqual(status.evidence_readiness.missing_required_metrics, ["source_freshness_p95_days"]);
 
-console.log("PASS — configured ledger sources, populated and empty source migration rebinds, same-source erasure refusal, validated rows, exact byte/population/value bindings, mismatched-value refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");
+console.log("PASS — normalized configured source identities, spelling-alias erasure refusal, populated and empty source migration rebinds, same-source erasure refusal, validated rows, exact byte/population/value bindings, mismatched-value refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");

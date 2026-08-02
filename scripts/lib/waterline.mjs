@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { posix } from "node:path";
 
 export const WATERLINE_VERSION = 1;
 export const METRIC_KEYS = [
@@ -36,6 +37,17 @@ export function emptyWaterlineState() {
 function requireString(value, label) {
   if (!String(value || "").trim()) throw new Error(`${label} is required`);
   return String(value).trim();
+}
+export function normalizeMetricObservationSource(value, label = "observation source") {
+  const source = requireString(value, label).replaceAll("\\", "/");
+  if (source.includes("\0") || source.startsWith("/") || /^[A-Za-z]:\//.test(source)) {
+    throw new Error(`${label} must be a safe repository-relative path`);
+  }
+  const normalized = posix.normalize(source).replace(/\/+$/, "");
+  if (!normalized || normalized === "." || normalized === ".." || normalized.startsWith("../")) {
+    throw new Error(`${label} must stay within the repository`);
+  }
+  return normalized;
 }
 function requireDate(value, label) {
   if (!Number.isFinite(Date.parse(value || ""))) throw new Error(`${label} must be an ISO date/time`);
@@ -151,7 +163,7 @@ export function validateWaterlineState(doc, config) {
       const binding = bindings[key];
       if (policy?.mode === "when-observed" && binding) {
         if (typeof binding !== "object" || Array.isArray(binding)) throw new Error(`metric receipt ${receipt.id} observation binding for ${key} must be an object`);
-        requireString(binding.source, `metric receipt ${receipt.id}.observation_bindings.${key}.source`);
+        normalizeMetricObservationSource(binding.source, `metric receipt ${receipt.id}.observation_bindings.${key}.source`);
         if (!/^[0-9a-f]{64}$/.test(String(binding.sha256 || ""))) throw new Error(`metric receipt ${receipt.id}.${key}.sha256 must be a sha256`);
         if (!Number.isSafeInteger(binding.population) || binding.population < 0) throw new Error(`metric receipt ${receipt.id}.${key}.population must be non-negative`);
         if (value === null) {
@@ -354,7 +366,9 @@ export function makeMetricsReceipt(input, currentMetrics, context = {}) {
   const validatedSnapshot = (key, policy) => {
     const snapshot = context.observationSnapshots?.[key];
     if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new Error(`metric ${key} requires a validated observation snapshot`);
-    if (snapshot.source !== policy.observation_source) throw new Error(`metric ${key} snapshot source does not match configured observation source`);
+    const source = normalizeMetricObservationSource(snapshot.source, `metric ${key} snapshot source`);
+    const configuredSource = normalizeMetricObservationSource(policy.observation_source, `metric ${key} configured observation source`);
+    if (source !== configuredSource) throw new Error(`metric ${key} snapshot source does not match configured observation source`);
     if (!/^[0-9a-f]{64}$/.test(String(snapshot.sha256 || ""))) throw new Error(`metric ${key} snapshot sha256 is invalid`);
     if (!Number.isSafeInteger(snapshot.population) || snapshot.population < 0) throw new Error(`metric ${key} snapshot population is invalid`);
     const expectedStatus = snapshot.population === 0 ? "no-observations" : "measured";
@@ -364,7 +378,7 @@ export function makeMetricsReceipt(input, currentMetrics, context = {}) {
     } else if (!Number.isFinite(snapshot.value) || snapshot.value < 0) {
       throw new Error(`metric ${key} validated ledger measurement is invalid`);
     }
-    return snapshot;
+    return { ...snapshot, source };
   };
   const latestReceipt = (key) => {
     if (!Array.isArray(context.metricReceipts)) throw new Error(`metric ${key} needs prior receipt custody to retire a measured value`);
@@ -387,7 +401,7 @@ export function makeMetricsReceipt(input, currentMetrics, context = {}) {
         if (!previous || previous.metrics?.[key] !== currentMetrics[key] || !previousBinding || typeof previousBinding !== "object" || Array.isArray(previousBinding)) {
           throw new Error(`metrics.${key} cannot retire without the current measured receipt binding`);
         }
-        const previousSource = requireString(previousBinding.source, `previous observation binding for ${key}.source`);
+        const previousSource = normalizeMetricObservationSource(previousBinding.source, `previous observation binding for ${key}.source`);
         if (previousSource === snapshot.source) {
           throw new Error(`metrics.${key} can retire to null only after the configured observation source changes`);
         }
