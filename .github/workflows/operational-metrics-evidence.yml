@@ -1,0 +1,152 @@
+name: operational-metrics-evidence
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/operational-metrics-evidence.yml"
+      - "scripts/operational-metrics.mjs"
+      - "scripts/operational-metrics-fixtures.mjs"
+      - "data/operational-reliability/**"
+      - "data/CENSUS-MANIFEST.json"
+      - "package.json"
+      - "package-lock.json"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/operational-metrics-evidence.yml"
+      - "scripts/operational-metrics.mjs"
+      - "scripts/operational-metrics-fixtures.mjs"
+      - "data/operational-reliability/**"
+      - "data/CENSUS-MANIFEST.json"
+      - "package.json"
+      - "package-lock.json"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: operational-metrics-evidence-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EVIDENCE_ROOT: /tmp/undercast-operational-metrics
+  BUILD_SAMPLES: "5"
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Validate metric contracts before measuring
+        run: npm run operational:fixtures
+
+      - name: Measure five clean complete canonical builds on one exact head
+        run: |
+          set -euo pipefail
+          rm -rf "$EVIDENCE_ROOT"
+          mkdir -p "$EVIDENCE_ROOT/build-logs"
+          printf '[]\n' > "$EVIDENCE_ROOT/build-samples.json"
+          for sample in $(seq 1 "$BUILD_SAMPLES"); do
+            rm -rf records test-results playwright-report
+            git checkout -- .
+            test -z "$(git diff --name-only)"
+            test -z "$(git ls-files --others --exclude-standard)"
+
+            started_at="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+            started_ns="$(date +%s%N)"
+            set +e
+            npm run gate \
+              > "$EVIDENCE_ROOT/build-logs/sample-${sample}.stdout.log" \
+              2> "$EVIDENCE_ROOT/build-logs/sample-${sample}.stderr.log"
+            exit_code=$?
+            set -e
+            completed_ns="$(date +%s%N)"
+            completed_at="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+            duration_ms=$(( (completed_ns - started_ns) / 1000000 ))
+
+            if [ "$exit_code" -ne 0 ]; then
+              cat "$EVIDENCE_ROOT/build-logs/sample-${sample}.stdout.log"
+              cat "$EVIDENCE_ROOT/build-logs/sample-${sample}.stderr.log" >&2
+              exit "$exit_code"
+            fi
+            test ! -s "$EVIDENCE_ROOT/build-logs/sample-${sample}.stderr.log"
+            grep -Eq 'gate: PASS — [0-9]+ step\(s\)' "$EVIDENCE_ROOT/build-logs/sample-${sample}.stdout.log"
+
+            SAMPLE="$sample" STARTED_AT="$started_at" COMPLETED_AT="$completed_at" DURATION_MS="$duration_ms" \
+              node -e 'const fs=require("fs"); const path=process.env.EVIDENCE_ROOT+"/build-samples.json"; const rows=JSON.parse(fs.readFileSync(path,"utf8")); rows.push({id:`canonical-gate-${process.env.SAMPLE}`,target_head:process.env.GITHUB_SHA,workflow_run:Number(process.env.GITHUB_RUN_ID),workflow_attempt:Number(process.env.GITHUB_RUN_ATTEMPT),started_at:process.env.STARTED_AT,completed_at:process.env.COMPLETED_AT,duration_ms:Number(process.env.DURATION_MS),gate_exit_code:0,exact_head:true,rendered_browser:true,runner:"ubuntu-24.04",node:process.version}); fs.writeFileSync(path,JSON.stringify(rows,null,2)+"\n");'
+          done
+          rm -rf records test-results playwright-report
+          git checkout -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+
+      - name: Measure source freshness and preserve unknown cost and rights boundaries
+        run: |
+          set -euo pipefail
+          as_of="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+          node scripts/operational-metrics.mjs measure \
+            --build-samples "$EVIDENCE_ROOT/build-samples.json" \
+            --manifest data/CENSUS-MANIFEST.json \
+            --cost-ledger data/operational-reliability/COST-OBSERVATIONS.json \
+            --rights-ledger data/operational-reliability/RIGHTS-CASES.json \
+            --franchise "Star Trek" \
+            --as-of "$as_of" \
+            --output "$EVIDENCE_ROOT/operational-metrics.json" \
+            > "$EVIDENCE_ROOT/measurement.stdout.json"
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const evidence = JSON.parse(fs.readFileSync(process.env.EVIDENCE_ROOT + '/operational-metrics.json', 'utf8'));
+          const build = evidence.metrics.build_minutes_p95;
+          const freshness = evidence.metrics.source_freshness_p95_days;
+          const cost = evidence.metrics.cost_per_verified_record_usd;
+          const rights = evidence.metrics.rights_response_sla_days;
+          if (build.status !== 'measured' || build.population !== 5) throw new Error('build p95 was not measured from five samples');
+          if (freshness.status !== 'measured' || freshness.population < 1) throw new Error('source freshness population is missing');
+          if (cost.status !== 'no-observations' || cost.value !== null) throw new Error('cost absence was converted into a value');
+          if (rights.status !== 'no-observations' || rights.value !== null) throw new Error('rights absence was converted into a value');
+          if (evidence.boundary.waterline_state_mutated || evidence.boundary.roadmap_state_mutated) throw new Error('evidence producer exceeded its authority');
+          if (evidence.boundary.missing_values_rounded_to_zero !== false) throw new Error('missing-value boundary drifted');
+          NODE
+
+      - name: Publish the measured and unresolved boundary summary
+        run: |
+          node - <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require('fs');
+          const e = JSON.parse(fs.readFileSync(process.env.EVIDENCE_ROOT + '/operational-metrics.json', 'utf8'));
+          console.log('## Operational metric evidence');
+          console.log('');
+          for (const key of ['build_minutes_p95', 'source_freshness_p95_days', 'cost_per_verified_record_usd', 'rights_response_sla_days']) {
+            const row = e.metrics[key];
+            console.log(`- ${key}: ${row.status}${row.value === null ? '' : ` — ${row.value}`}; population=${row.population}`);
+          }
+          console.log('');
+          console.log('The two measured values remain workflow-executed and unreviewed. Empty cost and rights ledgers remain null.');
+          NODE
+
+      - name: Upload immutable metric evidence and all build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-metrics-evidence-${{ github.run_id }}
+          path: /tmp/undercast-operational-metrics
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
