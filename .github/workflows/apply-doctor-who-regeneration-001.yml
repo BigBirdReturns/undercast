@@ -1,0 +1,271 @@
+name: apply-doctor-who-regeneration-001
+
+on:
+  push:
+    branches:
+      - agent/doctor-who-regeneration-001
+    paths:
+      - ".github/workflows/apply-doctor-who-regeneration-001.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-doctor-who-regeneration-001
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: agent/doctor-who-regeneration-001
+  EXACT_MAIN: bb42d4386774a6c627d82c66c2bc06f73146aef3
+  SELF: .github/workflows/apply-doctor-who-regeneration-001.yml
+  REPORT: data/review/adapter-sdk/doctor-who-regeneration-001.json
+  CONTACT: undercast-doctor-who-adapter-review
+
+jobs:
+  regenerate:
+    if: github.repository == 'BigBirdReturns/undercast'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind exact branch and main, then freeze the non-Doctor-Who denominator
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$GITHUB_SHA"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const hash = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+          const census = JSON.parse(fs.readFileSync('data/CENSUS.json', 'utf8'));
+          const unresolved = JSON.parse(fs.readFileSync('data/CENSUS-UNRESOLVED.json', 'utf8'));
+          const manifest = JSON.parse(fs.readFileSync('data/CENSUS-MANIFEST.json', 'utf8'));
+          const coverage = JSON.parse(fs.readFileSync('data/CENSUS-COVERAGE.json', 'utf8'));
+          const before = {
+            census_non_doctor_who_sha256: hash(census.filter((row) => row.franchise !== 'Doctor Who')),
+            unresolved_non_doctor_who_sha256: hash(unresolved.filter((row) => row.franchise !== 'Doctor Who')),
+            manifest_non_doctor_who_sha256: hash((manifest.observations || []).filter((row) => row.franchise !== 'Doctor Who')),
+            coverage_non_doctor_who_sha256: hash(coverage.filter((row) => row.franchise !== 'Doctor Who')),
+            doctor_who: {
+              census_rows: census.filter((row) => row.franchise === 'Doctor Who').length,
+              unresolved_rows: unresolved.filter((row) => row.franchise === 'Doctor Who').length,
+              observation_rows: (manifest.observations || []).filter((row) => row.franchise === 'Doctor Who').length,
+              coverage_rows: coverage.filter((row) => row.franchise === 'Doctor Who').length,
+            },
+          };
+          fs.writeFileSync('/tmp/doctor-who-before.json', JSON.stringify(before, null, 2) + '\n');
+          NODE
+
+      - name: Regenerate the exact Doctor Who source slice
+        run: |
+          set -euo pipefail
+          node scripts/census-fixtures.mjs
+          node scripts/census.mjs doctor-who 2>&1 | tee /tmp/doctor-who-census.log
+          node scripts/census-adapter.mjs write
+          node scripts/census-adapter.mjs check
+
+      - name: Adjudicate the regenerated denominator without certifying it
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$REPORT")"
+          REPORT="$REPORT" EXACT_MAIN="$EXACT_MAIN" GITHUB_SHA="$GITHUB_SHA" node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const path = require('path');
+          const hashBytes = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+          const hashJson = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+          const countBy = (rows, key) => Object.fromEntries([...new Set(rows.map((row) => row[key] ?? 'missing'))].sort().map((value) => [value, rows.filter((row) => (row[key] ?? 'missing') === value).length]));
+          const before = JSON.parse(fs.readFileSync('/tmp/doctor-who-before.json', 'utf8'));
+          const census = JSON.parse(fs.readFileSync('data/CENSUS.json', 'utf8'));
+          const unresolved = JSON.parse(fs.readFileSync('data/CENSUS-UNRESOLVED.json', 'utf8'));
+          const manifest = JSON.parse(fs.readFileSync('data/CENSUS-MANIFEST.json', 'utf8'));
+          const coverage = JSON.parse(fs.readFileSync('data/CENSUS-COVERAGE.json', 'utf8'));
+          const summary = JSON.parse(fs.readFileSync('data/CENSUS-SUMMARY.json', 'utf8'));
+          const adapters = JSON.parse(fs.readFileSync('data/review/adapter-sdk/BASELINE.json', 'utf8'));
+
+          const doctorCensus = census.filter((row) => row.franchise === 'Doctor Who');
+          const doctorUnresolved = unresolved.filter((row) => row.franchise === 'Doctor Who');
+          const doctorObservations = (manifest.observations || []).filter((row) => row.franchise === 'Doctor Who');
+          const doctorCoverage = coverage.filter((row) => row.franchise === 'Doctor Who');
+          const doctorGroups = (summary.groups || []).filter((row) => row.franchise === 'Doctor Who');
+          const adapter = (adapters.adapters || []).find((row) => row.adapter_id === 'doctor-who-v1');
+
+          if (!doctorObservations.length) throw new Error('Doctor Who regeneration produced no observations');
+          if (!adapter) throw new Error('Doctor Who adapter baseline is missing');
+          if (adapter.certification_authorized !== false) throw new Error('regeneration acquired certification authority');
+          if (adapter.terminal_state !== 'exact-receipts-present-semantic-review-required') throw new Error(`unexpected adapter terminal state ${adapter.terminal_state}`);
+          const expectedCategories = ['Cybermen', 'Daleks', 'Ice Warriors', 'Sontarans'];
+          const actualCategories = [...new Set(doctorObservations.map((row) => row.category))].sort();
+          if (JSON.stringify(actualCategories) !== JSON.stringify(expectedCategories.sort())) throw new Error(`Doctor Who category denominator drifted: ${JSON.stringify(actualCategories)}`);
+          for (const row of doctorObservations) {
+            if (!Number.isInteger(row.pageid) || !Number.isInteger(row.revision)) throw new Error(`missing revision identity for ${row.title}`);
+            if (!/^[0-9a-f]{64}$/.test(row.content_sha256 || '')) throw new Error(`invalid content hash for ${row.title}`);
+            const url = new URL(row.source);
+            if (url.hostname !== 'tardis.fandom.com') throw new Error(`source host drifted for ${row.title}: ${url.hostname}`);
+            if (!['credited', 'unresolved'].includes(row.disposition)) throw new Error(`unexpected disposition ${row.disposition}`);
+          }
+
+          const afterNonDoctor = {
+            census_non_doctor_who_sha256: hashJson(census.filter((row) => row.franchise !== 'Doctor Who')),
+            unresolved_non_doctor_who_sha256: hashJson(unresolved.filter((row) => row.franchise !== 'Doctor Who')),
+            manifest_non_doctor_who_sha256: hashJson((manifest.observations || []).filter((row) => row.franchise !== 'Doctor Who')),
+            coverage_non_doctor_who_sha256: hashJson(coverage.filter((row) => row.franchise !== 'Doctor Who')),
+          };
+          for (const [key, value] of Object.entries(afterNonDoctor)) {
+            if (value !== before[key]) throw new Error(`scoped regeneration changed the non-Doctor-Who denominator: ${key}`);
+          }
+
+          const report = {
+            version: 1,
+            transaction: 'DOCTOR-WHO-REGENERATION-001',
+            operation: 'current-source-regeneration-and-semantic-denominator-adjudication',
+            generated_at: manifest.captured_at,
+            authorization: {
+              exact_main: process.env.EXACT_MAIN,
+              launcher_head: process.env.GITHUB_SHA,
+              branch: 'agent/doctor-who-regeneration-001',
+            },
+            before: before.doctor_who,
+            after: {
+              census_rows: doctorCensus.length,
+              credited_character_rows: doctorCensus.length,
+              unresolved_rows: doctorUnresolved.length,
+              observation_rows: doctorObservations.length,
+              unique_source_revisions: new Set(doctorObservations.map((row) => `${row.pageid}:${row.revision}:${row.content_sha256}`)).size,
+              duplicate_category_facets: doctorObservations.length - new Set(doctorObservations.map((row) => `${row.pageid}:${row.revision}:${row.content_sha256}`)).size,
+              coverage_rows: doctorCoverage.length,
+              distinct_performers: new Set(doctorCoverage.map((row) => row.performer)).size,
+              role_on_wall: doctorCoverage.filter((row) => row.role_on_wall).length,
+              missing_roles: doctorCoverage.filter((row) => !row.role_on_wall).length,
+              dispositions: countBy(doctorObservations, 'disposition'),
+              performance_modes: countBy(doctorCoverage, 'performance_mode'),
+              groups: doctorGroups,
+              adapter_terminal_state: adapter.terminal_state,
+            },
+            inputs: Object.fromEntries([
+              'data/CENSUS.json',
+              'data/CENSUS-UNRESOLVED.json',
+              'data/CENSUS-MANIFEST.json',
+              'data/CENSUS-COVERAGE.json',
+              'data/CENSUS-SUMMARY.json',
+              'data/CENSUS-GAPS.json',
+              'data/review/adapter-sdk/BASELINE.json',
+            ].map((file) => [file, hashBytes(file)])),
+            invariant: {
+              non_doctor_who_census_unchanged: true,
+              non_doctor_who_unresolved_unchanged: true,
+              non_doctor_who_manifest_unchanged: true,
+              non_doctor_who_coverage_unchanged: true,
+              exact_revision_and_content_receipts_complete: true,
+              category_overlap_not_independent_evidence: true,
+            },
+            boundary: {
+              adapter_certification_created: false,
+              estate_activated: false,
+              luna_lease_issued: false,
+              canonical_specimen_mutated: false,
+              roadmap_milestone_completed: false,
+              semantic_review_complete: false,
+              remaining_gate: 'review exact actor-role and performance-mode semantics, then issue a separate second-desk certification receipt or retain the candidate as blocked',
+            },
+          };
+          fs.writeFileSync(process.env.REPORT, JSON.stringify(report, null, 2) + '\n');
+          NODE
+
+          node -e "const r=require('./$REPORT'); if(r.after.observation_rows<1||r.boundary.adapter_certification_created) process.exit(1)"
+
+      - name: Smoke the complete current-source product before publication
+        run: |
+          set -euo pipefail
+          git rm "$SELF"
+          git add \
+            data/CENSUS.json \
+            data/CENSUS-UNRESOLVED.json \
+            data/CENSUS-MANIFEST.json \
+            data/CENSUS-COVERAGE.json \
+            data/CENSUS-SUMMARY.json \
+            data/CENSUS-GAPS.json \
+            data/review/adapter-sdk/BASELINE.json \
+            "$REPORT"
+          git diff --cached --check
+          npm run adapter:fixtures
+          npm run autopilot:fixtures
+          npm run gate 2>&1 | tee /tmp/doctor-who-gate.log
+
+      - name: Publish the exact clean regeneration under lease
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report .ci/projection-drift
+          git restore --worktree -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          git diff --cached --check
+          node scripts/census-adapter.mjs check
+
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$GITHUB_SHA"
+
+          git config user.name undercast-doctor-who-adapter
+          git config user.email undercast-doctor-who-adapter@users.noreply.github.com
+          git commit \
+            -m 'Adapter SDK: regenerate Doctor Who from current receipts' \
+            -m 'preserve the non-Doctor-Who denominator' \
+            -m 'retain certification and activation as separate review authority'
+          new_head="$(git rev-parse HEAD)"
+
+          cat > /tmp/expected-final-paths.txt <<'PATHS'
+          data/CENSUS-COVERAGE.json
+          data/CENSUS-GAPS.json
+          data/CENSUS-MANIFEST.json
+          data/CENSUS-SUMMARY.json
+          data/CENSUS-UNRESOLVED.json
+          data/CENSUS.json
+          data/review/adapter-sdk/BASELINE.json
+          data/review/adapter-sdk/doctor-who-regeneration-001.json
+          PATHS
+          sort -u /tmp/expected-final-paths.txt -o /tmp/expected-final-paths.txt
+          git diff --name-only refs/remotes/origin/main...HEAD | sort > /tmp/final-paths.txt
+          diff -u /tmp/expected-final-paths.txt /tmp/final-paths.txt
+
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${GITHUB_SHA}"
+          echo "published_head=${new_head}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload regeneration and gate diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-regeneration-001-${{ github.run_id }}
+          path: |
+            /tmp/doctor-who-before.json
+            /tmp/doctor-who-census.log
+            /tmp/doctor-who-gate.log
+            data/review/adapter-sdk/doctor-who-regeneration-001.json
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
