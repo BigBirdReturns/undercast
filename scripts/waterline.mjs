@@ -18,7 +18,8 @@ import {
 } from "./lib/waterline.mjs";
 import {
   applyMetricReadinessPolicy,
-  metricObservationCountsFromLedgers,
+  metricObservationSnapshotsFromLedgers,
+  resolveMetricObservationSources,
   validateMetricReadinessConfig,
 } from "./lib/metric-readiness.mjs";
 
@@ -33,6 +34,8 @@ function option(name, fallback = null) {
 }
 function flag(name) { return args.includes(`--${name}`); }
 const root = resolve(option("root", "."));
+const costLedgerOverride = option("cost-ledger");
+const rightsLedgerOverride = option("rights-ledger");
 const pathAt = (name, fallback) => resolve(root, option(name, fallback));
 const paths = {
   config: pathAt("config", "data/WATERLINE.json"),
@@ -44,8 +47,6 @@ const paths = {
   autopilotJournal: pathAt("autopilot-journal", "data/journal/autopilot.jsonl"),
   roadmap: pathAt("roadmap-state", "data/ROADMAP-STATE.json"),
   preservation: pathAt("preservation", "preservation/SNAPSHOTS.json"),
-  costLedger: pathAt("cost-ledger", "data/operational-reliability/COST-OBSERVATIONS.json"),
-  rightsLedger: pathAt("rights-ledger", "data/operational-reliability/RIGHTS-CASES.json"),
 };
 async function readJson(path, fallback) {
   try { return JSON.parse(await readFile(path, "utf8")); }
@@ -112,23 +113,46 @@ async function withLock(action) {
   try { return await action(); }
   finally { await handle?.close().catch(() => {}); await rm(paths.lock, { force: true }); }
 }
+async function readJsonBytes(path, label) {
+  try {
+    const bytes = await readFile(path);
+    return { bytes, doc: JSON.parse(bytes.toString("utf8")) };
+  } catch (error) {
+    throw new Error(`cannot read ${label} at ${path}: ${error.message}`);
+  }
+}
 async function load() {
-  const [config, state, mediaAudit, autopilot, autopilotJournalText, roadmapState, preservation, costLedger, rightsLedger, waterlineJournal] = await Promise.all([
-    readJson(paths.config),
+  const config = await readJson(paths.config);
+  validateWaterlineConfig(config);
+  validateMetricReadinessConfig(config);
+  const observationSources = resolveMetricObservationSources(config, {
+    root,
+    overrides: {
+      cost_per_verified_record_usd: costLedgerOverride,
+      rights_response_sla_days: rightsLedgerOverride,
+    },
+  });
+  const [state, mediaAudit, autopilot, autopilotJournalText, roadmapState, preservation, costLedger, rightsLedger, waterlineJournal] = await Promise.all([
     readJson(paths.state, emptyWaterlineState()),
     readJson(paths.media),
     readJson(paths.autopilot),
     readText(paths.autopilotJournal),
     readJson(paths.roadmap),
     readJson(paths.preservation),
-    readJson(paths.costLedger),
-    readJson(paths.rightsLedger),
+    readJsonBytes(observationSources.cost_per_verified_record_usd.path, "cost observation ledger"),
+    readJsonBytes(observationSources.rights_response_sla_days.path, "rights observation ledger"),
     readText(paths.journal),
   ]);
-  validateWaterlineConfig(config);
-  validateMetricReadinessConfig(config);
   validateWaterlineState(state, config);
   parseJsonl(waterlineJournal);
+  const metricObservationSnapshots = metricObservationSnapshotsFromLedgers({
+    costLedger: costLedger.doc,
+    costLedgerBytes: costLedger.bytes,
+    costSource: observationSources.cost_per_verified_record_usd.source,
+    rightsLedger: rightsLedger.doc,
+    rightsLedgerBytes: rightsLedger.bytes,
+    rightsSource: observationSources.rights_response_sla_days.source,
+  });
   return {
     config,
     state,
@@ -137,7 +161,7 @@ async function load() {
     autopilotJournal: parseJsonl(autopilotJournalText),
     roadmapState,
     preservation,
-    metricObservationCounts: metricObservationCountsFromLedgers({ costLedger, rightsLedger }),
+    metricObservationSnapshots,
     waterlineJournal,
   };
 }
@@ -146,7 +170,7 @@ function statusFor(inputs) {
   return applyMetricReadinessPolicy(base, {
     config: inputs.config,
     state: inputs.state,
-    observationCounts: inputs.metricObservationCounts,
+    observationSnapshots: inputs.metricObservationSnapshots,
   });
 }
 async function save(inputs, state, event) {
@@ -216,7 +240,10 @@ async function main() {
       return;
     }
     if (command === "record-metrics") {
-      const result = makeMetricsReceipt(doc, next.metrics);
+      const result = makeMetricsReceipt(doc, next.metrics, {
+        metricReadiness: inputs.config.operations.metric_readiness,
+        observationSnapshots: inputs.metricObservationSnapshots,
+      });
       next.metrics = result.metrics;
       next.metric_receipts.push(result.receipt);
       await save(inputs, next, { op: "metrics.receipted", at: now, receipt_id: result.receipt.id, metrics: result.receipt.metrics });

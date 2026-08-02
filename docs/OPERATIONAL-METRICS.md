@@ -35,6 +35,8 @@ Build time and source freshness are required numeric readiness metrics because t
 
 This rule never converts absence into zero, never waives a measured SLO failure, and never closes the cost or rights debt. It removes only the circular requirement to manufacture an event before the system may prove that it is ready to handle the event.
 
+Every observation-triggered numeric receipt binds the configured ledger path, exact ledger SHA-256, and validated population. The waterline reads the configured source itself; a CLI override must resolve to the same path or is refused. Appending, replacing, or deleting ledger rows changes the snapshot and immediately reopens measurement. A numeric value without a matching reviewed binding is a custody failure, not a measured baseline.
+
 ## Exact-main discovery
 
 Pull-request runs prove the candidate. Only a successful `push` run on `main` publishes a discovery issue. The issue binds:

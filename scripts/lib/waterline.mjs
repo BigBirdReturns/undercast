@@ -135,6 +135,29 @@ export function validateWaterlineState(doc, config) {
     if (drill.passed !== true && drill.passed !== false) throw new Error(`drill ${drill.id} needs passed boolean`);
     requireReview(drill);
   }
+  for (const receipt of doc.metric_receipts) {
+    if (!/^metrics_[0-9a-f]{24}$/.test(receipt.id || "")) throw new Error(`invalid metric receipt id ${receipt.id || "<missing>"}`);
+    if (!receipt.metrics || typeof receipt.metrics !== "object" || Array.isArray(receipt.metrics)) throw new Error(`metric receipt ${receipt.id} needs metrics{}`);
+    const entries = Object.entries(receipt.metrics);
+    if (!entries.length) throw new Error(`metric receipt ${receipt.id} changes no metric`);
+    requireReview(receipt);
+    requireEvidence(receipt.evidence, `metric receipt ${receipt.id}.evidence`);
+    const bindings = receipt.observation_bindings || {};
+    if (!bindings || typeof bindings !== "object" || Array.isArray(bindings)) throw new Error(`metric receipt ${receipt.id}.observation_bindings must be an object`);
+    for (const [key, value] of entries) {
+      if (!METRIC_KEYS.includes(key)) throw new Error(`metric receipt ${receipt.id} contains unknown metric ${key}`);
+      if (value !== null && (!Number.isFinite(value) || value < 0)) throw new Error(`metric receipt ${receipt.id}.metrics.${key} must be null or non-negative`);
+      const policy = config.operations.metric_readiness?.[key];
+      const binding = bindings[key];
+      if (value !== null && policy?.mode === "when-observed") {
+        if (!binding || typeof binding !== "object" || Array.isArray(binding)) throw new Error(`metric receipt ${receipt.id} needs observation binding for ${key}`);
+        if (requireString(binding.source, `metric receipt ${receipt.id}.observation_bindings.${key}.source`) !== policy.observation_source) throw new Error(`metric receipt ${receipt.id}.${key} binds the wrong observation source`);
+        if (!/^[0-9a-f]{64}$/.test(String(binding.sha256 || ""))) throw new Error(`metric receipt ${receipt.id}.${key}.sha256 must be a sha256`);
+        if (!Number.isSafeInteger(binding.population) || binding.population < 1) throw new Error(`metric receipt ${receipt.id}.${key}.population must be positive`);
+      } else if (binding) throw new Error(`metric receipt ${receipt.id} has unauthorized observation binding for ${key}`);
+    }
+    for (const key of Object.keys(bindings)) if (!Object.prototype.hasOwnProperty.call(receipt.metrics, key)) throw new Error(`metric receipt ${receipt.id} binds unrecorded metric ${key}`);
+  }
   validateIncidentEvents(doc.incidents);
   return true;
 }
@@ -313,19 +336,36 @@ export function makeDrillReceipt(input, config) {
   const body = { kind, passed: input.passed === true, note: requireString(input.note, "note"), evidence: requireEvidence(input.evidence), ...review };
   return { id: `drill_${sha256(stableJson(body)).slice(0, 24)}`, ...body };
 }
-export function makeMetricsReceipt(input, currentMetrics) {
+export function makeMetricsReceipt(input, currentMetrics, context = {}) {
   const review = requireReview(input);
+  if (input.observation_bindings !== undefined) throw new Error("observation_bindings are derived from validated ledgers, not caller input");
   const metrics = { ...currentMetrics };
+  const observation_bindings = {};
   let changed = 0;
   for (const key of METRIC_KEYS) {
     if (!(key in (input.metrics || {}))) continue;
     const value = input.metrics[key];
     if (value !== null && (!Number.isFinite(value) || value < 0)) throw new Error(`metrics.${key} must be null or non-negative`);
+    if (currentMetrics[key] !== null && value === null) throw new Error(`metrics.${key} cannot erase a measured value back to null`);
+    const policy = context.metricReadiness?.[key];
+    if (value !== null && policy?.mode === "when-observed") {
+      const snapshot = context.observationSnapshots?.[key];
+      if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new Error(`metric ${key} requires a populated validated observation snapshot`);
+      if (snapshot.source !== policy.observation_source) throw new Error(`metric ${key} snapshot source does not match configured observation source`);
+      if (!/^[0-9a-f]{64}$/.test(String(snapshot.sha256 || ""))) throw new Error(`metric ${key} snapshot sha256 is invalid`);
+      if (!Number.isSafeInteger(snapshot.population) || snapshot.population < 1 || snapshot.measurement_status !== "measured") throw new Error(`metric ${key} requires a populated validated observation snapshot`);
+      observation_bindings[key] = {
+        source: snapshot.source,
+        sha256: snapshot.sha256,
+        population: snapshot.population,
+      };
+    }
     metrics[key] = value;
     changed++;
   }
   if (!changed) throw new Error("metrics receipt changes no known metric");
   const body = { metrics: input.metrics, note: requireString(input.note, "note"), evidence: requireEvidence(input.evidence), ...review };
+  if (Object.keys(observation_bindings).length) body.observation_bindings = observation_bindings;
   return { receipt: { id: `metrics_${sha256(stableJson(body)).slice(0, 24)}`, ...body }, metrics };
 }
 export function makeAccountingReceipt(input, context) {
