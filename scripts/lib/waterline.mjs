@@ -131,7 +131,15 @@ export function validateWaterlineState(doc, config) {
   if (!doc || doc.version !== WATERLINE_VERSION) throw new Error(`WATERLINE state must be version ${WATERLINE_VERSION}`);
   for (const key of ["cycles", "drills", "accounting", "metric_receipts", "incidents"]) if (!Array.isArray(doc[key])) throw new Error(`WATERLINE state needs ${key}[]`);
   ensureUnique(doc.cycles, "id", "cycle receipts");
-  ensureUnique(doc.cycles, "lease_id", "cycle receipts");
+  const cycleReceiptKeys = new Set();
+  for (const cycle of doc.cycles) {
+    const scopeId = requireString(cycle.scope_id, `cycle ${cycle.id || "<missing>"}.scope_id`);
+    const leaseId = requireString(cycle.lease_id, `cycle ${cycle.id || "<missing>"}.lease_id`);
+    if (!config.scopes.some((row) => row.id === scopeId)) throw new Error(`cycle ${cycle.id || "<missing>"} references unknown scope ${scopeId}`);
+    const key = cycleReceiptKey(scopeId, leaseId);
+    if (cycleReceiptKeys.has(key)) throw new Error(`cycle receipts contain duplicate scope/lease ${scopeId}/${leaseId}`);
+    cycleReceiptKeys.add(key);
+  }
   ensureUnique(doc.drills, "id", "drill receipts");
   ensureUnique(doc.accounting, "id", "accounting receipts");
   ensureUnique(doc.metric_receipts, "id", "metric receipts");
@@ -360,7 +368,8 @@ export function makeCycleReceipt(input, context) {
   const evidence = requireEvidence(input.evidence);
   const group = context.groups.find((row) => row.lease_id === input.lease_id && row.scope_id === input.scope_id);
   if (!group) throw new Error(`unknown lease ${input.lease_id} for ${input.scope_id}`);
-  if (context.state.cycles.some((row) => row.lease_id === input.lease_id)) throw new Error(`lease ${input.lease_id} is already receipted`);
+  const inputReceiptKey = cycleReceiptKey(input.scope_id, input.lease_id);
+  if (context.state.cycles.some((row) => cycleReceiptKey(row.scope_id, row.lease_id) === inputReceiptKey)) throw new Error(`lease ${input.scope_id}/${input.lease_id} is already receipted`);
   const jobs = new Map((context.autopilot.jobs || []).map((job) => [job.id, job]));
   const statuses = Object.fromEntries(group.task_ids.map((id) => [id, jobs.get(id)?.status || "missing"]));
   if (Object.values(statuses).some((status) => ACTIVE_JOB_STATUSES.has(status))) throw new Error(`lease ${input.lease_id} still has active work`);
