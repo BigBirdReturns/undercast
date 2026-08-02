@@ -1,0 +1,158 @@
+name: fix-derived-metric-value-binding
+
+on:
+  push:
+    branches:
+      - agent/operational-metric-ledger-custody
+    paths:
+      - .github/workflows/fix-derived-metric-value-binding.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-derived-metric-value-binding
+  cancel-in-progress: true
+
+env:
+  TARGET_BRANCH: agent/operational-metric-ledger-custody
+  AUTHORIZED_CLEAN_HEAD: f38500fe1cbd29cd78cbbda8c2caf15a40fa4c68
+  SELF: .github/workflows/fix-derived-metric-value-binding.yml
+  PATCHER: scripts/apply-derived-metric-value-binding.mjs
+  RECEIPT: data/review/operational-reliability/metric-ledger-custody-hotfix-2026-08-02.json
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind exact clean-head extension
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$AUTHORIZED_CLEAN_HEAD" HEAD
+
+          git diff --name-only "$AUTHORIZED_CLEAN_HEAD...HEAD" | sort > /tmp/start-paths.txt
+          printf '%s\n' "$SELF" "$PATCHER" | sort > /tmp/expected-start-paths.txt
+          diff -u /tmp/expected-start-paths.txt /tmp/start-paths.txt
+
+      - name: Apply exact derived-value custody repair
+        run: |
+          set -euo pipefail
+          node --check "$PATCHER"
+          node "$PATCHER" apply
+          node --check scripts/lib/metric-readiness.mjs
+          node --check scripts/lib/waterline.mjs
+          node --check scripts/metric-readiness-fixtures.mjs
+
+      - name: Prove the exact exploit is refused
+        run: |
+          set -euo pipefail
+          node scripts/metric-readiness-fixtures.mjs
+          npm run waterline:fixtures
+          node scripts/waterline.mjs validate
+          node scripts/waterline.mjs status --scope star-trek --json > /tmp/value-binding-status.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const status = JSON.parse(fs.readFileSync('/tmp/value-binding-status.json', 'utf8'));
+          const readiness = status.evidence_readiness;
+          if (readiness.operational_reliability !== true) throw new Error(`current readiness regressed: ${JSON.stringify(readiness)}`);
+          for (const key of ['missing_metrics', 'stale_metric_measurements', 'metric_ledger_regressions', 'slo_target_failures']) {
+            if ((readiness[key] || []).length) throw new Error(`${key} is not empty: ${JSON.stringify(readiness[key])}`);
+          }
+          NODE
+
+      - name: Author candidate receipt and run the complete gate
+        run: |
+          set -euo pipefail
+          node "$PATCHER" author-receipt
+          git add \
+            scripts/lib/metric-readiness.mjs \
+            scripts/lib/waterline.mjs \
+            scripts/metric-readiness-fixtures.mjs \
+            docs/OPERATIONAL-METRICS.md \
+            "$RECEIPT"
+          git diff --cached --check
+          npm run gate 2>&1 | tee /tmp/derived-value-candidate-gate.log
+
+      - name: Retire temporary authority, promote receipt, and gate final tree
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report .ci/projection-drift
+          git restore --worktree -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+
+          node "$PATCHER" promote-receipt
+          git add "$RECEIPT"
+          git rm "$SELF" "$PATCHER"
+          git diff --cached --check
+
+          node scripts/waterline.mjs validate
+          node scripts/waterline.mjs status --scope star-trek --json > /tmp/final-value-binding-status.json
+          npm run gate 2>&1 | tee /tmp/derived-value-final-gate.log
+
+      - name: Publish exact clean custody under lease
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report .ci/projection-drift
+          git restore --worktree -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          git diff --cached --check
+
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$GITHUB_SHA"
+
+          cat > /tmp/expected-paths.txt <<'PATHS'
+          data/review/operational-reliability/metric-ledger-custody-hotfix-2026-08-02.json
+          docs/OPERATIONAL-METRICS.md
+          scripts/lib/metric-readiness.mjs
+          scripts/lib/waterline.mjs
+          scripts/metric-readiness-fixtures.mjs
+          PATHS
+          sort -u /tmp/expected-paths.txt -o /tmp/expected-paths.txt
+          git diff --cached --name-only "$AUTHORIZED_CLEAN_HEAD" | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+
+          git config user.name undercast-operational-reliability
+          git config user.email undercast-operational-reliability@users.noreply.github.com
+          git commit \
+            -m 'Operations: bind metric values to validated ledger results' \
+            -m 'refuse caller values unrelated to exact ledger measurement' \
+            -m 'retain exact source hash population and derived value custody'
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${GITHUB_SHA}"
+
+      - name: Upload derived-value diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: derived-metric-value-binding-${{ github.run_id }}
+          path: |
+            /tmp/value-binding-status.json
+            /tmp/final-value-binding-status.json
+            /tmp/derived-value-candidate-gate.log
+            /tmp/derived-value-final-gate.log
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
