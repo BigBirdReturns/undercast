@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { posix } from "node:path";
 
 export const WATERLINE_VERSION = 1;
 export const METRIC_KEYS = [
@@ -36,6 +37,17 @@ export function emptyWaterlineState() {
 function requireString(value, label) {
   if (!String(value || "").trim()) throw new Error(`${label} is required`);
   return String(value).trim();
+}
+export function normalizeMetricObservationSource(value, label = "observation source") {
+  const source = requireString(value, label).replaceAll("\\", "/");
+  if (source.includes("\0") || source.startsWith("/") || /^[A-Za-z]:\//.test(source)) {
+    throw new Error(`${label} must be a safe repository-relative path`);
+  }
+  const normalized = posix.normalize(source).replace(/\/+$/, "");
+  if (!normalized || normalized === "." || normalized === ".." || normalized.startsWith("../")) {
+    throw new Error(`${label} must stay within the repository`);
+  }
+  return normalized;
 }
 function requireDate(value, label) {
   if (!Number.isFinite(Date.parse(value || ""))) throw new Error(`${label} must be an ISO date/time`);
@@ -134,6 +146,39 @@ export function validateWaterlineState(doc, config) {
     if (!config.operations.required_drills.includes(drill.kind)) throw new Error(`unknown drill kind ${drill.kind}`);
     if (drill.passed !== true && drill.passed !== false) throw new Error(`drill ${drill.id} needs passed boolean`);
     requireReview(drill);
+  }
+  for (const receipt of doc.metric_receipts) {
+    if (!/^metrics_[0-9a-f]{24}$/.test(receipt.id || "")) throw new Error(`invalid metric receipt id ${receipt.id || "<missing>"}`);
+    if (!receipt.metrics || typeof receipt.metrics !== "object" || Array.isArray(receipt.metrics)) throw new Error(`metric receipt ${receipt.id} needs metrics{}`);
+    const entries = Object.entries(receipt.metrics);
+    if (!entries.length) throw new Error(`metric receipt ${receipt.id} changes no metric`);
+    requireReview(receipt);
+    requireEvidence(receipt.evidence, `metric receipt ${receipt.id}.evidence`);
+    const bindings = receipt.observation_bindings || {};
+    if (!bindings || typeof bindings !== "object" || Array.isArray(bindings)) throw new Error(`metric receipt ${receipt.id}.observation_bindings must be an object`);
+    for (const [key, value] of entries) {
+      if (!METRIC_KEYS.includes(key)) throw new Error(`metric receipt ${receipt.id} contains unknown metric ${key}`);
+      if (value !== null && (!Number.isFinite(value) || value < 0)) throw new Error(`metric receipt ${receipt.id}.metrics.${key} must be null or non-negative`);
+      const policy = config.operations.metric_readiness?.[key];
+      const binding = bindings[key];
+      if (policy?.mode === "when-observed" && binding) {
+        if (typeof binding !== "object" || Array.isArray(binding)) throw new Error(`metric receipt ${receipt.id} observation binding for ${key} must be an object`);
+        normalizeMetricObservationSource(binding.source, `metric receipt ${receipt.id}.observation_bindings.${key}.source`);
+        if (!/^[0-9a-f]{64}$/.test(String(binding.sha256 || ""))) throw new Error(`metric receipt ${receipt.id}.${key}.sha256 must be a sha256`);
+        if (!Number.isSafeInteger(binding.population) || binding.population < 0) throw new Error(`metric receipt ${receipt.id}.${key}.population must be non-negative`);
+        if (value === null) {
+          if (binding.population !== 0) throw new Error(`metric receipt ${receipt.id}.${key} null reset requires an empty observation binding`);
+          if (binding.value !== null) throw new Error(`metric receipt ${receipt.id}.${key} empty observation binding value must be null`);
+        } else {
+          if (binding.population < 1) throw new Error(`metric receipt ${receipt.id}.${key}.population must be positive`);
+          if (!Number.isFinite(binding.value) || binding.value < 0) throw new Error(`metric receipt ${receipt.id}.${key}.value must be non-negative`);
+          if (binding.value !== value) throw new Error(`metric receipt ${receipt.id}.${key} value does not match its observation binding`);
+        }
+      } else if (value !== null && policy?.mode === "when-observed") {
+        throw new Error(`metric receipt ${receipt.id} needs observation binding for ${key}`);
+      } else if (binding) throw new Error(`metric receipt ${receipt.id} has unauthorized observation binding for ${key}`);
+    }
+    for (const key of Object.keys(bindings)) if (!Object.prototype.hasOwnProperty.call(receipt.metrics, key)) throw new Error(`metric receipt ${receipt.id} binds unrecorded metric ${key}`);
   }
   validateIncidentEvents(doc.incidents);
   return true;
@@ -313,19 +358,85 @@ export function makeDrillReceipt(input, config) {
   const body = { kind, passed: input.passed === true, note: requireString(input.note, "note"), evidence: requireEvidence(input.evidence), ...review };
   return { id: `drill_${sha256(stableJson(body)).slice(0, 24)}`, ...body };
 }
-export function makeMetricsReceipt(input, currentMetrics) {
+export function makeMetricsReceipt(input, currentMetrics, context = {}) {
   const review = requireReview(input);
+  if (input.observation_bindings !== undefined) throw new Error("observation_bindings are derived from validated ledgers, not caller input");
   const metrics = { ...currentMetrics };
+  const observation_bindings = {};
+  const validatedSnapshot = (key, policy) => {
+    const snapshot = context.observationSnapshots?.[key];
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new Error(`metric ${key} requires a validated observation snapshot`);
+    const source = normalizeMetricObservationSource(snapshot.source, `metric ${key} snapshot source`);
+    const configuredSource = normalizeMetricObservationSource(policy.observation_source, `metric ${key} configured observation source`);
+    if (source !== configuredSource) throw new Error(`metric ${key} snapshot source does not match configured observation source`);
+    if (!/^[0-9a-f]{64}$/.test(String(snapshot.sha256 || ""))) throw new Error(`metric ${key} snapshot sha256 is invalid`);
+    if (!Number.isSafeInteger(snapshot.population) || snapshot.population < 0) throw new Error(`metric ${key} snapshot population is invalid`);
+    const expectedStatus = snapshot.population === 0 ? "no-observations" : "measured";
+    if (snapshot.measurement_status !== expectedStatus) throw new Error(`metric ${key} snapshot status disagrees with its population`);
+    if (snapshot.population === 0) {
+      if (snapshot.value !== null) throw new Error(`metric ${key} empty snapshot must have null measurement value`);
+    } else if (!Number.isFinite(snapshot.value) || snapshot.value < 0) {
+      throw new Error(`metric ${key} validated ledger measurement is invalid`);
+    }
+    return { ...snapshot, source };
+  };
+  const latestReceipt = (key) => {
+    if (!Array.isArray(context.metricReceipts)) throw new Error(`metric ${key} needs prior receipt custody to retire a measured value`);
+    return [...context.metricReceipts].reverse().find((row) => Object.prototype.hasOwnProperty.call(row?.metrics || {}, key)) || null;
+  };
   let changed = 0;
   for (const key of METRIC_KEYS) {
     if (!(key in (input.metrics || {}))) continue;
     const value = input.metrics[key];
     if (value !== null && (!Number.isFinite(value) || value < 0)) throw new Error(`metrics.${key} must be null or non-negative`);
+    const policy = context.metricReadiness?.[key];
+    if (policy?.mode === "when-observed") {
+      const snapshot = validatedSnapshot(key, policy);
+      if (value === null && currentMetrics[key] !== null) {
+        if (snapshot.population !== 0 || snapshot.measurement_status !== "no-observations" || snapshot.value !== null) {
+          throw new Error(`metrics.${key} can retire to null only against an empty validated replacement ledger`);
+        }
+        const previous = latestReceipt(key);
+        const previousBinding = previous?.observation_bindings?.[key];
+        if (!previous || previous.metrics?.[key] !== currentMetrics[key] || !previousBinding || typeof previousBinding !== "object" || Array.isArray(previousBinding)) {
+          throw new Error(`metrics.${key} cannot retire without the current measured receipt binding`);
+        }
+        const previousSource = normalizeMetricObservationSource(previousBinding.source, `previous observation binding for ${key}.source`);
+        if (previousSource === snapshot.source) {
+          throw new Error(`metrics.${key} can retire to null only after the configured observation source changes`);
+        }
+        if (!/^[0-9a-f]{64}$/.test(String(previousBinding.sha256 || "")) || !Number.isSafeInteger(previousBinding.population) || previousBinding.population < 1 || previousBinding.value !== currentMetrics[key]) {
+          throw new Error(`metrics.${key} previous observation binding does not match the current measured value`);
+        }
+        observation_bindings[key] = {
+          source: snapshot.source,
+          sha256: snapshot.sha256,
+          population: 0,
+          value: null,
+        };
+      } else if (value === null) {
+        if (snapshot.population > 0 || snapshot.measurement_status !== "no-observations" || snapshot.value !== null) {
+          throw new Error(`metrics.${key} cannot record null against a populated validated observation snapshot`);
+        }
+      } else if (value !== null) {
+        if (snapshot.population < 1 || snapshot.measurement_status !== "measured") throw new Error(`metric ${key} requires a populated validated observation snapshot`);
+        if (value !== snapshot.value) throw new Error(`metrics.${key} value ${value} does not match validated ledger measurement ${snapshot.value}`);
+        observation_bindings[key] = {
+          source: snapshot.source,
+          sha256: snapshot.sha256,
+          population: snapshot.population,
+          value: snapshot.value,
+        };
+      }
+    } else if (currentMetrics[key] !== null && value === null) {
+      throw new Error(`metrics.${key} cannot erase a measured value back to null`);
+    }
     metrics[key] = value;
     changed++;
   }
   if (!changed) throw new Error("metrics receipt changes no known metric");
   const body = { metrics: input.metrics, note: requireString(input.note, "note"), evidence: requireEvidence(input.evidence), ...review };
+  if (Object.keys(observation_bindings).length) body.observation_bindings = observation_bindings;
   return { receipt: { id: `metrics_${sha256(stableJson(body)).slice(0, 24)}`, ...body }, metrics };
 }
 export function makeAccountingReceipt(input, context) {
