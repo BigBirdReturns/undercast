@@ -18,9 +18,9 @@ env:
   TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
   AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
   EXACT_MAIN: acb804e2dcf758d82b57299ae366d1f57034d9cf
-  SOURCE_PRODUCT: 2c2f2a8c5813c0b22d40b21b766cb989d12b0865
+  SOURCE_PRODUCT: 445e648e41762d35259f96fc8816ffcc40d48ef9
   SELF: .github/workflows/replay-corrections-after-doctor-who.yml
-  REARM: "2"
+  REARM: "3"
 
 jobs:
   replay:
@@ -51,13 +51,15 @@ jobs:
           test -z "$(git status --porcelain)"
           git fetch origin \
             "refs/heads/main:refs/remotes/origin/main" \
-            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}" \
+            "refs/heads/agent/public-trust-corrections-001:refs/remotes/origin/agent/public-trust-corrections-001"
           test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
           test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
           test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
           git cat-file -e "${SOURCE_PRODUCT}^{commit}"
+          git merge-base --is-ancestor "$SOURCE_PRODUCT" refs/remotes/origin/agent/public-trust-corrections-001
 
-      - name: Restore the exact qualified correction product
+      - name: Restore exact artifacts and compose the current package gate
         run: |
           set -euo pipefail
           git checkout "$SOURCE_PRODUCT" -- \
@@ -66,19 +68,29 @@ jobs:
             data/review/corrections/BASELINE.json \
             data/review/corrections/controlled-exercise-001.json \
             docs/CORRECTIONS.md \
-            package.json \
             schema/correction.schema.json \
             scripts/correction-fixtures.mjs \
             scripts/corrections.mjs
-          git rm "$SELF"
-          git diff --cached --check
 
           node - <<'NODE'
           const fs = require('fs');
-          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const file = 'package.json';
+          const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const correctionCommand = 'node scripts/correction-fixtures.mjs && node scripts/corrections.mjs check';
+          if (!pkg.scripts['corpus:fixtures'].includes(correctionCommand)) {
+            pkg.scripts['corpus:fixtures'] += ` && ${correctionCommand}`;
+          }
+          pkg.scripts['corrections:write'] = 'node scripts/corrections.mjs write';
+          pkg.scripts['corrections:check'] = 'node scripts/corrections.mjs check';
+          pkg.scripts['corrections:status'] = 'node scripts/corrections.mjs status';
+          pkg.scripts['corrections:fixtures'] = correctionCommand;
           if (!pkg.scripts['autopilot:fixtures'].includes('node scripts/census-adapter.mjs check')) throw new Error('adapter fixture chain was lost');
-          if (!pkg.scripts['corpus:fixtures'].includes('node scripts/corrections.mjs check')) throw new Error('correction fixture chain was lost');
+          fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
           NODE
+
+          git add package.json
+          git rm "$SELF"
+          git diff --cached --check
 
       - name: Prove the composed correction and adapter estate
         run: |
