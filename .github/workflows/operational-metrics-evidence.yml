@@ -6,6 +6,8 @@ on:
       - ".github/workflows/operational-metrics-evidence.yml"
       - "scripts/operational-metrics.mjs"
       - "scripts/operational-metrics-fixtures.mjs"
+      - "scripts/operational-metrics-ledger.mjs"
+      - "scripts/operational-metrics-ledger-fixtures.mjs"
       - "data/operational-reliability/**"
       - "data/CENSUS-MANIFEST.json"
       - "package.json"
@@ -17,6 +19,8 @@ on:
       - ".github/workflows/operational-metrics-evidence.yml"
       - "scripts/operational-metrics.mjs"
       - "scripts/operational-metrics-fixtures.mjs"
+      - "scripts/operational-metrics-ledger.mjs"
+      - "scripts/operational-metrics-ledger-fixtures.mjs"
       - "data/operational-reliability/**"
       - "data/CENSUS-MANIFEST.json"
       - "package.json"
@@ -25,12 +29,14 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: operational-metrics-evidence-${{ github.ref }}
   cancel-in-progress: true
 
 env:
+  GH_TOKEN: ${{ github.token }}
   EVIDENCE_ROOT: /tmp/undercast-operational-metrics
   BUILD_SAMPLES: "5"
 
@@ -61,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf "$EVIDENCE_ROOT"
-          mkdir -p "$EVIDENCE_ROOT/build-logs"
+          mkdir -p "$EVIDENCE_ROOT/build-logs" "$EVIDENCE_ROOT/ledger"
           printf '[]\n' > "$EVIDENCE_ROOT/build-samples.json"
           for sample in $(seq 1 "$BUILD_SAMPLES"); do
             rm -rf records test-results playwright-report
@@ -97,7 +103,7 @@ jobs:
           test -z "$(git diff --name-only)"
           test -z "$(git ls-files --others --exclude-standard)"
 
-      - name: Measure source freshness and preserve unknown cost and rights boundaries
+      - name: Measure source freshness and preserve cost and rights evidence semantics
         run: |
           set -euo pipefail
           as_of="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
@@ -114,14 +120,28 @@ jobs:
           node - <<'NODE'
           const fs = require('fs');
           const evidence = JSON.parse(fs.readFileSync(process.env.EVIDENCE_ROOT + '/operational-metrics.json', 'utf8'));
+          const costLedger = JSON.parse(fs.readFileSync('data/operational-reliability/COST-OBSERVATIONS.json', 'utf8'));
+          const rightsLedger = JSON.parse(fs.readFileSync('data/operational-reliability/RIGHTS-CASES.json', 'utf8'));
           const build = evidence.metrics.build_minutes_p95;
           const freshness = evidence.metrics.source_freshness_p95_days;
           const cost = evidence.metrics.cost_per_verified_record_usd;
           const rights = evidence.metrics.rights_response_sla_days;
+          const ledgerCounts = {
+            cost: costLedger.observations.length,
+            rights: rightsLedger.cases.length,
+          };
           if (build.status !== 'measured' || build.population !== 5) throw new Error('build p95 was not measured from five samples');
           if (freshness.status !== 'measured' || freshness.population < 1) throw new Error('source freshness population is missing');
-          if (cost.status !== 'no-observations' || cost.value !== null) throw new Error('cost absence was converted into a value');
-          if (rights.status !== 'no-observations' || rights.value !== null) throw new Error('rights absence was converted into a value');
+          const assertLedgerMetric = (row, count, label) => {
+            if (count === 0) {
+              if (row.status !== 'no-observations' || row.value !== null || row.population !== 0) throw new Error(`${label} absence was converted into a value`);
+              return;
+            }
+            if (row.status !== 'measured' || !Number.isFinite(row.value) || row.population !== count) throw new Error(`${label} populated ledger did not produce a measured value`);
+          };
+          assertLedgerMetric(cost, ledgerCounts.cost, 'cost');
+          assertLedgerMetric(rights, ledgerCounts.rights, 'rights');
+          if (evidence.source_manifest.path !== 'data/CENSUS-MANIFEST.json') throw new Error('selected manifest path drifted');
           if (evidence.boundary.waterline_state_mutated || evidence.boundary.roadmap_state_mutated) throw new Error('evidence producer exceeded its authority');
           if (evidence.boundary.missing_values_rounded_to_zero !== false) throw new Error('missing-value boundary drifted');
           NODE
@@ -138,10 +158,11 @@ jobs:
             console.log(`- ${key}: ${row.status}${row.value === null ? '' : ` — ${row.value}`}; population=${row.population}`);
           }
           console.log('');
-          console.log('The two measured values remain workflow-executed and unreviewed. Empty cost and rights ledgers remain null.');
+          console.log('Measured values remain workflow-executed and unreviewed. Empty ledgers remain null; populated ledgers are measured.');
           NODE
 
       - name: Upload immutable metric evidence and all build logs
+        id: metric_artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -150,3 +171,80 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
+
+      - name: Publish exact-main metric evidence discovery
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          ARTIFACT_ID: ${{ steps.metric_artifact.outputs.artifact-id }}
+          ARTIFACT_NAME: operational-metrics-evidence-${{ github.run_id }}
+          ARTIFACT_URL: ${{ steps.metric_artifact.outputs.artifact-url }}
+          ARTIFACT_DIGEST: ${{ steps.metric_artifact.outputs.artifact-digest }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          test -n "$ARTIFACT_ID"
+          test -n "$ARTIFACT_URL"
+          test -n "$ARTIFACT_DIGEST"
+
+          payload="$EVIDENCE_ROOT/ledger/issue-payload.json"
+          node scripts/operational-metrics-ledger.mjs issue-payload \
+            --evidence "$EVIDENCE_ROOT/operational-metrics.json" \
+            --build-samples "$EVIDENCE_ROOT/build-samples.json" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --run-url "$RUN_URL" \
+            --repository "$GITHUB_REPOSITORY" \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --head-branch "$GITHUB_REF_NAME" \
+            --head-sha "$GITHUB_SHA" \
+            --generated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --artifact-id "$ARTIFACT_ID" \
+            --artifact-name "$ARTIFACT_NAME" \
+            --artifact-url "$ARTIFACT_URL" \
+            --artifact-digest "$ARTIFACT_DIGEST" \
+            --output "$payload" \
+            > "$EVIDENCE_ROOT/ledger/facts.json"
+
+          PAYLOAD="$payload" node - <<'NODE'
+          const fs = require('fs');
+          const payload = JSON.parse(fs.readFileSync(process.env.PAYLOAD, 'utf8'));
+          fs.writeFileSync(process.env.EVIDENCE_ROOT + '/ledger/title.txt', payload.title + '\n');
+          fs.writeFileSync(process.env.EVIDENCE_ROOT + '/ledger/body.md', payload.body + '\n');
+          NODE
+
+          title="$(cat "$EVIDENCE_ROOT/ledger/title.txt")"
+          body="$EVIDENCE_ROOT/ledger/body.md"
+          gh api --method GET /search/issues \
+            -f q="repo:${GITHUB_REPOSITORY} type:issue in:title \"${title}\"" \
+            -f per_page=100 \
+            > "$EVIDENCE_ROOT/ledger/search.json"
+
+          match="$(TITLE="$title" SEARCH="$EVIDENCE_ROOT/ledger/search.json" node - <<'NODE'
+          const fs = require('fs');
+          const rows = JSON.parse(fs.readFileSync(process.env.SEARCH, 'utf8')).items || [];
+          const exact = rows.filter((row) => row.title === process.env.TITLE && !row.pull_request);
+          if (exact.length > 1) throw new Error(`multiple exact metric evidence issues found for ${process.env.TITLE}`);
+          if (exact[0]) process.stdout.write(`${exact[0].number}\t${exact[0].state}`);
+          NODE
+          )"
+
+          if [ -n "$match" ]; then
+            issue_number="${match%%$'\t'*}"
+            issue_state="${match#*$'\t'}"
+            if [ "$issue_state" = "closed" ]; then
+              gh issue reopen "$issue_number" --repo "$GITHUB_REPOSITORY"
+            fi
+            gh issue edit "$issue_number" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body"
+            issue_url="https://github.com/${GITHUB_REPOSITORY}/issues/${issue_number}"
+          else
+            issue_url="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body")"
+          fi
+
+          {
+            echo ""
+            echo "### Durable metric evidence ledger"
+            echo ""
+            echo "- issue: ${issue_url}"
+            echo "- artifact: ${ARTIFACT_URL}"
+            echo "- artifact digest: \`${ARTIFACT_DIGEST}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
