@@ -1,0 +1,141 @@
+name: replay-corrections-after-doctor-who
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/replay-corrections-after-doctor-who.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: replay-corrections-after-doctor-who-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXACT_MAIN: acb804e2dcf758d82b57299ae366d1f57034d9cf
+  SOURCE_PRODUCT: 2c2f2a8c5813c0b22d40b21b766cb989d12b0865
+  SELF: .github/workflows/replay-corrections-after-doctor-who.yml
+
+jobs:
+  replay:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind exact branch, current main, and qualified correction product
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+          git cat-file -e "${SOURCE_PRODUCT}^{commit}"
+
+      - name: Restore the exact qualified correction product
+        run: |
+          set -euo pipefail
+          git checkout "$SOURCE_PRODUCT" -- \
+            .github/ISSUE_TEMPLATE/correction.yml \
+            data/CORRECTIONS.json \
+            data/review/corrections/BASELINE.json \
+            data/review/corrections/controlled-exercise-001.json \
+            docs/CORRECTIONS.md \
+            package.json \
+            schema/correction.schema.json \
+            scripts/correction-fixtures.mjs \
+            scripts/corrections.mjs
+          git rm "$SELF"
+          git diff --cached --check
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          if (!pkg.scripts['autopilot:fixtures'].includes('node scripts/census-adapter.mjs check')) throw new Error('adapter fixture chain was lost');
+          if (!pkg.scripts['corpus:fixtures'].includes('node scripts/corrections.mjs check')) throw new Error('correction fixture chain was lost');
+          NODE
+
+      - name: Prove the composed correction and adapter estate
+        run: |
+          set -euo pipefail
+          npm run adapter:fixtures
+          npm run corrections:fixtures
+          npm run corpus:fixtures
+          npm run gate 2>&1 | tee /tmp/corrections-replay-gate.log
+
+      - name: Publish the exact workflow-free product under lease
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report .ci/projection-drift
+          git restore --worktree -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          git diff --cached --check
+
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+
+          cat > /tmp/expected-final-paths.txt <<'PATHS'
+          .github/ISSUE_TEMPLATE/correction.yml
+          data/CORRECTIONS.json
+          data/review/corrections/BASELINE.json
+          data/review/corrections/controlled-exercise-001.json
+          docs/CORRECTIONS.md
+          package.json
+          schema/correction.schema.json
+          scripts/correction-fixtures.mjs
+          scripts/corrections.mjs
+          PATHS
+          sort -u /tmp/expected-final-paths.txt -o /tmp/expected-final-paths.txt
+          git diff --cached --name-only refs/remotes/origin/main | sort > /tmp/final-paths.txt
+          diff -u /tmp/expected-final-paths.txt /tmp/final-paths.txt
+
+          git config user.name undercast-corrections
+          git config user.email undercast-corrections@users.noreply.github.com
+          git commit \
+            -m 'Corrections: qualify public intake and change history' \
+            -m 'replay exact qualified bytes after Doctor Who mainline' \
+            -m 'preserve adapter and correction fixture composition'
+          new_head="$(git rev-parse HEAD)"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+          echo "published_head=${new_head}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload replay diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corrections-doctor-who-replay-${{ github.run_id }}
+          path: |
+            /tmp/corrections-replay-gate.log
+            /tmp/final-paths.txt
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
