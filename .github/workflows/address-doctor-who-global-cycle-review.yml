@@ -1,0 +1,283 @@
+name: address-doctor-who-global-cycle-review
+
+on:
+  push:
+    branches:
+      - agent/doctor-who-global-cycle-receipt
+    paths:
+      - ".github/workflows/address-doctor-who-global-cycle-review.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: address-doctor-who-global-cycle-review
+  cancel-in-progress: true
+
+env:
+  TARGET_BRANCH: agent/doctor-who-global-cycle-receipt
+  AUTHORIZED_HEAD: ${{ github.sha }}
+  EXACT_MAIN: 79362e21d9d526f1310467574e69fe909eb80adb
+  SELF: .github/workflows/address-doctor-who-global-cycle-review.yml
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  address:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind exact branch and main
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+
+      - name: Replace self-asserted repair claims with executable transition proof
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+
+          script_path = Path('scripts/doctor-who-activation.mjs')
+          text = script_path.read_text(encoding='utf-8')
+
+          old_import = 'import { deriveWaterlineStatus, validateWaterlineConfig, validateWaterlineState } from "./lib/waterline.mjs";'
+          new_import = 'import { deriveWaterlineStatus, emptyWaterlineState, leaseGroups, makeCycleReceipt, validateWaterlineConfig, validateWaterlineState } from "./lib/waterline.mjs";'
+          if text.count(old_import) != 1:
+              raise SystemExit('activation checker import contract drifted')
+          text = text.replace(old_import, new_import, 1)
+
+          marker = 'async function checkReceipt(root, report) {'
+          helper = r'''function assertGlobalCycleCustody(current, report) {
+            const exactEvents = current.autopilotJournal.filter((row) => row.op === "lease.claimed"
+              && row.scope === SCOPE_ID
+              && row.lease_id === report.lease.lease_id
+              && row.task_id === report.lease.task.id);
+            assert.equal(exactEvents.length, 1, "global-cycle proof needs the exact activation lease event");
+
+            const durableDoctorTask = current.autopilot.jobs.find((row) => row.id === report.lease.task.id);
+            const durableStarTrekTask = current.autopilot.jobs.find((row) => row.scope === "star-trek");
+            assert.ok(durableDoctorTask, "global-cycle proof cannot find the Doctor Who pilot task");
+            assert.ok(durableStarTrekTask, "global-cycle proof cannot find a Star Trek control task");
+
+            const starTrekTask = { ...structuredClone(durableStarTrekTask), status: "queued", queueable: true };
+            delete starTrekTask.lease;
+            const leasedDoctorTask = {
+              ...structuredClone(durableDoctorTask),
+              scope: SCOPE_ID,
+              status: "leased",
+              queueable: false,
+              source_fingerprint: report.lease.task.source_fingerprint,
+            };
+            const syntheticMediaAudit = {
+              version: current.mediaAudit.version || 1,
+              source: { item_set_sha256: sha256(Buffer.from("doctor-who-global-cycle-executable-proof")) },
+              items: [],
+            };
+            const baseState = emptyWaterlineState();
+            const derive = (autopilot, state) => deriveWaterlineStatus({
+              config: current.waterlineConfig,
+              state,
+              mediaAudit: syntheticMediaAudit,
+              autopilot,
+              autopilotJournal: exactEvents,
+              roadmapState: current.roadmapState,
+              preservation: current.preservation,
+              scopeId: "star-trek",
+              requestedTasks: 1,
+            });
+
+            const activeAutopilot = { jobs: [starTrekTask, leasedDoctorTask] };
+            const active = derive(activeAutopilot, structuredClone(baseState));
+            assert.equal(active.phase, "other-cycle-in-flight", "active other-scope work did not hold the global cycle");
+            assert.ok(active.claim_reasons.includes("other_scope_cycle_in_flight"), "active other-scope blocker is missing");
+            assert.ok(active.jobs.other_scope_in_flight.some((row) => row.id === report.lease.task.id), "active blocker lost the exact pilot task");
+
+            const terminalDoctorTask = { ...leasedDoctorTask, status: "resolved" };
+            const terminalAutopilot = { jobs: [starTrekTask, terminalDoctorTask] };
+            const terminalState = structuredClone(baseState);
+            const terminal = derive(terminalAutopilot, terminalState);
+            assert.equal(terminal.phase, "other-cycle-receipt-required", "terminal unreceipted other-scope work released the global cycle");
+            assert.ok(terminal.claim_reasons.includes("other_scope_cycle_receipt_required"), "terminal receipt blocker is missing");
+            const pending = terminal.cycles.other_scope_unreceipted.find((row) => row.lease_id === report.lease.lease_id);
+            assert.ok(pending, "terminal receipt blocker lost the exact activation lease");
+            assert.equal(pending.task_statuses[report.lease.task.id], "resolved", "terminal receipt blocker lost the exact task status");
+
+            const claimedAt = Date.parse(report.lease.claimed_at);
+            assert.ok(Number.isFinite(claimedAt), "activation lease claim time is invalid");
+            const reviewedReceipt = makeCycleReceipt({
+              version: 1,
+              scope_id: SCOPE_ID,
+              lease_id: report.lease.lease_id,
+              outcome: "aborted",
+              reviewed_by: "doctor-who-activation-check",
+              reviewed_role: "second-desk",
+              reviewed_at: new Date(claimedAt + 60_000).toISOString(),
+              note: "Synthetic executable proof that a valid reviewed cycle receipt releases only the global receipt blocker.",
+              evidence: [{ type: "incident", value: "doctor-who-global-cycle-executable-proof" }],
+            }, {
+              config: current.waterlineConfig,
+              state: terminalState,
+              autopilot: terminalAutopilot,
+              mediaAudit: syntheticMediaAudit,
+              groups: leaseGroups(exactEvents, SCOPE_ID),
+            });
+            const receiptedState = structuredClone(terminalState);
+            receiptedState.cycles.push(reviewedReceipt);
+            const released = derive(terminalAutopilot, receiptedState);
+            assert.ok(!released.claim_reasons.includes("other_scope_cycle_receipt_required"), "reviewed receipt did not release the global receipt blocker");
+            assert.equal(released.cycles.other_scope_unreceipted.length, 0, "reviewed receipt left an unreceipted other-scope cycle");
+          }
+
+          '''
+          if text.count(marker) != 1 or 'function assertGlobalCycleCustody(' in text:
+              raise SystemExit('activation checker insertion contract drifted')
+          text = text.replace(marker, helper + marker, 1)
+
+          old_assertions = '''  assert.equal(report.global_cycle_custody?.status, "smoke-passed");
+          assert.equal(report.global_cycle_custody?.other_scope_active_work_blocked, true);
+          assert.equal(report.global_cycle_custody?.other_scope_terminal_unreceipted_blocked, true);
+          assert.equal(report.global_cycle_custody?.global_claim_release_requires_cycle_receipt, true);
+          assert.equal(report.global_cycle_custody?.candidate_complete_gate_passed, true);
+          assert.equal(report.global_cycle_custody?.final_complete_gate_passed, true);'''
+          new_assertions = '''  assert.equal(report.global_cycle_custody?.status, "recomputed");
+          assert.equal(report.global_cycle_custody?.verification_mode, "activation-check-recomputes-cross-scope-transitions");
+          assert.equal(report.global_cycle_custody?.checker, "scripts/doctor-who-activation.mjs");
+          assert.deepEqual(report.global_cycle_custody?.verified_transitions, [
+            "active-work-blocks-other-scope",
+            "terminal-unreceipted-blocks-other-scope",
+            "reviewed-cycle-receipt-releases-global-blocker",
+          ]);'''
+          if text.count(old_assertions) != 1:
+              raise SystemExit('self-asserted custody block drifted')
+          text = text.replace(old_assertions, new_assertions, 1)
+
+          old_current = '''  const current = await loadCurrent(root);
+          const events = current.autopilotJournal.filter((row) => row.op === "lease.claimed" && row.scope === SCOPE_ID && row.lease_id === report.lease.lease_id);'''
+          new_current = '''  const current = await loadCurrent(root);
+          assertGlobalCycleCustody(current, report);
+          const events = current.autopilotJournal.filter((row) => row.op === "lease.claimed" && row.scope === SCOPE_ID && row.lease_id === report.lease.lease_id);'''
+          if text.count(old_current) != 1:
+              raise SystemExit('activation current-state check contract drifted')
+          text = text.replace(old_current, new_current, 1)
+          script_path.write_text(text, encoding='utf-8')
+
+          receipt_path = Path('data/review/adapter-sdk/doctor-who-activation-001.json')
+          receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
+          receipt['global_cycle_custody'] = {
+              'checker': 'scripts/doctor-who-activation.mjs',
+              'status': 'recomputed',
+              'verification_mode': 'activation-check-recomputes-cross-scope-transitions',
+              'verified_transitions': [
+                  'active-work-blocks-other-scope',
+                  'terminal-unreceipted-blocks-other-scope',
+                  'reviewed-cycle-receipt-releases-global-blocker',
+              ],
+          }
+          body = {key: value for key, value in receipt.items() if key != 'receipt_sha256'}
+          stable_body = json.dumps(body, ensure_ascii=False, indent=2, sort_keys=True) + '\n'
+          receipt['receipt_sha256'] = hashlib.sha256(stable_body.encode('utf-8')).hexdigest()
+          stable_receipt = json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\n'
+          receipt_path.write_text(stable_receipt, encoding='utf-8')
+
+          summary = {
+              'receipt_sha256': receipt['receipt_sha256'],
+              'checker': receipt['global_cycle_custody']['checker'],
+              'verification_mode': receipt['global_cycle_custody']['verification_mode'],
+              'verified_transitions': receipt['global_cycle_custody']['verified_transitions'],
+          }
+          Path('/tmp/doctor-who-global-cycle-review.json').write_text(json.dumps(summary, indent=2) + '\n', encoding='utf-8')
+          print(json.dumps(summary, indent=2))
+          PY
+
+          node --check scripts/doctor-who-activation.mjs
+          node scripts/doctor-who-activation.mjs check
+          node scripts/waterline-fixtures.mjs
+
+      - name: Run complete candidate gate
+        run: |
+          set -euo pipefail
+          git rm "$SELF"
+          git add \
+            data/review/adapter-sdk/doctor-who-activation-001.json \
+            scripts/doctor-who-activation.mjs
+          git diff --cached --check
+          npm run gate 2>&1 | tee /tmp/doctor-who-global-cycle-review-gate.log
+
+      - name: Revalidate and publish workflow-free review fix under lease
+        run: |
+          set -euo pipefail
+          node scripts/doctor-who-activation.mjs check
+          node scripts/waterline-fixtures.mjs
+
+          rm -rf records test-results playwright-report .ci/projection-drift
+          git restore --worktree -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          git diff --cached --check
+
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git commit \
+            -m 'Activation: bind global-cycle custody to executable proof' \
+            -m 'recompute active, terminal-unreceipted, and reviewed-release transitions' \
+            -m 'remove self-asserted CI booleans from the permanent activation receipt'
+          new_head="$(git rev-parse HEAD)"
+
+          cat > /tmp/expected-final-paths.txt <<'PATHS'
+          data/review/adapter-sdk/doctor-who-activation-001.json
+          docs/AUTOPILOT.md
+          scripts/doctor-who-activation.mjs
+          scripts/lib/waterline.mjs
+          scripts/waterline-fixtures.mjs
+          PATHS
+          git diff --name-only refs/remotes/origin/main...HEAD | sort > /tmp/final-paths.txt
+          diff -u /tmp/expected-final-paths.txt /tmp/final-paths.txt
+
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+          echo "published_head=${new_head}" >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/doctor-who-global-cycle-review.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact review-fix evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-global-cycle-review-${{ github.run_id }}
+          path: |
+            /tmp/doctor-who-global-cycle-review.json
+            /tmp/doctor-who-global-cycle-review-gate.log
+            /tmp/final-paths.txt
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
