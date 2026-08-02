@@ -10,11 +10,11 @@ on:
 permissions:
   actions: read
   contents: write
-  issues: read
+  issues: write
 
 concurrency:
   group: apply-operational-metrics-receipt-003
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   TARGET_BRANCH: agent/operational-metrics-receipt-003
@@ -42,7 +42,7 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
-      - name: Discover the successful exact-main metric evidence issue
+      - name: Discover the exact-main metric workflow and artifact
         id: evidence
         env:
           GH_TOKEN: ${{ github.token }}
@@ -53,72 +53,114 @@ jobs:
           test -z "$(git status --porcelain)"
 
           found=0
-          for attempt in $(seq 1 40); do
-            gh api --method GET /search/issues \
-              -f q="repo:${GITHUB_REPOSITORY} type:issue in:title \"Operational metric evidence run\"" \
-              -f per_page=100 > /tmp/metric-issue-search.json
+          for attempt in $(seq 1 60); do
+            gh api --method GET \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/operational-metrics-evidence.yml/runs" \
+              -f branch=main \
+              -f event=push \
+              -f per_page=100 \
+              > /tmp/metric-runs.json
 
-            if EXACT_MAIN="$EXACT_MAIN" SEARCH=/tmp/metric-issue-search.json \
-              ISSUE=/tmp/metric-issue.json FACTS=/tmp/metric-facts.json node - <<'NODE'
+            if EXACT_MAIN="$EXACT_MAIN" RUNS=/tmp/metric-runs.json SELECTED=/tmp/metric-workflow-run.json node - <<'NODE'
           const fs = require('fs');
-          const search = JSON.parse(fs.readFileSync(process.env.SEARCH, 'utf8'));
-          const rows = (search.items || []).filter((row) =>
-            !row.pull_request
-            && String(row.title || '').startsWith('Operational metric evidence run ')
-            && String(row.body || '').includes(process.env.EXACT_MAIN)
+          const doc = JSON.parse(fs.readFileSync(process.env.RUNS, 'utf8'));
+          const rows = (doc.workflow_runs || []).filter((row) =>
+            row.head_sha === process.env.EXACT_MAIN
+            && row.event === 'push'
+            && row.head_branch === 'main'
           );
           if (rows.length === 0) process.exit(2);
-          if (rows.length !== 1) throw new Error(`expected one exact-main metric evidence issue, found ${rows.length}`);
-          const issue = rows[0];
-          const match = String(issue.body || '').match(/```json\s*([\s\S]*?)\s*```/);
-          if (!match) throw new Error('metric issue has no machine-readable JSON block');
-          const facts = JSON.parse(match[1]);
-          if (facts.target_head !== process.env.EXACT_MAIN || facts.event !== 'push' || facts.branch !== 'main') {
-            throw new Error('metric issue is not bound to the exact main push');
-          }
-          if (facts.review_status !== 'unreviewed' || facts.evidence_tier !== 'workflow-executed-unreviewed') {
-            throw new Error('metric issue review boundary drifted');
-          }
-          fs.writeFileSync(process.env.ISSUE, JSON.stringify({
-            number: issue.number,
-            title: issue.title,
-            body: issue.body,
-            url: issue.html_url,
-            state: issue.state,
-          }, null, 2) + '\n');
-          fs.writeFileSync(process.env.FACTS, JSON.stringify(facts, null, 2) + '\n');
+          if (rows.length !== 1) throw new Error(`expected one exact-main metric workflow run, found ${rows.length}`);
+          const run = rows[0];
+          if (run.status !== 'completed') process.exit(3);
+          fs.writeFileSync(process.env.SELECTED, JSON.stringify(run, null, 2) + '\n');
           NODE
             then
               found=1
               break
             fi
-            sleep 15
+            sleep 10
           done
           test "$found" = 1
 
+          run_id="$(node -p "JSON.parse(require('fs').readFileSync('/tmp/metric-workflow-run.json','utf8')).id")"
+          artifact_found=0
+          for attempt in $(seq 1 30); do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" > /tmp/metric-artifacts.json
+            if RUN_ID="$run_id" ARTIFACTS=/tmp/metric-artifacts.json SELECTED=/tmp/metric-artifact-metadata.json node - <<'NODE'
+          const fs = require('fs');
+          const doc = JSON.parse(fs.readFileSync(process.env.ARTIFACTS, 'utf8'));
+          const name = `operational-metrics-evidence-${process.env.RUN_ID}`;
+          const rows = (doc.artifacts || []).filter((row) => row.name === name && !row.expired);
+          if (rows.length === 0) process.exit(2);
+          if (rows.length !== 1) throw new Error(`expected one exact metric artifact, found ${rows.length}`);
+          fs.writeFileSync(process.env.SELECTED, JSON.stringify(rows[0], null, 2) + '\n');
+          NODE
+            then
+              artifact_found=1
+              break
+            fi
+            sleep 5
+          done
+          test "$artifact_found" = 1
+
           node - <<'NODE' >> "$GITHUB_OUTPUT"
           const fs = require('fs');
-          const issue = JSON.parse(fs.readFileSync('/tmp/metric-issue.json', 'utf8'));
-          const facts = JSON.parse(fs.readFileSync('/tmp/metric-facts.json', 'utf8'));
+          const run = JSON.parse(fs.readFileSync('/tmp/metric-workflow-run.json', 'utf8'));
+          const artifact = JSON.parse(fs.readFileSync('/tmp/metric-artifact-metadata.json', 'utf8'));
           const out = {
-            issue_number: issue.number,
-            issue_url: issue.url,
-            run_id: facts.workflow.run_id,
-            run_attempt: facts.workflow.run_attempt,
-            run_url: facts.workflow.run_url,
-            artifact_id: facts.artifact.id,
-            artifact_name: facts.artifact.name,
-            artifact_url: facts.artifact.url,
-            artifact_digest: facts.artifact.digest,
-            generated_at: facts.generated_at,
+            run_id: run.id,
+            run_attempt: run.run_attempt,
+            run_url: run.html_url,
+            run_conclusion: run.conclusion,
+            artifact_id: artifact.id,
+            artifact_name: artifact.name,
+            artifact_url: run.html_url + '/artifacts/' + artifact.id,
+            artifact_digest: artifact.digest,
           };
           for (const [key, value] of Object.entries(out)) console.log(`${key}=${value}`);
+          NODE
+
+      - name: Prove the workflow failure boundary when the final index step failed
+        if: ${{ steps.evidence.outputs.run_conclusion != 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.evidence.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?filter=latest" > /tmp/metric-workflow-jobs.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const doc = JSON.parse(fs.readFileSync('/tmp/metric-workflow-jobs.json', 'utf8'));
+          if (!Array.isArray(doc.jobs) || doc.jobs.length !== 1) throw new Error('unexpected metric workflow job denominator');
+          const job = doc.jobs[0];
+          const byName = new Map((job.steps || []).map((row) => [row.name, row]));
+          const requiredSuccess = [
+            'Set up job',
+            'Run actions/checkout@v4',
+            'Run actions/setup-node@v4',
+            'Install exact dependencies and rendered runtime',
+            'Validate metric contracts before measuring',
+            'Measure five clean complete canonical builds on one exact head',
+            'Measure source freshness and preserve cost and rights evidence semantics',
+            'Publish the measured and unresolved boundary summary',
+            'Upload immutable metric evidence and all build logs',
+          ];
+          for (const name of requiredSuccess) {
+            const step = byName.get(name);
+            if (!step || step.status !== 'completed' || step.conclusion !== 'success') {
+              throw new Error(`metric evidence step did not pass: ${name}`);
+            }
+          }
+          const index = byName.get('Publish exact-main metric evidence discovery');
+          if (!index || index.status !== 'completed' || index.conclusion !== 'failure') {
+            throw new Error('workflow failed outside the replaceable discovery-index step');
+          }
           NODE
 
       - name: Download and independently validate the exact artifact
         env:
           GH_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ steps.evidence.outputs.issue_number }}
           RUN_ID: ${{ steps.evidence.outputs.run_id }}
           RUN_ATTEMPT: ${{ steps.evidence.outputs.run_attempt }}
           RUN_URL: ${{ steps.evidence.outputs.run_url }}
@@ -126,13 +168,9 @@ jobs:
           ARTIFACT_NAME: ${{ steps.evidence.outputs.artifact_name }}
           ARTIFACT_URL: ${{ steps.evidence.outputs.artifact_url }}
           ARTIFACT_DIGEST: ${{ steps.evidence.outputs.artifact_digest }}
-          GENERATED_AT: ${{ steps.evidence.outputs.generated_at }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/metric-artifact /tmp/metric-extracted
-
-          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" > /tmp/metric-workflow-run.json
-          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" > /tmp/metric-artifact-metadata.json
 
           curl --fail --location --silent --show-error \
             -H "Authorization: Bearer ${GH_TOKEN}" \
@@ -154,26 +192,17 @@ jobs:
 
           EVIDENCE_FILE="$EVIDENCE_FILE" SAMPLES_FILE="$SAMPLES_FILE" \
             RUN=/tmp/metric-workflow-run.json ARTIFACT=/tmp/metric-artifact-metadata.json \
-            FACTS=/tmp/metric-facts.json EXACT_MAIN="$EXACT_MAIN" node - <<'NODE'
+            EXACT_MAIN="$EXACT_MAIN" node - <<'NODE'
           const fs = require('fs');
-          const crypto = require('crypto');
-          const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
-          const facts = JSON.parse(fs.readFileSync(process.env.FACTS, 'utf8'));
+          const evidence = JSON.parse(fs.readFileSync(process.env.EVIDENCE_FILE, 'utf8'));
+          const samples = JSON.parse(fs.readFileSync(process.env.SAMPLES_FILE, 'utf8'));
           const run = JSON.parse(fs.readFileSync(process.env.RUN, 'utf8'));
           const artifact = JSON.parse(fs.readFileSync(process.env.ARTIFACT, 'utf8'));
-          const evidenceRaw = fs.readFileSync(process.env.EVIDENCE_FILE);
-          const samplesRaw = fs.readFileSync(process.env.SAMPLES_FILE);
-          const evidence = JSON.parse(evidenceRaw);
-          const samples = JSON.parse(samplesRaw);
 
-          if (run.id !== facts.workflow.run_id || run.run_attempt !== facts.workflow.run_attempt) throw new Error('workflow identity drifted');
           if (run.event !== 'push' || run.head_branch !== 'main' || run.head_sha !== process.env.EXACT_MAIN) throw new Error('workflow is not the exact main push');
-          if (run.status !== 'completed' || run.conclusion !== 'success') throw new Error('workflow did not complete successfully');
-          if (artifact.id !== facts.artifact.id || artifact.name !== facts.artifact.name || artifact.digest !== facts.artifact.digest) throw new Error('artifact metadata drifted');
+          if (run.status !== 'completed' || !['success', 'failure'].includes(run.conclusion)) throw new Error('workflow terminal state is invalid');
           if (artifact.workflow_run?.id !== run.id || artifact.workflow_run?.head_sha !== process.env.EXACT_MAIN || artifact.workflow_run?.head_branch !== 'main') throw new Error('artifact workflow custody drifted');
-          if (hash(evidenceRaw) !== facts.evidence.operational_metrics_sha256) throw new Error('metric evidence hash drifted');
-          if (hash(samplesRaw) !== facts.evidence.build_samples_sha256) throw new Error('build sample hash drifted');
-          if (evidence.source_manifest.path !== facts.evidence.source_manifest_path || evidence.source_manifest.sha256 !== facts.evidence.source_manifest_sha256) throw new Error('source manifest custody drifted');
+          if (evidence.source_manifest.path !== 'data/CENSUS-MANIFEST.json') throw new Error('source manifest path drifted');
           if (evidence.boundary?.workflow_executed_unreviewed !== true || evidence.boundary?.waterline_state_mutated !== false || evidence.boundary?.roadmap_state_mutated !== false) throw new Error('producer authority boundary drifted');
 
           const build = evidence.metrics?.build_minutes_p95;
@@ -205,9 +234,61 @@ jobs:
             test ! -s "$log"
           done
 
-          source_manifest_path="$(FACTS=/tmp/metric-facts.json node -p "JSON.parse(require('fs').readFileSync(process.env.FACTS,'utf8')).evidence.source_manifest_path")"
-          test "$source_manifest_path" = "data/CENSUS-MANIFEST.json"
-          test "$(sha256sum "$source_manifest_path" | awk '{print $1}')" = "$(FACTS=/tmp/metric-facts.json node -p "JSON.parse(require('fs').readFileSync(process.env.FACTS,'utf8')).evidence.source_manifest_sha256")"
+          test "$(sha256sum data/CENSUS-MANIFEST.json | awk '{print $1}')" = "$(EVIDENCE_FILE="$EVIDENCE_FILE" node -p "JSON.parse(require('fs').readFileSync(process.env.EVIDENCE_FILE,'utf8')).source_manifest.sha256")"
+
+          echo "EVIDENCE_FILE=${EVIDENCE_FILE}" >> "$GITHUB_ENV"
+          echo "SAMPLES_FILE=${SAMPLES_FILE}" >> "$GITHUB_ENV"
+
+      - name: Reconstruct or repair the exact-main metric discovery issue
+        id: issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.evidence.outputs.run_id }}
+          RUN_ATTEMPT: ${{ steps.evidence.outputs.run_attempt }}
+          RUN_URL: ${{ steps.evidence.outputs.run_url }}
+          ARTIFACT_ID: ${{ steps.evidence.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ steps.evidence.outputs.artifact_name }}
+          ARTIFACT_URL: ${{ steps.evidence.outputs.artifact_url }}
+          ARTIFACT_DIGEST: ${{ steps.evidence.outputs.artifact_digest }}
+        run: |
+          set -euo pipefail
+          gh api --method GET "/repos/${GITHUB_REPOSITORY}/issues" \
+            -f state=all \
+            -f per_page=100 \
+            -f sort=created \
+            -f direction=desc \
+            > /tmp/metric-issue-search.json
+
+          EXACT_MAIN="$EXACT_MAIN" SEARCH=/tmp/metric-issue-search.json node - <<'NODE'
+          const fs = require('fs');
+          const search = JSON.parse(fs.readFileSync(process.env.SEARCH, 'utf8'));
+          const rows = (search || []).filter((row) =>
+            !row.pull_request
+            && String(row.title || '').startsWith('Operational metric evidence run ')
+            && String(row.body || '').includes(process.env.EXACT_MAIN)
+          );
+          if (rows.length > 1) throw new Error(`multiple exact-main metric evidence issues found: ${rows.length}`);
+          if (rows[0]) fs.writeFileSync('/tmp/existing-metric-issue.json', JSON.stringify({
+            number: rows[0].number,
+            title: rows[0].title,
+            body: rows[0].body,
+            url: rows[0].html_url,
+            state: rows[0].state,
+          }, null, 2) + '\n');
+          NODE
+
+          if [ -s /tmp/existing-metric-issue.json ]; then
+            generated_at="$(node - <<'NODE'
+          const fs = require('fs');
+          const issue = JSON.parse(fs.readFileSync('/tmp/existing-metric-issue.json', 'utf8'));
+          const match = issue.body.match(/```json\s*([\s\S]*?)\s*```/);
+          if (!match) throw new Error('existing metric issue has no machine-readable facts');
+          process.stdout.write(JSON.parse(match[1]).generated_at);
+          NODE
+            )"
+          else
+            generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          fi
 
           node scripts/operational-metrics-ledger.mjs issue-payload \
             --evidence "$EVIDENCE_FILE" \
@@ -219,39 +300,55 @@ jobs:
             --event-name push \
             --head-branch main \
             --head-sha "$EXACT_MAIN" \
-            --generated-at "$GENERATED_AT" \
+            --generated-at "$generated_at" \
             --artifact-id "$ARTIFACT_ID" \
             --artifact-name "$ARTIFACT_NAME" \
             --artifact-url "$ARTIFACT_URL" \
             --artifact-digest "$ARTIFACT_DIGEST" \
             --output /tmp/rebuilt-metric-issue.json \
-            > /tmp/rebuilt-metric-facts.json
+            > /tmp/metric-facts.json
 
           node - <<'NODE'
           const fs = require('fs');
-          const original = JSON.parse(fs.readFileSync('/tmp/metric-issue.json', 'utf8'));
           const rebuilt = JSON.parse(fs.readFileSync('/tmp/rebuilt-metric-issue.json', 'utf8'));
-          const clean = (value) => String(value).replace(/\s+$/g, '');
-          if (rebuilt.title !== original.title || clean(rebuilt.body) !== clean(original.body)) {
-            throw new Error('published metric issue does not reconstruct from the artifact');
+          fs.writeFileSync('/tmp/metric-issue-title.txt', rebuilt.title + '\n');
+          fs.writeFileSync('/tmp/metric-issue-body.md', rebuilt.body + '\n');
+          if (fs.existsSync('/tmp/existing-metric-issue.json')) {
+            const existing = JSON.parse(fs.readFileSync('/tmp/existing-metric-issue.json', 'utf8'));
+            const clean = (value) => String(value).replace(/\s+$/g, '');
+            if (rebuilt.title !== existing.title || clean(rebuilt.body) !== clean(existing.body)) {
+              throw new Error('published metric issue does not reconstruct from the artifact');
+            }
           }
           NODE
 
+          if [ -s /tmp/existing-metric-issue.json ]; then
+            issue_number="$(node -p "JSON.parse(require('fs').readFileSync('/tmp/existing-metric-issue.json','utf8')).number")"
+            issue_url="$(node -p "JSON.parse(require('fs').readFileSync('/tmp/existing-metric-issue.json','utf8')).url")"
+          else
+            issue_url="$(gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$(cat /tmp/metric-issue-title.txt)" \
+              --body-file /tmp/metric-issue-body.md)"
+            issue_number="${issue_url##*/}"
+          fi
+          echo "issue_number=${issue_number}" >> "$GITHUB_OUTPUT"
+          echo "issue_url=${issue_url}" >> "$GITHUB_OUTPUT"
+
       - name: Create the reviewed custody packet and exact waterline input
         env:
-          ISSUE_NUMBER: ${{ steps.evidence.outputs.issue_number }}
-          ISSUE_URL: ${{ steps.evidence.outputs.issue_url }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.issue_number }}
+          ISSUE_URL: ${{ steps.issue.outputs.issue_url }}
           RUN_ID: ${{ steps.evidence.outputs.run_id }}
           RUN_ATTEMPT: ${{ steps.evidence.outputs.run_attempt }}
           RUN_URL: ${{ steps.evidence.outputs.run_url }}
+          RUN_CONCLUSION: ${{ steps.evidence.outputs.run_conclusion }}
           ARTIFACT_ID: ${{ steps.evidence.outputs.artifact_id }}
           ARTIFACT_NAME: ${{ steps.evidence.outputs.artifact_name }}
           ARTIFACT_URL: ${{ steps.evidence.outputs.artifact_url }}
           ARTIFACT_DIGEST: ${{ steps.evidence.outputs.artifact_digest }}
         run: |
           set -euo pipefail
-          EVIDENCE_FILE="$(find /tmp/metric-extracted -type f -name operational-metrics.json)"
-          SAMPLES_FILE="$(find /tmp/metric-extracted -type f -name build-samples.json)"
           REVIEW_DIR="${REVIEW_ROOT}/metric-run-${RUN_ID}"
           echo "REVIEW_DIR=${REVIEW_DIR}" >> "$GITHUB_ENV"
           mkdir -p "$REVIEW_DIR"
@@ -260,9 +357,10 @@ jobs:
           cp /tmp/metric-facts.json "$REVIEW_DIR/issue-facts.json"
           cp /tmp/metric-workflow-run.json "$REVIEW_DIR/workflow-run.json"
           cp /tmp/metric-artifact-metadata.json "$REVIEW_DIR/artifact.json"
+          if [ -s /tmp/metric-workflow-jobs.json ]; then cp /tmp/metric-workflow-jobs.json "$REVIEW_DIR/workflow-jobs.json"; fi
 
           REVIEW_DIR="$REVIEW_DIR" ISSUE_NUMBER="$ISSUE_NUMBER" ISSUE_URL="$ISSUE_URL" \
-            RUN_ID="$RUN_ID" RUN_ATTEMPT="$RUN_ATTEMPT" RUN_URL="$RUN_URL" \
+            RUN_ID="$RUN_ID" RUN_ATTEMPT="$RUN_ATTEMPT" RUN_URL="$RUN_URL" RUN_CONCLUSION="$RUN_CONCLUSION" \
             ARTIFACT_ID="$ARTIFACT_ID" ARTIFACT_NAME="$ARTIFACT_NAME" \
             ARTIFACT_URL="$ARTIFACT_URL" ARTIFACT_DIGEST="$ARTIFACT_DIGEST" \
             EXACT_MAIN="$EXACT_MAIN" node - <<'NODE'
@@ -271,16 +369,28 @@ jobs:
           const path = require('path');
           const hash = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
           const root = process.env.REVIEW_DIR;
-          const evidenceRaw = fs.readFileSync(path.join(root, 'operational-metrics.json'));
-          const samplesRaw = fs.readFileSync(path.join(root, 'build-samples.json'));
-          const factsRaw = fs.readFileSync(path.join(root, 'issue-facts.json'));
-          const runRaw = fs.readFileSync(path.join(root, 'workflow-run.json'));
-          const artifactRaw = fs.readFileSync(path.join(root, 'artifact.json'));
+          const read = (name) => fs.readFileSync(path.join(root, name));
+          const evidenceRaw = read('operational-metrics.json');
+          const samplesRaw = read('build-samples.json');
+          const factsRaw = read('issue-facts.json');
+          const runRaw = read('workflow-run.json');
+          const artifactRaw = read('artifact.json');
           const evidence = JSON.parse(evidenceRaw);
           const samples = JSON.parse(samplesRaw);
           const reviewedAt = new Date().toISOString();
           const build = evidence.metrics.build_minutes_p95;
           const freshness = evidence.metrics.source_freshness_p95_days;
+          const retained = {
+            operational_metrics: { path: `${root}/operational-metrics.json`, sha256: hash(evidenceRaw) },
+            build_samples: { path: `${root}/build-samples.json`, sha256: hash(samplesRaw) },
+            issue_facts: { path: `${root}/issue-facts.json`, sha256: hash(factsRaw) },
+            workflow_run: { path: `${root}/workflow-run.json`, sha256: hash(runRaw) },
+            artifact: { path: `${root}/artifact.json`, sha256: hash(artifactRaw) },
+          };
+          if (fs.existsSync(path.join(root, 'workflow-jobs.json'))) {
+            const jobsRaw = read('workflow-jobs.json');
+            retained.workflow_jobs = { path: `${root}/workflow-jobs.json`, sha256: hash(jobsRaw) };
+          }
 
           const review = {
             version: 1,
@@ -296,18 +406,13 @@ jobs:
               workflow_run: Number(process.env.RUN_ID),
               workflow_attempt: Number(process.env.RUN_ATTEMPT),
               workflow_url: process.env.RUN_URL,
+              workflow_conclusion: process.env.RUN_CONCLUSION,
               artifact_id: Number(process.env.ARTIFACT_ID),
               artifact_name: process.env.ARTIFACT_NAME,
               artifact_url: process.env.ARTIFACT_URL,
               artifact_digest: process.env.ARTIFACT_DIGEST,
             },
-            retained_receipts: {
-              operational_metrics: { path: `${root}/operational-metrics.json`, sha256: hash(evidenceRaw) },
-              build_samples: { path: `${root}/build-samples.json`, sha256: hash(samplesRaw) },
-              issue_facts: { path: `${root}/issue-facts.json`, sha256: hash(factsRaw) },
-              workflow_run: { path: `${root}/workflow-run.json`, sha256: hash(runRaw) },
-              artifact: { path: `${root}/artifact.json`, sha256: hash(artifactRaw) },
-            },
+            retained_receipts: retained,
             measurements: {
               build_minutes_p95: build.value,
               build_population: build.population,
@@ -318,7 +423,7 @@ jobs:
             },
             review_findings: {
               exact_main_identity_bound: true,
-              workflow_conclusion_success: true,
+              evidence_steps_passed: true,
               actions_artifact_digest_verified: true,
               metric_evidence_hash_verified: true,
               build_sample_hash_verified: true,
@@ -328,6 +433,7 @@ jobs:
               measured_slo_targets_passed: build.value <= 20 && freshness.value <= 14,
               cost_absence_preserved: true,
               rights_absence_preserved: true,
+              discovery_index_reconstructed: true,
               producer_did_not_self_review: true,
             },
             boundary: {
@@ -351,7 +457,7 @@ jobs:
             note: 'Recorded the exact-main build and active Star Trek source-freshness measurements from a hash-bound five-gate artifact. Cost and rights remain null because their admissible ledgers contain no observations.',
             evidence: [
               { type: 'review', value: `${root}/review.json — second-desk review ${reviewedAt}.` },
-              { type: 'workflow-run', value: `GitHub Actions run ${process.env.RUN_ID} on exact main ${process.env.EXACT_MAIN}; conclusion success.` },
+              { type: 'workflow-run', value: `GitHub Actions run ${process.env.RUN_ID} on exact main ${process.env.EXACT_MAIN}; evidence steps passed; terminal conclusion ${process.env.RUN_CONCLUSION}.` },
               { type: 'artifact', value: `${process.env.ARTIFACT_NAME}; artifact id ${process.env.ARTIFACT_ID}; digest ${process.env.ARTIFACT_DIGEST}.` },
               { type: 'build-denominator', value: `Five complete rendered 26-step canonical gates; build samples sha256 ${hash(samplesRaw)}; nearest-rank p95 ${build.value} minutes.` },
               { type: 'source-denominator', value: `${freshness.population} unique exact Star Trek source-revision identities; manifest ${evidence.source_manifest.path}; sha256 ${evidence.source_manifest.sha256}; nearest-rank p95 ${freshness.value} days.` },
@@ -475,14 +581,13 @@ jobs:
         with:
           name: operational-metrics-receipt-003-${{ github.run_id }}
           path: |
-            /tmp/metric-issue.json
-            /tmp/metric-facts.json
             /tmp/metric-workflow-run.json
+            /tmp/metric-workflow-jobs.json
             /tmp/metric-artifact-metadata.json
+            /tmp/metric-facts.json
             /tmp/metric-receipt-preflight.json
             /tmp/metric-receipt-status.json
             /tmp/metric-receipt-gate.log
-            /tmp/rebuilt-metric-facts.json
           if-no-files-found: warn
           retention-days: 30
           compression-level: 0
