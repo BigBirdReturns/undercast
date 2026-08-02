@@ -1,0 +1,81 @@
+name: diagnose-doctor-who-projection-drift
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/diagnose-doctor-who-projection-drift.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnose-doctor-who-projection-drift-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXACT_MAIN: ${{ github.event.pull_request.base.sha }}
+
+jobs:
+  diagnose:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Rebuild only the Doctor Who source and freeze its intended source paths
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          git fetch origin "refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+          node scripts/census.mjs doctor-who > /tmp/doctor-who-diagnostic-census.log 2>&1
+          node scripts/census-adapter.mjs write
+          git add \
+            data/CENSUS.json \
+            data/CENSUS-UNRESOLVED.json \
+            data/CENSUS-MANIFEST.json \
+            data/CENSUS-COVERAGE.json \
+            data/CENSUS-SUMMARY.json \
+            data/CENSUS-GAPS.json \
+            data/review/adapter-sdk/BASELINE.json
+
+      - name: Materialize and inventory deterministic projection drift
+        run: |
+          set -euo pipefail
+          node scripts/shard.mjs > /tmp/doctor-who-diagnostic-projection.log 2>&1
+          git status --short > /tmp/doctor-who-post-projection-status.txt
+          git diff --name-only > /tmp/doctor-who-post-projection-paths.txt
+          git diff --stat > /tmp/doctor-who-post-projection-stat.txt
+          git diff --binary > /tmp/doctor-who-projection-drift.patch
+          test -s /tmp/doctor-who-post-projection-paths.txt
+
+      - name: Upload exact projection denominator
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-projection-drift-${{ github.run_id }}
+          path: |
+            /tmp/doctor-who-diagnostic-census.log
+            /tmp/doctor-who-diagnostic-projection.log
+            /tmp/doctor-who-post-projection-status.txt
+            /tmp/doctor-who-post-projection-paths.txt
+            /tmp/doctor-who-post-projection-stat.txt
+            /tmp/doctor-who-projection-drift.patch
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
