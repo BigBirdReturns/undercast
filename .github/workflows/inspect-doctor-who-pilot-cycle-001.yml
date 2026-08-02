@@ -1,0 +1,108 @@
+name: inspect-doctor-who-pilot-cycle-001
+
+on:
+  push:
+    branches:
+      - agent/doctor-who-pilot-cycle-001
+    paths:
+      - ".github/workflows/inspect-doctor-who-pilot-cycle-001.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inspect-doctor-who-pilot-cycle-001
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Extract exact lease, existing-card, source, and media conventions
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+
+          const readJson = (path) => JSON.parse(fs.readFileSync(path, 'utf8'));
+          const contains = (value, needle) => JSON.stringify(value).toLowerCase().includes(needle.toLowerCase());
+          const cap = (rows, n = 80) => rows.slice(0, n);
+          const topMatches = (value, needles) => {
+            if (Array.isArray(value)) return cap(value.filter((row) => needles.some((needle) => contains(row, needle))));
+            if (value && typeof value === 'object') {
+              return Object.fromEntries(cap(Object.entries(value).filter(([, row]) => needles.some((needle) => contains(row, needle)))));
+            }
+            return [];
+          };
+
+          const taskId = 'ap_6dfcb7b9254c26dc3f4b46b8';
+          const leaseId = 'lease_51e3223a4810f3681aff9df4';
+          const actor = 'Dan Starkey';
+          const character = 'Commander (The Sontarans)';
+          const needles = [taskId, leaseId, actor, character];
+
+          const autopilot = readJson('data/AUTOPILOT.json');
+          const specimens = readJson('data/specimens.json');
+          const sources = readJson('data/SOURCES.json');
+          const media = readJson('data/MEDIA-AUDIT.json');
+          const coverage = readJson('data/CENSUS-COVERAGE.json');
+          const manifest = readJson('data/CENSUS-MANIFEST.json');
+          const drafts = fs.existsSync('data/drafts.json') ? readJson('data/drafts.json') : null;
+          const journal = fs.readFileSync('data/journal/autopilot.jsonl', 'utf8')
+            .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+
+          const voiceCards = cap(specimens.filter((row) => row.kind === 'voice'), 25);
+          const actorCards = specimens.filter((row) => contains(row, actor));
+          const exactTask = autopilot.jobs.find((row) => row.id === taskId);
+          const exactJournal = journal.filter((row) => needles.some((needle) => contains(row, needle)));
+          const actorCardIds = actorCards.map((row) => row.id).filter(Boolean);
+          const sourceNeedles = [...needles, ...actorCardIds];
+
+          const report = {
+            version: 1,
+            inspected_head: process.env.GITHUB_SHA,
+            inspected_at: new Date().toISOString(),
+            exact: {
+              task: exactTask,
+              journal: exactJournal,
+              actor_cards: actorCards,
+              sources: topMatches(sources, sourceNeedles),
+              media: topMatches(media, sourceNeedles),
+              coverage: topMatches(coverage, needles),
+              manifest: topMatches(manifest, needles),
+            },
+            conventions: {
+              specimen_count: specimens.length,
+              specimen_keys: [...new Set(specimens.flatMap((row) => Object.keys(row)))].sort(),
+              voice_card_count: specimens.filter((row) => row.kind === 'voice').length,
+              voice_cards: voiceCards,
+              draft_document: drafts,
+              sources_top_level: Array.isArray(sources) ? 'array' : Object.keys(sources),
+              media_top_level: Array.isArray(media) ? 'array' : Object.keys(media),
+              autopilot_top_level: Object.keys(autopilot),
+            },
+          };
+
+          const stable = JSON.stringify(report, null, 2) + '\n';
+          fs.writeFileSync('/tmp/doctor-who-pilot-inspection.json', stable);
+          console.log(stable);
+          console.log(`inspection_sha256=${crypto.createHash('sha256').update(stable).digest('hex')}`);
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-pilot-inspection-${{ github.run_id }}
+          path: /tmp/doctor-who-pilot-inspection.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
