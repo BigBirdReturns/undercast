@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   emptyWaterlineState,
   makeMetricsReceipt,
@@ -475,4 +480,112 @@ status = applyMetricReadinessPolicy(baseStatus(), {
 });
 assert.deepEqual(status.evidence_readiness.missing_required_metrics, ["source_freshness_p95_days"]);
 
-console.log("PASS — normalized configured source identities, spelling-alias erasure refusal, populated and empty source migration rebinds, same-source erasure refusal, validated rows, exact byte/population/value bindings, mismatched-value refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");
+const waterlineCli = fileURLToPath(new URL("./waterline.mjs", import.meta.url));
+const isolationRoot = await mkdtemp(join(tmpdir(), "undercast-waterline-ledger-isolation-"));
+const writeFixtureText = async (path, value) => {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, value);
+};
+const writeFixtureJson = (path, value) => writeFixtureText(path, JSON.stringify(value, null, 2) + "\n");
+try {
+  const fixtureLease = "lease_metric_ledger_failure";
+  const fixtureTask = "ap_metric_ledger_failure";
+  await Promise.all([
+    writeFixtureJson(join(isolationRoot, "data/WATERLINE.json"), config),
+    writeFixtureJson(join(isolationRoot, "data/WATERLINE-STATE.json"), emptyWaterlineState()),
+    writeFixtureJson(join(isolationRoot, "data/MEDIA-AUDIT.json"), {
+      source: { item_set_sha256: "a".repeat(64) },
+      items: [{ id: "media-1", scope: "star-trek", status: "verified" }],
+    }),
+    writeFixtureJson(join(isolationRoot, "data/AUTOPILOT.json"), {
+      jobs: [{
+        id: fixtureTask,
+        scope: "star-trek",
+        status: "resolved",
+        source_fingerprint: "b".repeat(64),
+        wall_ids: ["UC-FIXTURE"],
+      }],
+    }),
+    writeFixtureText(join(isolationRoot, "data/journal/autopilot.jsonl"), JSON.stringify({
+      op: "lease.claimed",
+      task_id: fixtureTask,
+      at: "2026-08-02T07:00:00Z",
+      scope: "star-trek",
+      lease_id: fixtureLease,
+      readiness_token: "c".repeat(64),
+    }) + "\n"),
+    writeFixtureJson(join(isolationRoot, "data/ROADMAP-STATE.json"), { completed: [] }),
+    writeFixtureJson(join(isolationRoot, "preservation/SNAPSHOTS.json"), {
+      history_guard: { precondition_met: true, status: "offsite-verified" },
+    }),
+    writeFixtureText(join(isolationRoot, "data/journal/waterline.jsonl"), ""),
+    writeFixtureJson(join(isolationRoot, costSource), {
+      version: 1,
+      observations: [{}],
+    }),
+    writeFixtureJson(join(isolationRoot, rightsSource), {
+      version: 1,
+      cases: [],
+    }),
+    writeFixtureJson(join(isolationRoot, "cycle.json"), {
+      version: 1,
+      scope_id: "star-trek",
+      lease_id: fixtureLease,
+      outcome: "completed",
+      reviewed_by: "second-desk",
+      reviewed_role: "second-desk",
+      reviewed_at: "2026-08-02T07:01:00Z",
+      note: "Record completed work even while a metric ledger needs repair.",
+      evidence: [
+        { type: "workflow-run", value: "fixture-cycle" },
+        { type: "commit", value: "fixture-commit" },
+        { type: "restart-proof", value: "fixture-restart" },
+      ],
+    }),
+    writeFixtureJson(join(isolationRoot, "incident.json"), {
+      incident_id: "metric-ledger-malformed",
+      status: "open",
+      severity: "high",
+      at: "2026-08-02T07:02:00Z",
+      recorded_by: "fixture-operator",
+      recorded_role: "operator",
+      note: "Open a stop even though the metric ledger is malformed.",
+      evidence: [{ type: "incident", value: "fixture-incident" }],
+    }),
+    writeFixtureJson(join(isolationRoot, "metrics.json"), {
+      metrics: { cost_per_verified_record_usd: 1 },
+      reviewed_by: "second-desk",
+      reviewed_role: "second-desk",
+      reviewed_at: "2026-08-02T07:03:00Z",
+      note: "Metric-aware writes must still refuse the malformed ledger.",
+      evidence: [{ type: "report", value: "fixture-metrics" }],
+    }),
+  ]);
+
+  const runCli = (...cliArgs) => spawnSync(
+    process.execPath,
+    [waterlineCli, ...cliArgs, "--root", isolationRoot],
+    { encoding: "utf8" },
+  );
+  const cycleRun = runCli("record-cycle", "--input", "cycle.json");
+  assert.equal(cycleRun.status, 0, "record-cycle failed: " + cycleRun.stderr);
+  const incidentRun = runCli("record-incident", "--input", "incident.json");
+  assert.equal(incidentRun.status, 0, "record-incident failed: " + incidentRun.stderr);
+
+  const metricRun = runCli("record-metrics", "--input", "metrics.json");
+  assert.notEqual(metricRun.status, 0);
+  assert.match(metricRun.stderr, /cost observations\.id/);
+  const statusRun = runCli("status");
+  assert.notEqual(statusRun.status, 0);
+  assert.match(statusRun.stderr, /cost observations\.id/);
+
+  const persisted = JSON.parse(await readFile(join(isolationRoot, "data/WATERLINE-STATE.json"), "utf8"));
+  assert.equal(persisted.cycles.length, 1);
+  assert.equal(persisted.incidents.length, 1);
+  assert.equal(persisted.incidents[0].severity, "high");
+  assert.equal(persisted.metric_receipts.length, 0);
+} finally {
+  await rm(isolationRoot, { recursive: true, force: true });
+}
+
+console.log("PASS — normalized source identity, migration/reset custody, non-metric writer isolation during malformed metric ledgers, exact byte/population/value bindings, mismatch refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");

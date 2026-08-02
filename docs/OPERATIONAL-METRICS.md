@@ -67,3 +67,10 @@ Historical numeric receipts retain their recorded source as immutable evidence. 
 If the reviewed replacement ledger is empty, `record-metrics` may retire the historical numeric value to `null` only when the latest measured receipt names a different source. The reset receipt binds the replacement source, exact hash, zero population, and derived null value. Emptying the same source never authorizes erasure.
 
 Source identity is a normalized, safe, repository-relative POSIX path. Dot segments, repeated separators, and backslash spellings are canonicalized before duplicate detection, snapshot construction, receipt binding, readiness comparison, and migration authorization. A spelling-only alias such as `data/ledger.json` → `./data/ledger.json` is the same source and cannot authorize a null reset.
+
+
+### Non-metric writer isolation
+
+Observation-ledger parsing remains mandatory for `status`, `validate`, `gate`, and `record-metrics`. It is not a prerequisite for non-metric receipt writers: `record-cycle`, `record-drill`, `record-accounting`, and `record-incident` load and validate durable waterline state without interpreting cost or rights rows.
+
+A malformed observation row therefore cannot prevent an operator from opening a high/critical incident stop or from receipting already-completed work. Metric-aware commands continue to fail closed until the ledger is repaired, and non-metric writers cannot alter metric values or metric receipts.

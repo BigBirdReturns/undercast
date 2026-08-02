@@ -121,38 +121,45 @@ async function readJsonBytes(path, label) {
     throw new Error(`cannot read ${label} at ${path}: ${error.message}`);
   }
 }
-async function load() {
+async function load({ metricAware = true } = {}) {
   const config = await readJson(paths.config);
   validateWaterlineConfig(config);
   validateMetricReadinessConfig(config);
-  const observationSources = resolveMetricObservationSources(config, {
-    root,
-    overrides: {
-      cost_per_verified_record_usd: costLedgerOverride,
-      rights_response_sla_days: rightsLedgerOverride,
-    },
-  });
-  const [state, mediaAudit, autopilot, autopilotJournalText, roadmapState, preservation, costLedger, rightsLedger, waterlineJournal] = await Promise.all([
+  const [state, mediaAudit, autopilot, autopilotJournalText, roadmapState, preservation, waterlineJournal] = await Promise.all([
     readJson(paths.state, emptyWaterlineState()),
     readJson(paths.media),
     readJson(paths.autopilot),
     readText(paths.autopilotJournal),
     readJson(paths.roadmap),
     readJson(paths.preservation),
-    readJsonBytes(observationSources.cost_per_verified_record_usd.path, "cost observation ledger"),
-    readJsonBytes(observationSources.rights_response_sla_days.path, "rights observation ledger"),
     readText(paths.journal),
   ]);
   validateWaterlineState(state, config);
   parseJsonl(waterlineJournal);
-  const metricObservationSnapshots = metricObservationSnapshotsFromLedgers({
-    costLedger: costLedger.doc,
-    costLedgerBytes: costLedger.bytes,
-    costSource: observationSources.cost_per_verified_record_usd.source,
-    rightsLedger: rightsLedger.doc,
-    rightsLedgerBytes: rightsLedger.bytes,
-    rightsSource: observationSources.rights_response_sla_days.source,
-  });
+
+  let metricObservationSnapshots = null;
+  if (metricAware) {
+    const observationSources = resolveMetricObservationSources(config, {
+      root,
+      overrides: {
+        cost_per_verified_record_usd: costLedgerOverride,
+        rights_response_sla_days: rightsLedgerOverride,
+      },
+    });
+    const [costLedger, rightsLedger] = await Promise.all([
+      readJsonBytes(observationSources.cost_per_verified_record_usd.path, "cost observation ledger"),
+      readJsonBytes(observationSources.rights_response_sla_days.path, "rights observation ledger"),
+    ]);
+    metricObservationSnapshots = metricObservationSnapshotsFromLedgers({
+      costLedger: costLedger.doc,
+      costLedgerBytes: costLedger.bytes,
+      costSource: observationSources.cost_per_verified_record_usd.source,
+      rightsLedger: rightsLedger.doc,
+      rightsLedgerBytes: rightsLedger.bytes,
+      rightsSource: observationSources.rights_response_sla_days.source,
+    });
+  }
+
   return {
     config,
     state,
@@ -221,7 +228,7 @@ async function main() {
   }
 
   return withLock(async () => {
-    const inputs = await load();
+    const inputs = await load({ metricAware: command === "record-metrics" });
     const next = structuredClone(inputs.state);
     const doc = await inputDoc();
     const now = doc.reviewed_at || doc.at || new Date().toISOString();
