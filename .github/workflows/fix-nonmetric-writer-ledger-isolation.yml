@@ -59,18 +59,18 @@ jobs:
       - name: Isolate non-metric writers and add CLI regression proof
         run: |
           set -euo pipefail
-          node - <<'NODE'
-          const fs = require('fs');
+          python - <<'PY'
+          from pathlib import Path
 
-          const replaceOnce = (source, oldText, newText, label) => {
-            const count = source.split(oldText).length - 1;
-            if (count !== 1) throw new Error(`${label} anchor count is ${count}`);
-            return source.replace(oldText, newText);
-          };
+          def replace_once(source: str, old: str, new: str, label: str) -> str:
+              count = source.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{label} anchor count is {count}")
+              return source.replace(old, new, 1)
 
-          const cliPath = 'scripts/waterline.mjs';
-          let cli = fs.readFileSync(cliPath, 'utf8');
-          const oldLoad = `async function load() {
+          cli_path = Path("scripts/waterline.mjs")
+          cli = cli_path.read_text()
+          old_load = r'''async function load() {
             const config = await readJson(paths.config);
             validateWaterlineConfig(config);
             validateMetricReadinessConfig(config);
@@ -113,8 +113,8 @@ jobs:
               metricObservationSnapshots,
               waterlineJournal,
             };
-          }`;
-          const newLoad = `async function load({ metricAware = true } = {}) {
+          }'''
+          new_load = r'''async function load({ metricAware = true } = {}) {
             const config = await readJson(paths.config);
             validateWaterlineConfig(config);
             validateMetricReadinessConfig(config);
@@ -164,41 +164,39 @@ jobs:
               metricObservationSnapshots,
               waterlineJournal,
             };
-          }`;
-          cli = replaceOnce(cli, oldLoad, newLoad, 'metric-aware loader');
-          cli = replaceOnce(
-            cli,
-            `  return withLock(async () => {
-              const inputs = await load();`,
-            `  return withLock(async () => {
-              const inputs = await load({ metricAware: command === "record-metrics" });`,
-            'writer loader policy',
-          );
-          fs.writeFileSync(cliPath, cli);
+          }'''
+          cli = replace_once(cli, old_load, new_load, "metric-aware loader")
+          cli = replace_once(
+              cli,
+              '''  return withLock(async () => {
+            const inputs = await load();''',
+              '''  return withLock(async () => {
+            const inputs = await load({ metricAware: command === "record-metrics" });''',
+              "writer loader policy",
+          )
+          cli_path.write_text(cli)
 
-          const fixturePath = 'scripts/metric-readiness-fixtures.mjs';
-          let fixture = fs.readFileSync(fixturePath, 'utf8');
-          fixture = replaceOnce(
-            fixture,
-            `import assert from "node:assert/strict";`,
-            [
-              `import assert from "node:assert/strict";`,
-              `import { spawnSync } from "node:child_process";`,
-              `import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";`,
-              `import { tmpdir } from "node:os";`,
-              `import { dirname, join } from "node:path";`,
-              `import { fileURLToPath } from "node:url";`,
-            ].join('\n'),
-            'fixture imports',
-          );
-          const oldSummary = `console.log("PASS — normalized configured source identities, spelling-alias erasure refusal, populated and empty source migration rebinds, same-source erasure refusal, validated rows, exact byte/population/value bindings, mismatched-value refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");`;
-          const isolationFixture = `const waterlineCli = fileURLToPath(new URL("./waterline.mjs", import.meta.url));
+          fixture_path = Path("scripts/metric-readiness-fixtures.mjs")
+          fixture = fixture_path.read_text()
+          fixture = replace_once(
+              fixture,
+              'import assert from "node:assert/strict";',
+              '''import assert from "node:assert/strict";
+          import { spawnSync } from "node:child_process";
+          import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+          import { tmpdir } from "node:os";
+          import { dirname, join } from "node:path";
+          import { fileURLToPath } from "node:url";''',
+              "fixture imports",
+          )
+          old_summary = 'console.log("PASS — normalized configured source identities, spelling-alias erasure refusal, populated and empty source migration rebinds, same-source erasure refusal, validated rows, exact byte/population/value bindings, mismatched-value refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");'
+          isolation_fixture = r'''const waterlineCli = fileURLToPath(new URL("./waterline.mjs", import.meta.url));
           const isolationRoot = await mkdtemp(join(tmpdir(), "undercast-waterline-ledger-isolation-"));
           const writeFixtureText = async (path, value) => {
             await mkdir(dirname(path), { recursive: true });
             await writeFile(path, value);
           };
-          const writeFixtureJson = (path, value) => writeFixtureText(path, \`${JSON.stringify(value, null, 2)}\\n\`);
+          const writeFixtureJson = (path, value) => writeFixtureText(path, JSON.stringify(value, null, 2) + "\n");
           try {
             const fixtureLease = "lease_metric_ledger_failure";
             const fixtureTask = "ap_metric_ledger_failure";
@@ -218,14 +216,14 @@ jobs:
                   wall_ids: ["UC-FIXTURE"],
                 }],
               }),
-              writeFixtureText(join(isolationRoot, "data/journal/autopilot.jsonl"), \`${JSON.stringify({
+              writeFixtureText(join(isolationRoot, "data/journal/autopilot.jsonl"), JSON.stringify({
                 op: "lease.claimed",
                 task_id: fixtureTask,
                 at: "2026-08-02T07:00:00Z",
                 scope: "star-trek",
                 lease_id: fixtureLease,
                 readiness_token: "c".repeat(64),
-              })}\\n\`),
+              }) + "\n"),
               writeFixtureJson(join(isolationRoot, "data/ROADMAP-STATE.json"), { completed: [] }),
               writeFixtureJson(join(isolationRoot, "preservation/SNAPSHOTS.json"), {
                 history_guard: { precondition_met: true, status: "offsite-verified" },
@@ -280,16 +278,16 @@ jobs:
               { encoding: "utf8" },
             );
             const cycleRun = runCli("record-cycle", "--input", "cycle.json");
-            assert.equal(cycleRun.status, 0, \`record-cycle failed: ${cycleRun.stderr}\`);
+            assert.equal(cycleRun.status, 0, "record-cycle failed: " + cycleRun.stderr);
             const incidentRun = runCli("record-incident", "--input", "incident.json");
-            assert.equal(incidentRun.status, 0, \`record-incident failed: ${incidentRun.stderr}\`);
+            assert.equal(incidentRun.status, 0, "record-incident failed: " + incidentRun.stderr);
 
             const metricRun = runCli("record-metrics", "--input", "metrics.json");
             assert.notEqual(metricRun.status, 0);
-            assert.match(metricRun.stderr, /cost observations\\.id/);
+            assert.match(metricRun.stderr, /cost observations\.id/);
             const statusRun = runCli("status");
             assert.notEqual(statusRun.status, 0);
-            assert.match(statusRun.stderr, /cost observations\\.id/);
+            assert.match(statusRun.stderr, /cost observations\.id/);
 
             const persisted = JSON.parse(await readFile(join(isolationRoot, "data/WATERLINE-STATE.json"), "utf8"));
             assert.equal(persisted.cycles.length, 1);
@@ -300,25 +298,25 @@ jobs:
             await rm(isolationRoot, { recursive: true, force: true });
           }
 
-          console.log("PASS — normalized source identity, migration/reset custody, non-metric writer isolation during malformed metric ledgers, exact byte/population/value bindings, mismatch refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");`;
-          fixture = replaceOnce(fixture, oldSummary, isolationFixture, 'CLI isolation fixture');
-          fs.writeFileSync(fixturePath, fixture);
+          console.log("PASS — normalized source identity, migration/reset custody, non-metric writer isolation during malformed metric ledgers, exact byte/population/value bindings, mismatch refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");'''
+          fixture = replace_once(fixture, old_summary, isolation_fixture, "CLI isolation fixture")
+          fixture_path.write_text(fixture)
 
-          const docsPath = 'docs/OPERATIONAL-METRICS.md';
-          let docs = fs.readFileSync(docsPath, 'utf8');
-          const heading = '### Non-metric writer isolation';
-          if (docs.includes(heading)) throw new Error('non-metric writer isolation documentation already exists');
-          docs += [
-            '',
-            heading,
-            '',
-            'Observation-ledger parsing remains mandatory for `status`, `validate`, `gate`, and `record-metrics`. It is not a prerequisite for non-metric receipt writers: `record-cycle`, `record-drill`, `record-accounting`, and `record-incident` load and validate durable waterline state without interpreting cost or rights rows.',
-            '',
-            'A malformed observation row therefore cannot prevent an operator from opening a high/critical incident stop or from receipting already-completed work. Metric-aware commands continue to fail closed until the ledger is repaired, and non-metric writers cannot alter metric values or metric receipts.',
-            '',
-          ].join('\n');
-          fs.writeFileSync(docsPath, docs);
-          NODE
+          docs_path = Path("docs/OPERATIONAL-METRICS.md")
+          docs = docs_path.read_text()
+          heading = "### Non-metric writer isolation"
+          if heading in docs:
+              raise RuntimeError("non-metric writer isolation documentation already exists")
+          docs += """
+
+          ### Non-metric writer isolation
+
+          Observation-ledger parsing remains mandatory for `status`, `validate`, `gate`, and `record-metrics`. It is not a prerequisite for non-metric receipt writers: `record-cycle`, `record-drill`, `record-accounting`, and `record-incident` load and validate durable waterline state without interpreting cost or rights rows.
+
+          A malformed observation row therefore cannot prevent an operator from opening a high/critical incident stop or from receipting already-completed work. Metric-aware commands continue to fail closed until the ledger is repaired, and non-metric writers cannot alter metric values or metric receipts.
+          """
+          docs_path.write_text(docs)
+          PY
 
           node --check scripts/waterline.mjs
           node --check scripts/metric-readiness-fixtures.mjs
