@@ -1,9 +1,9 @@
 name: apply-doctor-who-regeneration-001
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/doctor-who-regeneration-001
+      - main
     paths:
       - ".github/workflows/apply-doctor-who-regeneration-001.yml"
 
@@ -11,26 +11,26 @@ permissions:
   contents: write
 
 concurrency:
-  group: apply-doctor-who-regeneration-001
-  cancel-in-progress: false
+  group: apply-doctor-who-regeneration-001-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 env:
-  TARGET_BRANCH: agent/doctor-who-regeneration-001
-  EXACT_MAIN: bb42d4386774a6c627d82c66c2bc06f73146aef3
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXACT_MAIN: ${{ github.event.pull_request.base.sha }}
   SELF: .github/workflows/apply-doctor-who-regeneration-001.yml
   REPORT: data/review/adapter-sdk/doctor-who-regeneration-001.json
   CONTACT: undercast-doctor-who-adapter-review
-  REARM: "2"
 
 jobs:
   regenerate:
-    if: github.repository == 'BigBirdReturns/undercast'
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.AUTHORIZED_HEAD }}
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
@@ -47,13 +47,13 @@ jobs:
       - name: Bind exact branch and main, then freeze the non-Doctor-Who denominator
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
           test -z "$(git status --porcelain)"
           git fetch origin \
             "refs/heads/main:refs/remotes/origin/main" \
             "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
           test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
-          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$GITHUB_SHA"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
           test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
 
           node - <<'NODE'
@@ -91,7 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$(dirname "$REPORT")"
-          REPORT="$REPORT" EXACT_MAIN="$EXACT_MAIN" GITHUB_SHA="$GITHUB_SHA" node - <<'NODE'
+          REPORT="$REPORT" EXACT_MAIN="$EXACT_MAIN" AUTHORIZED_HEAD="$AUTHORIZED_HEAD" node - <<'NODE'
           const fs = require('fs');
           const crypto = require('crypto');
           const hashBytes = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -144,8 +144,11 @@ jobs:
             generated_at: manifest.captured_at,
             authorization: {
               exact_main: process.env.EXACT_MAIN,
-              launcher_head: process.env.GITHUB_SHA,
-              branch: 'agent/doctor-who-regeneration-001',
+              launcher_head: process.env.AUTHORIZED_HEAD,
+              workflow_run: Number(process.env.GITHUB_RUN_ID),
+              workflow_attempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+              pull_request: Number(process.env.GITHUB_EVENT_PATH ? JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')).number : 162),
+              branch: process.env.GITHUB_HEAD_REF || 'agent/doctor-who-regeneration-001',
             },
             before: before.doctor_who,
             after: {
@@ -228,7 +231,7 @@ jobs:
             "refs/heads/main:refs/remotes/origin/main" \
             "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
           test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
-          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$GITHUB_SHA"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
 
           git config user.name undercast-doctor-who-adapter
           git config user.email undercast-doctor-who-adapter@users.noreply.github.com
@@ -253,7 +256,7 @@ jobs:
           diff -u /tmp/expected-final-paths.txt /tmp/final-paths.txt
 
           git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
-            --force-with-lease="refs/heads/${TARGET_BRANCH}:${GITHUB_SHA}"
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
           echo "published_head=${new_head}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload regeneration and gate diagnostics
