@@ -167,11 +167,15 @@ function latestMetricReceipt(state, metric) {
 function bindingFor(receipt, metric) {
   const binding = receipt?.observation_bindings?.[metric];
   if (!binding) return null;
+  const population = requireCount(binding.population, `${receipt.id}.${metric}.population`);
+  const boundValue = binding.value;
+  if (population === 0 && boundValue !== null) throw new Error(`${receipt.id}.${metric} empty binding must have null value`);
+  if (population > 0) requireMetricValue(boundValue, `${receipt.id}.${metric}.value`);
   return {
     source: requireString(binding.source, `${receipt.id}.${metric}.source`),
     sha256: requireHash(binding.sha256, `${receipt.id}.${metric}.sha256`),
-    population: requireCount(binding.population, `${receipt.id}.${metric}.population`),
-    value: requireMetricValue(binding.value, `${receipt.id}.${metric}.value`),
+    population,
+    value: boundValue,
   };
 }
 

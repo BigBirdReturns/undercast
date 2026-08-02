@@ -243,6 +243,7 @@ async function main() {
       const result = makeMetricsReceipt(doc, next.metrics, {
         metricReadiness: inputs.config.operations.metric_readiness,
         observationSnapshots: inputs.metricObservationSnapshots,
+        metricReceipts: next.metric_receipts,
       });
       next.metrics = result.metrics;
       next.metric_receipts.push(result.receipt);

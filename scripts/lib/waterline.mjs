@@ -149,13 +149,21 @@ export function validateWaterlineState(doc, config) {
       if (value !== null && (!Number.isFinite(value) || value < 0)) throw new Error(`metric receipt ${receipt.id}.metrics.${key} must be null or non-negative`);
       const policy = config.operations.metric_readiness?.[key];
       const binding = bindings[key];
-      if (value !== null && policy?.mode === "when-observed") {
-        if (!binding || typeof binding !== "object" || Array.isArray(binding)) throw new Error(`metric receipt ${receipt.id} needs observation binding for ${key}`);
+      if (policy?.mode === "when-observed" && binding) {
+        if (typeof binding !== "object" || Array.isArray(binding)) throw new Error(`metric receipt ${receipt.id} observation binding for ${key} must be an object`);
         requireString(binding.source, `metric receipt ${receipt.id}.observation_bindings.${key}.source`);
         if (!/^[0-9a-f]{64}$/.test(String(binding.sha256 || ""))) throw new Error(`metric receipt ${receipt.id}.${key}.sha256 must be a sha256`);
-        if (!Number.isSafeInteger(binding.population) || binding.population < 1) throw new Error(`metric receipt ${receipt.id}.${key}.population must be positive`);
-        if (!Number.isFinite(binding.value) || binding.value < 0) throw new Error(`metric receipt ${receipt.id}.${key}.value must be non-negative`);
-        if (binding.value !== value) throw new Error(`metric receipt ${receipt.id}.${key} value does not match its observation binding`);
+        if (!Number.isSafeInteger(binding.population) || binding.population < 0) throw new Error(`metric receipt ${receipt.id}.${key}.population must be non-negative`);
+        if (value === null) {
+          if (binding.population !== 0) throw new Error(`metric receipt ${receipt.id}.${key} null reset requires an empty observation binding`);
+          if (binding.value !== null) throw new Error(`metric receipt ${receipt.id}.${key} empty observation binding value must be null`);
+        } else {
+          if (binding.population < 1) throw new Error(`metric receipt ${receipt.id}.${key}.population must be positive`);
+          if (!Number.isFinite(binding.value) || binding.value < 0) throw new Error(`metric receipt ${receipt.id}.${key}.value must be non-negative`);
+          if (binding.value !== value) throw new Error(`metric receipt ${receipt.id}.${key} value does not match its observation binding`);
+        }
+      } else if (value !== null && policy?.mode === "when-observed") {
+        throw new Error(`metric receipt ${receipt.id} needs observation binding for ${key}`);
       } else if (binding) throw new Error(`metric receipt ${receipt.id} has unauthorized observation binding for ${key}`);
     }
     for (const key of Object.keys(bindings)) if (!Object.prototype.hasOwnProperty.call(receipt.metrics, key)) throw new Error(`metric receipt ${receipt.id} binds unrecorded metric ${key}`);
@@ -343,27 +351,67 @@ export function makeMetricsReceipt(input, currentMetrics, context = {}) {
   if (input.observation_bindings !== undefined) throw new Error("observation_bindings are derived from validated ledgers, not caller input");
   const metrics = { ...currentMetrics };
   const observation_bindings = {};
+  const validatedSnapshot = (key, policy) => {
+    const snapshot = context.observationSnapshots?.[key];
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new Error(`metric ${key} requires a validated observation snapshot`);
+    if (snapshot.source !== policy.observation_source) throw new Error(`metric ${key} snapshot source does not match configured observation source`);
+    if (!/^[0-9a-f]{64}$/.test(String(snapshot.sha256 || ""))) throw new Error(`metric ${key} snapshot sha256 is invalid`);
+    if (!Number.isSafeInteger(snapshot.population) || snapshot.population < 0) throw new Error(`metric ${key} snapshot population is invalid`);
+    const expectedStatus = snapshot.population === 0 ? "no-observations" : "measured";
+    if (snapshot.measurement_status !== expectedStatus) throw new Error(`metric ${key} snapshot status disagrees with its population`);
+    if (snapshot.population === 0) {
+      if (snapshot.value !== null) throw new Error(`metric ${key} empty snapshot must have null measurement value`);
+    } else if (!Number.isFinite(snapshot.value) || snapshot.value < 0) {
+      throw new Error(`metric ${key} validated ledger measurement is invalid`);
+    }
+    return snapshot;
+  };
+  const latestReceipt = (key) => {
+    if (!Array.isArray(context.metricReceipts)) throw new Error(`metric ${key} needs prior receipt custody to retire a measured value`);
+    return [...context.metricReceipts].reverse().find((row) => Object.prototype.hasOwnProperty.call(row?.metrics || {}, key)) || null;
+  };
   let changed = 0;
   for (const key of METRIC_KEYS) {
     if (!(key in (input.metrics || {}))) continue;
     const value = input.metrics[key];
     if (value !== null && (!Number.isFinite(value) || value < 0)) throw new Error(`metrics.${key} must be null or non-negative`);
-    if (currentMetrics[key] !== null && value === null) throw new Error(`metrics.${key} cannot erase a measured value back to null`);
     const policy = context.metricReadiness?.[key];
-    if (value !== null && policy?.mode === "when-observed") {
-      const snapshot = context.observationSnapshots?.[key];
-      if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new Error(`metric ${key} requires a populated validated observation snapshot`);
-      if (snapshot.source !== policy.observation_source) throw new Error(`metric ${key} snapshot source does not match configured observation source`);
-      if (!/^[0-9a-f]{64}$/.test(String(snapshot.sha256 || ""))) throw new Error(`metric ${key} snapshot sha256 is invalid`);
-      if (!Number.isSafeInteger(snapshot.population) || snapshot.population < 1 || snapshot.measurement_status !== "measured") throw new Error(`metric ${key} requires a populated validated observation snapshot`);
-      if (!Number.isFinite(snapshot.value) || snapshot.value < 0) throw new Error(`metric ${key} validated ledger measurement is invalid`);
-      if (value !== snapshot.value) throw new Error(`metrics.${key} value ${value} does not match validated ledger measurement ${snapshot.value}`);
-      observation_bindings[key] = {
-        source: snapshot.source,
-        sha256: snapshot.sha256,
-        population: snapshot.population,
-        value: snapshot.value,
-      };
+    if (policy?.mode === "when-observed") {
+      const snapshot = validatedSnapshot(key, policy);
+      if (value === null && currentMetrics[key] !== null) {
+        if (snapshot.population !== 0 || snapshot.measurement_status !== "no-observations" || snapshot.value !== null) {
+          throw new Error(`metrics.${key} can retire to null only against an empty validated replacement ledger`);
+        }
+        const previous = latestReceipt(key);
+        const previousBinding = previous?.observation_bindings?.[key];
+        if (!previous || previous.metrics?.[key] !== currentMetrics[key] || !previousBinding || typeof previousBinding !== "object" || Array.isArray(previousBinding)) {
+          throw new Error(`metrics.${key} cannot retire without the current measured receipt binding`);
+        }
+        const previousSource = requireString(previousBinding.source, `previous observation binding for ${key}.source`);
+        if (previousSource === snapshot.source) {
+          throw new Error(`metrics.${key} can retire to null only after the configured observation source changes`);
+        }
+        if (!/^[0-9a-f]{64}$/.test(String(previousBinding.sha256 || "")) || !Number.isSafeInteger(previousBinding.population) || previousBinding.population < 1 || previousBinding.value !== currentMetrics[key]) {
+          throw new Error(`metrics.${key} previous observation binding does not match the current measured value`);
+        }
+        observation_bindings[key] = {
+          source: snapshot.source,
+          sha256: snapshot.sha256,
+          population: 0,
+          value: null,
+        };
+      } else if (value !== null) {
+        if (snapshot.population < 1 || snapshot.measurement_status !== "measured") throw new Error(`metric ${key} requires a populated validated observation snapshot`);
+        if (value !== snapshot.value) throw new Error(`metrics.${key} value ${value} does not match validated ledger measurement ${snapshot.value}`);
+        observation_bindings[key] = {
+          source: snapshot.source,
+          sha256: snapshot.sha256,
+          population: snapshot.population,
+          value: snapshot.value,
+        };
+      }
+    } else if (currentMetrics[key] !== null && value === null) {
+      throw new Error(`metrics.${key} cannot erase a measured value back to null`);
     }
     metrics[key] = value;
     changed++;

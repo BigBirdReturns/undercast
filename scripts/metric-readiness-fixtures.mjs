@@ -320,6 +320,64 @@ status = applyMetricReadinessPolicy(baseStatus(), {
 assert.equal(status.evidence_readiness.operational_reliability, false);
 assert.deepEqual(status.evidence_readiness.metric_ledger_regressions, ["cost_per_verified_record_usd"]);
 assert.equal(status.evidence_readiness.metric_states.cost_per_verified_record_usd.status, "measured-against-wrong-ledger");
+const migratedEmptySnapshots = {
+  ...emptySnapshots,
+  cost_per_verified_record_usd: {
+    ...emptySnapshots.cost_per_verified_record_usd,
+    source: migratedCostSource,
+  },
+};
+const emptyMigrationState = structuredClone(migrationState);
+status = applyMetricReadinessPolicy(baseStatus(), {
+  config: migratedConfig,
+  state: emptyMigrationState,
+  observationSnapshots: migratedEmptySnapshots,
+});
+assert.equal(status.evidence_readiness.operational_reliability, false);
+assert.equal(status.evidence_readiness.metric_states.cost_per_verified_record_usd.status, "measured-against-wrong-ledger");
+assert.throws(() => makeMetricsReceipt({
+  metrics: { cost_per_verified_record_usd: null },
+  reviewed_by: "second-desk",
+  reviewed_role: "second-desk",
+  reviewed_at: "2026-08-02T03:17:00Z",
+  note: "Attempted to erase a measured value after emptying the same observation source.",
+  evidence: [{ type: "report", value: "cost-same-source-empty.json" }],
+}, current.metrics, {
+  metricReadiness: config.operations.metric_readiness,
+  observationSnapshots: emptySnapshots,
+  metricReceipts: current.metric_receipts,
+}), /only after the configured observation source changes/);
+const emptyResetResult = makeMetricsReceipt({
+  metrics: { cost_per_verified_record_usd: null },
+  reviewed_by: "second-desk",
+  reviewed_role: "second-desk",
+  reviewed_at: "2026-08-02T03:18:00Z",
+  note: "Retired the historical numeric value against the reviewed empty replacement ledger.",
+  evidence: [{ type: "report", value: "cost-migrated-empty.json" }],
+}, emptyMigrationState.metrics, {
+  metricReadiness: migratedConfig.operations.metric_readiness,
+  observationSnapshots: migratedEmptySnapshots,
+  metricReceipts: emptyMigrationState.metric_receipts,
+});
+assert.deepEqual(emptyResetResult.receipt.observation_bindings.cost_per_verified_record_usd, {
+  source: migratedCostSource,
+  sha256: migratedEmptySnapshots.cost_per_verified_record_usd.sha256,
+  population: 0,
+  value: null,
+});
+emptyMigrationState.metrics = emptyResetResult.metrics;
+emptyMigrationState.metric_receipts.push(emptyResetResult.receipt);
+assert.doesNotThrow(() => validateWaterlineState(emptyMigrationState, migratedConfig));
+status = applyMetricReadinessPolicy(baseStatus(), {
+  config: migratedConfig,
+  state: emptyMigrationState,
+  observationSnapshots: migratedEmptySnapshots,
+});
+assert.equal(status.evidence_readiness.operational_reliability, true);
+assert.equal(status.evidence_readiness.metric_states.cost_per_verified_record_usd.status, "unobserved-nonblocking");
+const tamperedEmptyResetState = structuredClone(emptyMigrationState);
+tamperedEmptyResetState.metric_receipts.at(-1).observation_bindings.cost_per_verified_record_usd.value = 0;
+assert.throws(() => validateWaterlineState(tamperedEmptyResetState, migratedConfig), /empty observation binding value must be null/);
 const reboundResult = makeMetricsReceipt({
   metrics: { cost_per_verified_record_usd: 4.25 },
   reviewed_by: "second-desk",
@@ -369,4 +427,4 @@ status = applyMetricReadinessPolicy(baseStatus(), {
 });
 assert.deepEqual(status.evidence_readiness.missing_required_metrics, ["source_freshness_p95_days"]);
 
-console.log("PASS — configured ledger sources, historical source migration and rebind, validated rows, exact byte/population/value bindings, mismatched-value refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");
+console.log("PASS — configured ledger sources, populated and empty source migration rebinds, same-source erasure refusal, validated rows, exact byte/population/value bindings, mismatched-value refusal, stale-measurement reopening, SLO refusal, and no-golden-cage null semantics");
