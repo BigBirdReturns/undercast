@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   measureBuildP95,
   measureCostPerVerifiedRecord,
+  measureOperationalMetrics,
   measureRightsResponse,
   measureSourceFreshness,
   nearestRankPercentile,
@@ -31,6 +32,7 @@ assert.throws(() => measureBuildP95([{ ...builds[0], exact_head: false }, ...bui
 assert.throws(() => measureBuildP95([{ ...builds[0], target_head: "b".repeat(40) }, ...builds.slice(1)]), /multiple target heads/);
 
 const manifest = {
+  captured_at: "2026-07-31T00:00:00Z",
   observations: [
     {
       franchise: "Star Trek", category: "Ferengi", title: "Quark", source: "https://memory-alpha.fandom.com/wiki/Quark",
@@ -62,7 +64,9 @@ assert.equal(freshness.maximum_days, 4);
 assert.equal(freshness.value, 4);
 assert.throws(() => measureSourceFreshness({ observations: [{ ...manifest.observations[0], observed_at: "2026-08-02T00:00:00Z" }] }, { franchise: "Star Trek", asOf: "2026-08-01T00:00:00Z" }), /future/);
 
-const emptyCost = measureCostPerVerifiedRecord({ version: 1, observations: [] });
+const emptyCostLedger = { version: 1, observations: [] };
+const emptyRightsLedger = { version: 1, cases: [] };
+const emptyCost = measureCostPerVerifiedRecord(emptyCostLedger);
 assert.equal(emptyCost.status, "no-observations");
 assert.equal(emptyCost.value, null);
 const cost = measureCostPerVerifiedRecord({
@@ -76,7 +80,7 @@ assert.equal(cost.status, "measured");
 assert.equal(cost.value, 4);
 assert.throws(() => measureCostPerVerifiedRecord({ version: 1, observations: [{ id: "bad", at: "2026-08-01T00:00:00Z", currency: "USD", direct_cost_usd: 0, verified_records: 0, evidence: [{ type: "invoice", value: "bad" }] }] }), /positive integer/);
 
-const emptyRights = measureRightsResponse({ version: 1, cases: [] });
+const emptyRights = measureRightsResponse(emptyRightsLedger);
 assert.equal(emptyRights.status, "no-observations");
 assert.equal(emptyRights.value, null);
 const rights = measureRightsResponse({
@@ -91,4 +95,35 @@ assert.equal(rights.value, 2);
 assert.equal(rights.p95_days, 2);
 assert.throws(() => measureRightsResponse({ version: 1, cases: [{ id: "bad", case_type: "real", opened_at: "2026-08-02T00:00:00Z", first_response_at: "2026-08-01T00:00:00Z", evidence: [{ type: "email", value: "bad" }] }] }), /before opening/);
 
-console.log("PASS — operational metric populations, p95s, evidence ledgers, and null-preserving boundaries are deterministic");
+const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
+const aggregate = measureOperationalMetrics({
+  manifest,
+  manifestBytes,
+  manifestPath: "fixtures/custom-census-manifest.json",
+  buildSamples: builds,
+  costLedger: emptyCostLedger,
+  rightsLedger: emptyRightsLedger,
+  franchise: "Star Trek",
+  asOf: "2026-08-01T00:00:00Z",
+});
+assert.equal(aggregate.source_manifest.path, "fixtures/custom-census-manifest.json");
+assert.equal(aggregate.metrics.cost_per_verified_record_usd.value, null);
+assert.equal(aggregate.metrics.rights_response_sla_days.value, null);
+assert.deepEqual(aggregate.measured_patch, { build_minutes_p95: 1.066667, source_freshness_p95_days: 4 });
+
+const populatedAggregate = measureOperationalMetrics({
+  manifest,
+  manifestBytes,
+  manifestPath: "fixtures/custom-census-manifest.json",
+  buildSamples: builds,
+  costLedger: { version: 1, observations: [{ id: "invoice-3", at: "2026-08-01T00:00:00Z", currency: "USD", direct_cost_usd: 9, verified_records: 3, evidence: [{ type: "invoice", value: "invoice-3" }] }] },
+  rightsLedger: { version: 1, cases: [{ id: "case-3", case_type: "real", opened_at: "2026-08-01T00:00:00Z", first_response_at: "2026-08-02T00:00:00Z", evidence: [{ type: "email", value: "case-3" }] }] },
+  franchise: "Star Trek",
+  asOf: "2026-08-01T00:00:00Z",
+});
+assert.equal(populatedAggregate.metrics.cost_per_verified_record_usd.status, "measured");
+assert.equal(populatedAggregate.metrics.rights_response_sla_days.status, "measured");
+assert.equal(populatedAggregate.measured_patch.cost_per_verified_record_usd, 3);
+assert.equal(populatedAggregate.measured_patch.rights_response_sla_days, 1);
+
+console.log("PASS — operational metric populations, p95s, manifest provenance, populated ledgers, and null-preserving boundaries are deterministic");
