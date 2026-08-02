@@ -1,0 +1,129 @@
+name: apply-doctor-who-activation-preflight-001
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/apply-doctor-who-activation-preflight-001.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-doctor-who-activation-preflight-001-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXACT_MAIN: ${{ github.event.pull_request.base.sha }}
+  SELF: .github/workflows/apply-doctor-who-activation-preflight-001.yml
+  REPORT: data/review/adapter-sdk/doctor-who-activation-preflight-001.json
+
+jobs:
+  apply:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind exact branch and current main
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+
+      - name: Materialize and adjudicate the isolated activation preflight
+        run: |
+          set -euo pipefail
+          node scripts/doctor-who-activation-preflight.mjs write
+          node scripts/doctor-who-activation-preflight.mjs check
+          node - <<'NODE'
+          const report = require('./data/review/adapter-sdk/doctor-who-activation-preflight-001.json');
+          if (report.current.estate_state !== 'certified-paused' || report.current.scope_status !== 'paused') throw new Error('canonical Doctor Who custody drifted');
+          if (report.current.queue.total !== 316 || report.current.queue.claimable !== 0) throw new Error('paused denominator is not exactly 316 non-claimable obligations');
+          if (report.simulated_active.queue.total !== 316 || report.simulated_active.queue.claimable !== 316) throw new Error('activation simulation did not produce exactly 316 claimable obligations');
+          if (report.isolation.non_doctor_changes !== 0 || report.isolation.star_trek_changes !== 0) throw new Error('activation simulation changed another scope');
+          if (report.preservation.require_source_snapshot !== false || report.preservation.matching_receipt_present !== false) throw new Error('preservation blocker no longer matches this preflight transaction');
+          if (report.decision.code !== 'source-preservation-before-activation') throw new Error(`unexpected decision ${report.decision.code}`);
+          if (report.boundary.canonical_scope_mutated || report.boundary.canonical_autopilot_state_mutated || report.boundary.real_lease_issued || report.boundary.canonical_specimen_mutated || report.boundary.estate_activation_authorized) throw new Error('preflight crossed its authority boundary');
+          NODE
+
+      - name: Smoke the complete preflight product before publication
+        run: |
+          set -euo pipefail
+          git rm "$SELF"
+          git add "$REPORT"
+          git diff --cached --check
+          npm run gate 2>&1 | tee /tmp/activation-preflight-gate.log
+
+      - name: Publish the workflow-free exact product under lease
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report .ci/projection-drift
+          git restore --worktree -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          git diff --cached --check
+          node scripts/doctor-who-activation-preflight.mjs check
+
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git commit \
+            -m 'Adapter SDK: publish Doctor Who activation preflight' \
+            -m 'prove the exact 316-obligation queue transition in isolation' \
+            -m 'retain source preservation as the next unpaid authority gate'
+          new_head="$(git rev-parse HEAD)"
+
+          cat > /tmp/expected-final-paths.txt <<'PATHS'
+          data/review/adapter-sdk/doctor-who-activation-preflight-001.json
+          package.json
+          scripts/doctor-who-activation-preflight.mjs
+          PATHS
+          git diff --name-only refs/remotes/origin/main...HEAD | sort > /tmp/final-paths.txt
+          diff -u /tmp/expected-final-paths.txt /tmp/final-paths.txt
+
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+          echo "published_head=${new_head}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload preflight, gate, and path evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-activation-preflight-${{ github.run_id }}
+          path: |
+            data/review/adapter-sdk/doctor-who-activation-preflight-001.json
+            /tmp/activation-preflight-gate.log
+            /tmp/final-paths.txt
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
