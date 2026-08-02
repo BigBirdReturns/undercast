@@ -215,7 +215,7 @@ export function measureRightsResponse(doc) {
   };
 }
 
-export function measureOperationalMetrics({ manifest, manifestBytes, buildSamples, costLedger, rightsLedger, franchise, asOf }) {
+export function measureOperationalMetrics({ manifest, manifestBytes, manifestPath = "data/CENSUS-MANIFEST.json", buildSamples, costLedger, rightsLedger, franchise, asOf }) {
   const build = measureBuildP95(buildSamples);
   const freshness = measureSourceFreshness(manifest, { franchise, asOf });
   const cost = measureCostPerVerifiedRecord(costLedger);
@@ -227,7 +227,7 @@ export function measureOperationalMetrics({ manifest, manifestBytes, buildSample
     generated_at: new Date().toISOString(),
     as_of: new Date(requireDate(asOf, "as_of")).toISOString(),
     source_manifest: {
-      path: "data/CENSUS-MANIFEST.json",
+      path: requireString(manifestPath, "manifest path"),
       sha256: sha256(manifestBytes),
       captured_at: manifest.captured_at,
       franchise,
@@ -273,6 +273,7 @@ async function cli() {
   const result = measureOperationalMetrics({
     manifest: JSON.parse(manifestBytes),
     manifestBytes,
+    manifestPath,
     buildSamples: await readJson(buildPath),
     costLedger: await readJson(costPath),
     rightsLedger: await readJson(rightsPath),
