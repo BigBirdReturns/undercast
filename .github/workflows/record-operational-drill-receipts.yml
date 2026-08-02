@@ -1,0 +1,321 @@
+name: record-operational-drill-receipts
+
+on:
+  push:
+    branches:
+      - agent/operational-reliability-drill-receipts
+    paths:
+      - .github/workflows/record-operational-drill-receipts.yml
+
+permissions:
+  actions: read
+  contents: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  TARGET_BRANCH: agent/operational-reliability-drill-receipts
+  TARGET_MAIN: 25f63793eafb921d5459332441a864886c903d6e
+  EVIDENCE_RUN: "30724335046"
+  ARTIFACT_NAME: operational-reliability-evidence-30724335046
+  ARTIFACT_DIGEST: sha256:654449ffe40ee649db74068403bfa4c8d82fbc3ee9aeb8188f8a7baa1e52bf50
+  SNAPSHOT_ID: preservation-20260801-7054b6e620ee
+  SNAPSHOT_ASSET_SHA256: e172ce9e3113a5fba5e086876145f4f2bd0bc5d732b1727766ab25ee4ecc02b7
+  RESTORE_SHA256: 7636f9b3329dc1dddfe774ec7474d2500d556e71344f3d898940bc4eaff5ca41
+  ROLLBACK_SHA256: 8534fb863a70e18a1cbf10b6e3ec24ac590a4479225e432d43a901253c6cf99e
+  BUNDLE_SHA256: d1b34f89de6af3ed75f1ca53e49517bacde73a0772486327984d64de47072525
+  REVIEW_ROOT: data/review/operational-reliability/run-30724335046
+
+jobs:
+  review-and-record:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prove exact review authority and download the evidence artifact
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$TARGET_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$GITHUB_SHA"
+
+          gh run view "$EVIDENCE_RUN" --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,headSha,event,status,conclusion,url,workflowName,jobs \
+            > /tmp/operational-run.json
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${EVIDENCE_RUN}/artifacts" \
+            > /tmp/operational-artifacts.json
+          rm -rf /tmp/operational-review
+          mkdir -p /tmp/operational-review
+          gh run download "$EVIDENCE_RUN" --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT_NAME" --dir /tmp/operational-review
+
+      - name: Independently review the exact restore and rollback evidence
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const path = require('path');
+          const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+          const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+          const root = '/tmp/operational-review';
+          const run = readJson('/tmp/operational-run.json');
+          const artifacts = readJson('/tmp/operational-artifacts.json').artifacts || [];
+          const artifact = artifacts.find((row) => row.name === process.env.ARTIFACT_NAME);
+          if (!artifact) throw new Error(`missing artifact ${process.env.ARTIFACT_NAME}`);
+          if (artifact.digest !== process.env.ARTIFACT_DIGEST) throw new Error(`artifact digest ${artifact.digest} != ${process.env.ARTIFACT_DIGEST}`);
+          if (run.databaseId !== Number(process.env.EVIDENCE_RUN)) throw new Error('workflow run id drifted');
+          if (run.headSha !== process.env.TARGET_MAIN) throw new Error(`workflow head ${run.headSha} != ${process.env.TARGET_MAIN}`);
+          if (run.event !== 'push' || run.status !== 'completed' || run.conclusion !== 'success') throw new Error(`workflow is ${run.event}/${run.status}/${run.conclusion}`);
+          const failed = [];
+          for (const job of run.jobs || []) for (const step of job.steps || []) if (step.conclusion === 'failure') failed.push(`${job.name} / ${step.name}`);
+          if (failed.length) throw new Error(`failed workflow steps: ${failed.join('; ')}`);
+
+          const selectionPath = path.join(root, 'selection.json');
+          const restorePath = path.join(root, 'evidence/repository-restore.json');
+          const rollbackPath = path.join(root, 'evidence/publication-rollback.json');
+          const bundlePath = path.join(root, 'evidence/bundle.json');
+          const gateStdoutPath = path.join(root, 'restore/diagnostics/gate.stdout.log');
+          const gateStderrPath = path.join(root, 'restore/diagnostics/gate.stderr.log');
+          const npmStdoutPath = path.join(root, 'restore/diagnostics/npm-ci.stdout.log');
+          const npmStderrPath = path.join(root, 'restore/diagnostics/npm-ci.stderr.log');
+          for (const file of [selectionPath, restorePath, rollbackPath, bundlePath, gateStdoutPath, gateStderrPath, npmStdoutPath, npmStderrPath]) {
+            if (!fs.existsSync(file)) throw new Error(`artifact file missing: ${file}`);
+          }
+
+          const selection = readJson(selectionPath);
+          const restoreBytes = fs.readFileSync(restorePath);
+          const rollbackBytes = fs.readFileSync(rollbackPath);
+          const bundleBytes = fs.readFileSync(bundlePath);
+          const restore = JSON.parse(restoreBytes);
+          const rollback = JSON.parse(rollbackBytes);
+          const bundle = JSON.parse(bundleBytes);
+          if (sha256(restoreBytes) !== process.env.RESTORE_SHA256) throw new Error('repository-restore receipt hash drifted');
+          if (sha256(rollbackBytes) !== process.env.ROLLBACK_SHA256) throw new Error('publication-rollback receipt hash drifted');
+          if (sha256(bundleBytes) !== process.env.BUNDLE_SHA256) throw new Error('bundle receipt hash drifted');
+          if (selection.id !== process.env.SNAPSHOT_ID || selection.asset?.sha256 !== process.env.SNAPSHOT_ASSET_SHA256) throw new Error('snapshot selection drifted');
+
+          if (restore.status !== 'passed' || restore.evidence_tier !== 'workflow-executed-unreviewed') throw new Error('restore evidence state is invalid');
+          if (restore.workflow?.run_id !== Number(process.env.EVIDENCE_RUN) || restore.workflow?.event_name !== 'push') throw new Error('restore workflow custody drifted');
+          if (restore.source_snapshot?.id !== process.env.SNAPSHOT_ID || restore.source_snapshot?.asset_sha256 !== process.env.SNAPSHOT_ASSET_SHA256) throw new Error('restore snapshot custody drifted');
+          if (restore.forward_recovery?.target_head !== process.env.TARGET_MAIN || restore.forward_recovery?.exact_tracked_tree_match !== true || restore.forward_recovery?.target_files !== 3692) throw new Error('restore exact-tree proof failed');
+          if (restore.canonical_gate?.exit_code !== 0 || restore.canonical_gate?.duration_ms !== 73600) throw new Error('canonical gate evidence drifted');
+          if (restore.dependency_install?.exit_code !== 0 || restore.dependency_install?.duration_ms !== 749) throw new Error('dependency install evidence drifted');
+          if (restore.boundary?.preservation_asset_rewritten || restore.boundary?.source_snapshot_rewritten || restore.boundary?.waterline_state_mutated || restore.boundary?.roadmap_state_mutated || restore.boundary?.live_publication_mutated) throw new Error('restore boundary was violated');
+          if (restore.boundary?.review_required_before_recording !== true || restore.boundary?.disposable_verification_index_created !== true || restore.boundary?.source_history_restored !== false) throw new Error('restore review/index boundary drifted');
+          if (restore.verification_index?.initialized_after_exact_tree_proof !== true || restore.verification_index?.target_head !== process.env.TARGET_MAIN || restore.verification_index?.tracked_paths !== 3692) throw new Error('verification index custody drifted');
+
+          if (rollback.status !== 'passed' || rollback.evidence_tier !== 'workflow-executed-unreviewed') throw new Error('rollback evidence state is invalid');
+          if (rollback.workflow?.run_id !== Number(process.env.EVIDENCE_RUN) || rollback.workflow?.event_name !== 'push') throw new Error('rollback workflow custody drifted');
+          if (rollback.known_good?.target_head !== process.env.TARGET_MAIN || rollback.known_good?.snapshot_id !== process.env.SNAPSHOT_ID || rollback.known_good?.paths?.length !== 8) throw new Error('rollback known-good custody drifted');
+          if (rollback.fault_injection?.detected_before_rollback !== true) throw new Error('fault injection was not detected');
+          if (rollback.rollback?.atomic_directory_swap !== true || rollback.rollback?.exact_manifest_restored !== true) throw new Error('rollback did not restore the exact manifest');
+          if (rollback.served_checks?.length !== 8 || rollback.served_checks.some((row) => row.exact_byte_match !== true)) throw new Error('served rollback checks are incomplete');
+          if (rollback.boundary?.isolated_publication_slot !== true || rollback.boundary?.live_publication_mutated || rollback.boundary?.waterline_state_mutated || rollback.boundary?.roadmap_state_mutated || rollback.boundary?.review_required_before_recording !== true) throw new Error('rollback boundary was violated');
+
+          if (bundle.status !== 'passed' || bundle.evidence_tier !== 'workflow-executed-unreviewed' || bundle.target_head !== process.env.TARGET_MAIN || bundle.snapshot_id !== process.env.SNAPSHOT_ID) throw new Error('bundle custody drifted');
+          if (bundle.receipts?.repository_restore_sha256 !== process.env.RESTORE_SHA256 || bundle.receipts?.publication_rollback_sha256 !== process.env.ROLLBACK_SHA256) throw new Error('bundle receipt hashes drifted');
+          if (bundle.boundary?.reviewed_waterline_receipts_created !== false || bundle.boundary?.roadmap_milestone_completed !== false) throw new Error('evidence producer exceeded its authority');
+
+          const gateStdout = fs.readFileSync(gateStdoutPath, 'utf8');
+          const gateStderr = fs.readFileSync(gateStderrPath, 'utf8');
+          const npmStderr = fs.readFileSync(npmStderrPath, 'utf8');
+          if (gateStderr.length || npmStderr.length) throw new Error('restore diagnostics contain stderr');
+          if (!/gate: PASS — 26 step\(s\) in 73s/.test(gateStdout)) throw new Error('canonical gate terminal proof is absent');
+          if (/<<< FAIL|gate: FAIL|\bError:|##\[error\]/.test(gateStdout)) throw new Error('canonical gate log contains failure evidence');
+
+          const reviewedAt = new Date().toISOString();
+          const durableRoot = process.env.REVIEW_ROOT;
+          fs.mkdirSync(durableRoot, { recursive: true });
+          fs.copyFileSync(selectionPath, path.join(durableRoot, 'selection.json'));
+          fs.copyFileSync(restorePath, path.join(durableRoot, 'repository-restore.json'));
+          fs.copyFileSync(rollbackPath, path.join(durableRoot, 'publication-rollback.json'));
+          fs.copyFileSync(bundlePath, path.join(durableRoot, 'bundle.json'));
+
+          const review = {
+            version: 1,
+            transaction: 'OPERATIONAL-RELIABILITY-DRILLS-001',
+            status: 'reviewed-passed',
+            reviewed_at: reviewedAt,
+            reviewed_by: 'chatgpt-second-desk',
+            reviewed_role: 'second-desk',
+            authorization: {
+              exact_main_head: process.env.TARGET_MAIN,
+              workflow_run: Number(process.env.EVIDENCE_RUN),
+              workflow_url: run.url,
+              workflow_event: run.event,
+              workflow_conclusion: run.conclusion,
+              artifact_name: artifact.name,
+              artifact_id: artifact.id,
+              artifact_digest: artifact.digest,
+            },
+            source_snapshot: selection,
+            repository_restore: {
+              path: `${durableRoot}/repository-restore.json`,
+              sha256: process.env.RESTORE_SHA256,
+              target_head: restore.forward_recovery.target_head,
+              target_files: restore.forward_recovery.target_files,
+              target_manifest_sha256: restore.forward_recovery.target_manifest_sha256,
+              canonical_gate_duration_ms: restore.canonical_gate.duration_ms,
+              dependency_install_duration_ms: restore.dependency_install.duration_ms,
+              exact_tracked_tree_match: restore.forward_recovery.exact_tracked_tree_match,
+              disposable_index_after_exact_proof: restore.verification_index.initialized_after_exact_tree_proof,
+              source_history_restored: restore.verification_index.source_history_restored,
+            },
+            publication_rollback: {
+              path: `${durableRoot}/publication-rollback.json`,
+              sha256: process.env.ROLLBACK_SHA256,
+              known_good_manifest_sha256: rollback.known_good.manifest_sha256,
+              bad_manifest_sha256: rollback.fault_injection.bad_manifest_sha256,
+              restored_manifest_sha256: rollback.rollback.restored_manifest_sha256,
+              atomic_directory_swap: rollback.rollback.atomic_directory_swap,
+              served_exact_byte_checks: rollback.served_checks.length,
+            },
+            bundle: {
+              path: `${durableRoot}/bundle.json`,
+              sha256: process.env.BUNDLE_SHA256,
+            },
+            review_findings: {
+              all_workflow_steps_passed: true,
+              exact_main_identity_bound: true,
+              immutable_snapshot_hash_verified: true,
+              exact_tree_recovery_verified: true,
+              complete_canonical_gate_verified: true,
+              rendered_browser_gate_included: true,
+              injected_fault_detected: true,
+              isolated_atomic_rollback_verified: true,
+              served_bytes_match_known_good: true,
+              producer_did_not_self_review: true,
+            },
+            boundary: {
+              canonical_mutation: false,
+              live_publication_mutation: false,
+              preservation_asset_rewrite: false,
+              source_history_restored: false,
+              metrics_measured: false,
+              roadmap_milestone_completed: false,
+              reviewed_waterline_drill_receipts_authorized: true,
+            },
+          };
+          fs.writeFileSync(path.join(durableRoot, 'review.json'), JSON.stringify(review, null, 2) + '\n');
+
+          const commonEvidence = [
+            { type: 'workflow-run', value: `GitHub Actions run ${process.env.EVIDENCE_RUN} — exact main push evidence for ${process.env.TARGET_MAIN}; all workflow steps passed.` },
+            { type: 'artifact', value: `${artifact.name}; artifact id ${artifact.id}; digest ${artifact.digest}.` },
+            { type: 'snapshot', value: `${selection.id}; repository commit ${selection.repository_commit}; repository asset sha256 ${selection.asset.sha256}; ${selection.asset.bytes} bytes.` },
+            { type: 'review', value: `${durableRoot}/review.json — second-desk review ${reviewedAt}.` },
+          ];
+          fs.writeFileSync('/tmp/repository-restore-input.json', JSON.stringify({
+            kind: 'repository-restore',
+            passed: true,
+            reviewed_by: 'chatgpt-second-desk',
+            reviewed_role: 'second-desk',
+            reviewed_at: reviewedAt,
+            note: `Fresh immutable snapshot recovery matched all 3,692 tracked paths to exact main head ${process.env.TARGET_MAIN}; npm ci and the complete 26-step canonical gate passed without stderr. The disposable verification index was created only after exact tree proof, and source history was not represented as restored.`,
+            evidence: [
+              ...commonEvidence,
+              { type: 'receipt', value: `${durableRoot}/repository-restore.json; sha256 ${process.env.RESTORE_SHA256}; target manifest ${restore.forward_recovery.target_manifest_sha256}; gate ${restore.canonical_gate.duration_ms} ms.` },
+              { type: 'boundary', value: 'No preservation asset, source snapshot, waterline state, roadmap state, or live publication mutation occurred during evidence production.' },
+            ],
+          }, null, 2) + '\n');
+          fs.writeFileSync('/tmp/publication-rollback-input.json', JSON.stringify({
+            kind: 'publication-rollback',
+            passed: true,
+            reviewed_by: 'chatgpt-second-desk',
+            reviewed_role: 'second-desk',
+            reviewed_at: reviewedAt,
+            note: `An isolated bad homepage changed the known-good manifest, was detected before rollback, and the same-filesystem atomic directory swap restored the exact manifest. All eight served critical-surface files matched known-good bytes; GitHub Pages was not touched.`,
+            evidence: [
+              ...commonEvidence,
+              { type: 'receipt', value: `${durableRoot}/publication-rollback.json; sha256 ${process.env.ROLLBACK_SHA256}; restored manifest ${rollback.rollback.restored_manifest_sha256}.` },
+              { type: 'fault-injection', value: `index.html bad manifest ${rollback.fault_injection.bad_manifest_sha256} was detected before rollback.` },
+              { type: 'served-checks', value: `${rollback.served_checks.length}/${rollback.served_checks.length} representative critical-surface routes matched exact known-good bytes after rollback.` },
+              { type: 'boundary', value: 'Rollback ran in an isolated publication slot and did not mutate live publication, waterline state, or roadmap state.' },
+            ],
+          }, null, 2) + '\n');
+          NODE
+
+      - name: Record both reviewed waterline drill receipts
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('fs');
+          const state = JSON.parse(fs.readFileSync('data/WATERLINE-STATE.json', 'utf8'));
+          if (state.drills.length !== 0) throw new Error(`expected zero pre-existing drill receipts, found ${state.drills.length}`);
+          if (Object.values(state.metrics).some((value) => value !== null)) throw new Error('operational metrics must remain unknown before this transaction');
+          NODE
+          node scripts/waterline.mjs record-drill --input /tmp/repository-restore-input.json
+          node scripts/waterline.mjs record-drill --input /tmp/publication-rollback-input.json
+          node scripts/waterline.mjs status --scope star-trek --json > /tmp/waterline-status.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const state = JSON.parse(fs.readFileSync('data/WATERLINE-STATE.json', 'utf8'));
+          const status = JSON.parse(fs.readFileSync('/tmp/waterline-status.json', 'utf8'));
+          const roadmap = JSON.parse(fs.readFileSync('data/ROADMAP-STATE.json', 'utf8'));
+          if (state.drills.length !== 2) throw new Error(`expected two drill receipts, found ${state.drills.length}`);
+          if (new Set(state.drills.map((row) => row.kind)).size !== 2) throw new Error('drill kinds are not unique');
+          if (state.drills.some((row) => row.passed !== true || row.reviewed_role !== 'second-desk')) throw new Error('reviewed drill receipt is invalid');
+          if (status.evidence_readiness.missing_drills.length !== 0) throw new Error(`missing drills remain: ${status.evidence_readiness.missing_drills}`);
+          const expectedMetrics = ['build_minutes_p95', 'cost_per_verified_record_usd', 'source_freshness_p95_days', 'rights_response_sla_days'];
+          if (JSON.stringify(status.evidence_readiness.missing_metrics) !== JSON.stringify(expectedMetrics)) throw new Error('metric unknowns drifted');
+          if (status.evidence_readiness.operational_reliability !== false) throw new Error('operational readiness was completed without metrics');
+          if ((roadmap.completed || []).some((row) => row.milestone === 'operational-reliability')) throw new Error('roadmap milestone was completed by a waterline evidence transaction');
+          if (Object.values(state.metrics).some((value) => value !== null)) throw new Error('metrics were invented');
+          NODE
+
+      - name: Stage the exact review transaction and run the complete gate
+        run: |
+          set -euo pipefail
+          git add data/WATERLINE-STATE.json data/journal/waterline.jsonl "$REVIEW_ROOT"
+          git diff --cached --check
+          npm run gate
+          rm -rf records test-results playwright-report
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          paths="$(git diff --cached --name-only | sort)"
+          expected="$(printf '%s\n' \
+            data/WATERLINE-STATE.json \
+            data/journal/waterline.jsonl \
+            "$REVIEW_ROOT/bundle.json" \
+            "$REVIEW_ROOT/publication-rollback.json" \
+            "$REVIEW_ROOT/repository-restore.json" \
+            "$REVIEW_ROOT/review.json" \
+            "$REVIEW_ROOT/selection.json" | sort)"
+          test "$paths" = "$expected"
+
+      - name: Publish the exact reviewed drill transaction under lease
+        run: |
+          set -euo pipefail
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$TARGET_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$GITHUB_SHA"
+          git config user.name undercast-second-desk
+          git config user.email undercast-second-desk@users.noreply.github.com
+          git commit \
+            -m 'Operational reliability: receipt restore and rollback drills' \
+            -m "reviewed_evidence_run=${EVIDENCE_RUN}" \
+            -m "exact_main_head=${TARGET_MAIN}" \
+            -m 'metrics_remain_unknown=true' \
+            -m 'roadmap_milestone_completed=false'
+          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${GITHUB_SHA}" \
+            origin "HEAD:refs/heads/${TARGET_BRANCH}"
