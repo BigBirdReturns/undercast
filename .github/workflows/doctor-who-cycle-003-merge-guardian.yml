@@ -1,0 +1,215 @@
+name: doctor-who-cycle-003-merge-guardian
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/doctor-who-cycle-003-merge-guardian.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-003-merge-guardian-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PRODUCT_PR: "228"
+  PRODUCT_BRANCH: agent/doctor-who-cycle-003-margaret-publication
+  GUARDIAN_PATH: .github/workflows/doctor-who-cycle-003-merge-guardian.yml
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  guard-and-merge:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 256
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Prove the guardian is one read-only path
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --porcelain)"
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git fetch --no-tags --depth=256 origin \
+            refs/heads/main:refs/remotes/origin/main \
+            "refs/heads/${PRODUCT_BRANCH}:refs/remotes/origin/${PRODUCT_BRANCH}"
+          printf '%s\n' "$GUARDIAN_PATH" > /tmp/expected-guardian-paths.txt
+          git diff --name-only refs/remotes/origin/main...HEAD | sort > /tmp/actual-guardian-paths.txt
+          diff -u /tmp/expected-guardian-paths.txt /tmp/actual-guardian-paths.txt
+          main_before="$(git rev-parse refs/remotes/origin/main)"
+          product_head="$(git rev-parse refs/remotes/origin/${PRODUCT_BRANCH})"
+          test -n "$main_before"
+          test -n "$product_head"
+          test "$product_head" != "$main_before"
+          echo "MAIN_BEFORE=$main_before" >> "$GITHUB_ENV"
+          echo "PRODUCT_HEAD=$product_head" >> "$GITHUB_ENV"
+          printf '%s\n' "$main_before" > /tmp/main-before.txt
+          printf '%s\n' "$product_head" > /tmp/product-head.txt
+          echo "main_before=$main_before" >> "$GITHUB_STEP_SUMMARY"
+          echo "product_head=$product_head" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify exact workflow-free product shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach /tmp/cycle-003-product "$PRODUCT_HEAD"
+          cd /tmp/cycle-003-product
+          test "$(git merge-base HEAD "$MAIN_BEFORE")" = "$MAIN_BEFORE"
+          git diff --name-only "$MAIN_BEFORE"...HEAD | sort > /tmp/product-paths.txt
+          test -s /tmp/product-paths.txt
+          ! grep -Eq '^(\.github/|\.ci/|scripts/apply-doctor-who-cycle)' /tmp/product-paths.txt
+          mapfile -t image_paths < <(grep '^images/' /tmp/product-paths.txt || true)
+          test "${#image_paths[@]}" -eq 1
+          test "${image_paths[0]}" = 'images/uc-1348-portrait.jpg'
+          for required in \
+            images/uc-1348-portrait.jpg \
+            data/review/adapter-sdk/doctor-who-cycle-003-margaret-blaine.json \
+            data/review/media/doctor-who-cycle-003-annette-badland-portrait.json \
+            scripts/doctor-who-cycle-003.mjs \
+            data/WATERLINE-STATE.json \
+            data/ESTATE-REGISTRY.json \
+            data/review/adapter-sdk/BASELINE.json \
+            package.json \
+            docs/AUTOPILOT.md; do
+            grep -Fxq "$required" /tmp/product-paths.txt || {
+              echo "required permanent product path missing: $required" >&2
+              exit 1
+            }
+            test -s "$required"
+          done
+          test "$(sha256sum images/uc-1348-portrait.jpg | awk '{print $1}')" = '20b605604fb184f280ea20a90f091a8bed081ff8383417fb87598681a6a02c8e'
+          identify -format '%w %h\n' images/uc-1348-portrait.jpg | tee /tmp/product-portrait-dimensions.txt
+          test "$(cat /tmp/product-portrait-dimensions.txt)" = '420 600'
+          git diff --check "$MAIN_BEFORE"...HEAD
+          test -z "$(git status --porcelain)"
+          printf '%s\n' "$(wc -l < /tmp/product-paths.txt)" > /tmp/product-path-count.txt
+
+      - name: Install exact dependencies and rendered browser
+        shell: bash
+        working-directory: /tmp/cycle-003-product
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Requalify permanent cycle and complete repository gate
+        shell: bash
+        working-directory: /tmp/cycle-003-product
+        run: |
+          set -euo pipefail
+          npm run doctor-who:cycle-003:check 2>&1 | tee /tmp/cycle-003-permanent-check.log
+          npm run doctor-who:cycle-002:check 2>&1 | tee /tmp/cycle-002-permanent-check.log
+          npm run doctor-who:pilot-cycle:check 2>&1 | tee /tmp/doctor-who-pilot-check.log
+          npm run doctor-who:correction-drill:check 2>&1 | tee /tmp/doctor-who-correction-check.log
+          npm run star-trek:enwright-cycle:check 2>&1 | tee /tmp/star-trek-enwright-check.log
+          node scripts/autopilot.mjs validate 2>&1 | tee /tmp/autopilot-check.log
+          node scripts/media-audit.mjs gate --scope doctor-who 2>&1 | tee /tmp/doctor-who-media-check.log
+          node scripts/waterline.mjs validate --scope doctor-who 2>&1 | tee /tmp/doctor-who-waterline-check.log
+          node scripts/waterline.mjs validate --scope star-trek 2>&1 | tee /tmp/star-trek-waterline-check.log
+          npm run gate 2>&1 | tee /tmp/cycle-003-guardian-gate.log
+          sha256sum /tmp/cycle-003-guardian-gate.log > /tmp/cycle-003-guardian-gate.sha256
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          git restore --worktree -- .
+          test -z "$(git status --porcelain)"
+          grep -Fq 'phase=ready-for-cycle' /tmp/doctor-who-waterline-check.log
+          grep -Fq 'claim=allowed' /tmp/doctor-who-waterline-check.log
+          grep -Fq 'phase=ready-for-cycle' /tmp/star-trek-waterline-check.log
+          grep -Fq 'claim=allowed' /tmp/star-trek-waterline-check.log
+
+      - name: Bind the open PR to the exact qualified head
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr_json="$(gh pr view "$PRODUCT_PR" --repo "$GITHUB_REPOSITORY" --json number,state,isDraft,headRefName,headRefOid,baseRefName,mergeable)"
+          printf '%s\n' "$pr_json" > /tmp/product-pr-before.json
+          test "$(jq -r '.number' /tmp/product-pr-before.json)" = "$PRODUCT_PR"
+          test "$(jq -r '.state' /tmp/product-pr-before.json)" = 'OPEN'
+          test "$(jq -r '.headRefName' /tmp/product-pr-before.json)" = "$PRODUCT_BRANCH"
+          test "$(jq -r '.headRefOid' /tmp/product-pr-before.json)" = "$PRODUCT_HEAD"
+          test "$(jq -r '.baseRefName' /tmp/product-pr-before.json)" = 'main'
+          git fetch --no-tags --depth=256 origin \
+            refs/heads/main:refs/remotes/origin/main \
+            "refs/heads/${PRODUCT_BRANCH}:refs/remotes/origin/${PRODUCT_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$MAIN_BEFORE"
+          test "$(git rev-parse refs/remotes/origin/${PRODUCT_BRANCH})" = "$PRODUCT_HEAD"
+          if [ "$(jq -r '.isDraft' /tmp/product-pr-before.json)" = 'true' ]; then
+            gh pr ready "$PRODUCT_PR" --repo "$GITHUB_REPOSITORY"
+          fi
+          gh pr view "$PRODUCT_PR" --repo "$GITHUB_REPOSITORY" --json number,state,isDraft,headRefOid,mergeable > /tmp/product-pr-ready.json
+          test "$(jq -r '.state' /tmp/product-pr-ready.json)" = 'OPEN'
+          test "$(jq -r '.isDraft' /tmp/product-pr-ready.json)" = 'false'
+          test "$(jq -r '.headRefOid' /tmp/product-pr-ready.json)" = "$PRODUCT_HEAD"
+
+      - name: Merge only the exact qualified product head
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr merge "$PRODUCT_PR" \
+            --repo "$GITHUB_REPOSITORY" \
+            --merge \
+            --match-head-commit "$PRODUCT_HEAD" \
+            --subject 'Doctor Who: complete reviewed Margaret Blaine cycle 003 (#228)' \
+            --body 'Merge the exact independently requalified workflow-free product with candidate and receipt-bearing ancestry preserved. Resolve Annette Badland as Margaret Blaine, retain the exact character still as honest absence, publish one attributed CC BY-SA 2.0 actor portrait, close one bounded lease with a reviewed cycle receipt, and return both active estates to zero-in-flight ready-for-cycle custody.'
+          gh pr view "$PRODUCT_PR" --repo "$GITHUB_REPOSITORY" --json number,state,mergedAt,mergeCommit,headRefOid > /tmp/product-pr-after.json
+          test "$(jq -r '.state' /tmp/product-pr-after.json)" = 'MERGED'
+          test "$(jq -r '.headRefOid' /tmp/product-pr-after.json)" = "$PRODUCT_HEAD"
+          merge_sha="$(jq -r '.mergeCommit.oid' /tmp/product-pr-after.json)"
+          test -n "$merge_sha"
+          git fetch --no-tags --depth=256 origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$merge_sha"
+          git fetch --no-tags --depth=2 origin "$merge_sha"
+          parents="$(git show -s --format=%P "$merge_sha")"
+          test "$parents" = "$MAIN_BEFORE $PRODUCT_HEAD"
+          printf '%s\n' "$merge_sha" > /tmp/merge-commit.txt
+          echo "merge_commit=$merge_sha" >> "$GITHUB_STEP_SUMMARY"
+          echo "qualified_product_head=$PRODUCT_HEAD" >> "$GITHUB_STEP_SUMMARY"
+          echo "product_paths=$(cat /tmp/product-path-count.txt)" >> "$GITHUB_STEP_SUMMARY"
+          echo "guardian_gate_sha256=$(awk '{print $1}' /tmp/cycle-003-guardian-gate.sha256)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact guardian and merge evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-003-merge-guardian-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: warn
+          path: |
+            /tmp/main-before.txt
+            /tmp/product-head.txt
+            /tmp/product-paths.txt
+            /tmp/product-path-count.txt
+            /tmp/product-portrait-dimensions.txt
+            /tmp/cycle-003-permanent-check.log
+            /tmp/cycle-002-permanent-check.log
+            /tmp/doctor-who-pilot-check.log
+            /tmp/doctor-who-correction-check.log
+            /tmp/star-trek-enwright-check.log
+            /tmp/autopilot-check.log
+            /tmp/doctor-who-media-check.log
+            /tmp/doctor-who-waterline-check.log
+            /tmp/star-trek-waterline-check.log
+            /tmp/cycle-003-guardian-gate.log
+            /tmp/cycle-003-guardian-gate.sha256
+            /tmp/product-pr-before.json
+            /tmp/product-pr-ready.json
+            /tmp/product-pr-after.json
+            /tmp/merge-commit.txt
+            /tmp/expected-guardian-paths.txt
+            /tmp/actual-guardian-paths.txt
