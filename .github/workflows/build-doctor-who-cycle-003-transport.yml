@@ -1,0 +1,556 @@
+name: build-doctor-who-cycle-003-transport
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-doctor-who-cycle-003-transport.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-doctor-who-cycle-003-transport-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  SELF: .github/workflows/build-doctor-who-cycle-003-transport.yml
+  GREDD_WRITER_COMMIT: d059de92a7570f02c0b3b6831d19ed6d5e0ac7b3
+  GREDD_SCRIPTS_SHA256: d824b3af5b5f02210c7893c8090077a887b649f8be5231ded1effe66d6169837
+  GREDD_PATCH_SHA256: 2ab832438dc932a0b156b374fa16af6b1112f30067ed1a3cf7fc15b2066e4826
+  PORTRAIT_ORIGINAL_SHA256: 1585c0d53e38679635ce184c611f1eff3d1793cc0d8d903717cf2384cf91244f
+  PORTRAIT_DERIVATIVE_SHA256: 20b605604fb184f280ea20a90f091a8bed081ff8383417fb87598681a6a02c8e
+  OUT_DIR: .ci/doctor-who-cycle-003
+
+jobs:
+  build:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 256
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and deterministic image tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          sudo apt-get update
+          sudo apt-get install -y imagemagick python3-pil
+          python3 - <<'PY'
+          from PIL import Image
+          print(Image.__version__)
+          PY
+
+      - name: Bind live main and prove the one-file generator carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git fetch --no-tags --depth=256 origin \
+            refs/heads/main:refs/remotes/origin/main \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          exact_main="$(git rev-parse refs/remotes/origin/main)"
+          test -n "$exact_main"
+          git rebase refs/remotes/origin/main
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$exact_main"
+          printf '%s\n' "$SELF" > /tmp/expected-generator-paths.txt
+          git diff --name-only "$exact_main"...HEAD | sort > /tmp/actual-generator-paths.txt
+          diff -u /tmp/expected-generator-paths.txt /tmp/actual-generator-paths.txt
+          printf '%s\n' "$exact_main" > /tmp/exact-main.txt
+          echo "EXACT_MAIN=$exact_main" >> "$GITHUB_ENV"
+          echo "exact_main=$exact_main" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Recover and patch the proved Gredd materializer and finalizer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/cycle-003/base /tmp/cycle-003/scripts
+          git fetch --no-tags --depth=1 origin "$GREDD_WRITER_COMMIT" || true
+          git cat-file -e "${GREDD_WRITER_COMMIT}:.ci/doctor-who-cycle-002/scripts.tgz.b64"
+          git cat-file -e "${GREDD_WRITER_COMMIT}:.ci/doctor-who-cycle-002/patch-current.mjs.gz.b64"
+          git show "${GREDD_WRITER_COMMIT}:.ci/doctor-who-cycle-002/scripts.tgz.b64" > /tmp/cycle-003/base/scripts.tgz.b64
+          git show "${GREDD_WRITER_COMMIT}:.ci/doctor-who-cycle-002/patch-current.mjs.gz.b64" > /tmp/cycle-003/base/patch-current.mjs.gz.b64
+          tr -d '\n\r\t ' < /tmp/cycle-003/base/scripts.tgz.b64 | base64 --decode > /tmp/cycle-003/base/scripts.tgz
+          tr -d '\n\r\t ' < /tmp/cycle-003/base/patch-current.mjs.gz.b64 | base64 --decode > /tmp/cycle-003/base/patch-current.mjs.gz
+          test "$(sha256sum /tmp/cycle-003/base/scripts.tgz | awk '{print $1}')" = "$GREDD_SCRIPTS_SHA256"
+          test "$(sha256sum /tmp/cycle-003/base/patch-current.mjs.gz | awk '{print $1}')" = "$GREDD_PATCH_SHA256"
+          tar -xzf /tmp/cycle-003/base/scripts.tgz -C /tmp/cycle-003/scripts
+          gzip -dc /tmp/cycle-003/base/patch-current.mjs.gz > /tmp/cycle-003/base/patch-current.mjs
+          node --check /tmp/cycle-003/base/patch-current.mjs
+          MATERIALIZER=/tmp/cycle-003/scripts/apply-doctor-who-cycle-002.mjs \
+          FINALIZER=/tmp/cycle-003/scripts/apply-doctor-who-cycle-finalize-002.mjs \
+            node /tmp/cycle-003/base/patch-current.mjs
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+
+          const root = process.cwd();
+          const baseDir = '/tmp/cycle-003/scripts';
+          const materializerPath = path.join(baseDir, 'apply-doctor-who-cycle-002.mjs');
+          const finalizerPath = path.join(baseDir, 'apply-doctor-who-cycle-finalize-002.mjs');
+          const specs = JSON.parse(fs.readFileSync(path.join(root, 'data/specimens.json'), 'utf8'));
+          const specById = new Map(specs.map((row) => [row.id, row]));
+          const coverageDoc = JSON.parse(fs.readFileSync(path.join(root, 'data/CENSUS-COVERAGE.json'), 'utf8'));
+          const coverage = Array.isArray(coverageDoc) ? coverageDoc : (coverageDoc.rows || coverageDoc.coverage || []);
+          const pairs = [];
+          for (const row of coverage) {
+            if (row.performance_mode !== 'physical-prosthetic' || !row.role_on_wall) continue;
+            for (const wallId of row.wall_ids || []) {
+              const specimen = specById.get(wallId);
+              if (specimen) pairs.push({ kind: specimen.kind, transform: specimen.transform, universe: specimen.universe });
+            }
+          }
+          const preferred = pairs.filter((row) => row.universe === 'Doctor Who');
+          const source = preferred.length ? preferred : pairs;
+          if (!source.length) throw new Error('no filed physical-prosthetic convention exists');
+          const counts = new Map();
+          for (const row of source) {
+            const key = JSON.stringify([row.kind, row.transform]);
+            counts.set(key, (counts.get(key) || 0) + 1);
+          }
+          const [winningKey] = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+          const [canonicalKind, canonicalTransform] = JSON.parse(winningKey);
+
+          const common = new Map([
+            ['ap_f6ca3d513c7ac0b6b9d67ce1', 'ap_ba63d075857222943e609a7f'],
+            ['Dan Starkey', 'Annette Badland'],
+            ['Gredd', 'Margaret Blaine'],
+            ['gredd', 'margaret-blaine'],
+            ['UC-1347', 'UC-1348'],
+            ['uc-1347', 'uc-1348'],
+            ['Starlight Robbery', 'Aliens of London'],
+            ['2013', '2005'],
+            ['https://tardis.fandom.com/wiki/Gredd', 'https://tardis.fandom.com/wiki/Margaret_Blaine'],
+            ['2895150', '2696671'],
+            ['cd83aeb119ec5ef30deb4cbca2c917d6119a83918fa01832863e5e96b6bc2b2d', 'ef175ed98926056697d7f60f4dc0e56e76949328ea3f327baeb1fe086272b9fc'],
+            ['4be5cb67c57115c6f679e0c86361206eabd2768c39fb3c1f8326dcd8c120bfd0', '2a3a77dddf94c4b2d99375482760fb4a4863a8838360f135b247b39706743119'],
+            ['bdd46b9538d188a221b5f0121f006e2832f283e51c2b24b5cc86f349b7f0429e', '20b605604fb184f280ea20a90f091a8bed081ff8383417fb87598681a6a02c8e'],
+            ['images/uc-1347-portrait.jpg', 'images/uc-1348-portrait.jpg'],
+            ['doctor-who-cycle-002-gredd.json', 'doctor-who-cycle-003-margaret-blaine.json'],
+            ['scripts/doctor-who-cycle-002.mjs', 'scripts/doctor-who-cycle-003.mjs'],
+            ['doctor-who:cycle-002:check', 'doctor-who:cycle-003:check'],
+          ]);
+
+          const replaceCommon = (text) => {
+            for (const [before, after] of common) text = text.split(before).join(after);
+            return text;
+          };
+
+          let materializer = replaceCommon(fs.readFileSync(materializerPath, 'utf8'));
+          let finalizer = replaceCommon(fs.readFileSync(finalizerPath, 'utf8'));
+
+          const semanticReplacements = [
+            ["performance_mode: 'voice'", "performance_mode: 'physical-prosthetic'"],
+            ['performance_mode: "voice"', 'performance_mode: "physical-prosthetic"'],
+            ["const EXPECTED_MODE = 'voice';", "const EXPECTED_MODE = 'physical-prosthetic';"],
+            ['const EXPECTED_MODE = "voice";', 'const EXPECTED_MODE = "physical-prosthetic";'],
+            ["kind: 'voice'", `kind: ${JSON.stringify(canonicalKind)}`],
+            ['kind: "voice"', `kind: ${JSON.stringify(canonicalKind)}`],
+            ['transform: 2', `transform: ${JSON.stringify(canonicalTransform)}`],
+          ];
+          for (const [before, after] of semanticReplacements) {
+            materializer = materializer.split(before).join(after);
+            finalizer = finalizer.split(before).join(after);
+          }
+
+          const countReplacements = [
+            ['315 queued', '314 queued'],
+            ['314 queued', '313 queued'],
+            ['1 resolved', '2 resolved'],
+            ['2 resolved', '3 resolved'],
+            ['queued: 314', 'queued: 313'],
+            ['resolved: 2', 'resolved: 3'],
+            ['4 / 4', '6 / 6'],
+            ['4/4', '6/6'],
+            ['verified: 1', 'verified: 2'],
+            ['absent: 3', 'absent: 4'],
+            ['cycle 002', 'cycle 003'],
+            ['Cycle 002', 'Cycle 003'],
+            ['cycle-002', 'cycle-003'],
+          ];
+          for (const [before, after] of countReplacements) {
+            materializer = materializer.split(before).join(after);
+            finalizer = finalizer.split(before).join(after);
+          }
+
+          const mediaMarkerCandidates = [
+            'runNode("scripts/media-audit.mjs", ["sync"',
+            "runNode('scripts/media-audit.mjs', ['sync'",
+            'runNode("scripts/media-audit.mjs", ["validate"',
+            "runNode('scripts/media-audit.mjs', ['validate'",
+          ];
+          let mediaIndex = -1;
+          for (const marker of mediaMarkerCandidates) {
+            const found = materializer.indexOf(marker);
+            if (found >= 0 && (mediaIndex < 0 || found < mediaIndex)) mediaIndex = found;
+          }
+          if (mediaIndex < 0) throw new Error('could not locate the first media-audit operation');
+          const lineStart = materializer.lastIndexOf('\n', mediaIndex) + 1;
+          const portraitOverride = [
+            '  {',
+            "    const approvedPortraitPath = process.env.APPROVED_PORTRAIT_PATH;",
+            "    if (!approvedPortraitPath) throw new Error('APPROVED_PORTRAIT_PATH is required');",
+            "    const fsPromises = await import('node:fs/promises');",
+            "    const cryptoModule = await import('node:crypto');",
+            "    await fsPromises.copyFile(approvedPortraitPath, 'images/uc-1348-portrait.jpg');",
+            "    const approvedBytes = await fsPromises.readFile('images/uc-1348-portrait.jpg');",
+            "    const approvedDigest = cryptoModule.createHash('sha256').update(approvedBytes).digest('hex');",
+            "    if (approvedDigest !== '20b605604fb184f280ea20a90f091a8bed081ff8383417fb87598681a6a02c8e') throw new Error(`approved portrait digest drifted: ${approvedDigest}`);",
+            '  }',
+            '',
+          ].join('\n');
+          materializer = materializer.slice(0, lineStart) + portraitOverride + materializer.slice(lineStart);
+
+          const staleAdapterCheck = 'runNode("scripts/census-adapter.mjs", ["check"]);';
+          if (finalizer.split(staleAdapterCheck).length - 1 === 1) {
+            finalizer = finalizer.replace(staleAdapterCheck, [
+              'runNode("scripts/census-adapter.mjs", ["write"]);',
+              staleAdapterCheck,
+              'runNode("scripts/autopilot.mjs", ["sync", "--scope", "doctor-who", "--now", context.timestamps.final_at]);',
+              'runNode("scripts/autopilot.mjs", ["validate"]);',
+            ].join('\n'));
+          }
+
+          for (const forbidden of [
+            'ap_f6ca3d513c7ac0b6b9d67ce1',
+            'Dan Starkey',
+            'Gredd',
+            'UC-1347',
+            'cd83aeb119ec5ef30deb4cbca2c917d6119a83918fa01832863e5e96b6bc2b2d',
+          ]) {
+            if (materializer.includes(forbidden) || finalizer.includes(forbidden)) throw new Error(`unpaid Gredd token survived: ${forbidden}`);
+          }
+
+          const outMaterializer = '/tmp/cycle-003/scripts/apply-doctor-who-cycle-003.mjs';
+          const outFinalizer = '/tmp/cycle-003/scripts/apply-doctor-who-cycle-finalize-003.mjs';
+          fs.writeFileSync(outMaterializer, materializer);
+          fs.writeFileSync(outFinalizer, finalizer);
+          fs.unlinkSync(materializerPath);
+          fs.unlinkSync(finalizerPath);
+          fs.writeFileSync('/tmp/cycle-003/convention.json', `${JSON.stringify({ canonicalKind, canonicalTransform, counts: Object.fromEntries(counts) }, null, 2)}\n`);
+          NODE
+
+          node --check /tmp/cycle-003/scripts/apply-doctor-who-cycle-003.mjs
+          node --check /tmp/cycle-003/scripts/apply-doctor-who-cycle-finalize-003.mjs
+          find /tmp/cycle-003/scripts -maxdepth 1 -type f -print | sort | tee /tmp/cycle-003/scripts.txt
+
+      - name: Recover and deterministically derive the approved Annette Badland portrait
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/cycle-003/portrait
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const api = 'https://commons.wikimedia.org/w/api.php';
+          const params = new URLSearchParams({
+            action: 'query',
+            pageids: '181538749',
+            prop: 'imageinfo',
+            iiprop: 'url|mime|size|sha1|timestamp|extmetadata',
+            format: 'json',
+            formatversion: '2',
+            origin: '*',
+          });
+          const headers = { 'user-agent': 'Undercast cycle-003 transport builder/1.0 (BigBirdReturns/undercast)' };
+          const response = await fetch(`${api}?${params}`, { headers });
+          if (!response.ok) throw new Error(`Commons API failed: ${response.status}`);
+          const payload = await response.json();
+          const page = payload.query?.pages?.[0];
+          const info = page?.imageinfo?.[0];
+          if (page?.title !== 'File:Annette Badland 2025.jpg' || !info?.url) throw new Error('approved Commons file custody drifted');
+          const image = await fetch(info.url, { headers });
+          if (!image.ok) throw new Error(`approved Commons image download failed: ${image.status}`);
+          fs.writeFileSync('/tmp/cycle-003/portrait/annette-badland-original.jpg', Buffer.from(await image.arrayBuffer()));
+          fs.writeFileSync('/tmp/cycle-003/portrait/commons.json', `${JSON.stringify({ page, info }, null, 2)}\n`);
+          NODE
+          test "$(sha256sum /tmp/cycle-003/portrait/annette-badland-original.jpg | awk '{print $1}')" = "$PORTRAIT_ORIGINAL_SHA256"
+          identify -format '%w %h\n' /tmp/cycle-003/portrait/annette-badland-original.jpg | tee /tmp/cycle-003/portrait/original-dimensions.txt
+          test "$(cat /tmp/cycle-003/portrait/original-dimensions.txt)" = '4450 2966'
+
+          python3 - <<'PY'
+          from PIL import Image
+          source = Image.open('/tmp/cycle-003/portrait/annette-badland-original.jpg').convert('RGB')
+          derivative = source.crop((2000, 200, 3567, 2550)).resize((420, 600), Image.Resampling.LANCZOS)
+          derivative.save(
+              '/tmp/cycle-003/portrait/annette-badland-portrait.jpg',
+              format='JPEG', quality=92, optimize=True, progressive=False, subsampling=0,
+          )
+          PY
+          test "$(sha256sum /tmp/cycle-003/portrait/annette-badland-portrait.jpg | awk '{print $1}')" = "$PORTRAIT_DERIVATIVE_SHA256"
+          identify -format '%w %h\n' /tmp/cycle-003/portrait/annette-badland-portrait.jpg | tee /tmp/cycle-003/portrait/derivative-dimensions.txt
+          test "$(cat /tmp/cycle-003/portrait/derivative-dimensions.txt)" = '420 600'
+
+      - name: Add permanent attributable portrait custody to the cycle context and checker
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/cycle-003/scripts/apply-doctor-who-cycle-003-attribution.mjs <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+
+          const mode = process.argv[2];
+          const contextPath = process.env.CYCLE_CONTEXT || '/tmp/doctor-who-cycle-003-context.json';
+          const portraitPath = 'images/uc-1348-portrait.jpg';
+          const portraitSha = '20b605604fb184f280ea20a90f091a8bed081ff8383417fb87598681a6a02c8e';
+          const attributionPath = 'data/review/media/doctor-who-cycle-003-annette-badland-portrait.json';
+          const checkerPath = 'scripts/doctor-who-cycle-003.mjs';
+          const stable = (value) => {
+            if (Array.isArray(value)) return value.map(stable);
+            if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])]));
+            return value;
+          };
+          const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+          const readJson = (path) => JSON.parse(fs.readFileSync(path, 'utf8'));
+          const writeJson = (path, value) => {
+            fs.mkdirSync(new URL('.', `file://${process.cwd()}/${path}`).pathname, { recursive: true });
+            fs.writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+          };
+
+          if (mode === 'candidate') {
+            const actual = sha256(fs.readFileSync(portraitPath));
+            if (actual !== portraitSha) throw new Error(`approved portrait bytes drifted: ${actual}`);
+            const context = readJson(contextPath);
+            context.media = context.media || {};
+            context.media.portrait_attribution = {
+              actor_identity_only: true,
+              character_appearance_evidence: false,
+              still_disposition: 'absent',
+              derivative: {
+                path: portraitPath,
+                sha256: portraitSha,
+                bytes: fs.statSync(portraitPath).size,
+                width: 420,
+                height: 600,
+                crop_box: [2000, 200, 3567, 2550],
+                resize: '420x600-lanczos',
+                jpeg_quality: 92,
+                progressive: false,
+                subsampling: 0,
+              },
+              source: {
+                commons_file: 'File:Annette Badland 2025.jpg',
+                commons_page_id: 181538749,
+                file_page_url: 'https://commons.wikimedia.org/wiki/File:Annette_Badland_2025.jpg',
+                original_sha256: '1585c0d53e38679635ce184c611f1eff3d1793cc0d8d903717cf2384cf91244f',
+                original_width: 4450,
+                original_height: 2966,
+                photographer: 'Raph_PH',
+                license: 'CC BY-SA 2.0',
+                license_url: 'https://creativecommons.org/licenses/by-sa/2.0',
+                review_workflow_run: 30852943612,
+                review_workflow_job: 91817666539,
+                review_artifact_id: 8872320990,
+                review_artifact_sha256: '018318122ed7a3dd2e095f3fef73fcdbe1d8b93784636cb8f1acfb1d89277994',
+              },
+            };
+            fs.writeFileSync(contextPath, `${JSON.stringify(context, null, 2)}\n`);
+            fs.writeFileSync('/tmp/doctor-who-cycle-003-attribution-candidate.json', `${JSON.stringify(context.media.portrait_attribution, null, 2)}\n`);
+          } else if (mode === 'final') {
+            const context = readJson(contextPath);
+            const body = {
+              version: 1,
+              transaction: 'doctor-who-cycle-003-margaret-blaine',
+              generated_at: context.timestamps?.final_at || new Date().toISOString(),
+              task_id: 'ap_ba63d075857222943e609a7f',
+              wall_id: 'UC-1348',
+              actor: 'Annette Badland',
+              character: 'Margaret Blaine',
+              use_boundary: {
+                actor_identity_only: true,
+                character_appearance_evidence: false,
+                character_still: 'absent',
+              },
+              custody: context.media?.portrait_attribution,
+              workflow: {
+                run_id: Number(process.env.GITHUB_RUN_ID || 0),
+                job_id: Number(process.env.WORKFLOW_JOB_ID || 0),
+                candidate_commit: process.env.CANDIDATE_COMMIT,
+                candidate_artifact_id: Number(process.env.CANDIDATE_ARTIFACT_ID || 0),
+                candidate_artifact_sha256: process.env.CANDIDATE_ARTIFACT_SHA256,
+                candidate_gate_sha256: process.env.CANDIDATE_GATE_SHA256,
+              },
+            };
+            if (!body.custody?.derivative || body.custody.derivative.sha256 !== portraitSha) throw new Error('candidate attribution is missing from cycle context');
+            const receipt = { ...body, self_sha256: sha256(Buffer.from(JSON.stringify(stable(body)))) };
+            writeJson(attributionPath, receipt);
+
+            let checker = fs.readFileSync(checkerPath, 'utf8');
+            if (checker.includes('doctor-who-cycle-003-annette-badland-portrait')) throw new Error('attribution checker already installed');
+            checker += `\n{\n  const fs = await import('node:fs');\n  const crypto = await import('node:crypto');\n  const stableAttr = (value) => Array.isArray(value) ? value.map(stableAttr) : (value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableAttr(value[key])])) : value);\n  const shaAttr = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');\n  const attrPath = 'data/review/media/doctor-who-cycle-003-annette-badland-portrait.json';\n  const attr = JSON.parse(fs.readFileSync(attrPath, 'utf8'));\n  const { self_sha256, ...attrBody } = attr;\n  if (self_sha256 !== shaAttr(Buffer.from(JSON.stringify(stableAttr(attrBody))))) throw new Error('cycle-003 portrait attribution self-hash drifted');\n  if (attr.task_id !== 'ap_ba63d075857222943e609a7f' || attr.wall_id !== 'UC-1348') throw new Error('cycle-003 portrait attribution target drifted');\n  if (!attr.use_boundary.actor_identity_only || attr.use_boundary.character_appearance_evidence || attr.use_boundary.character_still !== 'absent') throw new Error('cycle-003 portrait use boundary drifted');\n  if (attr.custody.derivative.sha256 !== '20b605604fb184f280ea20a90f091a8bed081ff8383417fb87598681a6a02c8e') throw new Error('cycle-003 portrait derivative receipt drifted');\n  if (attr.custody.source.original_sha256 !== '1585c0d53e38679635ce184c611f1eff3d1793cc0d8d903717cf2384cf91244f' || attr.custody.source.license !== 'CC BY-SA 2.0' || attr.custody.source.photographer !== 'Raph_PH') throw new Error('cycle-003 portrait source attribution drifted');\n  if (shaAttr(fs.readFileSync('images/uc-1348-portrait.jpg')) !== attr.custody.derivative.sha256) throw new Error('cycle-003 portrait asset bytes drifted');\n}\n`;
+            fs.writeFileSync(checkerPath, checker);
+            fs.writeFileSync('/tmp/doctor-who-cycle-003-attribution-receipt.json', `${JSON.stringify(receipt, null, 2)}\n`);
+          } else {
+            throw new Error(`unknown attribution mode: ${mode}`);
+          }
+          NODE
+          node --check /tmp/cycle-003/scripts/apply-doctor-who-cycle-003-attribution.mjs
+
+      - name: Rehearse candidate and receipt-bearing trees against current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach /tmp/cycle-003/rehearsal refs/remotes/origin/main
+          cd /tmp/cycle-003/rehearsal
+          ln -s "$GITHUB_WORKSPACE/node_modules" node_modules
+          mkdir -p .ci/doctor-who-cycle-003
+          cp /tmp/cycle-003/portrait/annette-badland-portrait.jpg .ci/doctor-who-cycle-003/annette-badland-portrait.jpg
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          cycle_at="$(git show -s --format=%cI HEAD)"
+          export CYCLE_AT="$cycle_at"
+          export APPROVED_PORTRAIT_PATH="$PWD/.ci/doctor-who-cycle-003/annette-badland-portrait.jpg"
+          export CYCLE_CONTEXT=/tmp/doctor-who-cycle-003-context.json
+
+          node /tmp/cycle-003/scripts/apply-doctor-who-cycle-003.mjs 2>&1 | tee /tmp/cycle-003/rehearsal-materializer.log
+          node /tmp/cycle-003/scripts/apply-doctor-who-cycle-003-attribution.mjs candidate
+          test "$(sha256sum images/uc-1348-portrait.jpg | awk '{print $1}')" = "$PORTRAIT_DERIVATIVE_SHA256"
+          node scripts/autopilot.mjs validate
+          node scripts/media-audit.mjs gate --scope doctor-who
+          node scripts/waterline.mjs validate --scope doctor-who
+          npm run doctor-who:pilot-cycle:check
+          npm run doctor-who:correction-drill:check
+          npm run doctor-who:cycle-002:check
+          npm run star-trek:enwright-cycle:check
+
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          rm -rf .ci/doctor-who-cycle-003
+          git add -A
+          git diff --cached --check
+          candidate_at="$(cat /tmp/doctor-who-cycle-003-candidate-at.txt)"
+          GIT_AUTHOR_DATE="$candidate_at" GIT_COMMITTER_DATE="$candidate_at" git commit -m 'rehearsal cycle-003 candidate'
+          export CANDIDATE_COMMIT="$(git rev-parse HEAD)"
+          export WORKFLOW_JOB_ID=1
+          export CANDIDATE_GATE_SHA256=0000000000000000000000000000000000000000000000000000000000000000
+          export CANDIDATE_ARTIFACT_NAME=doctor-who-cycle-003-rehearsal
+          export CANDIDATE_ARTIFACT_ID=1
+          export CANDIDATE_ARTIFACT_SHA256=1111111111111111111111111111111111111111111111111111111111111111
+          export GITHUB_RUN_ID=1
+          node /tmp/cycle-003/scripts/apply-doctor-who-cycle-finalize-003.mjs 2>&1 | tee /tmp/cycle-003/rehearsal-finalizer.log
+          node /tmp/cycle-003/scripts/apply-doctor-who-cycle-003-attribution.mjs final
+          npm run doctor-who:cycle-003:check
+          npm run doctor-who:cycle-002:check
+          npm run doctor-who:pilot-cycle:check
+          npm run doctor-who:correction-drill:check
+          node scripts/autopilot.mjs validate
+          node scripts/media-audit.mjs gate --scope doctor-who
+          node scripts/waterline.mjs validate --scope doctor-who
+          git add -A
+          git diff --cached --check
+          final_at="$(cat /tmp/doctor-who-cycle-003-final-at.txt)"
+          GIT_AUTHOR_DATE="$final_at" GIT_COMMITTER_DATE="$final_at" git commit -m 'rehearsal cycle-003 final'
+          npm run gate -- --skip-rendered 2>&1 | tee /tmp/cycle-003/rehearsal-gate.log
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          git restore --worktree -- .
+          test -z "$(git status --porcelain)"
+          printf '%s\n' "$(git rev-parse HEAD)" > /tmp/cycle-003/rehearsal-final-head.txt
+
+      - name: Package exact scripts and portrait transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /tmp/cycle-003/scripts
+          tar --sort=name --mtime='UTC 2026-08-03' --owner=0 --group=0 --numeric-owner \
+            -czf /tmp/cycle-003/scripts.tgz \
+            apply-doctor-who-cycle-003.mjs \
+            apply-doctor-who-cycle-finalize-003.mjs \
+            apply-doctor-who-cycle-003-attribution.mjs
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p "$OUT_DIR"
+          base64 -w 76 /tmp/cycle-003/scripts.tgz > "$OUT_DIR/scripts.tgz.b64"
+          base64 -w 76 /tmp/cycle-003/portrait/annette-badland-portrait.jpg > "$OUT_DIR/annette-badland-portrait.jpg.b64"
+          scripts_sha="$(sha256sum /tmp/cycle-003/scripts.tgz | awk '{print $1}')"
+          portrait_sha="$(sha256sum /tmp/cycle-003/portrait/annette-badland-portrait.jpg | awk '{print $1}')"
+          cat > "$OUT_DIR/transport-manifest.json" <<JSON
+          {
+            "version": 1,
+            "transaction": "doctor-who-cycle-003-margaret-blaine",
+            "base_main": "$EXACT_MAIN",
+            "task_id": "ap_ba63d075857222943e609a7f",
+            "scripts_tgz_sha256": "$scripts_sha",
+            "portrait_sha256": "$portrait_sha",
+            "portrait_source_original_sha256": "$PORTRAIT_ORIGINAL_SHA256",
+            "portrait_source_file": "File:Annette Badland 2025.jpg",
+            "portrait_source_license": "CC BY-SA 2.0",
+            "portrait_source_photographer": "Raph_PH",
+            "rehearsal_final_head": "$(cat /tmp/cycle-003/rehearsal-final-head.txt)",
+            "invariants": {
+              "lease_published": false,
+              "task_published": false,
+              "portrait_reviewed": true,
+              "character_still_absent": true,
+              "quality_floor_weakened": false
+            }
+          }
+          JSON
+          sha256sum \
+            "$OUT_DIR/scripts.tgz.b64" \
+            "$OUT_DIR/annette-badland-portrait.jpg.b64" \
+            "$OUT_DIR/transport-manifest.json" \
+            > /tmp/cycle-003/transport-files.sha256
+          git add -- "$OUT_DIR"
+          git diff --cached --check
+          test "$(git diff --cached --name-only | sort | tr '\n' ' ')" = ".ci/doctor-who-cycle-003/annette-badland-portrait.jpg.b64 .ci/doctor-who-cycle-003/scripts.tgz.b64 .ci/doctor-who-cycle-003/transport-manifest.json "
+
+      - name: Commit and publish the rehearsed non-workflow transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          git commit \
+            -m 'Doctor Who: stage rehearsed cycle-003 Margaret Blaine transport' \
+            -m 'bind the exact queued task, preserved Tardis revision, and reviewed attributable Annette Badland portrait' \
+            -m 'publish no lease or product state'
+          transport_head="$(git rev-parse HEAD)"
+          git fetch --no-tags --depth=32 origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+          echo "transport_head=$transport_head" >> "$GITHUB_STEP_SUMMARY"
+          echo "scripts_tgz_sha256=$(sha256sum /tmp/cycle-003/scripts.tgz | awk '{print $1}')" >> "$GITHUB_STEP_SUMMARY"
+          echo "portrait_sha256=$PORTRAIT_DERIVATIVE_SHA256" >> "$GITHUB_STEP_SUMMARY"
+          echo 'remote_lease_issued=false' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload complete build and rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-003-transport-build-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: warn
+          path: |
+            /tmp/exact-main.txt
+            /tmp/expected-generator-paths.txt
+            /tmp/actual-generator-paths.txt
+            /tmp/cycle-003/convention.json
+            /tmp/cycle-003/scripts.txt
+            /tmp/cycle-003/scripts.tgz
+            /tmp/cycle-003/base/scripts.tgz
+            /tmp/cycle-003/base/patch-current.mjs.gz
+            /tmp/cycle-003/portrait/commons.json
+            /tmp/cycle-003/portrait/annette-badland-original.jpg
+            /tmp/cycle-003/portrait/annette-badland-portrait.jpg
+            /tmp/cycle-003/portrait/original-dimensions.txt
+            /tmp/cycle-003/portrait/derivative-dimensions.txt
+            /tmp/cycle-003/rehearsal-materializer.log
+            /tmp/cycle-003/rehearsal-finalizer.log
+            /tmp/cycle-003/rehearsal-gate.log
+            /tmp/cycle-003/rehearsal-final-head.txt
+            /tmp/cycle-003/transport-files.sha256
+            .ci/doctor-who-cycle-003/transport-manifest.json
