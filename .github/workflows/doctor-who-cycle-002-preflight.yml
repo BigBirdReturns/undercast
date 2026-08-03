@@ -1,0 +1,233 @@
+name: close-star-trek-media-debt-before-next-cycle
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/doctor-who-cycle-002-preflight.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: close-star-trek-media-debt-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXACT_MAIN: ${{ github.event.pull_request.base.sha }}
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  SELF: .github/workflows/doctor-who-cycle-002-preflight.yml
+
+jobs:
+  close-debt:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 16
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind exact current main and segmented transport
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=16 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+
+          cat > /tmp/expected-transport-paths.txt <<'PATHS'
+          .ci/star-trek-media-debt/patcher-00.b64
+          .ci/star-trek-media-debt/patcher-01.b64
+          .ci/star-trek-media-debt/patcher-02.b64
+          .ci/star-trek-media-debt/patcher-03.b64
+          .ci/star-trek-media-debt/patcher-04.b64
+          .ci/star-trek-media-debt/patcher-05.b64
+          .github/workflows/doctor-who-cycle-002-preflight.yml
+          PATHS
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-transport-paths.txt
+          diff -u /tmp/expected-transport-paths.txt /tmp/actual-transport-paths.txt
+
+          reviewed_at="$(git show -s --format=%cI "$AUTHORIZED_HEAD")"
+          echo "REVIEWED_AT=$reviewed_at" >> "$GITHUB_ENV"
+          echo "reviewed_at=$reviewed_at" >> "$GITHUB_STEP_SUMMARY"
+          echo "exact_main=$EXACT_MAIN" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Close exact media debt and scope-bind the completed pilot
+        run: |
+          set -euo pipefail
+          cat .ci/star-trek-media-debt/patcher-*.b64 \
+            | tr -d '\n\r\t ' \
+            | base64 --decode \
+            > /tmp/apply-star-trek-media-debt-closure.mjs
+          node --check /tmp/apply-star-trek-media-debt-closure.mjs
+          node /tmp/apply-star-trek-media-debt-closure.mjs 2>&1 \
+            | tee /tmp/star-trek-media-debt-closure.log
+          node --check scripts/doctor-who-pilot-cycle.mjs
+
+          node scripts/media-audit.mjs validate
+          node scripts/media-audit.mjs status --scope star-trek --json \
+            > /tmp/star-trek-media-status-after.json
+          node scripts/media-audit.mjs gate --scope star-trek
+
+          node scripts/corpus-ops.mjs validate
+          node scripts/corpus-ops.mjs status --json \
+            > /tmp/corpus-status-after.json
+          node scripts/corpus-ops.mjs next --json \
+            > /tmp/corpus-next-after.json
+
+          node scripts/waterline.mjs validate --scope star-trek
+          node scripts/waterline.mjs status --scope star-trek --json \
+            > /tmp/star-trek-waterline-after.json
+          node scripts/waterline.mjs validate --scope doctor-who
+          node scripts/waterline.mjs status --scope doctor-who --json \
+            > /tmp/doctor-who-waterline-after.json
+
+          node scripts/autopilot.mjs status --scope doctor-who --json \
+            > /tmp/doctor-who-autopilot-after.json
+          npm run activation:check
+          npm run doctor-who:pilot-cycle:check
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const media = JSON.parse(fs.readFileSync('/tmp/star-trek-media-status-after.json', 'utf8'));
+          const corpus = JSON.parse(fs.readFileSync('/tmp/corpus-status-after.json', 'utf8'));
+          const next = JSON.parse(fs.readFileSync('/tmp/corpus-next-after.json', 'utf8'));
+          const trekWaterline = JSON.parse(fs.readFileSync('/tmp/star-trek-waterline-after.json', 'utf8'));
+          const receipt = JSON.parse(fs.readFileSync('data/review/adapter-sdk/doctor-who-pilot-cycle-001.json', 'utf8'));
+
+          if (media.total !== 882 || media.complete !== 882 || media.verified !== 612
+            || media.absent !== 270 || media.review !== 0 || media.attention !== 0) {
+            throw new Error(`unexpected closed media summary ${JSON.stringify(media)}`);
+          }
+          const trek = corpus.estates.find((row) => row.id === 'star-trek');
+          if (!trek || trek.media?.debt !== 0 || trek.media?.verified !== 612 || trek.media?.absent !== 270) {
+            throw new Error('corpus Star Trek media debt did not close');
+          }
+          if (next.kind === 'close-media-debt' && next.estate === 'star-trek') {
+            throw new Error('corpus scheduler still selects the retired Star Trek media debt');
+          }
+          if (trekWaterline.media?.debt !== 0 || trekWaterline.phase === 'media-catch-up') {
+            throw new Error('Star Trek waterline did not leave media catch-up');
+          }
+          if (receipt.media?.binding_version !== 2
+            || receipt.media?.binding_scope !== 'doctor-who/UC-1345'
+            || receipt.media?.pilot_item_ids?.length !== 2
+            || Object.prototype.hasOwnProperty.call(receipt.media || {}, 'media_audit_sha256')) {
+            throw new Error('Doctor Who pilot media receipt did not become scope-bound');
+          }
+          NODE
+
+      - name: Stage exact workflow-free five-path product and run candidate gate
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          git rm -rf "$SELF" .ci/star-trek-media-debt
+          git add -A
+
+          cat > /tmp/expected-product-paths.txt <<'PATHS'
+          data/MEDIA-AUDIT.json
+          data/journal/media-audit.jsonl
+          data/review/adapter-sdk/doctor-who-pilot-cycle-001.json
+          docs/AUTOPILOT.md
+          scripts/doctor-who-pilot-cycle.mjs
+          PATHS
+          git diff --cached --name-only "$EXACT_MAIN" | sort > /tmp/candidate-product-paths.txt
+          diff -u /tmp/expected-product-paths.txt /tmp/candidate-product-paths.txt
+          git diff --cached --check
+          test -z "$(git diff --name-only)"
+
+          npm run gate 2>&1 | tee /tmp/star-trek-media-debt-candidate-gate.log
+
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+
+      - name: Commit exact product and run complete final-tree gate
+        run: |
+          set -euo pipefail
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git commit \
+            -m 'Media audit: close the final Star Trek portrait debt' \
+            -m 'enforce exact Rick Worthy and James Doohan portrait rulings' \
+            -m 'scope-bind the completed Doctor Who pilot media receipt'
+
+          new_head="$(git rev-parse HEAD)"
+          echo "NEW_HEAD=$new_head" >> "$GITHUB_ENV"
+          echo "product_head=$new_head" >> "$GITHUB_STEP_SUMMARY"
+
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/final-product-paths.txt
+          diff -u /tmp/expected-product-paths.txt /tmp/final-product-paths.txt
+          git diff --check "$EXACT_MAIN"...HEAD
+
+          npm run gate 2>&1 | tee /tmp/star-trek-media-debt-final-gate.log
+
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          test -z "$(git status --porcelain)"
+          git ls-tree -r --name-only HEAD > /tmp/star-trek-media-debt-final-tree.txt
+          ! grep -Eq '^\.github/workflows/doctor-who-cycle-002-preflight\.yml$|^\.ci/star-trek-media-debt/' \
+            /tmp/star-trek-media-debt-final-tree.txt
+
+      - name: Publish exact five-path product under branch lease
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=16 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+
+          echo "published_head=$NEW_HEAD" >> "$GITHUB_STEP_SUMMARY"
+          echo "product_paths=5" >> "$GITHUB_STEP_SUMMARY"
+          echo "lease_issued=false" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact rulings and complete-gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-media-debt-closure-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-media-debt-resolution.json
+            /tmp/star-trek-media-debt-resolution.log
+            /tmp/star-trek-media-debt-closure.log
+            /tmp/star-trek-media-debt-closure-summary.json
+            /tmp/star-trek-media-status-after.json
+            /tmp/corpus-status-after.json
+            /tmp/corpus-next-after.json
+            /tmp/star-trek-waterline-after.json
+            /tmp/doctor-who-waterline-after.json
+            /tmp/doctor-who-autopilot-after.json
+            /tmp/star-trek-media-debt-candidate-gate.log
+            /tmp/star-trek-media-debt-final-gate.log
+            /tmp/expected-transport-paths.txt
+            /tmp/actual-transport-paths.txt
+            /tmp/expected-product-paths.txt
+            /tmp/candidate-product-paths.txt
+            /tmp/final-product-paths.txt
+            /tmp/star-trek-media-debt-final-tree.txt
+            data/review/adapter-sdk/doctor-who-pilot-cycle-001.json
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
