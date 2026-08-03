@@ -1,0 +1,197 @@
+name: post-merge-enwright-proof
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/post-merge-enwright-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: post-merge-enwright-proof-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXACT_MAIN: ${{ github.event.pull_request.base.sha }}
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  SELF: .github/workflows/post-merge-enwright-proof.yml
+  EXPECTED_MAIN: dd03bcf68f090f717ce7888611be3152b5b5b6b4
+  PRODUCT_HEAD: 9ccd13279068cb5832c93df7e28329049774bcba
+  TASK_ID: ap_fddff4a188eb5eb9fbefd86f
+  LEASE_ID: lease_e6c0541e10146179ad56a867
+  WALL_ID: UC-1346
+  CYCLE_ID: cycle_9cdab3104f46a978639c5051
+  RECEIPT_SHA256: f045d26826c2a6e568f4214de43b0727055cc7883ee4f5a451a1d2d38007dce8
+
+jobs:
+  prove:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind exact merged main and one-file read-only transport
+        run: |
+          set -euo pipefail
+          test "$EXACT_MAIN" = "$EXPECTED_MAIN"
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test "$(git rev-parse HEAD^)" = "$EXACT_MAIN"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=4 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git diff --name-only "$EXACT_MAIN"...HEAD)" = "$SELF"
+          git diff --quiet "$PRODUCT_HEAD" "$EXPECTED_MAIN"
+          ! git ls-tree -r --name-only refs/remotes/origin/main | grep -Eq '^\.github/workflows/(star-trek-enwright-completion|post-merge-enwright-proof)\.yml$|^\.ci/star-trek-enwright/'
+
+      - name: Prove exact Enwright product and cycle state on merged main
+        run: |
+          set -euo pipefail
+          git worktree add --detach /tmp/merged-main refs/remotes/origin/main
+          ln -s "$GITHUB_WORKSPACE/node_modules" /tmp/merged-main/node_modules
+          cd /tmp/merged-main
+
+          node scripts/autopilot.mjs validate
+          node scripts/media-audit.mjs validate
+          node scripts/waterline.mjs validate --scope star-trek
+          node scripts/waterline.mjs validate --scope doctor-who
+          npm run star-trek:enwright-cycle:check
+
+          node scripts/autopilot.mjs status --scope star-trek --json > /tmp/star-trek-autopilot.json
+          node scripts/media-audit.mjs status --scope star-trek --json > /tmp/star-trek-media.json
+          node scripts/waterline.mjs status --scope star-trek --json > /tmp/star-trek-waterline.json
+          node scripts/waterline.mjs status --scope doctor-who --json > /tmp/doctor-who-waterline.json
+          node scripts/corpus-ops.mjs next --json > /tmp/corpus-next.json
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const stable = (value) => Array.isArray(value)
+            ? value.map(stable)
+            : value && typeof value === 'object'
+              ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])]))
+              : value;
+          const sha = (text) => crypto.createHash('sha256').update(text).digest('hex');
+          const read = (path) => JSON.parse(fs.readFileSync(path, 'utf8'));
+          const specimens = read('data/specimens.json');
+          const sources = read('data/SOURCES.json');
+          const autopilot = read('data/AUTOPILOT.json');
+          const waterline = read('data/WATERLINE-STATE.json');
+          const receipt = read('data/review/star-trek-enwright-cycle.json');
+          const media = read('/tmp/star-trek-media.json');
+          const star = read('/tmp/star-trek-waterline.json');
+          const doctor = read('/tmp/doctor-who-waterline.json');
+          const status = read('/tmp/star-trek-autopilot.json');
+          const next = read('/tmp/corpus-next.json');
+
+          const wall = specimens.find((row) => row.id === process.env.WALL_ID);
+          if (!wall || wall.actor !== 'James Doohan' || wall.character !== 'Enwright'
+            || wall.kind !== 'voice' || wall.transform !== 2 || wall.years !== '1968') {
+            throw new Error(`merged Enwright canonical row drifted: ${JSON.stringify(wall)}`);
+          }
+          const source = sources.find((row) => row.id === process.env.WALL_ID);
+          if (!source || source.still !== null || source.portrait !== null) {
+            throw new Error('merged Enwright media is not exact null/null custody');
+          }
+          const task = autopilot.jobs.find((row) => row.id === process.env.TASK_ID);
+          if (!task || task.status !== 'resolved' || task.lease || task.outcome?.kind !== 'audited-wall'
+            || JSON.stringify(task.wall_ids) !== JSON.stringify([process.env.WALL_ID])) {
+            throw new Error(`merged Enwright task drifted: ${JSON.stringify(task)}`);
+          }
+          const cycle = waterline.cycles.find((row) => row.id === process.env.CYCLE_ID);
+          if (!cycle || cycle.lease_id !== process.env.LEASE_ID || cycle.outcome !== 'completed'
+            || cycle.task_statuses?.[process.env.TASK_ID] !== 'resolved'
+            || cycle.reviewed_by !== 'chatgpt-second-desk') {
+            throw new Error(`merged Enwright cycle drifted: ${JSON.stringify(cycle)}`);
+          }
+          const clone = structuredClone(receipt);
+          delete clone.receipt_sha256;
+          const calculated = sha(JSON.stringify(stable(clone)) + '\n');
+          if (receipt.receipt_sha256 !== process.env.RECEIPT_SHA256 || calculated !== process.env.RECEIPT_SHA256) {
+            throw new Error(`permanent receipt hash drifted: declared=${receipt.receipt_sha256} calculated=${calculated}`);
+          }
+          if (media.total !== 884 || media.complete !== 884 || media.verified !== 612
+            || media.absent !== 272 || media.review !== 0 || media.attention !== 0) {
+            throw new Error(`merged media denominator drifted: ${JSON.stringify(media)}`);
+          }
+          if (status.total !== 2228 || status.in_flight !== 0 || status.statuses?.queued !== 1836
+            || status.statuses?.resolved !== 391 || status.statuses?.rejected !== 1) {
+            throw new Error(`merged queue denominator drifted: ${JSON.stringify(status)}`);
+          }
+          if (star.phase !== 'ready-for-cycle' || star.claim_allowed !== true
+            || doctor.phase !== 'ready-for-cycle' || doctor.claim_allowed !== true) {
+            throw new Error(`post-cycle waterlines are not green: ${JSON.stringify({star, doctor})}`);
+          }
+          if (next.kind !== 'lease-one-cycle' || next.estate !== 'star-trek') {
+            throw new Error(`corpus scheduler did not advance naturally: ${JSON.stringify(next)}`);
+          }
+
+          const summary = {
+            version: 1,
+            transaction: 'POST-MERGE-ENWRIGHT-PROOF',
+            main: process.env.EXPECTED_MAIN,
+            product_tree_equivalent_to: process.env.PRODUCT_HEAD,
+            task: { id: process.env.TASK_ID, status: task.status, wall_id: process.env.WALL_ID },
+            cycle: { id: cycle.id, lease_id: cycle.lease_id, outcome: cycle.outcome },
+            media,
+            queue: status,
+            waterlines: {
+              star_trek: { phase: star.phase, claim_allowed: star.claim_allowed },
+              doctor_who: { phase: doctor.phase, claim_allowed: doctor.claim_allowed }
+            },
+            next,
+            boundary: { additional_lease_issued: false, canonical_mutation: false }
+          };
+          fs.writeFileSync('/tmp/post-merge-enwright-summary.json', JSON.stringify(summary, null, 2) + '\n');
+          console.log(JSON.stringify(summary, null, 2));
+          NODE
+
+      - name: Run complete repository and rendered-browser gate on actual main
+        run: |
+          set -euo pipefail
+          cd /tmp/merged-main
+          npm run gate 2>&1 | tee /tmp/post-merge-enwright-gate.log
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          rm -f node_modules
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MAIN"
+          git fetch --no-tags --depth=2 origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+
+      - name: Upload exact merged-main proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-merge-enwright-proof-${{ github.run_id }}
+          path: |
+            /tmp/post-merge-enwright-summary.json
+            /tmp/post-merge-enwright-gate.log
+            /tmp/star-trek-autopilot.json
+            /tmp/star-trek-media.json
+            /tmp/star-trek-waterline.json
+            /tmp/doctor-who-waterline.json
+            /tmp/corpus-next.json
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
