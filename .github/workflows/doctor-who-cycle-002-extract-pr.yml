@@ -1,0 +1,119 @@
+name: doctor-who-cycle-002-extract-pr
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/doctor-who-cycle-002-extract-pr.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      EXACT_MAIN: e8f5cb652daa5ed325bc84d85d41412e7c4d44c3
+      TASK_ID: ap_f6ca3d513c7ac0b6b9d67ce1
+      SOURCE_URL: https://tardis.fandom.com/wiki/Gredd
+      SOURCE_FINGERPRINT: 4be5cb67c57115c6f679e0c86361206eabd2768c39fb3c1f8326dcd8c120bfd0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 8
+
+      - name: Bind exact current main and read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=8 origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+          cat > /tmp/expected-paths.txt <<'PATHS'
+          .github/workflows/doctor-who-cycle-002-extract-pr.yml
+          .github/workflows/doctor-who-cycle-002-extract.yml
+          PATHS
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+          test -z "$(git status --porcelain)"
+
+      - name: Extract exact Gredd custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gredd
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+          const write = (name, value) => fs.writeFileSync(path.join('/tmp/gredd', name), JSON.stringify(value, null, 2) + '\n');
+          const taskId = process.env.TASK_ID;
+          const source = process.env.SOURCE_URL;
+          const fingerprint = process.env.SOURCE_FINGERPRINT;
+          const state = read('data/AUTOPILOT.json');
+          const task = state.jobs.find((row) => row.id === taskId);
+          if (!task || task.scope !== 'doctor-who' || task.status !== 'queued') throw new Error('Gredd task missing or not queued');
+          if (task.performer !== 'Dan Starkey' || task.character !== 'Gredd') throw new Error('Gredd identity drifted');
+          if (task.source_fingerprint !== fingerprint || JSON.stringify(task.sources) !== JSON.stringify([source])) throw new Error('Gredd source custody drifted');
+          write('task.json', task);
+          const matches = (doc) => Object.fromEntries(Object.entries(doc).map(([key, value]) => [key, Array.isArray(value) ? value.filter((row) => JSON.stringify(row).includes(source) || JSON.stringify(row).includes(fingerprint) || JSON.stringify(row).includes(taskId) || /Gredd/i.test(JSON.stringify(row))) : value]).filter(([, value]) => !Array.isArray(value) || value.length));
+          write('manifest-matches.json', matches(read('data/CENSUS-MANIFEST.json')));
+          write('coverage-matches.json', matches(read('data/CENSUS-COVERAGE.json')));
+          write('existing-dan-starkey.json', read('data/specimens.json').filter((row) => row.actor === 'Dan Starkey'));
+          const jobs = state.jobs.filter((row) => row.scope === 'doctor-who');
+          write('summary.json', {
+            exact_main: process.env.EXACT_MAIN,
+            task,
+            queue: {
+              total: jobs.length,
+              queued: jobs.filter((row) => row.status === 'queued').length,
+              in_flight: jobs.filter((row) => ['leased', 'drafted', 'merged'].includes(row.status)).length,
+              resolved: jobs.filter((row) => row.status === 'resolved').length,
+            },
+          });
+          NODE
+          git grep -n -i -E 'Gredd|ap_f6ca3d513c7ac0b6b9d67ce1|4be5cb67c57115c6f679e0c86361206eabd2768c39fb3c1f8326dcd8c120bfd0' > /tmp/gredd/git-grep.txt || true
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact task and current implementation surfaces
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-002-gredd-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            /tmp/expected-paths.txt
+            /tmp/actual-paths.txt
+            /tmp/gredd
+            data/AUTOPILOT.json
+            data/journal/autopilot.jsonl
+            data/WATERLINE-STATE.json
+            data/journal/waterline.jsonl
+            data/MEDIA-AUDIT.json
+            data/journal/media-audit.jsonl
+            data/MEDIA-AUDIT-SCOPES.json
+            data/ESTATE-REGISTRY.json
+            data/specimens.json
+            data/SOURCES.json
+            data/AUTOPILOT-CAPABILITIES.json
+            data/AUTOPILOT-SCOPES.json
+            data/review/adapter-sdk/doctor-who-pilot-cycle-001.json
+            data/review/adapter-sdk/doctor-who-correction-drill-001.json
+            package.json
+            package-lock.json
+            scripts/autopilot.mjs
+            scripts/lib/autopilot.mjs
+            scripts/grow.mjs
+            scripts/credits.mjs
+            scripts/sync-sources.mjs
+            scripts/media-audit.mjs
+            scripts/lib/media-audit.mjs
+            scripts/waterline.mjs
+            scripts/lib/waterline.mjs
+            scripts/doctor-who-pilot-cycle.mjs
+            scripts/doctor-who-correction-drill.mjs
+            scripts/gate.mjs
