@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { snapshotReadiness } from "./lib/autopilot-certification.mjs";
 
 const readRaw = (file) => readFileSync(file);
 const readJson = (file) => JSON.parse(readRaw(file));
@@ -67,8 +68,14 @@ assert.equal(activationReport.boundary.media_review_performed, false, "activatio
 
 same(certificate.producer_files, adapter.producer_files, "certificate producer files drifted from the registered adapter");
 assert.ok(certificate.checks.length >= 2 && certificate.checks.every((row) => row.status === "passed"), "Doctor Who certificate lacks passed producer checks");
-assert.equal(certificate.snapshot.coverage_file_sha256, sha256(readRaw("data/CENSUS-COVERAGE.json")), "certificate coverage file hash is stale");
-assert.equal(certificate.snapshot.manifest_file_sha256, sha256(readRaw("data/CENSUS-MANIFEST.json")), "certificate manifest file hash is stale");
+const currentSnapshot = snapshotReadiness(scope, coverage, manifest, {
+  coverageSha256: sha256(readRaw("data/CENSUS-COVERAGE.json")),
+  manifestSha256: sha256(readRaw("data/CENSUS-MANIFEST.json")),
+});
+assert.equal(certificate.snapshot.coverage_sha256, currentSnapshot.coverage_sha256, "certificate scope coverage hash is stale");
+assert.equal(certificate.snapshot.manifest_sha256, currentSnapshot.manifest_sha256, "certificate scope manifest hash is stale");
+assert.match(certificate.snapshot.coverage_file_sha256, /^[0-9a-f]{64}$/, "certificate historical coverage file hash is invalid");
+assert.match(certificate.snapshot.manifest_file_sha256, /^[0-9a-f]{64}$/, "certificate historical manifest file hash is invalid");
 
 const doctorCoverage = coverage.filter((row) => row.franchise === "Doctor Who");
 const doctorObservations = (manifest.observations || []).filter((row) => row.franchise === "Doctor Who");
