@@ -17,6 +17,7 @@ concurrency:
 env:
   EXACT_MAIN: 04551b140022c7b733b0290e10c7e40905aabc76
   WORKFLOW_PATH: .github/workflows/doctor-who-cycle-002-preflight.yml
+  ACTIVE_PROFILE: text-vision
 
 jobs:
   preflight:
@@ -60,9 +61,8 @@ jobs:
           node scripts/waterline.mjs status --scope doctor-who --json > /tmp/doctor-who-waterline.json
           node scripts/autopilot.mjs readiness --scope doctor-who --require-active --json > /tmp/doctor-who-readiness.json
           node scripts/autopilot.mjs status --scope doctor-who --json > /tmp/doctor-who-autopilot-status.json
-          node scripts/autopilot.mjs candidates --scope doctor-who --capability-profile text-vision --limit 50 --json > /tmp/doctor-who-candidates-text-vision.json
-          node scripts/autopilot.mjs candidates --scope doctor-who --capability-profile text-image-audio --limit 50 --json > /tmp/doctor-who-candidates-text-image-audio.json
-          node scripts/autopilot.mjs candidates --scope doctor-who --capability-profile full-performance --limit 50 --json > /tmp/doctor-who-candidates-full-performance.json
+          cp data/AUTOPILOT-CAPABILITIES.json /tmp/doctor-who-capability-policy.json
+          node scripts/autopilot.mjs candidates --scope doctor-who --capability-profile "$ACTIVE_PROFILE" --limit 100 --json > /tmp/doctor-who-candidates.json
           node scripts/corpus-ops.mjs next --json > /tmp/corpus-next.json
           test -z "$(git status --porcelain)"
 
@@ -70,26 +70,23 @@ jobs:
           const fs = require('fs');
           const read = (name) => JSON.parse(fs.readFileSync(`/tmp/${name}`, 'utf8'));
           const waterline = read('doctor-who-waterline.json');
+          const readiness = read('doctor-who-readiness.json');
           const status = read('doctor-who-autopilot-status.json');
-          const textVision = read('doctor-who-candidates-text-vision.json');
-          const audio = read('doctor-who-candidates-text-image-audio.json');
-          const full = read('doctor-who-candidates-full-performance.json');
+          const policy = read('doctor-who-capability-policy.json');
+          const candidates = read('doctor-who-candidates.json');
           const next = read('corpus-next.json');
+          const profiles = policy.profiles.map(({ id, status, capabilities }) => ({ id, status, capabilities }));
           const summary = {
             exact_main: process.env.EXACT_MAIN,
             lease_issued: false,
+            active_profile: process.env.ACTIVE_PROFILE,
+            declared_profiles: profiles,
             waterline,
+            readiness,
             autopilot: status,
-            candidate_counts: {
-              text_vision: textVision.counts,
-              text_image_audio: audio.counts,
-              full_performance: full.counts,
-            },
-            first_compatible: {
-              text_vision: textVision.compatible.slice(0, 10),
-              text_image_audio: audio.compatible.slice(0, 10),
-              full_performance: full.compatible.slice(0, 10),
-            },
+            candidate_counts: candidates.counts,
+            first_compatible: candidates.compatible.slice(0, 20),
+            first_incompatible: candidates.incompatible.slice(0, 20),
             corpus_next: next,
           };
           fs.writeFileSync('/tmp/doctor-who-cycle-002-readonly-summary.json', JSON.stringify(summary, null, 2) + '\n');
@@ -97,19 +94,20 @@ jobs:
           NODE
 
       - name: Upload exact read-only evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: doctor-who-cycle-002-readonly-${{ github.run_id }}
           retention-days: 30
           compression-level: 0
+          if-no-files-found: error
           path: |
             /tmp/expected-paths.txt
             /tmp/actual-paths.txt
             /tmp/doctor-who-waterline.json
             /tmp/doctor-who-readiness.json
             /tmp/doctor-who-autopilot-status.json
-            /tmp/doctor-who-candidates-text-vision.json
-            /tmp/doctor-who-candidates-text-image-audio.json
-            /tmp/doctor-who-candidates-full-performance.json
+            /tmp/doctor-who-capability-policy.json
+            /tmp/doctor-who-candidates.json
             /tmp/corpus-next.json
             /tmp/doctor-who-cycle-002-readonly-summary.json
