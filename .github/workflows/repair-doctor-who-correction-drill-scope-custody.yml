@@ -1,0 +1,418 @@
+name: repair-doctor-who-correction-drill-scope-custody
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/repair-doctor-who-correction-drill-scope-custody.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-doctor-who-correction-drill-scope-custody-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXACT_MAIN: ${{ github.event.pull_request.base.sha }}
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  SELF: .github/workflows/repair-doctor-who-correction-drill-scope-custody.yml
+  CHECKER: scripts/doctor-who-correction-drill.mjs
+  RECEIPT: data/review/adapter-sdk/doctor-who-correction-drill-001-scope-custody.json
+
+jobs:
+  repair:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind exact current main and transport-only branch
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=4 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git rev-parse HEAD^)" = "$EXACT_MAIN"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git diff --name-only "$EXACT_MAIN"...HEAD)" = "$SELF"
+          repaired_at="$(git show -s --format=%cI "$AUTHORIZED_HEAD")"
+          echo "REPAIRED_AT=$repaired_at" >> "$GITHUB_ENV"
+          echo "repaired_at=$repaired_at" >> "$GITHUB_STEP_SUMMARY"
+          echo "exact_main=$EXACT_MAIN" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Scope-bind the historical drill and add adversarial self-proof
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          checker_path = Path(os.environ["CHECKER"])
+          receipt_path = Path(os.environ["RECEIPT"])
+          script = checker_path.read_text()
+
+          def replace_once(old: str, new: str, label: str) -> None:
+              global script
+              count = script.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one replacement point, found {count}")
+              script = script.replace(old, new)
+
+          replace_once(
+              'const PILOT_RECEIPT_SHA256 = "9ed078b768191a80845bab6ce221ea335960e3a3efeee95235d94a76cd8205eb";\n',
+              '''const HISTORICAL_PILOT_RECEIPT_SHA256 = "9ed078b768191a80845bab6ce221ea335960e3a3efeee95235d94a76cd8205eb";
+          const PILOT_MEDIA_BINDING_SCOPE = "doctor-who/UC-1345";
+          const PILOT_MEDIA_ITEM_IDS = ["ma_ee364d31319f0943c9c4f8ce", "ma_f8ee1f03ec2173d75f6f85ea"];
+          const PILOT_MEDIA_FACETS_SHA256 = "d8f69833e561b9a01754d9ee906d30255f4c45ef1894ef289e2e12bc1ffc363b";
+          const SCOPE_REPAIR_TRANSACTION = "DOCTOR-WHO-CORRECTION-DRILL-SCOPE-CUSTODY-001";
+          const SCOPE_REPAIR_BASE_SHA = "e8f5cb652daa5ed325bc84d85d41412e7c4d44c3";
+          const FAILED_CLAIM_RUN = 30801441270;
+          const FAILED_CLAIM_JOB = 91646681213;
+          const FAILED_CLAIM_ARTIFACT_ID = 8850976176;
+          const FAILED_CLAIM_ARTIFACT_SHA256 = "612c0aac4ca41db3101bb0a72fe1701528f036ec9bf78da091bca70fa4496d5b";
+          ''',
+              "scope constants",
+          )
+
+          replace_once(
+              '  roadmapState: "data/ROADMAP-STATE.json",\n};\n',
+              '  roadmapState: "data/ROADMAP-STATE.json",\n  scopeRepair: "data/review/adapter-sdk/doctor-who-correction-drill-001-scope-custody.json",\n};\n',
+              "repair receipt path",
+          )
+
+          helper_marker = '''const sameSet = (left, right) =>
+            left.length === right.length && left.every((value) => right.includes(value));
+          '''
+          helper_replacement = helper_marker + '''
+          const ACTIVE_JOB_STATUSES = new Set(["leased", "drafted", "merged"]);
+          const rehashReceipt = (doc) => {
+            const clone = structuredClone(doc);
+            delete clone.receipt_sha256;
+            doc.receipt_sha256 = sha(`${stableJson(clone)}\\n`);
+            return doc;
+          };
+          const expectFailure = (fn, pattern, label) => {
+            let message = "";
+            try { fn(); }
+            catch (error) { message = String(error?.message || error); }
+            assert(pattern.test(message), `${label} did not fail closed (${message || "no error"})`);
+          };
+          const pilotFacetReceipt = (items) => [...items]
+            .sort((left, right) => left.side.localeCompare(right.side))
+            .map((item) => ({
+              id: item.id,
+              scope: item.scope,
+              wall_id: item.wall_id,
+              side: item.side,
+              actor: item.actor,
+              character: item.character,
+              expected_subject: item.expected_subject,
+              source_fetched_at: item.source_fetched_at,
+              asset: item.asset,
+              risk_codes: item.risk_codes,
+              votes: item.votes,
+              status: item.status,
+              claims: item.claims,
+            }));
+          const validateCurrentPilotReceipt = (pilotDoc, items) => {
+            assert(pilotDoc.task?.id === TASK_ID && pilotDoc.lease?.id === LEASE_ID, "pilot task or lease identity drifted");
+            assert(pilotDoc.task?.source_content_sha256 === SOURCE_CONTENT_SHA256, "pilot source-content identity drifted");
+            assert(pilotDoc.canonical?.wall_id === WALL_ID, "pilot canonical wall binding drifted");
+            assert(pilotDoc.media?.still === null && pilotDoc.media?.portrait === null, "pilot receipt no longer preserves both media absences");
+            assert(pilotDoc.media?.binding_version === 2 && pilotDoc.media?.binding_scope === PILOT_MEDIA_BINDING_SCOPE, "pilot scope-bound media binding drifted");
+            assert(sameSet(pilotDoc.media?.pilot_item_ids || [], PILOT_MEDIA_ITEM_IDS), "pilot media item identities drifted");
+            assert(pilotDoc.media?.pilot_facets_sha256 === PILOT_MEDIA_FACETS_SHA256, "pilot media facet receipt drifted");
+            assert(pilotDoc.media?.historical_global_audit_snapshot_sha256 === MEDIA_AUDIT_SHA256, "pilot historical global media snapshot drifted");
+            assert(!Object.hasOwn(pilotDoc.media || {}, "media_audit_sha256"), "deprecated mutable global media binding returned");
+            const facets = pilotFacetReceipt(items);
+            assert(sha(`${stableJson(facets)}\\n`) === PILOT_MEDIA_FACETS_SHA256, "current exact pilot media facets drifted");
+            const decoupling = pilotDoc.evidence_correction?.mutable_audit_decoupling;
+            assert(decoupling?.previous_global_audit_sha256 === MEDIA_AUDIT_SHA256, "pilot media decoupling lost historical custody");
+            assert(decoupling?.corrected_binding_scope === PILOT_MEDIA_BINDING_SCOPE, "pilot media decoupling scope drifted");
+            assert(sameSet(decoupling?.corrected_item_ids || [], PILOT_MEDIA_ITEM_IDS), "pilot media decoupling item ids drifted");
+            assert(decoupling?.corrected_pilot_facets_sha256 === PILOT_MEDIA_FACETS_SHA256, "pilot media decoupling digest drifted");
+            const clone = structuredClone(pilotDoc);
+            delete clone.receipt_sha256;
+            assert(pilotDoc.receipt_sha256 === sha(`${stableJson(clone)}\\n`), "current pilot receipt self-hash drifted");
+            assert(pilotDoc.boundary?.second_lease_issued === false, "pilot receipt now claims a second lease");
+            assert(pilotDoc.boundary?.roadmap_completion_claimed === false, "pilot receipt acquired roadmap completion authority");
+            return true;
+          };
+          const validateActiveLeaseIsolation = (jobs) => {
+            const active = (jobs || []).filter((job) => ACTIVE_JOB_STATUSES.has(job.status));
+            const leaseGroups = new Set();
+            for (const job of active) {
+              assert(job.scope !== "doctor-who", `Doctor Who acquired active work around the historical correction drill: ${job.id}`);
+              assert(String(job.lease?.id || "").trim(), `active job ${job.scope}:${job.id} lacks lease identity`);
+              leaseGroups.add(`${job.scope}|${job.lease.id}`);
+            }
+            assert(leaseGroups.size <= 1, `global one-cycle boundary has multiple active lease groups: ${[...leaseGroups].join(", ")}`);
+            return { active_jobs: active.length, lease_groups: [...leaseGroups] };
+          };
+          '''
+          replace_once(helper_marker, helper_replacement, "scope helpers")
+
+          replace_once(
+              'const roadmapState = read(PATHS.roadmapState);\n',
+              'const roadmapState = read(PATHS.roadmapState);\nconst scopeRepair = read(PATHS.scopeRepair);\n',
+              "repair receipt read",
+          )
+
+          old_pilot_block = '''assert(pilot.task?.id === TASK_ID && pilot.lease?.id === LEASE_ID, "pilot task or lease identity drifted");
+          assert(pilot.task?.source_content_sha256 === SOURCE_CONTENT_SHA256, "pilot source-content identity drifted");
+          assert(pilot.canonical?.wall_id === WALL_ID, "pilot canonical wall binding drifted");
+          assert(pilot.media?.still === null && pilot.media?.portrait === null, "pilot receipt no longer preserves both media absences");
+          assert(pilot.receipt_sha256 === PILOT_RECEIPT_SHA256, "pilot receipt declared content identity drifted");
+          const pilotReceiptClone = structuredClone(pilot);
+          delete pilotReceiptClone.receipt_sha256;
+          assert(sha(`${stableJson(pilotReceiptClone)}\\n`) === PILOT_RECEIPT_SHA256, "pilot receipt content hash drifted");
+          assert(pilot.boundary?.second_lease_issued === false, "pilot receipt now claims a second lease");
+          assert(pilot.boundary?.roadmap_completion_claimed === false, "pilot receipt acquired roadmap completion authority");
+          '''
+          replace_once(old_pilot_block, 'validateCurrentPilotReceipt(pilot, pilotItems);\n', "current pilot validation")
+
+          old_active_block = '''const activeJobs = (autopilot.jobs || []).filter((job) => ["leased", "drafted", "merged"].includes(job.status));
+          assert(activeJobs.length === 0, `global one-cycle boundary drifted; active jobs: ${activeJobs.map((job) => `${job.scope}:${job.id}`).join(", ")}`);
+          '''
+          replace_once(old_active_block, 'validateActiveLeaseIsolation(autopilot.jobs || []);\n', "active lease isolation")
+
+          old_open_cycles = '''const openCycles = (waterlineState.cycles || []).filter((cycle) => !cycle.closed_at || !cycle.reviewed_at);
+          assert(openCycles.length === 0, "an unclosed or unreviewed waterline cycle exists around the correction drill");
+          '''
+          new_open_cycles = '''const openDoctorCycles = (waterlineState.cycles || []).filter((cycle) =>
+            cycle.scope_id === "doctor-who" && (!cycle.closed_at || !cycle.reviewed_at)
+          );
+          assert(openDoctorCycles.length === 0, "an unclosed or unreviewed Doctor Who cycle exists around the correction drill");
+          '''
+          replace_once(old_open_cycles, new_open_cycles, "Doctor Who cycle isolation")
+
+          replace_once(
+              'assert(receipt.inputs?.pilot_receipt?.receipt_sha256 === PILOT_RECEIPT_SHA256, "Doctor Who drill receipt lost pilot custody");',
+              'assert(receipt.inputs?.pilot_receipt?.receipt_sha256 === HISTORICAL_PILOT_RECEIPT_SHA256, "Doctor Who drill receipt lost historical pilot custody");',
+              "historical pilot receipt custody",
+          )
+
+          old_tail = '''assert(!/<[^>\\n]+>/.test(JSON.stringify(receipt)), "Doctor Who drill receipt contains a template placeholder");
+
+          console.log("doctor-who-correction-drill: PASS — certified Commander/Slite source separation, rejected generic media, live production growth allowed, global zero-in-flight, and roadmap completion reserved for a separate reviewed transaction");
+          '''
+          new_tail = '''assert(!/<[^>\\n]+>/.test(JSON.stringify(receipt)), "Doctor Who drill receipt contains a template placeholder");
+
+          assert(scopeRepair.version === 1 && scopeRepair.transaction === SCOPE_REPAIR_TRANSACTION, "Doctor Who drill scope-repair identity drifted");
+          assert(scopeRepair.base_main_sha === SCOPE_REPAIR_BASE_SHA, "Doctor Who drill scope-repair base drifted");
+          assert(scopeRepair.failed_claim?.run === FAILED_CLAIM_RUN && scopeRepair.failed_claim?.job === FAILED_CLAIM_JOB, "Doctor Who drill failed-claim run custody drifted");
+          assert(scopeRepair.failed_claim?.artifact_id === FAILED_CLAIM_ARTIFACT_ID && scopeRepair.failed_claim?.artifact_sha256 === FAILED_CLAIM_ARTIFACT_SHA256, "Doctor Who drill failed-claim artifact custody drifted");
+          assert(scopeRepair.repair?.historical_drill_receipt_immutable === true, "Doctor Who drill historical receipt was not preserved");
+          assert(scopeRepair.repair?.current_pilot_self_hash_required === true, "Doctor Who drill current-pilot self-hash repair missing");
+          assert(scopeRepair.repair?.exact_pilot_facets_required === true, "Doctor Who drill exact-facet repair missing");
+          assert(scopeRepair.repair?.unrelated_single_cycle_allowed === true, "Doctor Who drill unrelated-cycle isolation missing");
+          assert(scopeRepair.repair?.multiple_active_cycles_refused === true, "Doctor Who drill multiple-cycle refusal missing");
+          assert(scopeRepair.code?.path === PATHS.scopeRepair.replace("data/review/adapter-sdk/doctor-who-correction-drill-001-scope-custody.json", "scripts/doctor-who-correction-drill.mjs"), "Doctor Who drill repair code path drifted");
+          assert(scopeRepair.code?.sha256 === sha(readBytes(scopeRepair.code.path)), "Doctor Who drill repair code hash drifted");
+          const scopeRepairClone = structuredClone(scopeRepair);
+          delete scopeRepairClone.receipt_sha256;
+          assert(scopeRepair.receipt_sha256 === sha(`${stableJson(scopeRepairClone)}\\n`), "Doctor Who drill scope-repair receipt hash drifted");
+
+          validateActiveLeaseIsolation([
+            { id: "fixture-star-one", scope: "star-trek", status: "leased", lease: { id: "lease_fixture_one" } },
+            { id: "fixture-doctor-queued", scope: "doctor-who", status: "queued" },
+          ]);
+          expectFailure(
+            () => validateActiveLeaseIsolation([
+              { id: "fixture-star-one", scope: "star-trek", status: "leased", lease: { id: "lease_fixture_one" } },
+              { id: "fixture-star-two", scope: "star-trek", status: "drafted", lease: { id: "lease_fixture_two" } },
+            ]),
+            /multiple active lease groups/,
+            "multiple active lease groups",
+          );
+          expectFailure(
+            () => validateActiveLeaseIsolation([
+              { id: "fixture-doctor-active", scope: "doctor-who", status: "leased", lease: { id: "lease_fixture_doctor" } },
+            ]),
+            /Doctor Who acquired active work/,
+            "Doctor Who active-work isolation",
+          );
+          const sourceDrift = structuredClone(pilot);
+          sourceDrift.task.source_content_sha256 = "0".repeat(64);
+          rehashReceipt(sourceDrift);
+          expectFailure(
+            () => validateCurrentPilotReceipt(sourceDrift, pilotItems),
+            /source-content identity drifted/,
+            "current pilot source drift",
+          );
+          const legacyBinding = structuredClone(pilot);
+          legacyBinding.media = {
+            still: null,
+            portrait: null,
+            dispositions: { still: "absent", portrait: "absent" },
+            media_audit_sha256: MEDIA_AUDIT_SHA256,
+          };
+          rehashReceipt(legacyBinding);
+          expectFailure(
+            () => validateCurrentPilotReceipt(legacyBinding, pilotItems),
+            /scope-bound media binding drifted/,
+            "legacy mutable media binding",
+          );
+
+          console.log("doctor-who-correction-drill: PASS — historical drill custody, exact Commander/Slite separation, scope-bound current pilot proof, one unrelated active cycle allowed, concurrent lease groups refused, and roadmap completion reserved");
+          '''
+          replace_once(old_tail, new_tail, "repair receipt and adversarial proof")
+
+          if "PILOT_RECEIPT_SHA256" in script:
+              raise SystemExit("stale PILOT_RECEIPT_SHA256 identifier survived")
+
+          checker_path.write_text(script)
+          checker_sha = hashlib.sha256(checker_path.read_bytes()).hexdigest()
+          repair = {
+              "version": 1,
+              "transaction": "DOCTOR-WHO-CORRECTION-DRILL-SCOPE-CUSTODY-001",
+              "generated_at": os.environ["REPAIRED_AT"],
+              "base_main_sha": os.environ["EXACT_MAIN"],
+              "failed_claim": {
+                  "run": 30801441270,
+                  "job": 91646681213,
+                  "artifact": "star-trek-next-bounded-cycle-claim-30801441270",
+                  "artifact_id": 8850976176,
+                  "artifact_sha256": "612c0aac4ca41db3101bb0a72fe1701528f036ec9bf78da091bca70fa4496d5b",
+                  "selected_task": "ap_fddff4a188eb5eb9fbefd86f",
+                  "selected_subject": "James Doohan as Enwright",
+                  "failure": "The Doctor Who controlled drill rejected a lawful unrelated Star Trek lease before publication.",
+              },
+              "defects": [
+                  "historical-pilot-receipt-hash-used-as-current-state",
+                  "global-active-job-count-used-as-Doctor-Who-drill-state",
+                  "global-open-cycle-count-used-as-Doctor-Who-drill-state",
+              ],
+              "repair": {
+                  "historical_drill_receipt_immutable": True,
+                  "current_pilot_self_hash_required": True,
+                  "exact_pilot_facets_required": True,
+                  "current_doctor_who_zero_in_flight_required": True,
+                  "unrelated_single_cycle_allowed": True,
+                  "multiple_active_cycles_refused": True,
+                  "Doctor_Who_active_cycle_refused": True,
+                  "adversarial_self_proof_embedded": True,
+              },
+              "code": {
+                  "path": "scripts/doctor-who-correction-drill.mjs",
+                  "sha256": checker_sha,
+              },
+              "qualification": {
+                  "workflow_run": int(os.environ["GITHUB_RUN_ID"]),
+                  "candidate_complete_gate_required": True,
+                  "final_workflow_free_gate_required": True,
+              },
+              "boundary": {
+                  "canonical_mutation": False,
+                  "source_ledger_mutation": False,
+                  "media_audit_mutation": False,
+                  "autopilot_state_mutation": False,
+                  "waterline_state_mutation": False,
+                  "roadmap_state_mutation": False,
+                  "lease_issued": False,
+              },
+          }
+          compact = json.dumps(repair, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"
+          repair["receipt_sha256"] = hashlib.sha256(compact.encode()).hexdigest()
+          receipt_path.parent.mkdir(parents=True, exist_ok=True)
+          receipt_path.write_text(json.dumps(repair, indent=2, ensure_ascii=False) + "\n")
+          PY
+
+          node --check "$CHECKER"
+          npm run doctor-who:correction-drill:check 2>&1 | tee /tmp/doctor-who-correction-drill-scope-custody-focused.log
+          npm run autopilot:fixtures 2>&1 | tee /tmp/doctor-who-correction-drill-scope-custody-autopilot.log
+
+      - name: Stage exact workflow-free two-path product and run candidate gate
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          git rm "$SELF"
+          git add "$CHECKER" "$RECEIPT"
+          cat > /tmp/expected-product-paths.txt <<'PATHS'
+          data/review/adapter-sdk/doctor-who-correction-drill-001-scope-custody.json
+          scripts/doctor-who-correction-drill.mjs
+          PATHS
+          git diff --cached --name-only "$EXACT_MAIN" | sort > /tmp/candidate-product-paths.txt
+          diff -u /tmp/expected-product-paths.txt /tmp/candidate-product-paths.txt
+          git diff --cached --check
+          test -z "$(git diff --name-only)"
+          npm run gate 2>&1 | tee /tmp/doctor-who-correction-drill-scope-custody-candidate-gate.log
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+
+      - name: Commit exact repair and run final workflow-free gate
+        run: |
+          set -euo pipefail
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git commit \
+            -m 'Corrections: scope-bind the Doctor Who drill checker' \
+            -m 'preserve historical custody while allowing one unrelated active cycle' \
+            -m 'refuse Doctor Who drift and concurrent lease groups'
+          new_head="$(git rev-parse HEAD)"
+          echo "NEW_HEAD=$new_head" >> "$GITHUB_ENV"
+          echo "product_head=$new_head" >> "$GITHUB_STEP_SUMMARY"
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/final-product-paths.txt
+          diff -u /tmp/expected-product-paths.txt /tmp/final-product-paths.txt
+          git diff --check "$EXACT_MAIN"...HEAD
+          npm run gate 2>&1 | tee /tmp/doctor-who-correction-drill-scope-custody-final-gate.log
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          test -z "$(git status --porcelain)"
+          ! git ls-tree -r --name-only HEAD | grep -Fx "$SELF"
+
+      - name: Publish exact repair under branch lease
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=4 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+          echo "published_head=$NEW_HEAD" >> "$GITHUB_STEP_SUMMARY"
+          echo "durable_paths=2" >> "$GITHUB_STEP_SUMMARY"
+          echo "lease_issued=false" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload repair and complete-gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-correction-drill-scope-custody-${{ github.run_id }}
+          path: |
+            /tmp/doctor-who-correction-drill-scope-custody-focused.log
+            /tmp/doctor-who-correction-drill-scope-custody-autopilot.log
+            /tmp/doctor-who-correction-drill-scope-custody-candidate-gate.log
+            /tmp/doctor-who-correction-drill-scope-custody-final-gate.log
+            /tmp/expected-product-paths.txt
+            /tmp/candidate-product-paths.txt
+            /tmp/final-product-paths.txt
+            data/review/adapter-sdk/doctor-who-correction-drill-001-scope-custody.json
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
