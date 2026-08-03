@@ -1,0 +1,107 @@
+name: materialize-doctor-who-cycle-002-v2-corrected
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/materialize-doctor-who-cycle-002-v2-corrected.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-doctor-who-cycle-002-v2-corrected-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  SOURCE: .github/workflows/complete-doctor-who-cycle-002-v2.yml
+  OUTPUT: .ci/doctor-who-cycle-002/complete-doctor-who-cycle-002-v2.corrected.yml
+
+jobs:
+  materialize:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 16
+
+      - name: Produce and validate corrected workflow bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          test -s "$SOURCE"
+
+          node --input-type=module <<'NODE'
+          import { mkdir, readFile, writeFile } from 'node:fs/promises';
+          import { dirname } from 'node:path';
+
+          const source = process.env.SOURCE;
+          const output = process.env.OUTPUT;
+          let workflow = await readFile(source, 'utf8');
+          const invalid = `          const staleAdapterCheck = 'runNode("scripts/census-adapter.mjs", ["check"]);';
+          const refreshedTerminalState = \`runNode("scripts/census-adapter.mjs", ["write"]);
+runNode("scripts/census-adapter.mjs", ["check"]);
+runNode("scripts/autopilot.mjs", ["sync", "--scope", "doctor-who", "--now", context.timestamps.final_at]);
+runNode("scripts/autopilot.mjs", ["validate"]);\`;
+          if (finalizer.split(staleAdapterCheck).length - 1 !== 1) throw new Error('unexpected terminal adapter check');
+`;
+          const valid = `          const staleAdapterCheck = 'runNode("scripts/census-adapter.mjs", ["check"]);';
+          const refreshedTerminalState = [
+            'runNode("scripts/census-adapter.mjs", ["write"]);',
+            'runNode("scripts/census-adapter.mjs", ["check"]);',
+            'runNode("scripts/autopilot.mjs", ["sync", "--scope", "doctor-who", "--now", context.timestamps.final_at]);',
+            'runNode("scripts/autopilot.mjs", ["validate"]);',
+          ].join('\\n');
+          if (finalizer.split(staleAdapterCheck).length - 1 !== 1) throw new Error('unexpected terminal adapter check');
+`;
+          if (workflow.split(invalid).length - 1 !== 1) throw new Error('malformed v2 workflow block drifted');
+          workflow = workflow.replace(invalid, valid);
+          await mkdir(dirname(output), { recursive: true });
+          await writeFile(output, workflow);
+          NODE
+
+          test -s "$OUTPUT"
+          grep -Fq "].join('\\n');" "$OUTPUT"
+          ! grep -Fxq 'runNode("scripts/census-adapter.mjs", ["check"]);' "$OUTPUT"
+          ruby -e "require 'yaml'; YAML.load_file(ARGV[0]); puts 'YAML_OK'" "$OUTPUT"
+          sha256sum "$SOURCE" "$OUTPUT" | tee /tmp/doctor-who-cycle-002-v2-corrected.sha256
+          git diff --no-index -- "$SOURCE" "$OUTPUT" | tee /tmp/doctor-who-cycle-002-v2-corrected.diff || test "$?" -eq 1
+
+      - name: Commit and push only the non-workflow corrected blob
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -- "$OUTPUT"
+          git diff --cached --check
+          test "$(git diff --cached --name-only)" = "$OUTPUT"
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git commit -m 'Doctor Who: materialize the corrected v2 writer blob'
+          output_head="$(git rev-parse HEAD)"
+          git fetch --no-tags --depth=16 origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+          echo "output_head=$output_head" >> "$GITHUB_STEP_SUMMARY"
+          echo "output_path=$OUTPUT" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload correction proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-002-v2-corrected-${{ github.run_id }}
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: warn
+          path: |
+            .ci/doctor-who-cycle-002/complete-doctor-who-cycle-002-v2.corrected.yml
+            /tmp/doctor-who-cycle-002-v2-corrected.sha256
+            /tmp/doctor-who-cycle-002-v2-corrected.diff
