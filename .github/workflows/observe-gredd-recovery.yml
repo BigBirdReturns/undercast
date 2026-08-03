@@ -1,0 +1,56 @@
+name: observe-gredd-recovery-63fadd
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/observe-gredd-recovery.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  observe:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Resolve the exact push-triggered recovery run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_SHA: 63fadd878ad350556f401b38bc78fa147968c254
+          DISPATCH_NAME: dispatch-complete-gredd-cycle-002-recovery
+        run: |
+          set -euo pipefail
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${DISPATCH_SHA}&event=push&per_page=100" \
+            > /tmp/gredd-recovery-runs.json
+          jq --arg name "$DISPATCH_NAME" \
+            '[.workflow_runs[] | select(.name == $name)] | sort_by(.created_at) | reverse' \
+            /tmp/gredd-recovery-runs.json \
+            > /tmp/gredd-recovery-matches.json
+          test "$(jq 'length' /tmp/gredd-recovery-matches.json)" -eq 1
+          jq '.[0] | {id, name, event, status, conclusion, head_sha, head_branch, run_number, run_attempt, created_at, updated_at, html_url, jobs_url, artifacts_url}' \
+            /tmp/gredd-recovery-matches.json \
+            | tee /tmp/gredd-recovery-run.json
+          test "$(jq -r '.head_sha' /tmp/gredd-recovery-run.json)" = "$DISPATCH_SHA"
+          test "$(jq -r '.event' /tmp/gredd-recovery-run.json)" = "push"
+          echo "run_id=$(jq -r '.id' /tmp/gredd-recovery-run.json)" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$(jq -r '.status' /tmp/gredd-recovery-run.json)" >> "$GITHUB_STEP_SUMMARY"
+          echo "conclusion=$(jq -r '.conclusion // ""' /tmp/gredd-recovery-run.json)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload exact observer output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gredd-recovery-observer-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            /tmp/gredd-recovery-runs.json
+            /tmp/gredd-recovery-matches.json
+            /tmp/gredd-recovery-run.json
