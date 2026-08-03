@@ -3,7 +3,8 @@ from pathlib import Path
 SOURCE = Path("scripts/operational-reliability.mjs")
 FIXTURE = Path("scripts/operational-reliability-fixtures.mjs")
 
-source = SOURCE.read_text(encoding="utf-8")n
+source = SOURCE.read_text(encoding="utf-8")
+
 binary_before = '''  const binaryPaths = numstat.stdout.split(/\\r?\\n/).filter(Boolean).filter((line) => line.startsWith("-\\t-\\t")).map((line) => line.split("\\t").slice(2).join("\\t"));
   if (binaryPaths.length) throw new Error(`forward recovery contains binary paths unsupported by the text patch transport: ${binaryPaths.join(", ")}`);'''
 binary_after = '''  const binaryPaths = numstat.stdout.split(/\\r?\\n/).filter(Boolean).filter((line) => line.startsWith("-\\t-\\t")).map((line) => line.split("\\t").slice(2).join("\\t")).sort();'''
