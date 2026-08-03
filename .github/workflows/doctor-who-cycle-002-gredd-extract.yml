@@ -1,0 +1,150 @@
+name: doctor-who-cycle-002-gredd-exact-main-extract
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/doctor-who-cycle-002-gredd-extract.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-002-gredd-exact-main-extract
+  cancel-in-progress: true
+
+env:
+  EXACT_MAIN: dd03bcf68f090f717ce7888611be3152b5b5b6b4
+  SELF: .github/workflows/doctor-who-cycle-002-gredd-extract.yml
+  TASK_ID: ap_f6ca3d513c7ac0b6b9d67ce1
+  SOURCE_URL: https://tardis.fandom.com/wiki/Gredd
+  SOURCE_FINGERPRINT: 4be5cb67c57115c6f679e0c86361206eabd2768c39fb3c1f8326dcd8c120bfd0
+  SOURCE_CONTENT_SHA256: cd83aeb119ec5ef30deb4cbca2c917d6119a83918fa01832863e5e96b6bc2b2d
+
+jobs:
+  extract:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 8
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact merged main and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=8 origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git diff --name-only "$EXACT_MAIN"...HEAD)" = "$SELF"
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Prove zero-in-flight custody and extract exact Gredd task
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gredd
+          node scripts/autopilot.mjs validate
+          npm run activation:check
+          npm run doctor-who:pilot-cycle:check
+          npm run star-trek:enwright-cycle:check
+          node scripts/doctor-who-correction-drill.mjs
+          node scripts/waterline.mjs validate --scope star-trek
+          node scripts/waterline.mjs validate --scope doctor-who
+          node scripts/waterline.mjs status --scope star-trek --json > /tmp/gredd/star-trek-waterline.json
+          node scripts/waterline.mjs status --scope doctor-who --json > /tmp/gredd/doctor-who-waterline.json
+          node scripts/autopilot.mjs readiness --scope doctor-who --require-active --json > /tmp/gredd/doctor-who-readiness.json
+          node scripts/autopilot.mjs status --scope doctor-who --json > /tmp/gredd/doctor-who-autopilot-status.json
+          node scripts/autopilot.mjs candidates --scope doctor-who --capability-profile text-vision --limit 100 --json > /tmp/gredd/doctor-who-candidates.json
+          node scripts/corpus-ops.mjs next --json > /tmp/gredd/corpus-next.json
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+          const write = (name, value) => fs.writeFileSync(path.join('/tmp/gredd', name), JSON.stringify(value, null, 2) + '\n');
+          const state = read('data/AUTOPILOT.json');
+          const task = state.jobs.find((row) => row.id === process.env.TASK_ID);
+          if (!task || task.scope !== 'doctor-who' || task.status !== 'queued') throw new Error('Gredd task is missing or not queued');
+          if (task.performer !== 'Dan Starkey' || task.character !== 'Gredd') throw new Error('Gredd subject identity drifted');
+          if (task.source_fingerprint !== process.env.SOURCE_FINGERPRINT) throw new Error('Gredd source fingerprint drifted');
+          if (JSON.stringify(task.sources) !== JSON.stringify([process.env.SOURCE_URL])) throw new Error('Gredd source set drifted');
+          if (task.performance_modes?.length !== 1 || task.performance_modes[0] !== 'voice') throw new Error('Gredd mode custody drifted');
+          if (task.source_receipts?.length !== 1 || task.source_receipts[0].content_sha256 !== process.env.SOURCE_CONTENT_SHA256) throw new Error('Gredd source-content receipt drifted');
+          const active = state.jobs.filter((row) => ['leased', 'drafted', 'merged'].includes(row.status));
+          if (active.length !== 0) throw new Error(`global work remains active: ${active.map((row) => `${row.scope}:${row.id}`).join(', ')}`);
+          const doctor = state.jobs.filter((row) => row.scope === 'doctor-who');
+          const candidates = read('/tmp/gredd/doctor-who-candidates.json');
+          if (candidates.compatible?.[0]?.task_id !== task.id) throw new Error('Gredd is no longer the deterministic first compatible Doctor Who task');
+          if (candidates.counts?.compatible !== 315 || candidates.counts?.incompatible !== 0) throw new Error('Doctor Who capability denominator drifted');
+          const doctorWaterline = read('/tmp/gredd/doctor-who-waterline.json');
+          const starWaterline = read('/tmp/gredd/star-trek-waterline.json');
+          if (!doctorWaterline.claim_allowed || doctorWaterline.phase !== 'ready-for-cycle') throw new Error('Doctor Who is not ready for cycle 002');
+          if (!starWaterline.claim_allowed || starWaterline.phase !== 'ready-for-cycle') throw new Error('Star Trek did not release global one-cycle custody');
+          write('task.json', task);
+          write('summary.json', {
+            exact_main: process.env.EXACT_MAIN,
+            lease_issued: false,
+            task,
+            global_active: active,
+            doctor_queue: {
+              total: doctor.length,
+              queued: doctor.filter((row) => row.status === 'queued').length,
+              resolved: doctor.filter((row) => row.status === 'resolved').length,
+              in_flight: doctor.filter((row) => ['leased', 'drafted', 'merged'].includes(row.status)).length,
+            },
+            candidate_counts: candidates.counts,
+            first_compatible: candidates.compatible[0],
+            doctor_waterline: doctorWaterline,
+            star_trek_waterline: starWaterline,
+          });
+
+          const match = (value) => JSON.stringify(value).includes(process.env.SOURCE_URL)
+            || JSON.stringify(value).includes(process.env.SOURCE_FINGERPRINT)
+            || JSON.stringify(value).includes(process.env.TASK_ID)
+            || /Gredd/i.test(JSON.stringify(value));
+          for (const [file, out] of [
+            ['data/CENSUS-MANIFEST.json', 'manifest-matches.json'],
+            ['data/CENSUS-COVERAGE.json', 'coverage-matches.json'],
+          ]) {
+            const doc = read(file);
+            const filtered = Object.fromEntries(Object.entries(doc).map(([key, value]) => [key, Array.isArray(value) ? value.filter(match) : value]).filter(([, value]) => !Array.isArray(value) || value.length));
+            write(out, filtered);
+          }
+          write('existing-dan-starkey.json', read('data/specimens.json').filter((row) => row.actor === 'Dan Starkey'));
+          NODE
+
+          git grep -n -i -E 'Gredd|ap_f6ca3d513c7ac0b6b9d67ce1|4be5cb67c57115c6f679e0c86361206eabd2768c39fb3c1f8326dcd8c120bfd0|cd83aeb119ec5ef30deb4cbca2c917d6119a83918fa01832863e5e96b6bc2b2d' > /tmp/gredd/git-grep.txt || true
+          tar -czf /tmp/gredd/repository.tgz \
+            --exclude=.git \
+            --exclude=.github \
+            --exclude=images \
+            --exclude=node_modules \
+            --exclude=records \
+            --exclude=test-results \
+            --exclude=playwright-report \
+            --exclude=data/_curate \
+            .
+          sha256sum /tmp/gredd/repository.tgz > /tmp/gredd/repository.sha256
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact merged task and repository surface
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-002-gredd-source-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: /tmp/gredd
