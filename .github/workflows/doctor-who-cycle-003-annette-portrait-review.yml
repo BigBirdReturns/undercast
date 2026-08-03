@@ -1,0 +1,250 @@
+name: doctor-who-cycle-003-annette-portrait-review
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/doctor-who-cycle-003-annette-portrait-review.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-003-annette-portrait-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-003-annette-portrait-review.yml
+  TASK_ID: ap_ba63d075857222943e609a7f
+  SOURCE_URL: https://tardis.fandom.com/wiki/Margaret_Blaine
+  SOURCE_REVISION: "2696671"
+  SOURCE_CONTENT_SHA256: ef175ed98926056697d7f60f4dc0e56e76949328ea3f327baeb1fe086272b9fc
+
+jobs:
+  review:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 128
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Bind live main and prove the one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --porcelain)"
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git fetch --no-tags --depth=128 origin \
+            refs/heads/main:refs/remotes/origin/main \
+            "refs/heads/${{ github.event.pull_request.head.ref }}:refs/remotes/origin/${{ github.event.pull_request.head.ref }}"
+          test "$(git rev-parse refs/remotes/origin/${{ github.event.pull_request.head.ref }})" = "${{ github.event.pull_request.head.sha }}"
+          exact_main="$(git rev-parse refs/remotes/origin/main)"
+          git rebase refs/remotes/origin/main
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$exact_main"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$exact_main"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+          printf '%s\n' "$exact_main" > /tmp/exact-main.txt
+          printf '%s\n' "$(git rev-parse HEAD)" > /tmp/rebased-carrier-head.txt
+
+      - name: Install image inspection tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          identify -version
+
+      - name: Prove task and source custody without claiming
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum \
+            data/AUTOPILOT.json \
+            data/MEDIA-AUDIT.json \
+            data/WATERLINE-STATE.json \
+            data/journal/autopilot.jsonl \
+            data/journal/media-audit.jsonl \
+            data/journal/waterline.jsonl \
+            > /tmp/state-before.sha256
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const autopilot = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const task = (autopilot.jobs || autopilot.tasks || autopilot).find((row) => row.id === process.env.TASK_ID);
+          if (!task) throw new Error(`missing task ${process.env.TASK_ID}`);
+          if (task.scope !== 'doctor-who' || task.status !== 'queued') throw new Error(`task custody drifted: ${task.scope}/${task.status}`);
+          if (task.performer !== 'Annette Badland' || task.character !== 'Margaret Blaine') throw new Error('task identity drifted');
+          if (task.performance_mode !== 'physical-prosthetic') throw new Error(`task mode drifted: ${task.performance_mode}`);
+          if (task.source !== process.env.SOURCE_URL) throw new Error(`task source drifted: ${task.source}`);
+
+          const row = JSON.parse(fs.readFileSync('data/CENSUS.json', 'utf8')).find((item) => item.performer === 'Annette Badland' && item.role === 'Margaret Blaine');
+          if (!row || String(row.revision_id) !== process.env.SOURCE_REVISION || row.content_sha256 !== process.env.SOURCE_CONTENT_SHA256) {
+            throw new Error('revision-bound census source drifted');
+          }
+          const sourcePath = `preservation/source-content/${process.env.SOURCE_CONTENT_SHA256}.txt`;
+          const bytes = fs.readFileSync(sourcePath);
+          const actual = crypto.createHash('sha256').update(bytes).digest('hex');
+          if (actual !== process.env.SOURCE_CONTENT_SHA256) throw new Error(`source bytes drifted: ${actual}`);
+          if (!bytes.toString('utf8').includes('|actor             = [[Annette Badland]]')) throw new Error('source no longer names Annette Badland');
+          fs.writeFileSync('/tmp/annette-task.json', `${JSON.stringify(task, null, 2)}\n`);
+          fs.writeFileSync('/tmp/margaret-source-row.json', `${JSON.stringify(row, null, 2)}\n`);
+          NODE
+          test -z "$(git status --porcelain)"
+
+      - name: Query Wikimedia Commons and download attributable portrait candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/annette-portrait/files
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import crypto from 'node:crypto';
+
+          const api = 'https://commons.wikimedia.org/w/api.php';
+          const headers = { 'user-agent': 'Undercast evidence review/1.0 (BigBirdReturns/undercast)' };
+          const query = new URLSearchParams({
+            action: 'query',
+            generator: 'categorymembers',
+            gcmtitle: 'Category:Annette Badland',
+            gcmtype: 'file',
+            gcmlimit: '50',
+            prop: 'imageinfo',
+            iiprop: 'url|mime|size|sha1|timestamp|extmetadata',
+            format: 'json',
+            formatversion: '2',
+            origin: '*',
+          });
+          const response = await fetch(`${api}?${query}`, { headers });
+          if (!response.ok) throw new Error(`Commons API failed: ${response.status}`);
+          const payload = await response.json();
+          fs.writeFileSync('/tmp/annette-portrait/commons-api-response.json', `${JSON.stringify(payload, null, 2)}\n`);
+
+          const pages = (payload.query?.pages || [])
+            .filter((page) => page.imageinfo?.[0]?.url)
+            .sort((a, b) => a.title.localeCompare(b.title));
+          if (pages.length < 1) throw new Error('Commons category returned no image files');
+
+          const records = [];
+          for (const page of pages) {
+            const info = page.imageinfo[0];
+            if (!/^image\/(jpeg|png|webp)$/i.test(info.mime || '')) continue;
+            if ((info.width || 0) < 350 || (info.height || 0) < 350) continue;
+            const safe = page.title.replace(/^File:/, '').replace(/[^A-Za-z0-9._-]+/g, '_');
+            const ext = path.extname(new URL(info.url).pathname) || '.bin';
+            const output = `/tmp/annette-portrait/files/${String(records.length + 1).padStart(2, '0')}-${safe}${safe.endsWith(ext) ? '' : ext}`;
+            const imageResponse = await fetch(info.url, { headers });
+            if (!imageResponse.ok) throw new Error(`image download failed ${page.title}: ${imageResponse.status}`);
+            const bytes = Buffer.from(await imageResponse.arrayBuffer());
+            fs.writeFileSync(output, bytes);
+            const metadata = info.extmetadata || {};
+            records.push({
+              title: page.title,
+              pageid: page.pageid,
+              file_page_url: info.descriptionurl,
+              original_url: info.url,
+              mime: info.mime,
+              width: info.width,
+              height: info.height,
+              commons_sha1: info.sha1,
+              timestamp: info.timestamp,
+              artist: metadata.Artist?.value || null,
+              credit: metadata.Credit?.value || null,
+              license_short_name: metadata.LicenseShortName?.value || null,
+              license_url: metadata.LicenseUrl?.value || null,
+              usage_terms: metadata.UsageTerms?.value || null,
+              attribution_required: metadata.AttributionRequired?.value || null,
+              image_description: metadata.ImageDescription?.value || null,
+              categories: metadata.Categories?.value || null,
+              output,
+              bytes: bytes.length,
+              sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+            });
+          }
+          if (records.length < 1) throw new Error('Commons category had no usable raster portrait candidates');
+          fs.writeFileSync('/tmp/annette-portrait/candidates.json', `${JSON.stringify(records, null, 2)}\n`);
+          NODE
+
+          find /tmp/annette-portrait/files -type f -print0 \
+            | sort -z \
+            | xargs -0 -r identify -format '%i\t%w\t%h\t%m\n' \
+            | tee /tmp/annette-portrait/identify.tsv
+          find /tmp/annette-portrait/files -type f -print0 \
+            | sort -z \
+            | xargs -0 -r sha256sum \
+            | tee /tmp/annette-portrait/downloads.sha256
+
+          mkdir -p /tmp/annette-portrait/thumbs
+          while IFS= read -r file; do
+            base="$(basename "$file")"
+            convert "$file" -auto-orient -thumbnail '360x360>' \
+              -background white -gravity south -splice 0x42 \
+              -pointsize 13 -fill black -annotate +0+12 "$base" \
+              "/tmp/annette-portrait/thumbs/${base%.*}.jpg"
+          done < <(find /tmp/annette-portrait/files -type f | sort)
+          montage /tmp/annette-portrait/thumbs/*.jpg \
+            -tile 4x -geometry '380x420+8+8' \
+            /tmp/annette-portrait/contact-sheet.jpg
+          identify /tmp/annette-portrait/contact-sheet.jpg | tee /tmp/annette-portrait/contact-sheet.txt
+
+          sha256sum \
+            /tmp/annette-portrait/commons-api-response.json \
+            /tmp/annette-portrait/candidates.json \
+            /tmp/annette-portrait/identify.tsv \
+            /tmp/annette-portrait/downloads.sha256 \
+            /tmp/annette-portrait/contact-sheet.jpg \
+            > /tmp/annette-portrait/review-surface.sha256
+
+      - name: Prove no repository or queue mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum \
+            data/AUTOPILOT.json \
+            data/MEDIA-AUDIT.json \
+            data/WATERLINE-STATE.json \
+            data/journal/autopilot.jsonl \
+            data/journal/media-audit.jsonl \
+            data/journal/waterline.jsonl \
+            > /tmp/state-after.sha256
+          diff -u /tmp/state-before.sha256 /tmp/state-after.sha256
+          test -z "$(git status --porcelain)"
+          echo 'lease_issued=false' >> "$GITHUB_STEP_SUMMARY"
+          echo 'repository_mutated=false' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact portrait-review evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-003-annette-portrait-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            /tmp/exact-main.txt
+            /tmp/rebased-carrier-head.txt
+            /tmp/expected-paths.txt
+            /tmp/actual-paths.txt
+            /tmp/state-before.sha256
+            /tmp/state-after.sha256
+            /tmp/annette-task.json
+            /tmp/margaret-source-row.json
+            /tmp/annette-portrait/commons-api-response.json
+            /tmp/annette-portrait/candidates.json
+            /tmp/annette-portrait/identify.tsv
+            /tmp/annette-portrait/downloads.sha256
+            /tmp/annette-portrait/contact-sheet.jpg
+            /tmp/annette-portrait/contact-sheet.txt
+            /tmp/annette-portrait/review-surface.sha256
+            /tmp/annette-portrait/files
