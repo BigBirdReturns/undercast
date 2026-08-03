@@ -13,7 +13,8 @@ const receipt = read('data/review/adapter-sdk/doctor-who-pilot-cycle-001.json');
 const autopilot = read('data/AUTOPILOT.json');
 const specimens = read('data/specimens.json');
 const sources = read('data/SOURCES.json');
-const audit = read('data/MEDIA-AUDIT.json');
+const auditBytes = fs.readFileSync('data/MEDIA-AUDIT.json');
+const audit = JSON.parse(auditBytes);
 const recurse = (value, predicate, out = []) => { if (Array.isArray(value)) for (const child of value) recurse(child, predicate, out); else if (value && typeof value === 'object') { if (predicate(value)) out.push(value); for (const child of Object.values(value)) recurse(child, predicate, out); } return out; };
 const statePaths = ['data/WATERLINE-STATE.json', 'data/WATERLINE.json'].filter((p) => fs.existsSync(p));
 const cycles = statePaths.flatMap((p) => recurse(read(p), (row) => row.lease_id === LEASE_ID && row.outcome === 'completed'));
@@ -41,5 +42,6 @@ if (doctor.length !== 316 || queued !== 315 || resolved !== 1 || leased + drafte
 const clone = structuredClone(receipt); delete clone.receipt_sha256;
 if (receipt.receipt_sha256 !== sha(JSON.stringify(stable(clone)) + '\n')) fail('pilot receipt hash drifted');
 if (receipt.task.id !== TASK_ID || receipt.lease.id !== LEASE_ID || receipt.canonical.wall_id !== wallId) fail('pilot receipt identity drifted');
+if (receipt.media.media_audit_sha256 !== sha(auditBytes)) fail('pilot media-audit receipt drifted');
 if (receipt.boundary.second_lease_issued || receipt.boundary.generic_character_image_used || receipt.boundary.duplicate_portrait_bytes_used) fail('pilot boundary drifted');
 console.log('doctor-who-pilot-cycle: PASS — one exact source-bound voice role, two honest media absences, one reviewed cycle receipt, and no second lease');
