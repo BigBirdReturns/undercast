@@ -1,0 +1,72 @@
+name: qualify-clifford-number-hr-indemnity-cost-transfer-wave-13
+
+on:
+  push:
+    branches:
+      - agent/clifford-number-hr-indemnity-cost-transfer-wave-13
+    paths:
+      - '.github/workflows/cnhr-wave13-qualify.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/clifford-number-hr-indemnity-cost-transfer-wave-13
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Validate exact Wave 13 packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          parent=9a4b07d6878d092c2c6b66645d5f92875f5f64a8
+          manifest=data/review/clifford-number/hr-discipline/wave-13/MANIFEST.json
+          root=/tmp/cnhr-wave13-root
+          rm -rf "$root"
+          mkdir -p "$root"
+
+          python - <<'PY'
+          import json, shutil, subprocess
+          from pathlib import Path
+
+          parent = '9a4b07d6878d092c2c6b66645d5f92875f5f64a8'
+          manifest_rel = 'data/review/clifford-number/hr-discipline/wave-13/MANIFEST.json'
+          packet_root = Path('/tmp/cnhr-wave13-root')
+          manifest = json.loads(Path(manifest_rel).read_text())
+          paths = {row['path'] for row in manifest['files']} | {manifest_rel}
+          assert len(paths) == 22, len(paths)
+          for rel in sorted(paths):
+              src = Path(rel)
+              dst = packet_root / rel
+              dst.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(src, dst)
+
+          rows = subprocess.check_output(
+              ['git', 'diff', '--name-status', parent, 'HEAD', '--'],
+              text=True,
+          ).splitlines()
+          observed = {}
+          for row in rows:
+              status, path = row.split('\t', 1)
+              if path == '.github/workflows/cnhr-wave13-qualify.yml':
+                  continue
+              observed[path] = status
+          assert set(observed) == paths, (
+              sorted(paths - set(observed)),
+              sorted(set(observed) - paths),
+          )
+          assert all(status == 'A' for status in observed.values()), observed
+          print('exact permanent delta: 22 added, 0 modified, 0 deleted')
+          PY
+
+          cd "$root"
+          node --check scripts/clifford-number-hr-cost-transfer.mjs
+          node --check test/clifford-number-hr-cost-transfer-fixtures.mjs
+          node scripts/clifford-number-hr-cost-transfer.mjs --check --strict-root
+          node test/clifford-number-hr-cost-transfer-fixtures.mjs
