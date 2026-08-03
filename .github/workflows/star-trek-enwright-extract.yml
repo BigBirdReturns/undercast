@@ -1,0 +1,70 @@
+name: star-trek-enwright-exact-state-extract
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/star-trek-enwright-extract.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      EXACT_MAIN: ae67650da4aa333022bd604c1c1d16e56153674e
+      TASK_ID: ap_fddff4a188eb5eb9fbefd86f
+      LEASE_ID: lease_e6c0541e10146179ad56a867
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 8
+
+      - name: Bind exact current main and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=8 origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git diff --name-only "$EXACT_MAIN"...HEAD)" = ".github/workflows/star-trek-enwright-extract.yml"
+          test -z "$(git status --porcelain)"
+
+      - name: Prove exact lease and export current delta surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/enwright
+          node - <<'NODE'
+          const fs = require('fs');
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const task = state.jobs.find((row) => row.id === process.env.TASK_ID);
+          if (!task || task.scope !== 'star-trek' || task.status !== 'leased') throw new Error('Enwright task is not the active Star Trek lease');
+          if (task.lease?.id !== process.env.LEASE_ID || task.performer !== 'James Doohan' || task.character !== 'Enwright') throw new Error('Enwright lease identity drifted');
+          const active = state.jobs.filter((row) => ['leased', 'drafted', 'merged'].includes(row.status));
+          if (active.length !== 1 || active[0].id !== task.id) throw new Error('Enwright is not the sole active task');
+          fs.writeFileSync('/tmp/enwright/task.json', JSON.stringify(task, null, 2) + '\n');
+          fs.writeFileSync('/tmp/enwright/summary.json', JSON.stringify({ exact_main: process.env.EXACT_MAIN, active, total_jobs: state.jobs.length }, null, 2) + '\n');
+          NODE
+          node scripts/autopilot.mjs validate
+          node scripts/waterline.mjs status --scope star-trek --json > /tmp/enwright/star-trek-waterline.json
+          node scripts/waterline.mjs status --scope doctor-who --json > /tmp/enwright/doctor-who-waterline.json
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact current state and checker surfaces
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-enwright-current-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            /tmp/enwright
+            data/AUTOPILOT.json
+            data/journal/autopilot.jsonl
+            data/review/adapter-sdk/doctor-who-correction-drill-001-scope-custody.json
+            scripts/doctor-who-correction-drill.mjs
