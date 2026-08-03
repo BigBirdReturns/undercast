@@ -1,0 +1,261 @@
+name: star-trek-next-bounded-cycle-claim
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/star-trek-next-bounded-cycle-claim.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-next-bounded-cycle-claim-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXACT_MAIN: ${{ github.event.pull_request.base.sha }}
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  SELF: .github/workflows/star-trek-next-bounded-cycle-claim.yml
+
+jobs:
+  claim:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind exact current main and transport-only branch
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=4 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git rev-parse HEAD^)" = "$EXACT_MAIN"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git diff --name-only "$EXACT_MAIN"...HEAD)" = "$SELF"
+          claimed_at="$(git show -s --format=%cI "$AUTHORIZED_HEAD")"
+          echo "CLAIMED_AT=$claimed_at" >> "$GITHUB_ENV"
+          echo "claimed_at=$claimed_at" >> "$GITHUB_STEP_SUMMARY"
+          echo "exact_main=$EXACT_MAIN" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prove the exact scheduler, waterline, and candidate frontier
+        run: |
+          set -euo pipefail
+          node scripts/roadmap.mjs validate
+          node scripts/corpus-ops.mjs validate
+          node scripts/corpus-ops.mjs next --json > /tmp/corpus-next-before.json
+          node scripts/waterline.mjs validate --scope star-trek
+          node scripts/waterline.mjs status --scope star-trek --json > /tmp/star-trek-waterline-before.json
+          node scripts/waterline.mjs gate --scope star-trek
+          node scripts/waterline.mjs validate --scope doctor-who
+          node scripts/waterline.mjs status --scope doctor-who --json > /tmp/doctor-who-waterline-before.json
+          node scripts/autopilot.mjs readiness --scope star-trek --json > /tmp/star-trek-readiness-before.json
+          node scripts/autopilot.mjs status --scope star-trek --json > /tmp/star-trek-autopilot-before.json
+          node scripts/autopilot.mjs candidates --scope star-trek --capability-profile text-vision --limit 20 --json > /tmp/star-trek-candidates-before.json
+          npm run activation:check
+          npm run doctor-who:pilot-cycle:check
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const next = JSON.parse(fs.readFileSync('/tmp/corpus-next-before.json', 'utf8'));
+          const waterline = JSON.parse(fs.readFileSync('/tmp/star-trek-waterline-before.json', 'utf8'));
+          const doctor = JSON.parse(fs.readFileSync('/tmp/doctor-who-waterline-before.json', 'utf8'));
+          const candidates = JSON.parse(fs.readFileSync('/tmp/star-trek-candidates-before.json', 'utf8'));
+          if (next.kind !== 'lease-one-cycle' || next.estate !== 'star-trek') {
+            throw new Error(`scheduler did not authorize the Star Trek lease: ${JSON.stringify(next)}`);
+          }
+          if (waterline.claim_allowed !== true || waterline.phase !== 'ready-for-cycle' || waterline.media?.debt !== 0 || waterline.jobs?.in_flight !== 0) {
+            throw new Error(`Star Trek waterline is not ready: ${JSON.stringify(waterline)}`);
+          }
+          if (doctor.jobs?.in_flight !== 0 || doctor.cycles?.other_scope_unreceipted?.length) {
+            throw new Error('Doctor Who custody is not terminal before the Star Trek claim');
+          }
+          if (candidates.profile?.id !== 'text-vision' || !Array.isArray(candidates.compatible) || candidates.compatible.length < 1) {
+            throw new Error('no text-vision-compatible Star Trek candidate is available');
+          }
+          fs.writeFileSync('/tmp/selected-candidate-before.json', JSON.stringify(candidates.compatible[0], null, 2) + '\n');
+          NODE
+
+      - name: Issue exactly one durable Luna lease
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/luna
+          node scripts/autopilot.mjs next \
+            --agent luna \
+            --scope star-trek \
+            --capability-profile text-vision \
+            --limit 1 \
+            --lease-minutes 1440 \
+            --now "$CLAIMED_AT" \
+            --out /tmp/luna/batch.json \
+            --prompt /tmp/luna/PROMPT.md \
+            > /tmp/star-trek-claim.stdout
+
+          node scripts/autopilot.mjs validate
+          node scripts/autopilot.mjs status --scope star-trek --json > /tmp/star-trek-autopilot-after.json
+          node scripts/waterline.mjs status --scope star-trek --json > /tmp/star-trek-waterline-after.json
+          node scripts/waterline.mjs status --scope doctor-who --json > /tmp/doctor-who-waterline-after.json
+          node scripts/corpus-ops.mjs next --json > /tmp/corpus-next-after.json
+
+          set +e
+          node scripts/autopilot.mjs next \
+            --agent luna \
+            --scope star-trek \
+            --capability-profile text-vision \
+            --limit 1 \
+            --lease-minutes 1440 \
+            --now "$CLAIMED_AT" \
+            > /tmp/second-claim.stdout 2> /tmp/second-claim.stderr
+          second_code="$?"
+          set -e
+          test "$second_code" -ne 0
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const before = JSON.parse(fs.readFileSync('/tmp/selected-candidate-before.json', 'utf8'));
+          const batch = JSON.parse(fs.readFileSync('/tmp/luna/batch.json', 'utf8'));
+          const state = JSON.parse(fs.readFileSync('/tmp/star-trek-autopilot-after.json', 'utf8'));
+          const star = JSON.parse(fs.readFileSync('/tmp/star-trek-waterline-after.json', 'utf8'));
+          const doctor = JSON.parse(fs.readFileSync('/tmp/doctor-who-waterline-after.json', 'utf8'));
+          const next = JSON.parse(fs.readFileSync('/tmp/corpus-next-after.json', 'utf8'));
+          if (batch.tasks?.length !== 1 || batch.tasks[0].id !== before.task_id || batch.tasks[0].source_fingerprint !== before.source_fingerprint) {
+            throw new Error('leased task does not match the deterministic first compatible candidate');
+          }
+          if (batch.agent !== 'luna' || batch.selection?.profile_id !== 'text-vision' || batch.selection?.strategy !== 'priority-compatible') {
+            throw new Error('lease capability selection drifted');
+          }
+          if (state.in_flight !== 1 || state.statuses?.leased !== 1) throw new Error('Star Trek queue did not enter one-task in-flight state');
+          if (star.phase !== 'cycle-in-flight' || star.claim_allowed !== false || star.jobs?.in_flight !== 1) throw new Error('Star Trek waterline did not close after the claim');
+          if (doctor.phase !== 'other-cycle-in-flight' || doctor.claim_allowed !== false) throw new Error('global one-cycle lock did not close Doctor Who');
+          if (next.kind !== 'close-cycle' || next.estate !== 'star-trek') throw new Error('corpus scheduler did not return custody to the leased Star Trek cycle');
+          const summary = {
+            version: 1,
+            transaction: 'STAR-TREK-NEXT-BOUNDED-CYCLE-CLAIM',
+            exact_main: process.env.EXACT_MAIN,
+            claimed_at: process.env.CLAIMED_AT,
+            lease_id: batch.lease_id,
+            expires_at: batch.expires_at,
+            task: batch.tasks[0],
+            selection: batch.selection,
+            before_candidate: before,
+            star_trek_waterline_after: star,
+            doctor_who_waterline_after: doctor,
+            corpus_next_after: next,
+            boundary: {
+              tasks_leased: 1,
+              second_claim_refused: true,
+              canonical_mutated: false,
+              media_mutated: false,
+              roadmap_mutated: false,
+            },
+          };
+          fs.writeFileSync('/tmp/star-trek-next-bounded-cycle-claim-summary.json', JSON.stringify(summary, null, 2) + '\n');
+          console.log(JSON.stringify(summary, null, 2));
+          NODE
+
+      - name: Stage exact workflow-free lease product and run candidate gate
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate .luna
+          git rm "$SELF"
+          git add data/AUTOPILOT.json data/journal/autopilot.jsonl
+          cat > /tmp/expected-product-paths.txt <<'PATHS'
+          data/AUTOPILOT.json
+          data/journal/autopilot.jsonl
+          PATHS
+          git diff --cached --name-only "$EXACT_MAIN" | sort > /tmp/candidate-product-paths.txt
+          diff -u /tmp/expected-product-paths.txt /tmp/candidate-product-paths.txt
+          git diff --cached --check
+          test -z "$(git diff --name-only)"
+          npm run gate 2>&1 | tee /tmp/star-trek-next-cycle-claim-candidate-gate.log
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate .luna
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+
+      - name: Commit exact lease and run final workflow-free gate
+        run: |
+          set -euo pipefail
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git commit \
+            -m 'Autopilot: issue one bounded Star Trek cycle' \
+            -m 'claim the deterministic first text-vision-compatible task' \
+            -m 'close the global one-cycle lock without canonical mutation'
+          new_head="$(git rev-parse HEAD)"
+          echo "NEW_HEAD=$new_head" >> "$GITHUB_ENV"
+          echo "product_head=$new_head" >> "$GITHUB_STEP_SUMMARY"
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/final-product-paths.txt
+          diff -u /tmp/expected-product-paths.txt /tmp/final-product-paths.txt
+          git diff --check "$EXACT_MAIN"...HEAD
+          npm run gate 2>&1 | tee /tmp/star-trek-next-cycle-claim-final-gate.log
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate .luna
+          test -z "$(git status --porcelain)"
+          ! git ls-tree -r --name-only HEAD | grep -Fx "$SELF"
+
+      - name: Publish exact two-path lease under branch custody
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=4 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+          echo "published_head=$NEW_HEAD" >> "$GITHUB_STEP_SUMMARY"
+          echo "lease_issued=true" >> "$GITHUB_STEP_SUMMARY"
+          echo "tasks_leased=1" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact lease, prompt, and gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-next-bounded-cycle-claim-${{ github.run_id }}
+          path: |
+            /tmp/corpus-next-before.json
+            /tmp/corpus-next-after.json
+            /tmp/star-trek-waterline-before.json
+            /tmp/star-trek-waterline-after.json
+            /tmp/doctor-who-waterline-before.json
+            /tmp/doctor-who-waterline-after.json
+            /tmp/star-trek-readiness-before.json
+            /tmp/star-trek-autopilot-before.json
+            /tmp/star-trek-autopilot-after.json
+            /tmp/star-trek-candidates-before.json
+            /tmp/selected-candidate-before.json
+            /tmp/luna/batch.json
+            /tmp/luna/PROMPT.md
+            /tmp/star-trek-claim.stdout
+            /tmp/second-claim.stdout
+            /tmp/second-claim.stderr
+            /tmp/star-trek-next-bounded-cycle-claim-summary.json
+            /tmp/star-trek-next-cycle-claim-candidate-gate.log
+            /tmp/star-trek-next-cycle-claim-final-gate.log
+            /tmp/expected-product-paths.txt
+            /tmp/candidate-product-paths.txt
+            /tmp/final-product-paths.txt
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
