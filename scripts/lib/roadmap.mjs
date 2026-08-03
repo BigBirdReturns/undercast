@@ -219,22 +219,35 @@ export function deriveMilestoneStates(roadmap, state) {
   const completed = completionMap(state);
   const decisions = decisionSet(state);
   return roadmap.milestones.slice().sort((a,b) => a.seq - b.seq).map((row) => {
-    if (completed.has(row.id)) return { ...row, state: "complete", reasons: [] };
-    const reasons = [];
+    if (completed.has(row.id)) return { ...row, state: "complete", reasons: [], missing_decisions: [] };
     const deps = row.deps.filter((id) => !completed.has(id));
-    if (deps.length) reasons.push(`missing dependencies: ${deps.join(", ")}`);
     const missingDecisions = row.decisions.filter((id) => !decisions.has(id));
-    if (missingDecisions.length) reasons.push(`missing owner decisions: ${missingDecisions.join(", ")}`);
     const failed = row.triggers.filter((trigger) => !triggerSatisfied(trigger, state.metrics));
+    const reasons = [];
+    if (deps.length) reasons.push(`missing dependencies: ${deps.join(", ")}`);
     if (failed.length) reasons.push(`unmet triggers: ${failed.map(([m,o,v]) => `${m} ${o} ${v}`).join(", ")}`);
-    return { ...row, state: reasons.length ? "blocked" : "ready", reasons };
+    if (deps.length || failed.length) {
+      if (missingDecisions.length) reasons.push(`held owner decisions: ${missingDecisions.join(", ")}`);
+      return { ...row, state: "blocked", reasons, missing_decisions: missingDecisions };
+    }
+    if (missingDecisions.length) {
+      return {
+        ...row,
+        state: "reversible",
+        reasons: [`owner decisions held for irreversible actions: ${missingDecisions.join(", ")}; reversible work remains eligible`],
+        missing_decisions: missingDecisions,
+      };
+    }
+    return { ...row, state: "ready", reasons: [], missing_decisions: [] };
   });
 }
 
 export function nextMilestones(roadmap, state, { limit = 3 } = {}) {
   const count = Number(limit);
   invariant(Number.isInteger(count) && count > 0, "roadmap next limit must be positive");
-  return deriveMilestoneStates(roadmap, state).filter((row) => row.state === "ready").slice(0, count);
+  return deriveMilestoneStates(roadmap, state)
+    .filter((row) => row.state === "ready" || row.state === "reversible")
+    .slice(0, count);
 }
 
 export function currentAdoptionStage(roadmap, state) {
