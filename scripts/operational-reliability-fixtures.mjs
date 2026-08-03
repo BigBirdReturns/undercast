@@ -8,6 +8,7 @@ import {
   EVIDENCE_TIER,
   normalizeArchiveEntry,
   runPublicationRollbackDrill,
+  runRepositoryRestoreDrill,
   selectPublicationPaths,
   selectRepositorySnapshot,
   sha256,
@@ -21,6 +22,7 @@ import {
 function command(name, args, cwd) {
   const result = spawnSync(name, args, { cwd, encoding: "utf8" });
   if (result.error || result.status !== 0) throw new Error(`${name} failed: ${result.error?.message || result.stderr || result.stdout}`);
+  return result;
 }
 const work = await mkdtemp(path.join(tmpdir(), "undercast-operational-fixtures-"));
 try {
@@ -162,7 +164,92 @@ try {
   }, null, 2) + "\n");
   await assert.rejects(() => validateEvidenceBundle(restoreReceiptPath, driftedRollbackPath), /different heads/);
 
-  console.log("PASS — operational restore and rollback evidence contracts, tamper refusal, exact-byte recovery, and review boundary");
+  const binaryCheckout = path.join(work, "binary-checkout");
+  const binarySnapshotSource = path.join(work, "binary-snapshot-source");
+  await mkdir(path.join(binaryCheckout, "data"), { recursive: true });
+  await mkdir(path.join(binarySnapshotSource, "data"), { recursive: true });
+  const binaryBaselineIndex = "<!doctype html><title>binary baseline</title>\n";
+  const binaryBaselineQuality = '{"version":1}\n';
+  await writeFile(path.join(binaryCheckout, "index.html"), binaryBaselineIndex);
+  await writeFile(path.join(binaryCheckout, "data", "quality.json"), binaryBaselineQuality);
+  await writeFile(path.join(binarySnapshotSource, "index.html"), binaryBaselineIndex);
+  await writeFile(path.join(binarySnapshotSource, "data", "quality.json"), binaryBaselineQuality);
+
+  command("git", ["init", "-q"], binaryCheckout);
+  command("git", ["config", "user.name", "operational-binary-fixture"], binaryCheckout);
+  command("git", ["config", "user.email", "operational-binary-fixture@example.invalid"], binaryCheckout);
+  command("git", ["config", "core.autocrlf", "false"], binaryCheckout);
+  command("git", ["add", "-A"], binaryCheckout);
+  command("git", ["commit", "-q", "-m", "binary fixture baseline"], binaryCheckout);
+  const binarySnapshotCommit = command("git", ["rev-parse", "HEAD"], binaryCheckout).stdout.trim();
+  assert.match(binarySnapshotCommit, /^[0-9a-f]{40}$/);
+
+  const binaryArchivePath = path.join(work, "binary-repository.tar.gz");
+  command("tar", ["-czf", binaryArchivePath, "."], binarySnapshotSource);
+  const binaryArchiveBytes = (await stat(binaryArchivePath)).size;
+  const binaryArchiveSha = await sha256File(binaryArchivePath);
+  const binaryRegistryPath = path.join(work, "binary-snapshots.json");
+  await writeFile(binaryRegistryPath, JSON.stringify({
+    snapshots: [{
+      id: "binary-snapshot",
+      status: "pending",
+      repository_commit: binarySnapshotCommit,
+      public_release: {
+        tag: "binary-snapshot",
+        url: "https://example.invalid/releases/binary-snapshot",
+        assets: [{
+          kind: "repository-snapshot",
+          name: "binary-repository.tar.gz",
+          sha256: binaryArchiveSha,
+          bytes: binaryArchiveBytes,
+          url: "https://example.invalid/binary-repository.tar.gz",
+        }],
+      },
+    }],
+  }, null, 2) + "\n");
+
+  const binaryImage = Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x10, 0x80, 0x7f, 0xff, 0xd9]);
+  await mkdir(path.join(binaryCheckout, "images"), { recursive: true });
+  await writeFile(path.join(binaryCheckout, "images", "new.jpg"), binaryImage);
+  await writeFile(path.join(binaryCheckout, "data", "quality.json"), '{"version":2,"image":"new.jpg"}\n');
+  command("git", ["add", "-A"], binaryCheckout);
+  command("git", ["commit", "-q", "-m", "add exact binary asset"], binaryCheckout);
+  const binaryTargetHead = command("git", ["rev-parse", "HEAD"], binaryCheckout).stdout.trim();
+  assert.match(binaryTargetHead, /^[0-9a-f]{40}$/);
+
+  const binaryRestore = await runRepositoryRestoreDrill({
+    checkoutRoot: binaryCheckout,
+    registryPath: binaryRegistryPath,
+    archivePath: binaryArchivePath,
+    snapshotId: "binary-snapshot",
+    targetHead: binaryTargetHead,
+    workRoot: path.join(work, "binary-restore"),
+    outputPath: path.join(work, "binary-restore-receipt.json"),
+    install: false,
+    gate: false,
+  });
+  validateRestoreReceipt(binaryRestore.receipt);
+  assert.deepEqual(await readFile(path.join(binaryRestore.restoredRoot, "images", "new.jpg")), binaryImage);
+  assert.deepEqual(binaryRestore.receipt.forward_recovery.binary_paths, ["images/new.jpg"]);
+  assert.equal(binaryRestore.receipt.forward_recovery.binary_patch_transport, true);
+  assert.ok(binaryRestore.receipt.forward_recovery.changed_paths.includes("images/new.jpg"));
+  assert.ok(binaryRestore.receipt.forward_recovery.changed_paths.includes("data/quality.json"));
+  assert.throws(() => validateRestoreReceipt({
+    ...binaryRestore.receipt,
+    forward_recovery: {
+      ...binaryRestore.receipt.forward_recovery,
+      binary_paths: ["images/missing.jpg"],
+    },
+  }), /binary path is absent/);
+  assert.throws(() => validateRestoreReceipt({
+    ...binaryRestore.receipt,
+    forward_recovery: {
+      ...binaryRestore.receipt.forward_recovery,
+      binary_patch_transport: false,
+    },
+  }), /binary patch transport/);
+
+  console.log("PASS — operational restore and rollback evidence contracts, binary patch round-trip, tamper refusal, exact-byte recovery, and review boundary");
 } finally {
   await rm(work, { recursive: true, force: true });
 }

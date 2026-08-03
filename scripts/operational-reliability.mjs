@@ -239,6 +239,19 @@ export function validateRestoreReceipt(receipt) {
   requireHash(receipt.source_snapshot?.asset_sha256, "repository-restore asset sha256");
   requireHash(receipt.forward_recovery?.patch_sha256, "repository-restore patch sha256");
   requireHash(receipt.forward_recovery?.target_manifest_sha256, "repository-restore target manifest sha256");
+  const binaryPaths = receipt.forward_recovery?.binary_paths ?? [];
+  if (!Array.isArray(binaryPaths) || binaryPaths.some((row) => typeof row !== "string" || !row)) {
+    throw new Error("repository-restore binary path custody is invalid");
+  }
+  if (new Set(binaryPaths).size !== binaryPaths.length || JSON.stringify(binaryPaths) !== JSON.stringify([...binaryPaths].sort())) {
+    throw new Error("repository-restore binary paths must be unique and sorted");
+  }
+  if (binaryPaths.some((row) => !receipt.forward_recovery?.changed_paths?.includes(row))) {
+    throw new Error("repository-restore binary path is absent from changed-path custody");
+  }
+  if (binaryPaths.length && receipt.forward_recovery?.binary_patch_transport !== true) {
+    throw new Error("repository-restore binary patch transport is not certified");
+  }
   if (receipt.forward_recovery?.exact_tracked_tree_match !== true) throw new Error("repository-restore exact tree proof is missing");
   if (receipt.canonical_gate?.exit_code !== 0) throw new Error("repository-restore canonical gate did not pass");
   if (receipt.boundary?.waterline_state_mutated !== false || receipt.boundary?.roadmap_state_mutated !== false || receipt.boundary?.live_publication_mutated !== false) {
@@ -277,8 +290,7 @@ export async function runRepositoryRestoreDrill({
   run("tar", ["-xzf", archivePath, "-C", restoredRoot, "--no-same-owner", "--no-same-permissions"], { label: "extract repository snapshot" });
 
   const numstat = git(checkoutRoot, ["diff", "--numstat", "--no-renames", `${snapshot.repository_commit}..${targetHead}`, "--", "."], { label: "classify forward recovery delta" });
-  const binaryPaths = numstat.stdout.split(/\r?\n/).filter(Boolean).filter((line) => line.startsWith("-\t-\t")).map((line) => line.split("\t").slice(2).join("\t"));
-  if (binaryPaths.length) throw new Error(`forward recovery contains binary paths unsupported by the text patch transport: ${binaryPaths.join(", ")}`);
+  const binaryPaths = numstat.stdout.split(/\r?\n/).filter(Boolean).filter((line) => line.startsWith("-\t-\t")).map((line) => line.split("\t").slice(2).join("\t")).sort();
   const patchResult = git(checkoutRoot, ["diff", "--binary", "--full-index", "--no-renames", `${snapshot.repository_commit}..${targetHead}`, "--", "."], { label: "build forward recovery patch" });
   const patchPath = path.join(diagnosticsRoot, "forward-recovery.patch");
   await writeFile(patchPath, patchResult.stdout, "utf8");
@@ -330,6 +342,8 @@ export async function runRepositoryRestoreDrill({
       patch_sha256: patchSha,
       patch_bytes: Buffer.byteLength(patchResult.stdout),
       changed_paths: changedPaths,
+      binary_paths: binaryPaths,
+      binary_patch_transport: true,
       target_files: targetTree.files,
       target_manifest_sha256: targetTree.manifest_sha256,
       exact_tracked_tree_match: true,
