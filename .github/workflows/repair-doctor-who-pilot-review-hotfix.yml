@@ -1,0 +1,177 @@
+name: repair-doctor-who-pilot-cycle-evidence
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/repair-doctor-who-pilot-review-hotfix.yml"
+      - "scripts/apply-doctor-who-pilot-review-hotfix.mjs"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-doctor-who-pilot-cycle-evidence-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXACT_MAIN: ${{ github.event.pull_request.base.sha }}
+  SELF: .github/workflows/repair-doctor-who-pilot-review-hotfix.yml
+  PATCHER: scripts/apply-doctor-who-pilot-review-hotfix.mjs
+
+jobs:
+  repair:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Bind exact main and receipt-only transport
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=2 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git rev-parse HEAD^)" = "$EXACT_MAIN"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+
+          cat > /tmp/expected-transport-paths.txt <<'PATHS'
+          .github/workflows/repair-doctor-who-pilot-review-hotfix.yml
+          scripts/apply-doctor-who-pilot-review-hotfix.mjs
+          PATHS
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-transport-paths.txt
+          diff -u /tmp/expected-transport-paths.txt /tmp/actual-transport-paths.txt
+
+          repair_at="$(git show -s --format=%cI "$AUTHORIZED_HEAD")"
+          echo "REPAIR_AT=$repair_at" >> "$GITHUB_ENV"
+          echo "repair_at=$repair_at" >> "$GITHUB_STEP_SUMMARY"
+          echo "exact_main=$EXACT_MAIN" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Correct exact cycle evidence and prove focused custody
+        run: |
+          set -euo pipefail
+          node --check "$PATCHER"
+          node "$PATCHER" 2>&1 | tee /tmp/doctor-who-pilot-cycle-evidence-correction.log
+
+          node scripts/waterline.mjs validate --scope doctor-who
+          node scripts/waterline.mjs status --scope doctor-who --json \
+            > /tmp/doctor-who-waterline-status.json
+          node scripts/waterline.mjs gate --scope doctor-who
+          npm run media:audit -- gate --scope doctor-who
+          npm run doctor-who:pilot-cycle:check
+
+          ! grep -R -n -E '<successful canonical gate run>|<merged cycle commit>|<durable resume evidence>' \
+            data/WATERLINE-STATE.json \
+            data/journal/waterline.jsonl \
+            data/review/adapter-sdk/doctor-who-pilot-cycle-001.json
+
+      - name: Stage exact workflow-free five-path product and run candidate gate
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          git rm -f "$SELF" "$PATCHER"
+          git add -A
+
+          cat > /tmp/expected-product-paths.txt <<'PATHS'
+          data/WATERLINE-STATE.json
+          data/journal/waterline.jsonl
+          data/review/adapter-sdk/doctor-who-pilot-cycle-001.json
+          docs/AUTOPILOT.md
+          scripts/doctor-who-pilot-cycle.mjs
+          PATHS
+          git diff --cached --name-only "$EXACT_MAIN" | sort > /tmp/candidate-product-paths.txt
+          diff -u /tmp/expected-product-paths.txt /tmp/candidate-product-paths.txt
+          git diff --cached --check
+          test -z "$(git diff --name-only)"
+
+          npm run gate 2>&1 | tee /tmp/doctor-who-pilot-cycle-evidence-candidate-gate.log
+
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+
+      - name: Commit exact product and run complete final-tree gate
+        run: |
+          set -euo pipefail
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git commit \
+            -m 'Pilot: bind the first Doctor Who cycle to exact evidence' \
+            -m 'replace template custody with exact run, artifact, commit, and restart receipts' \
+            -m 'recompute the cycle and journal identities without issuing a second lease'
+
+          new_head="$(git rev-parse HEAD)"
+          echo "NEW_HEAD=$new_head" >> "$GITHUB_ENV"
+          echo "published_candidate=$new_head" >> "$GITHUB_STEP_SUMMARY"
+
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/final-product-paths.txt
+          diff -u /tmp/expected-product-paths.txt /tmp/final-product-paths.txt
+          git diff --check "$EXACT_MAIN"...HEAD
+
+          npm run gate 2>&1 | tee /tmp/doctor-who-pilot-cycle-evidence-final-gate.log
+
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          test -z "$(git status --porcelain)"
+          git ls-tree -r --name-only HEAD > /tmp/doctor-who-pilot-cycle-evidence-final-tree.txt
+          ! grep -Eq '^\.github/workflows/repair-doctor-who-pilot-review-hotfix\.yml$|^scripts/apply-doctor-who-pilot-review-hotfix\.mjs$' \
+            /tmp/doctor-who-pilot-cycle-evidence-final-tree.txt
+
+      - name: Publish exact five-path product under branch lease
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=2 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+
+          echo "published_head=$NEW_HEAD" >> "$GITHUB_STEP_SUMMARY"
+          echo "product_paths=5" >> "$GITHUB_STEP_SUMMARY"
+          echo "second_lease_issued=false" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact correction and complete-gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-pilot-cycle-evidence-${{ github.run_id }}
+          path: |
+            /tmp/doctor-who-pilot-cycle-evidence-correction.log
+            /tmp/doctor-who-pilot-cycle-evidence-correction.json
+            /tmp/doctor-who-waterline-status.json
+            /tmp/doctor-who-pilot-cycle-evidence-candidate-gate.log
+            /tmp/doctor-who-pilot-cycle-evidence-final-gate.log
+            /tmp/expected-transport-paths.txt
+            /tmp/actual-transport-paths.txt
+            /tmp/expected-product-paths.txt
+            /tmp/candidate-product-paths.txt
+            /tmp/final-product-paths.txt
+            /tmp/doctor-who-pilot-cycle-evidence-final-tree.txt
+            data/review/adapter-sdk/doctor-who-pilot-cycle-001.json
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
