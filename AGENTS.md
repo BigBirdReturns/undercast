@@ -33,11 +33,15 @@ npm run waterline -- validate
 npm run waterline -- status --scope star-trek
 ```
 
-Work only on a milestone reported `ready`, then follow its exact section in
-`docs/ROADMAP-PLAYBOOKS.md`. Forecast dates do not authorize work; dependencies,
-measured triggers, owner decisions, and reviewed completion receipts do. A later
-or more interesting milestone is out of scope until the dependency graph unlocks
-it.
+Work only on a milestone reported `ready` or `reversible`, then follow the exact
+authorization printed by `roadmap next`. `ready` authorizes the full playbook
+within its stated authority. `reversible` authorizes only the exact reversible
+work printed from `data/EXECUTION-POLICY.json`; every listed held decision and
+held action remains out of bounds. Forecast dates do not authorize work. Missing
+dependencies or measured triggers still block a milestone, while a missing owner
+decision holds irreversible action and completion without turning the owner into
+an execution dependency. A later or more interesting milestone remains out of
+scope until the dependency graph unlocks it.
 
 Hotfixes for active correctness, rights, security, or publication incidents may
 interrupt the roadmap, but they must stay narrowly scoped, leave an incident or
