@@ -1,0 +1,103 @@
+name: fix-doctor-who-cycle-002-terminal-state-v2
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/fix-doctor-who-cycle-002-terminal-state-v2.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-doctor-who-cycle-002-terminal-state-v2-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  WRITER: .github/workflows/complete-doctor-who-cycle-002-v2.yml
+  EXTRACTOR: .github/workflows/extract-doctor-who-cycle-002-v2-live.yml
+  FAILED_FIX: .github/workflows/fix-doctor-who-cycle-002-terminal-state.yml
+  SELF: .github/workflows/fix-doctor-who-cycle-002-terminal-state-v2.yml
+
+jobs:
+  repair:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 16
+
+      - name: Patch terminal ordering through a structural writer anchor
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          for path in "$WRITER" "$EXTRACTOR" "$FAILED_FIX" "$SELF"; do
+            test -s "$path"
+          done
+
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
+
+          const path = process.env.WRITER;
+          let workflow = await readFile(path, 'utf8');
+          const marker = "          const staleAdapterCheck = 'runNode(\"scripts/census-adapter.mjs\", [\"check\"]);';";
+          if (workflow.includes(marker)) throw new Error('terminal state repair is already present');
+
+          const anchor = '          await writeFile(finalizerPath, finalizer);';
+          if (workflow.split(anchor).length - 1 !== 1) throw new Error('live writer finalizer write anchor drifted');
+
+          const repair = [
+            "          const staleAdapterCheck = 'runNode(\"scripts/census-adapter.mjs\", [\"check\"]);';",
+            '          const refreshedTerminalState = `runNode("scripts/census-adapter.mjs", ["write"]);',
+            'runNode("scripts/census-adapter.mjs", ["check"]);',
+            'runNode("scripts/autopilot.mjs", ["sync", "--scope", "doctor-who", "--now", context.timestamps.final_at]);',
+            'runNode("scripts/autopilot.mjs", ["validate"]);`;',
+            "          if (finalizer.split(staleAdapterCheck).length - 1 !== 1) throw new Error('unexpected terminal adapter check');",
+            '          finalizer = finalizer.replace(staleAdapterCheck, refreshedTerminalState);',
+            '',
+          ].join('\n');
+          workflow = workflow.replace(anchor, `${repair}${anchor}`);
+
+          const diagnostic = /^\s*console\.log\('patched date-only source custody, review ordering, semantic cross-scope custody,.*receipt serializers'\);$/m;
+          const matches = workflow.match(new RegExp(diagnostic.source, 'gm')) || [];
+          if (matches.length !== 1) throw new Error(`live writer diagnostic anchor drifted: ${matches.length}`);
+          workflow = workflow.replace(diagnostic, "          console.log('patched date-only source custody, review ordering, semantic cross-scope custody, stable pretty receipt serializers, adapter baseline refresh, and terminal waterline synchronization');");
+
+          await writeFile(path, workflow);
+          NODE
+
+          grep -Fq 'const staleAdapterCheck' "$WRITER"
+          grep -Fq 'adapter baseline refresh, and terminal waterline synchronization' "$WRITER"
+          rm -f "$EXTRACTOR" "$FAILED_FIX" "$SELF"
+          git add -A
+          git diff --cached --check
+          git diff --cached --name-status | tee /tmp/doctor-who-cycle-002-terminal-state-repair-v2-paths.txt
+          actual="$(git diff --cached --name-only | sort | tr '\n' ' ')"
+          expected=".github/workflows/complete-doctor-who-cycle-002-v2.yml .github/workflows/extract-doctor-who-cycle-002-v2-live.yml .github/workflows/fix-doctor-who-cycle-002-terminal-state-v2.yml .github/workflows/fix-doctor-who-cycle-002-terminal-state.yml "
+          test "$actual" = "$expected"
+
+      - name: Commit and publish the restored four-path carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git commit \
+            -m 'Doctor Who: refresh adapter and waterline state before final validation' \
+            -m 'regenerate the adapter baseline after registry mutation and resynchronize terminal custody' \
+            -m 'self-delete all temporary live-extraction and repair workflows'
+          repair_head="$(git rev-parse HEAD)"
+          git fetch --no-tags --depth=16 origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+          echo "repair_head=$repair_head" >> "$GITHUB_STEP_SUMMARY"
+          echo 'temporary_workflows_remaining=0' >> "$GITHUB_STEP_SUMMARY"
