@@ -18,6 +18,9 @@ env:
   AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
   TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
   SOURCE: .github/workflows/complete-doctor-who-cycle-002-v2.yml
+  CLEAN_SOURCE_COMMIT: d059de92a7570f02c0b3b6831d19ed6d5e0ac7b3
+  CLEAN_SOURCE_SHA256: ff333d389911211b354a05c4f7a1ee990abd78d611eacbacb0bce85ada8298b0
+  CLEAN_SOURCE: /tmp/complete-doctor-who-cycle-002-v2.clean.yml
   OUTPUT: .ci/doctor-who-cycle-002/complete-doctor-who-cycle-002-v2.corrected.yml
 
 jobs:
@@ -29,30 +32,28 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.AUTHORIZED_HEAD }}
-          fetch-depth: 16
+          fetch-depth: 128
 
-      - name: Produce and validate corrected workflow bytes
+      - name: Recover known-clean writer and produce corrected workflow bytes
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
           test -z "$(git status --porcelain)"
-          test -s "$SOURCE"
+          git cat-file -e "${CLEAN_SOURCE_COMMIT}:${SOURCE}"
+          git show "${CLEAN_SOURCE_COMMIT}:${SOURCE}" > "$CLEAN_SOURCE"
+          test "$(sha256sum "$CLEAN_SOURCE" | awk '{print $1}')" = "$CLEAN_SOURCE_SHA256"
 
           node --input-type=module <<'NODE'
           import { mkdir, readFile, writeFile } from 'node:fs/promises';
           import { dirname } from 'node:path';
 
-          const source = process.env.SOURCE;
+          const source = process.env.CLEAN_SOURCE;
           const output = process.env.OUTPUT;
-          const workflow = await readFile(source, 'utf8');
-          const lines = workflow.split('\n');
-          const start = lines.findIndex((line) => line.includes("const staleAdapterCheck = 'runNode(\"scripts/census-adapter.mjs\", [\"check\"]);';"));
-          const end = lines.findIndex((line, index) => index > start && line.includes("if (finalizer.split(staleAdapterCheck).length - 1 !== 1)"));
-          if (start < 0 || end < start || end - start !== 5) {
-            throw new Error(`malformed v2 workflow block drifted: start=${start} end=${end}`);
-          }
-          const replacement = [
+          let workflow = await readFile(source, 'utf8');
+          const anchor = '          await writeFile(finalizerPath, finalizer);';
+          if (workflow.split(anchor).length - 1 !== 1) throw new Error('clean writer finalizer anchor drifted');
+          const repair = [
             "          const staleAdapterCheck = 'runNode(\"scripts/census-adapter.mjs\", [\"check\"]);';",
             '          const refreshedTerminalState = [',
             '            \'runNode("scripts/census-adapter.mjs", ["write"]);\',',
@@ -61,18 +62,25 @@ jobs:
             '            \'runNode("scripts/autopilot.mjs", ["validate"]);\',',
             "          ].join('\\n');",
             "          if (finalizer.split(staleAdapterCheck).length - 1 !== 1) throw new Error('unexpected terminal adapter check');",
-          ];
-          lines.splice(start, end - start + 1, ...replacement);
-          const corrected = lines.join('\n');
+            '          finalizer = finalizer.replace(staleAdapterCheck, refreshedTerminalState);',
+          ].join('\n');
+          workflow = workflow.replace(anchor, `${repair}\n${anchor}`);
+          const diagnostic = "          console.log('patched date-only source custody, review ordering, semantic cross-scope custody, and both stable pretty receipt serializers');";
+          if (workflow.split(diagnostic).length - 1 !== 1) throw new Error('clean writer diagnostic anchor drifted');
+          workflow = workflow.replace(
+            diagnostic,
+            "          console.log('patched date-only source custody, review ordering, semantic cross-scope custody, stable pretty receipt serializers, adapter baseline refresh, and terminal waterline synchronization');",
+          );
           await mkdir(dirname(output), { recursive: true });
-          await writeFile(output, corrected);
+          await writeFile(output, workflow);
           NODE
 
           test -s "$OUTPUT"
           grep -Fq "].join('\\n');" "$OUTPUT"
+          grep -Fq 'adapter baseline refresh, and terminal waterline synchronization' "$OUTPUT"
           ruby -e "require 'yaml'; YAML.load_file(ARGV[0]); puts 'YAML_OK'" "$OUTPUT"
-          sha256sum "$SOURCE" "$OUTPUT" | tee /tmp/doctor-who-cycle-002-v2-corrected.sha256
-          git diff --no-index -- "$SOURCE" "$OUTPUT" | tee /tmp/doctor-who-cycle-002-v2-corrected.diff || test "$?" -eq 1
+          sha256sum "$CLEAN_SOURCE" "$OUTPUT" | tee /tmp/doctor-who-cycle-002-v2-corrected.sha256
+          git diff --no-index -- "$CLEAN_SOURCE" "$OUTPUT" | tee /tmp/doctor-who-cycle-002-v2-corrected.diff || test "$?" -eq 1
 
       - name: Commit and push only the non-workflow corrected blob
         shell: bash
