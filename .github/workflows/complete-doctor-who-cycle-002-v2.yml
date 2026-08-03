@@ -1,0 +1,388 @@
+name: complete-doctor-who-cycle-002-gredd-v2
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/complete-doctor-who-cycle-002-v2.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: complete-doctor-who-cycle-002-v2-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  SELF_V1: .github/workflows/apply-doctor-who-cycle-002.yml
+  SELF_V2: .github/workflows/complete-doctor-who-cycle-002-v2.yml
+  TRANSPORT: .ci/doctor-who-cycle-002/scripts.tgz.b64
+  PATCH_TRANSPORT: .ci/doctor-who-cycle-002/patch-current.mjs.gz.b64
+  TRANSPORT_SHA256: d824b3af5b5f02210c7893c8090077a887b649f8be5231ded1effe66d6169837
+  PATCH_TRANSPORT_SHA256: 2ab832438dc932a0b156b374fa16af6b1112f30067ed1a3cf7fc15b2066e4826
+  MATERIALIZER: /tmp/doctor-who-cycle-002/apply-doctor-who-cycle-002.mjs
+  FINALIZER: /tmp/doctor-who-cycle-002/apply-doctor-who-cycle-finalize-002.mjs
+  PATCHER: /tmp/doctor-who-cycle-002/patch-current.mjs
+  CYCLE_CONTEXT: /tmp/doctor-who-cycle-002-context.json
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  cycle-002:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 128
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies, rendered runtime, and deterministic image tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          convert -version
+
+      - name: Bind live main and decode the inspected four-path carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git fetch --no-tags --depth=128 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          exact_main="$(git rev-parse refs/remotes/origin/main)"
+          test -n "$exact_main"
+          echo "EXACT_MAIN=$exact_main" >> "$GITHUB_ENV"
+
+          cycle_at="$(git show -s --format=%cI "$AUTHORIZED_HEAD")"
+          test -n "$cycle_at"
+          echo "CYCLE_AT=$cycle_at" >> "$GITHUB_ENV"
+
+          git rebase refs/remotes/origin/main
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$exact_main"
+          cat > /tmp/expected-transport-paths.txt <<PATHS
+          $TRANSPORT
+          $PATCH_TRANSPORT
+          $SELF_V1
+          $SELF_V2
+          PATHS
+          sort -o /tmp/expected-transport-paths.txt /tmp/expected-transport-paths.txt
+          git diff --name-only "$exact_main"...HEAD | sort > /tmp/actual-transport-paths.txt
+          diff -u /tmp/expected-transport-paths.txt /tmp/actual-transport-paths.txt
+
+          mkdir -p /tmp/doctor-who-cycle-002
+          tr -d '\n\r\t ' < "$TRANSPORT" | base64 --decode > /tmp/doctor-who-cycle-002-scripts.tgz
+          test "$(sha256sum /tmp/doctor-who-cycle-002-scripts.tgz | awk '{print $1}')" = "$TRANSPORT_SHA256"
+          tar -xzf /tmp/doctor-who-cycle-002-scripts.tgz -C /tmp/doctor-who-cycle-002
+
+          tr -d '\n\r\t ' < "$PATCH_TRANSPORT" | base64 --decode > /tmp/doctor-who-cycle-002-patch.mjs.gz
+          test "$(sha256sum /tmp/doctor-who-cycle-002-patch.mjs.gz | awk '{print $1}')" = "$PATCH_TRANSPORT_SHA256"
+          gzip -dc /tmp/doctor-who-cycle-002-patch.mjs.gz > "$PATCHER"
+          node --check "$PATCHER"
+          node "$PATCHER"
+
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
+          const path = process.env.MATERIALIZER;
+          const before = 'const SOURCE_FETCHED_AT = at(3);';
+          const after = 'const SOURCE_FETCHED_AT = at(3).slice(0, 10);';
+          const text = await readFile(path, 'utf8');
+          const count = text.split(before).length - 1;
+          if (count !== 1) throw new Error(`expected one SOURCE_FETCHED_AT serializer, found ${count}`);
+          await writeFile(path, text.replace(before, after));
+          console.log('patched Gredd source fetched_at to schema-required calendar date');
+          NODE
+
+          node --check "$MATERIALIZER"
+          node --check "$FINALIZER"
+          sha256sum \
+            /tmp/doctor-who-cycle-002-scripts.tgz \
+            /tmp/doctor-who-cycle-002-patch.mjs.gz \
+            "$MATERIALIZER" \
+            "$FINALIZER" \
+            > /tmp/doctor-who-cycle-002-transport-sha256.txt
+          echo "exact_main=$exact_main" >> "$GITHUB_STEP_SUMMARY"
+          echo "rebased_launcher=$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "cycle_at=$cycle_at" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Claim, materialize, upload, review, and resolve exactly one Gredd task
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$MATERIALIZER" 2>&1 | tee /tmp/doctor-who-cycle-002-materialize.log
+          test -s "$CYCLE_CONTEXT"
+
+          readarray -t custody < <(node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const context = JSON.parse(fs.readFileSync(process.env.CYCLE_CONTEXT, 'utf8'));
+          console.log(context.canonical.wall_id);
+          console.log(context.media.portrait_src);
+          console.log(context.media.portrait_sha256);
+          console.log(context.timestamps.source_fetched_at);
+          NODE
+          )
+          wall_id="${custody[0]}"
+          portrait_path="${custody[1]}"
+          portrait_sha256="${custody[2]}"
+          source_fetched_at="${custody[3]}"
+          test -n "$wall_id"
+          [[ "$portrait_path" =~ ^images/uc-[0-9]+-portrait\.jpg$ ]]
+          [[ "$source_fetched_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]
+          test -f "$portrait_path"
+          test "$(sha256sum "$portrait_path" | awk '{print $1}')" = "$portrait_sha256"
+          identify -format '%w %h\n' "$portrait_path" | tee /tmp/doctor-who-cycle-002-portrait-dimensions.txt
+          test "$(cat /tmp/doctor-who-cycle-002-portrait-dimensions.txt)" = "420 600"
+          cp "$portrait_path" /tmp/doctor-who-cycle-002-portrait.jpg
+          sha256sum "$portrait_path" > /tmp/doctor-who-cycle-002-portrait.sha256
+          printf '%s\n' "$portrait_path" > /tmp/doctor-who-cycle-002-portrait-path.txt
+          printf '%s\n' "$wall_id" > /tmp/doctor-who-cycle-002-wall-id.txt
+          printf '%s\n' "$source_fetched_at" > /tmp/doctor-who-cycle-002-source-fetched-at.txt
+          echo "PORTRAIT_PATH=$portrait_path" >> "$GITHUB_ENV"
+          echo "PORTRAIT_SHA256=$portrait_sha256" >> "$GITHUB_ENV"
+          echo "WALL_ID=$wall_id" >> "$GITHUB_ENV"
+
+          node scripts/autopilot.mjs validate
+          node scripts/media-audit.mjs gate --scope doctor-who
+          node scripts/waterline.mjs validate --scope doctor-who
+          node scripts/doctor-who-pilot-cycle.mjs
+          node scripts/doctor-who-correction-drill.mjs
+          echo "wall_id=$wall_id" >> "$GITHUB_STEP_SUMMARY"
+          echo "portrait_path=$portrait_path" >> "$GITHUB_STEP_SUMMARY"
+          echo "portrait_sha256=$portrait_sha256" >> "$GITHUB_STEP_SUMMARY"
+          echo "source_fetched_at=$source_fetched_at" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stage the workflow-free terminal candidate and run the complete gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          git rm -f "$SELF_V1" "$SELF_V2" "$TRANSPORT" "$PATCH_TRANSPORT"
+          git add -A
+          git diff --cached --check
+          test -z "$(git diff --name-only)"
+
+          git diff --cached --name-only "$EXACT_MAIN" | sort > /tmp/doctor-who-cycle-002-candidate-paths.txt
+          if grep -Eq '^\.github/|^\.ci/' /tmp/doctor-who-cycle-002-candidate-paths.txt; then
+            echo 'temporary Gredd execution transport survived in the candidate' >&2
+            cat /tmp/doctor-who-cycle-002-candidate-paths.txt >&2
+            exit 1
+          fi
+          mapfile -t image_paths < <(grep '^images/' /tmp/doctor-who-cycle-002-candidate-paths.txt || true)
+          test "${#image_paths[@]}" -eq 1
+          test "${image_paths[0]}" = "$PORTRAIT_PATH"
+
+          for required in \
+            "$PORTRAIT_PATH" \
+            data/AUTOPILOT.json \
+            data/CENSUS-COVERAGE.json \
+            data/MEDIA-AUDIT.json \
+            data/SOURCES.json \
+            data/media-live.json \
+            data/media-manifest.json \
+            data/specimens.json \
+            data/journal/autopilot.jsonl \
+            data/journal/media-audit.jsonl \
+            scripts/doctor-who-pilot-cycle.mjs \
+            scripts/doctor-who-correction-drill.mjs; do
+            grep -Fxq "$required" /tmp/doctor-who-cycle-002-candidate-paths.txt || {
+              echo "required candidate path missing: $required" >&2
+              exit 1
+            }
+          done
+
+          npm run gate 2>&1 | tee /tmp/doctor-who-cycle-002-candidate-gate.log
+          candidate_gate_sha256="$(sha256sum /tmp/doctor-who-cycle-002-candidate-gate.log | awk '{print $1}')"
+          echo "$candidate_gate_sha256" > /tmp/doctor-who-cycle-002-candidate-gate.sha256
+          echo "CANDIDATE_GATE_SHA256=$candidate_gate_sha256" >> "$GITHUB_ENV"
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          git restore --worktree -- .
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+
+      - name: Commit the exact terminal candidate and collect job custody
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_at="$(cat /tmp/doctor-who-cycle-002-candidate-at.txt)"
+          GIT_AUTHOR_DATE="$candidate_at" GIT_COMMITTER_DATE="$candidate_at" git commit \
+            -m 'Doctor Who: resolve bounded cycle 002 Gredd candidate' \
+            -m 'claim one source-preserved voice role and review a byte-distinct Dan Starkey portrait' \
+            -m 'keep the exact Gredd still honestly absent and reserve the reviewed cycle receipt'
+          candidate_commit="$(git rev-parse HEAD)"
+          workflow_job_id="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[] | select(.name == "cycle-002") | .id' | head -n 1)"
+          test "$workflow_job_id" -gt 0
+          echo "$candidate_commit" > /tmp/doctor-who-cycle-002-candidate-commit.txt
+          echo "$workflow_job_id" > /tmp/doctor-who-cycle-002-workflow-job.txt
+          echo "candidate_commit=$candidate_commit" >> "$GITHUB_OUTPUT"
+          echo "candidate_gate_sha256=$CANDIDATE_GATE_SHA256" >> "$GITHUB_OUTPUT"
+          echo "workflow_job_id=$workflow_job_id" >> "$GITHUB_OUTPUT"
+          echo "candidate_commit=$candidate_commit" >> "$GITHUB_STEP_SUMMARY"
+          echo "candidate_gate_sha256=$CANDIDATE_GATE_SHA256" >> "$GITHUB_STEP_SUMMARY"
+          echo "workflow_job_id=$workflow_job_id" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact terminal candidate evidence
+        id: candidate_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-002-candidate-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            /tmp/doctor-who-cycle-002-context.json
+            /tmp/doctor-who-cycle-002-materialize.log
+            /tmp/doctor-who-cycle-002-candidate-gate.log
+            /tmp/doctor-who-cycle-002-candidate-gate.sha256
+            /tmp/doctor-who-cycle-002-candidate-paths.txt
+            /tmp/doctor-who-cycle-002-candidate-commit.txt
+            /tmp/doctor-who-cycle-002-workflow-job.txt
+            /tmp/doctor-who-cycle-002-portrait.jpg
+            /tmp/doctor-who-cycle-002-portrait.sha256
+            /tmp/doctor-who-cycle-002-portrait-dimensions.txt
+            /tmp/doctor-who-cycle-002-portrait-path.txt
+            /tmp/doctor-who-cycle-002-wall-id.txt
+            /tmp/doctor-who-cycle-002-source-fetched-at.txt
+            /tmp/doctor-who-cycle-002-transport-sha256.txt
+            /tmp/expected-transport-paths.txt
+            /tmp/actual-transport-paths.txt
+
+      - name: Write the reviewed cycle, permanent receipt, and future-safe checker
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ steps.candidate.outputs.candidate_commit }}
+          WORKFLOW_JOB_ID: ${{ steps.candidate.outputs.workflow_job_id }}
+          CANDIDATE_GATE_SHA256: ${{ steps.candidate.outputs.candidate_gate_sha256 }}
+          CANDIDATE_ARTIFACT_NAME: doctor-who-cycle-002-candidate-${{ github.run_id }}
+          CANDIDATE_ARTIFACT_ID: ${{ steps.candidate_artifact.outputs.artifact-id }}
+          CANDIDATE_ARTIFACT_SHA256: ${{ steps.candidate_artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          node "$FINALIZER" 2>&1 | tee /tmp/doctor-who-cycle-002-finalize.log
+          npm run doctor-who:cycle-002:check
+          npm run doctor-who:pilot-cycle:check
+          npm run doctor-who:correction-drill:check
+          node scripts/autopilot.mjs validate
+          node scripts/media-audit.mjs gate --scope doctor-who
+          node scripts/waterline.mjs validate --scope doctor-who
+
+      - name: Commit, completely gate, and publish the exact receipt-bearing product
+        id: final
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          git diff --cached --check
+          final_at="$(cat /tmp/doctor-who-cycle-002-final-at.txt)"
+          GIT_AUTHOR_DATE="$final_at" GIT_COMMITTER_DATE="$final_at" git commit \
+            -m 'Doctor Who: complete reviewed cycle 002 for Gredd' \
+            -m 'retain exact source, portrait, media, queue, workflow, artifact, and waterline custody' \
+            -m 'leave 314 queued obligations, zero work in flight, and no third lease'
+          final_head="$(git rev-parse HEAD)"
+          echo "$final_head" > /tmp/doctor-who-cycle-002-final-head.txt
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/doctor-who-cycle-002-final-paths.txt
+          git diff --check "$EXACT_MAIN"...HEAD
+          if grep -Eq '^\.github/|^\.ci/|scripts/apply-doctor-who-cycle' /tmp/doctor-who-cycle-002-final-paths.txt; then
+            echo 'Gredd cycle execution scaffolding survived in the final product' >&2
+            cat /tmp/doctor-who-cycle-002-final-paths.txt >&2
+            exit 1
+          fi
+          mapfile -t image_paths < <(grep '^images/' /tmp/doctor-who-cycle-002-final-paths.txt || true)
+          test "${#image_paths[@]}" -eq 1
+          test "${image_paths[0]}" = "$PORTRAIT_PATH"
+          for required in \
+            "$PORTRAIT_PATH" \
+            data/review/adapter-sdk/doctor-who-cycle-002-gredd.json \
+            scripts/doctor-who-cycle-002.mjs \
+            data/WATERLINE-STATE.json \
+            data/journal/waterline.jsonl \
+            data/media-manifest.json \
+            data/media-live.json \
+            package.json \
+            data/ESTATE-REGISTRY.json \
+            docs/AUTOPILOT.md; do
+            grep -Fxq "$required" /tmp/doctor-who-cycle-002-final-paths.txt || {
+              echo "required final path missing: $required" >&2
+              exit 1
+            }
+          done
+
+          npm run gate 2>&1 | tee /tmp/doctor-who-cycle-002-final-gate.log
+          final_gate_sha256="$(sha256sum /tmp/doctor-who-cycle-002-final-gate.log | awk '{print $1}')"
+          echo "$final_gate_sha256" > /tmp/doctor-who-cycle-002-final-gate.sha256
+          rm -rf records test-results playwright-report .ci/projection-drift data/_curate
+          git restore --worktree -- .
+          test -z "$(git status --porcelain)"
+          npm run doctor-who:cycle-002:check
+
+          git fetch --no-tags --depth=128 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+
+          echo "final_head=$final_head" >> "$GITHUB_OUTPUT"
+          echo "final_gate_sha256=$final_gate_sha256" >> "$GITHUB_OUTPUT"
+          echo "final_head=$final_head" >> "$GITHUB_STEP_SUMMARY"
+          echo "final_gate_sha256=$final_gate_sha256" >> "$GITHUB_STEP_SUMMARY"
+          echo "final_paths=$(wc -l < /tmp/doctor-who-cycle-002-final-paths.txt)" >> "$GITHUB_STEP_SUMMARY"
+          echo "third_lease_issued=false" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload complete cycle and final-gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-002-final-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: warn
+          path: |
+            /tmp/doctor-who-cycle-002-context.json
+            /tmp/doctor-who-cycle-002-receipt-input.json
+            /tmp/doctor-who-cycle-002-permanent-receipt.json
+            /tmp/doctor-who-cycle-002-materialize.log
+            /tmp/doctor-who-cycle-002-candidate-gate.log
+            /tmp/doctor-who-cycle-002-candidate-gate.sha256
+            /tmp/doctor-who-cycle-002-finalize.log
+            /tmp/doctor-who-cycle-002-final-gate.log
+            /tmp/doctor-who-cycle-002-final-gate.sha256
+            /tmp/doctor-who-cycle-002-candidate-paths.txt
+            /tmp/doctor-who-cycle-002-final-paths.txt
+            /tmp/doctor-who-cycle-002-candidate-commit.txt
+            /tmp/doctor-who-cycle-002-final-head.txt
+            /tmp/doctor-who-cycle-002-workflow-job.txt
+            /tmp/doctor-who-cycle-002-portrait.jpg
+            /tmp/doctor-who-cycle-002-portrait.sha256
+            /tmp/doctor-who-cycle-002-portrait-dimensions.txt
+            /tmp/doctor-who-cycle-002-portrait-path.txt
+            /tmp/doctor-who-cycle-002-wall-id.txt
+            /tmp/doctor-who-cycle-002-source-fetched-at.txt
+            /tmp/doctor-who-cycle-002-transport-sha256.txt
+            /tmp/expected-transport-paths.txt
+            /tmp/actual-transport-paths.txt
+            data/review/adapter-sdk/doctor-who-cycle-002-gredd.json
