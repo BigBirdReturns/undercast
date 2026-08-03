@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveScopeReadiness } from "./lib/autopilot.mjs";
+import { resolveScopeReadiness, validateState } from "./lib/autopilot.mjs";
+import { collapseCoverage, normalize as canonicalNormalize, sourceFingerprint as canonicalSourceFingerprint, sourceKey } from "./lib/autopilot-model.mjs";
 import {
   deriveWaterlineStatus,
   emptyWaterlineState,
@@ -17,6 +19,16 @@ import {
 export const ACTIVATION_VERSION = 1;
 export const DEFAULT_OUTPUT = "data/review/adapter-sdk/doctor-who-activation-001.json";
 const SCOPE_ID = "doctor-who";
+const DOCTOR_FRANCHISE = canonicalNormalize("Doctor Who");
+const ACTIVATION_STATE_HISTORY_SHA = "79362e21d9d526f1310467574e69fe909eb80adb";
+const ACTIVATION_STATE_AUTOPILOT_PATH = "data/AUTOPILOT.json";
+const ACTIVATION_STATE_AUTOPILOT_BLOB = "178e51eecfddf759b97fcaf29741df7736e68a70";
+const ACTIVATION_CODE_HISTORY_SHA = "9e5f39d22df254136fdc4a7b34d93ebd17bf1172";
+const ACTIVATION_CODE_OBJECTS = {
+  "scripts/doctor-who-activation.mjs": "254c4a4d9551be99e8e529dfe7bb937b04140e84",
+  "scripts/lib/waterline.mjs": "4c0cc1787c92caeb56c5031884e2579098a88b1a",
+  "scripts/waterline-fixtures.mjs": "81ec4d168f01aff0f09514d70d73bf5d4f077ffb",
+};
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const stable = (value) => Array.isArray(value)
@@ -39,6 +51,194 @@ const queueSummary = (jobs) => {
   };
 };
 
+function runGitText(args, { allowFail = false } = {}) {
+  const result = spawnSync("git", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  if (result.error) {
+    if (allowFail) return { ok: false, stdout: "", stderr: result.error.message };
+    throw result.error;
+  }
+  const ok = result.status === 0;
+  const stdout = String(result.stdout || "").trim();
+  const stderr = String(result.stderr || "").trim();
+  if (!ok && !allowFail) throw new Error(`git ${args.join(" ")} failed: ${stderr || stdout || `status ${result.status}`}`);
+  return { ok, stdout, stderr };
+}
+
+function runGitBytes(args) {
+  const result = spawnSync("git", args, {
+    encoding: null,
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const stderr = Buffer.from(result.stderr || []).toString("utf8").trim();
+    throw new Error(`git ${args.join(" ")} failed: ${stderr || `status ${result.status}`}`);
+  }
+  return Buffer.from(result.stdout || []);
+}
+
+const exactFetchPause = (milliseconds) =>
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+const isRetryableExactFetchError = (detail) =>
+  /shallow file has changed|shallow\.lock|index\.lock|packed-refs\.lock|cannot lock ref|another git process/i.test(String(detail || ""));
+
+function fetchExactCommitWithRetry(commit, label) {
+  let detail = "unknown git error";
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const fetched = runGitText([
+      "-c", "gc.auto=0",
+      "-c", "maintenance.auto=false",
+      "-c", "fetch.writeCommitGraph=false",
+      "fetch", "--no-tags", "--depth=1", "origin", commit,
+    ], { allowFail: true });
+    if (fetched.ok || runGitText(["cat-file", "-e", `${commit}^{commit}`], { allowFail: true }).ok) return;
+    detail = fetched.stderr || fetched.stdout || detail;
+    if (!isRetryableExactFetchError(detail) || attempt === 5) break;
+    exactFetchPause(attempt * 250);
+  }
+  assert.fail(`${label} commit ${commit} is unavailable after bounded exact-fetch retries: ${detail}`);
+}
+
+assert.equal(isRetryableExactFetchError("fatal: shallow file has changed since we read it"), true, "shallow-file race is not classified as retryable");
+assert.equal(isRetryableExactFetchError("fatal: repository not found"), false, "substantive fetch failure became retryable");
+
+function ensureHistoricalCommit(commit, label) {
+  if (runGitText(["cat-file", "-e", `${commit}^{commit}`], { allowFail: true }).ok) return;
+  fetchExactCommitWithRetry(commit, label);
+  assert.ok(runGitText(["cat-file", "-e", `${commit}^{commit}`], { allowFail: true }).ok, `${label} commit ${commit} did not resolve after exact fetch`);
+}
+
+function exactHistoricalBytes(commit, file, expectedObject, label) {
+  ensureHistoricalCommit(commit, label);
+  const object = runGitText(["rev-parse", `${commit}:${file}`]).stdout;
+  assert.equal(object, expectedObject, `${label} Git object drifted for ${file}`);
+  assert.ok(runGitText(["cat-file", "-e", `${object}^{blob}`], { allowFail: true }).ok, `${label} object for ${file} is not a blob`);
+  return runGitBytes(["show", `${commit}:${file}`]);
+}
+
+function historicalActivationTask(taskId) {
+  const bytes = exactHistoricalBytes(
+    ACTIVATION_STATE_HISTORY_SHA,
+    ACTIVATION_STATE_AUTOPILOT_PATH,
+    ACTIVATION_STATE_AUTOPILOT_BLOB,
+    "activation-state history",
+  );
+  const document = JSON.parse(bytes.toString("utf8"));
+  const job = (document.jobs || []).find((row) => row.id === taskId);
+  assert.ok(job, `activation-state history lacks task ${taskId}`);
+  return job;
+}
+
+function assertHttpsSourceUrl(value, label) {
+  assert.equal(typeof value, "string", `${label} is invalid`);
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    assert.fail(`${label} is not a parseable URL`);
+  }
+  assert.equal(parsed.protocol, "https:", `${label} must use HTTPS`);
+  assert.ok(parsed.hostname, `${label} hostname is missing`);
+  assert.equal(parsed.username, "", `${label} must not carry credentials`);
+  assert.equal(parsed.password, "", `${label} must not carry credentials`);
+  return parsed;
+}
+
+function validateLiveSourceCustody(task) {
+  assert.ok(Array.isArray(task.sources) && task.sources.length > 0, `${task.id} has no current source URLs`);
+  assert.ok(Array.isArray(task.source_receipts) && task.source_receipts.length > 0, `${task.id} has no current source receipts`);
+  const sourceKeys = new Set();
+  for (const source of task.sources) {
+    assertHttpsSourceUrl(source, `${task.id} source URL`);
+    const key = sourceKey(source);
+    sourceKeys.add(key);
+  }
+  assert.equal(sourceKeys.size, task.sources.length, `${task.id} has duplicate normalized source URLs`);
+  const receiptKeys = new Set();
+  for (const receipt of task.source_receipts) {
+    assertHttpsSourceUrl(receipt.source, `${task.id} source receipt URL`);
+    assert.ok(Number.isInteger(receipt.pageid) && receipt.pageid > 0, `${task.id} source receipt page id is invalid`);
+    assert.ok(Number.isInteger(receipt.revision) && receipt.revision > 0, `${task.id} source receipt revision is invalid`);
+    assert.match(String(receipt.content_sha256 || ""), /^[0-9a-f]{64}$/, `${task.id} source receipt content hash is invalid`);
+    receiptKeys.add(sourceKey(receipt.source));
+  }
+  assert.deepEqual(
+    [...sourceKeys].sort(),
+    [...receiptKeys].sort(),
+    `${task.id} current source URLs and receipt URLs disagree`,
+  );
+  assert.equal(
+    task.source_fingerprint,
+    canonicalSourceFingerprint(task),
+    `${task.id} source fingerprint does not match canonical source custody`,
+  );
+  return true;
+}
+
+function isCanonicalDoctorTask(task) {
+  const franchiseMatches = canonicalNormalize(task.franchise) === DOCTOR_FRANCHISE;
+  const scopeMatches = task.scope === SCOPE_ID;
+  assert.equal(
+    scopeMatches,
+    franchiseMatches,
+    `${task.id} Doctor Who scope/franchise membership disagrees`,
+  );
+  return franchiseMatches;
+}
+
+function validateCanonicalDoctorTaskSet(jobs, coverage, scopesDoc, manifest) {
+  const expectedTasks = collapseCoverage(coverage, scopesDoc, manifest).filter(isCanonicalDoctorTask);
+  assert.ok(expectedTasks.length > 0, "canonical Doctor Who task denominator is empty");
+  const actualTasks = (jobs || []).filter(isCanonicalDoctorTask);
+  const expectedIds = expectedTasks.map((task) => task.id).sort();
+  const actualIds = actualTasks.map((task) => task.id).sort();
+  assert.deepEqual(
+    actualIds,
+    expectedIds,
+    "current Doctor Who task denominator disagrees with canonical census coverage",
+  );
+  return { expectedTasks, actualTasks };
+}
+
+function validateLiveDoctorSourceCustody(jobs) {
+  const tasks = (jobs || []).filter((task) =>
+    isCanonicalDoctorTask(task) && !["rejected", "retired"].includes(task.status)
+  );
+  assert.ok(tasks.length > 0, "live Doctor Who source-custody denominator is empty");
+  const ids = new Set();
+  for (const task of tasks) {
+    assert.ok(!ids.has(task.id), `duplicate live Doctor Who task id ${task.id}`);
+    ids.add(task.id);
+    validateLiveSourceCustody(task);
+  }
+  return tasks;
+}
+
+function validateActivationTaskCustody(reportLease, historicalJob, liveJob) {
+  const task = reportLease.task;
+  assert.equal(historicalJob.scope, SCOPE_ID, "historical activation task escaped Doctor Who scope");
+  assert.equal(historicalJob.status, "leased", "historical activation task was not leased");
+  assert.equal(historicalJob.lease?.id, reportLease.lease_id, "historical activation lease identity drifted");
+  assert.equal(historicalJob.lease?.agent, reportLease.agent, "historical activation lease agent drifted");
+  assert.equal(historicalJob.performer, task.performer, "historical activation performer drifted");
+  assert.equal(historicalJob.character, task.character, "historical activation character drifted");
+  assert.deepEqual(historicalJob.sources, task.sources, "historical activation source URLs drifted");
+  assert.equal(historicalJob.source_fingerprint, task.source_fingerprint, "historical activation source fingerprint drifted");
+  assert.ok(liveJob, "reported pilot task is missing from durable Autopilot state");
+  assert.equal(liveJob.scope, SCOPE_ID, "live pilot task escaped Doctor Who scope");
+  if (liveJob.status === "retired") return { status: "retired" };
+  assert.notEqual(liveJob.status, "rejected", "historical pilot task was rejected instead of lawfully retired");
+  assert.equal(liveJob.performer, task.performer, "live pilot performer identity drifted");
+  assert.equal(liveJob.character, task.character, "live pilot character identity drifted");
+  validateLiveSourceCustody(liveJob);
+  return { status: liveJob.status };
+}
+
 function option(args, name, fallback = null) {
   const index = args.indexOf(name);
   if (index < 0) return fallback;
@@ -55,6 +255,7 @@ async function loadCurrent(root) {
   const manifest = readJson(root, "data/CENSUS-MANIFEST.json");
   const preservation = readJson(root, "preservation/SNAPSHOTS.json");
   const autopilot = readJson(root, "data/AUTOPILOT.json");
+  validateState(autopilot);
   const autopilotJournal = readJsonl(root, "data/journal/autopilot.jsonl");
   const waterlineConfig = readJson(root, "data/WATERLINE.json");
   const waterlineState = readJson(root, "data/WATERLINE-STATE.json");
@@ -502,13 +703,19 @@ async function checkReceipt(root, report) {
     "scripts/waterline-fixtures.mjs",
   ];
   assert.deepEqual(Object.keys(report.global_cycle_custody?.code_sha256 || {}).sort(), [...requiredCodeFiles].sort());
-  for (const file of requiredCodeFiles) {
-    assert.equal(
-      report.global_cycle_custody.code_sha256[file],
-      sha256(readBytes(root, file)),
-      `${file} no longer matches the reviewed global-cycle custody proof`,
-    );
-  }
+for (const file of requiredCodeFiles) {
+  const reviewedBytes = exactHistoricalBytes(
+    ACTIVATION_CODE_HISTORY_SHA,
+    file,
+    ACTIVATION_CODE_OBJECTS[file],
+    "activation reviewed-code history",
+  );
+  assert.equal(
+    report.global_cycle_custody.code_sha256[file],
+    sha256(reviewedBytes),
+    `${file} no longer matches the reviewed historical global-cycle custody proof`,
+  );
+}
   assert.deepEqual(report.global_cycle_custody?.expected_transitions, recomputedGlobalCycle);
   assert.ok(Object.values(report.boundary).every((value) => value === false), "activation boundary contains an unauthorized payment");
 
@@ -519,9 +726,158 @@ async function checkReceipt(root, report) {
   assert.equal(events[0].agent, report.lease.agent);
   const activationEvents = current.autopilotJournal.filter((row) => row.op === "scope.certified" && row.scope === SCOPE_ID && row.activated === true && row.at === report.activation.activated_at);
   assert.equal(activationEvents.length, 1, "reported activation event is missing or duplicated");
-  const job = current.autopilot.jobs.find((row) => row.id === report.lease.task.id);
-  assert.ok(job, "reported pilot task is missing from durable Autopilot state");
-  assert.equal(job.source_fingerprint, report.lease.task.source_fingerprint, "reported pilot task source changed");
+validateCanonicalDoctorTaskSet(current.autopilot.jobs || [], current.coverage, current.scopesDoc, current.manifest);
+const liveDoctorSourceTasks = validateLiveDoctorSourceCustody(current.autopilot.jobs || []);
+const job = current.autopilot.jobs.find((row) => row.id === report.lease.task.id);
+const historicalJob = historicalActivationTask(report.lease.task.id);
+validateActivationTaskCustody(report.lease, historicalJob, job);
+const certifiedRefreshFixture = structuredClone(job);
+// Certified-refresh adversarial proofs exercise live source custody even
+// when the actual historical pilot has lawfully moved to retired.
+certifiedRefreshFixture.status = "resolved";
+delete certifiedRefreshFixture.lease;
+assert.notEqual(certifiedRefreshFixture.status, "retired", "certified-refresh fixture inherited lawful retirement");
+const certifiedRefreshUrl = "https://tardis.fandom.com/wiki/Commander_(The_Sontarans)?refresh=certified";
+const certifiedRefreshReceipt = {
+  ...structuredClone(certifiedRefreshFixture.source_receipts[0]),
+  source: certifiedRefreshUrl,
+  revision: Number(certifiedRefreshFixture.source_receipts[0].revision) + 1,
+  content_sha256: "1".repeat(64),
+};
+certifiedRefreshFixture.sources = [certifiedRefreshUrl];
+certifiedRefreshFixture.source_receipts = [certifiedRefreshReceipt];
+certifiedRefreshFixture.source_fingerprint = canonicalSourceFingerprint(certifiedRefreshFixture);
+validateActivationTaskCustody(report.lease, historicalJob, certifiedRefreshFixture);
+
+const staleReceiptFixture = structuredClone(certifiedRefreshFixture);
+staleReceiptFixture.source_receipts = structuredClone(job.source_receipts);
+staleReceiptFixture.source_fingerprint = canonicalSourceFingerprint(staleReceiptFixture);
+assert.throws(
+  () => validateActivationTaskCustody(report.lease, historicalJob, staleReceiptFixture),
+  /current source URLs and receipt URLs disagree/,
+  "source refresh with stale receipts did not fail closed",
+);
+
+const forgedFingerprintFixture = structuredClone(certifiedRefreshFixture);
+forgedFingerprintFixture.source_fingerprint = "0".repeat(64);
+assert.throws(
+  () => validateActivationTaskCustody(report.lease, historicalJob, forgedFingerprintFixture),
+  /source fingerprint does not match canonical source custody/,
+  "source refresh with forged fingerprint did not fail closed",
+);
+const mezzTask = (current.autopilot.jobs || []).find((task) => task.id === "ap_0045a0e77c9d85b7771ebdc3");
+assert.ok(mezzTask, "Mezz adversarial source-custody fixture task is missing");
+const deletedMezzState = structuredClone(current.autopilot);
+deletedMezzState.jobs = deletedMezzState.jobs.filter((task) => task.id !== "ap_0045a0e77c9d85b7771ebdc3");
+assert.doesNotThrow(
+  () => validateState(deletedMezzState),
+  "canonical state validator unexpectedly detects a deleted task without coverage custody",
+);
+assert.throws(
+  () => validateCanonicalDoctorTaskSet(
+    deletedMezzState.jobs,
+    current.coverage,
+    current.scopesDoc,
+    current.manifest,
+  ),
+  /task denominator disagrees with canonical census coverage/,
+  "deleted Doctor Who task did not fail canonical coverage custody",
+);
+
+const staleMezz = structuredClone(mezzTask);
+staleMezz.sources = ["https://tardis.fandom.com/wiki/Unrelated_Mezz_Fixture"];
+staleMezz.source_fingerprint = canonicalSourceFingerprint(staleMezz);
+const staleMezzJobs = (current.autopilot.jobs || []).map((task) =>
+  task.id === staleMezz.id ? staleMezz : task
+);
+assert.throws(
+  () => validateLiveDoctorSourceCustody(staleMezzJobs),
+  /current source URLs and receipt URLs disagree/,
+  "non-pilot Doctor Who task with stale source receipts did not fail closed",
+);
+
+const nonUrlMezz = structuredClone(mezzTask);
+nonUrlMezz.sources = ["not-a-url"];
+nonUrlMezz.source_receipts = nonUrlMezz.source_receipts.map((receipt) => ({
+  ...receipt,
+  source: "not-a-url",
+}));
+nonUrlMezz.source_fingerprint = canonicalSourceFingerprint(nonUrlMezz);
+const nonUrlMezzJobs = (current.autopilot.jobs || []).map((task) =>
+  task.id === nonUrlMezz.id ? nonUrlMezz : task
+);
+assert.throws(
+  () => validateLiveDoctorSourceCustody(nonUrlMezzJobs),
+  /not a parseable URL/,
+  "matching non-URL Doctor Who task and receipt sources did not fail closed",
+);
+
+const httpMezz = structuredClone(mezzTask);
+httpMezz.sources = ["http://tardis.fandom.com/wiki/Mezz_HTTP_Fixture"];
+httpMezz.source_receipts = httpMezz.source_receipts.map((receipt) => ({
+  ...receipt,
+  source: "http://tardis.fandom.com/wiki/Mezz_HTTP_Fixture",
+}));
+httpMezz.source_fingerprint = canonicalSourceFingerprint(httpMezz);
+const httpMezzJobs = (current.autopilot.jobs || []).map((task) =>
+  task.id === httpMezz.id ? httpMezz : task
+);
+assert.throws(
+  () => validateLiveDoctorSourceCustody(httpMezzJobs),
+  /must use HTTPS/,
+  "matching HTTP Doctor Who task and receipt sources did not fail closed",
+);
+
+const escapedDoctorScopeTask = structuredClone(mezzTask);
+escapedDoctorScopeTask.scope = "star-trek";
+escapedDoctorScopeTask.sources = [];
+escapedDoctorScopeTask.source_receipts = [];
+escapedDoctorScopeTask.source_fingerprint = canonicalSourceFingerprint(escapedDoctorScopeTask);
+const escapedDoctorScopeJobs = (current.autopilot.jobs || []).map((task) =>
+  task.id === escapedDoctorScopeTask.id ? escapedDoctorScopeTask : task
+);
+assert.throws(
+  () => validateLiveDoctorSourceCustody(escapedDoctorScopeJobs),
+  /Doctor Who scope\/franchise membership disagrees/,
+  "Doctor Who task escaped source custody through a mutable scope change",
+);
+
+const duplicateIdentityState = structuredClone(current.autopilot);
+const duplicateIdentityMezz = duplicateIdentityState.jobs.find((task) => task.id === "ap_0045a0e77c9d85b7771ebdc3");
+assert.ok(duplicateIdentityMezz, "Mezz duplicate-identity fixture task is missing");
+duplicateIdentityMezz.franchise = job.franchise;
+duplicateIdentityMezz.character = job.character;
+duplicateIdentityMezz.performer = job.performer;
+duplicateIdentityMezz.source_fingerprint = canonicalSourceFingerprint(duplicateIdentityMezz);
+assert.throws(
+  () => validateState(duplicateIdentityState),
+  /does not match its performer-role identity|duplicate task identity/,
+  "duplicate performer-role identity did not fail canonical validation",
+);
+
+const invalidStatusState = structuredClone(current.autopilot);
+invalidStatusState.jobs.find((task) => task.id === "ap_0045a0e77c9d85b7771ebdc3").status = "archived";
+assert.throws(
+  () => validateState(invalidStatusState),
+  /invalid status archived/,
+  "unsupported Doctor Who task status did not fail canonical validation",
+);
+
+const retiredPilotState = structuredClone(current.autopilot);
+const retiredPilotJob = retiredPilotState.jobs.find((task) => task.id === report.lease.task.id);
+retiredPilotJob.status = "retired";
+validateState(retiredPilotState);
+const retiredPilotSourceTasks = validateLiveDoctorSourceCustody(retiredPilotState.jobs);
+assert.ok(
+  !retiredPilotSourceTasks.some((task) => task.id === report.lease.task.id),
+  "retired historical pilot remained in the live source-custody denominator",
+);
+assert.deepEqual(
+  validateActivationTaskCustody(report.lease, historicalJob, retiredPilotJob),
+  { status: "retired" },
+  "lawfully retired historical pilot task was rejected",
+);
+
   return true;
 }
 
@@ -542,7 +898,7 @@ async function cli() {
     if (!existsSync(outputPath)) throw new Error(`${output} is missing`);
     const report = JSON.parse(readFileSync(outputPath, "utf8"));
     await checkReceipt(root, report);
-    console.log(`activation: PASS — ${report.source_custody.roles} Doctor Who roles active; one Luna task leased; second claim blocked`);
+    console.log(`activation: PASS — ${report.source_custody.roles} Doctor Who activation roles historically bound; one Luna task leased at activation; live certified source refreshes allowed; second claim blocked`);
   } else if (command === "status") {
     if (!existsSync(outputPath)) throw new Error(`${output} is missing`);
     process.stdout.write(readFileSync(outputPath, "utf8"));
