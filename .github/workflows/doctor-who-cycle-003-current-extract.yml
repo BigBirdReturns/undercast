@@ -1,0 +1,260 @@
+name: doctor-who-cycle-003-current-extract
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/doctor-who-cycle-003-current-extract.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-003-current-extract-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-003-current-extract.yml
+
+jobs:
+  extract:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 128
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind live main and prove a one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --porcelain)"
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git fetch --no-tags --depth=128 origin \
+            refs/heads/main:refs/remotes/origin/main \
+            "refs/heads/${{ github.event.pull_request.head.ref }}:refs/remotes/origin/${{ github.event.pull_request.head.ref }}"
+          test "$(git rev-parse refs/remotes/origin/${{ github.event.pull_request.head.ref }})" = "${{ github.event.pull_request.head.sha }}"
+          exact_main="$(git rev-parse refs/remotes/origin/main)"
+          test -n "$exact_main"
+          git rebase refs/remotes/origin/main
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$exact_main"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$exact_main"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+          printf '%s\n' "$exact_main" > /tmp/exact-main.txt
+          printf '%s\n' "$(git rev-parse HEAD)" > /tmp/rebased-carrier-head.txt
+          echo "exact_main=$exact_main" >> "$GITHUB_STEP_SUMMARY"
+          echo "rebased_carrier=$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install exact dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+
+      - name: Prove zero-in-flight active-estate custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum \
+            data/AUTOPILOT.json \
+            data/AUTOPILOT-CERTIFICATIONS.json \
+            data/ESTATE-REGISTRY.json \
+            data/MEDIA-AUDIT.json \
+            data/WATERLINE-STATE.json \
+            data/journal/autopilot.jsonl \
+            data/journal/waterline.jsonl \
+            > /tmp/state-before.sha256
+
+          node scripts/autopilot.mjs validate 2>&1 | tee /tmp/autopilot-validate.log
+          node scripts/media-audit.mjs gate --scope doctor-who 2>&1 | tee /tmp/doctor-who-media-gate.log
+          node scripts/waterline.mjs validate --scope doctor-who 2>&1 | tee /tmp/doctor-who-waterline.log
+          node scripts/waterline.mjs validate --scope star-trek 2>&1 | tee /tmp/star-trek-waterline.log
+          npm run doctor-who:pilot-cycle:check 2>&1 | tee /tmp/doctor-who-pilot.log
+          npm run doctor-who:correction-drill:check 2>&1 | tee /tmp/doctor-who-correction.log
+          npm run doctor-who:cycle-002:check 2>&1 | tee /tmp/doctor-who-cycle-002.log
+          npm run star-trek:enwright-cycle:check 2>&1 | tee /tmp/star-trek-enwright.log
+
+          grep -Fq 'phase=ready-for-cycle' /tmp/doctor-who-waterline.log
+          grep -Fq 'claim=allowed' /tmp/doctor-who-waterline.log
+          grep -Fq 'phase=ready-for-cycle' /tmp/star-trek-waterline.log
+          grep -Fq 'claim=allowed' /tmp/star-trek-waterline.log
+
+          sha256sum \
+            data/AUTOPILOT.json \
+            data/AUTOPILOT-CERTIFICATIONS.json \
+            data/ESTATE-REGISTRY.json \
+            data/MEDIA-AUDIT.json \
+            data/WATERLINE-STATE.json \
+            data/journal/autopilot.jsonl \
+            data/journal/waterline.jsonl \
+            > /tmp/state-after.sha256
+          diff -u /tmp/state-before.sha256 /tmp/state-after.sha256
+          test -z "$(git status --porcelain)"
+
+      - name: Extract the deterministic next Doctor Who task without claiming it
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/autopilot.mjs candidates \
+            --scope doctor-who \
+            --agent luna \
+            --capability-profile text-vision \
+            --limit 1 \
+            --json \
+            > /tmp/doctor-who-cycle-003-candidates.json
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+
+          const readJson = (path) => JSON.parse(fs.readFileSync(path, 'utf8'));
+          const candidates = readJson('/tmp/doctor-who-cycle-003-candidates.json');
+          const list = Array.isArray(candidates) ? candidates : (candidates.candidates || candidates.tasks || []);
+          if (list.length !== 1) throw new Error(`expected exactly one deterministic candidate, found ${list.length}`);
+          const selected = list[0];
+          const taskId = selected.id || selected.task_id;
+          if (!taskId) throw new Error('selected candidate has no task id');
+
+          const autopilot = readJson('data/AUTOPILOT.json');
+          const jobs = Array.isArray(autopilot) ? autopilot : (autopilot.jobs || autopilot.tasks || []);
+          const task = jobs.find((row) => row.id === taskId);
+          if (!task) throw new Error(`selected task ${taskId} is absent from data/AUTOPILOT.json`);
+          if (task.scope !== 'doctor-who') throw new Error(`selected task scope drifted: ${task.scope}`);
+          if (task.status !== 'queued') throw new Error(`selected task is not queued: ${task.status}`);
+          const active = jobs.filter((row) => ['leased', 'submitted', 'review', 'in_flight'].includes(row.status));
+          if (active.length !== 0) throw new Error(`global in-flight work is not zero: ${active.map((row) => row.id).join(',')}`);
+
+          const sourceUrl = task.source || selected.source || task.source_url || selected.source_url || null;
+          const sourceContentSha = task.source_content_sha256 || selected.source_content_sha256 || null;
+          const sourceRevision = task.source_revision || selected.source_revision || task.revision_id || selected.revision_id || null;
+          const performer = task.performer || task.actor || selected.performer || selected.actor || null;
+          const character = task.character || task.role || selected.character || selected.role || null;
+          const fingerprint = task.source_fingerprint || selected.source_fingerprint || task.fingerprint || selected.fingerprint || null;
+
+          const detail = {
+            selected,
+            task,
+            exact: {
+              task_id: taskId,
+              performer,
+              character,
+              source: sourceUrl,
+              source_revision: sourceRevision,
+              source_content_sha256: sourceContentSha,
+              source_fingerprint: fingerprint,
+            },
+            boundary: {
+              lease_issued: false,
+              queue_mutated: false,
+              global_in_flight: 0,
+              selection_count: 1,
+              selection_strategy: selected.selection_strategy || 'priority-compatible',
+              capability_profile: 'text-vision',
+            },
+          };
+          fs.writeFileSync('/tmp/doctor-who-cycle-003-selected-task.json', `${JSON.stringify(detail, null, 2)}\n`);
+          fs.writeFileSync('/tmp/doctor-who-cycle-003-task-id.txt', `${taskId}\n`);
+
+          const sourceCandidates = [];
+          for (const path of ['data/CENSUS-SOURCES.json', 'data/CENSUS.json', 'data/CENSUS-COVERAGE.json', 'data/CENSUS-MANIFEST.json']) {
+            if (!fs.existsSync(path)) continue;
+            const document = readJson(path);
+            const stack = [{ value: document, path: '$' }];
+            while (stack.length) {
+              const current = stack.pop();
+              if (!current || current.value === null || typeof current.value !== 'object') continue;
+              if (Array.isArray(current.value)) {
+                current.value.forEach((value, index) => stack.push({ value, path: `${current.path}[${index}]` }));
+                continue;
+              }
+              const text = JSON.stringify(current.value);
+              const matches = [taskId, sourceUrl, sourceContentSha, performer, character].filter(Boolean).some((needle) => text.includes(String(needle)));
+              if (matches) sourceCandidates.push({ file: path, json_path: current.path, value: current.value });
+              for (const [key, value] of Object.entries(current.value)) stack.push({ value, path: `${current.path}.${key}` });
+            }
+          }
+          fs.writeFileSync('/tmp/doctor-who-cycle-003-source-candidates.json', `${JSON.stringify(sourceCandidates, null, 2)}\n`);
+
+          if (sourceContentSha) {
+            const contentPath = `preservation/source-content/${sourceContentSha}.txt`;
+            if (!fs.existsSync(contentPath)) throw new Error(`source content missing: ${contentPath}`);
+            fs.copyFileSync(contentPath, '/tmp/doctor-who-cycle-003-source-content.txt');
+            const actual = crypto.createHash('sha256').update(fs.readFileSync(contentPath)).digest('hex');
+            if (actual !== sourceContentSha) throw new Error(`source content hash mismatch: ${actual}`);
+          } else {
+            fs.writeFileSync('/tmp/doctor-who-cycle-003-source-content.txt', 'No source-content SHA was exposed directly by the selected task; inspect the exported exact repository surface and source candidates.\n');
+          }
+          NODE
+
+          cat /tmp/doctor-who-cycle-003-selected-task.json | tee /tmp/doctor-who-cycle-003-selection.log
+          sha256sum \
+            /tmp/doctor-who-cycle-003-candidates.json \
+            /tmp/doctor-who-cycle-003-selected-task.json \
+            /tmp/doctor-who-cycle-003-source-candidates.json \
+            /tmp/doctor-who-cycle-003-source-content.txt \
+            > /tmp/doctor-who-cycle-003-selection.sha256
+
+          diff -u /tmp/state-before.sha256 /tmp/state-after.sha256
+          test -z "$(git status --porcelain)"
+          echo 'lease_issued=false' >> "$GITHUB_STEP_SUMMARY"
+          echo "next_task=$(cat /tmp/doctor-who-cycle-003-task-id.txt)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package the exact merged repository surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar \
+            --exclude=.git \
+            --exclude=node_modules \
+            --exclude=records \
+            --exclude=test-results \
+            --exclude=playwright-report \
+            --exclude=data/_curate \
+            --exclude=.ci/projection-drift \
+            -czf /tmp/doctor-who-cycle-003-repository.tgz .
+          sha256sum /tmp/doctor-who-cycle-003-repository.tgz > /tmp/doctor-who-cycle-003-repository.sha256
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact next-task and repository evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-003-source-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            /tmp/exact-main.txt
+            /tmp/rebased-carrier-head.txt
+            /tmp/expected-paths.txt
+            /tmp/actual-paths.txt
+            /tmp/state-before.sha256
+            /tmp/state-after.sha256
+            /tmp/autopilot-validate.log
+            /tmp/doctor-who-media-gate.log
+            /tmp/doctor-who-waterline.log
+            /tmp/star-trek-waterline.log
+            /tmp/doctor-who-pilot.log
+            /tmp/doctor-who-correction.log
+            /tmp/doctor-who-cycle-002.log
+            /tmp/star-trek-enwright.log
+            /tmp/doctor-who-cycle-003-candidates.json
+            /tmp/doctor-who-cycle-003-selected-task.json
+            /tmp/doctor-who-cycle-003-task-id.txt
+            /tmp/doctor-who-cycle-003-source-candidates.json
+            /tmp/doctor-who-cycle-003-source-content.txt
+            /tmp/doctor-who-cycle-003-selection.log
+            /tmp/doctor-who-cycle-003-selection.sha256
+            /tmp/doctor-who-cycle-003-repository.tgz
+            /tmp/doctor-who-cycle-003-repository.sha256
