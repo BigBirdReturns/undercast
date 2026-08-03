@@ -1,0 +1,182 @@
+name: corpus-next-after-media-closure
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/corpus-next-after-media-closure.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: corpus-next-after-media-closure-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXACT_MAIN: ${{ github.event.pull_request.base.sha }}
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  SELF: .github/workflows/corpus-next-after-media-closure.yml
+
+jobs:
+  probe:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Bind exact main and read-only transport
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=2 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git rev-parse HEAD^)" = "$EXACT_MAIN"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git diff --name-only "$EXACT_MAIN"...HEAD)" = "$SELF"
+
+      - name: Capture current roadmap, corpus, waterline, readiness, and candidates
+        run: |
+          set -euo pipefail
+          : > /tmp/probe-exits.txt
+          capture() {
+            name="$1"
+            shift
+            set +e
+            "$@" > "/tmp/${name}.stdout" 2> "/tmp/${name}.stderr"
+            code="$?"
+            set -e
+            printf '%s=%s\n' "$name" "$code" >> /tmp/probe-exits.txt
+          }
+
+          capture roadmap-validate npm run roadmap -- validate
+          capture roadmap-status npm run roadmap -- status --json
+          capture roadmap-next npm run roadmap -- next --limit 3 --json
+
+          capture corpus-validate npm run corpus -- validate
+          capture corpus-status npm run corpus -- status --json
+          capture corpus-next npm run corpus -- next --json
+
+          capture media-star-trek node scripts/media-audit.mjs status --scope star-trek --json
+          capture media-doctor-who node scripts/media-audit.mjs status --scope doctor-who --json
+
+          capture waterline-validate-star-trek node scripts/waterline.mjs validate --scope star-trek
+          capture waterline-status-star-trek node scripts/waterline.mjs status --scope star-trek --json
+          capture waterline-gate-star-trek node scripts/waterline.mjs gate --scope star-trek
+
+          capture waterline-validate-doctor-who node scripts/waterline.mjs validate --scope doctor-who
+          capture waterline-status-doctor-who node scripts/waterline.mjs status --scope doctor-who --json
+          capture waterline-gate-doctor-who node scripts/waterline.mjs gate --scope doctor-who
+
+          capture readiness-star-trek node scripts/autopilot.mjs readiness --scope star-trek --json
+          capture status-star-trek node scripts/autopilot.mjs status --scope star-trek --json
+          capture candidates-star-trek node scripts/autopilot.mjs candidates --scope star-trek --capability-profile text-vision --limit 20 --json
+
+          capture readiness-doctor-who node scripts/autopilot.mjs readiness --scope doctor-who --json
+          capture status-doctor-who node scripts/autopilot.mjs status --scope doctor-who --json
+          capture candidates-doctor-who node scripts/autopilot.mjs candidates --scope doctor-who --capability-profile text-vision --limit 20 --json
+
+          capture activation-check npm run activation:check
+          capture pilot-check npm run doctor-who:pilot-cycle:check
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const readText = (name) => {
+            try { return fs.readFileSync(`/tmp/${name}.stdout`, 'utf8'); }
+            catch { return ''; }
+          };
+          const readJson = (name) => {
+            const text = readText(name).trim();
+            if (!text) return null;
+            try { return JSON.parse(text); }
+            catch { return { parse_error: true, raw: text }; }
+          };
+          const exits = Object.fromEntries(
+            fs.readFileSync('/tmp/probe-exits.txt', 'utf8')
+              .trim().split(/\n/).filter(Boolean)
+              .map((line) => {
+                const index = line.lastIndexOf('=');
+                return [line.slice(0, index), Number(line.slice(index + 1))];
+              }),
+          );
+          const starCandidates = readJson('candidates-star-trek');
+          const doctorCandidates = readJson('candidates-doctor-who');
+          const summary = {
+            version: 1,
+            transaction: 'CORPUS-NEXT-AFTER-MEDIA-CLOSURE',
+            exact_main: process.env.EXACT_MAIN,
+            authorized_head: process.env.AUTHORIZED_HEAD,
+            read_only: true,
+            lease_issued: false,
+            exits,
+            roadmap_next: readJson('roadmap-next'),
+            corpus_status: readJson('corpus-status'),
+            corpus_next: readJson('corpus-next'),
+            media: {
+              star_trek: readJson('media-star-trek'),
+              doctor_who: readJson('media-doctor-who'),
+            },
+            waterline: {
+              star_trek: readJson('waterline-status-star-trek'),
+              doctor_who: readJson('waterline-status-doctor-who'),
+            },
+            readiness: {
+              star_trek: readJson('readiness-star-trek'),
+              doctor_who: readJson('readiness-doctor-who'),
+            },
+            autopilot: {
+              star_trek: readJson('status-star-trek'),
+              doctor_who: readJson('status-doctor-who'),
+            },
+            candidates: {
+              star_trek: {
+                profile: starCandidates?.profile || null,
+                counts: starCandidates?.counts || null,
+                compatible: starCandidates?.compatible?.slice(0, 10) || [],
+                incompatible: starCandidates?.incompatible?.slice(0, 10) || [],
+              },
+              doctor_who: {
+                profile: doctorCandidates?.profile || null,
+                counts: doctorCandidates?.counts || null,
+                compatible: doctorCandidates?.compatible?.slice(0, 10) || [],
+                incompatible: doctorCandidates?.incompatible?.slice(0, 10) || [],
+              },
+            },
+          };
+          fs.writeFileSync('/tmp/corpus-next-after-media-closure-summary.json', JSON.stringify(summary, null, 2) + '\n');
+          console.log(JSON.stringify(summary, null, 2));
+          NODE
+
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact read-only evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-next-after-media-closure-${{ github.run_id }}
+          path: |
+            /tmp/probe-exits.txt
+            /tmp/*.stdout
+            /tmp/*.stderr
+            /tmp/corpus-next-after-media-closure-summary.json
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
