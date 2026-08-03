@@ -167,6 +167,7 @@ derivative work: RanZag (talk), CC BY 2.0 — [source](https://commons.wikimedia
 - **Marc Alaimo** (UC-1087) — Alaimo,_Shimerman_and_Meany.jpg: Beth Madison
 derivative work: Gyrobo (talk), CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Marc_Alaimo.jpg)
 - **Rick Worthy** (UC-1091) — vagueonthehow from Tadcaster, York, England, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Rick_Worthy_2013_(cropped).jpg)
+- **Rick Worthy** (UC-1092) — vagueonthehow, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Rick_Worthy_2013_(cropped).jpg)
 - **Gregory Itzin** (UC-1093) — CelebHeights.com, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Gregory-itzin.jpg)
 - **Brian Thompson** (UC-1096) — Thane of Ross, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Brian_Thompson_Interview_Photo.jpg)
 - **Josh Pais** (UC-110) — Bryan Berlin, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Josh_Pais_at_the_2024_New_York_Film_Festival_(cropped).jpg)
@@ -271,7 +272,7 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **Suzie Plakson** (UC-141) — Eva Rinaldi, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Suzie_Plakson_in_2012.jpg)
 - **Carel Struycken** (UC-142) — Miguel Discart, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Carel_Struycken_March_2016.jpg)
 - **Tony Todd** (UC-145) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Tony_Todd_(36141902441).jpg)
-- **Tim Rose** (UC-146) — Edward Hands, CC BY 2.5 — [source](https://commons.wikimedia.org/wiki/File:TimRoseBrompton.jpg)
+- **Tim Rose** (UC-146) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Tim_Rose_by_Gage_Skidmore.jpg)
 - **Alan Tudyk** (UC-148) — PhilipRomanoPhoto, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:AlanTudyk-byPhilipRomano.jpg)
 - **Manu Bennett** (UC-150) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Manu_Bennett_by_Gage_Skidmore.jpg)
 - **David Howard Thornton** (UC-151) — Tim Blackmon for Galaxy Con, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:David_Howard_Thornton_(54215255373).jpg)
@@ -389,7 +390,6 @@ derivative work: Masem (talk), CC BY 2.0 — [source](https://commons.wikimedia.
 - **El Hijo del Santo** (UC-292) — danksy, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:El_Hijo_De_Santo_vs_Blue_Demon_Jr.jpg)
 - **Dr. Wagner Jr.** (UC-293) — ExtraTNA, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Dr-Wagner-Jr.jpg)
 - **Rey Mysterio** (UC-294) — static, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:ReyMysterio.jpg)
-- **Atlantis** (UC-295) — Secretaría de Cultura Ciudad de México from México, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Atlantis_(Luchador),_Noviembre_2018.jpg)
 - **L.A. Park** (UC-296) — Joshua W from The Americas, China, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:L.A._Park_Cuernavaca_2005.jpg)
 - **Brian Thompson** (UC-297) — Thane of Ross, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Brian_Thompson_Interview_Photo.jpg)
 - **Lee Arenberg** (UC-298) — Diane Rooney at https://www.flickr.com/photos/dianesf/, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:LeeArenbergMay07.jpg)
@@ -497,6 +497,7 @@ derivative work: Masem (talk), CC BY 2.0 — [source](https://commons.wikimedia.
 - **Jeff Bergman** (UC-514) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Jeff_Bergman_by_Gage_Skidmore.jpg)
 - **Yeardley Smith** (UC-515) — Doug Kline of http://popculturegeek.com/, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Yeardley_Smith_2012.png)
 - **H. Jon Benjamin** (UC-517) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:H._Jon_Benjamin_by_Gage_Skidmore_3.jpg)
+- **Mike Henry** (UC-518) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Mike_Henry_by_Gage_Skidmore_3.jpg)
 - **Bill Fagerbakke** (UC-519) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Bill_Fagerbakke_by_Gage_Skidmore.jpg)
 - **Rodger Bumpass** (UC-520) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Rodger_Bumpass_2016.jpg)
 - **Carolyn Lawrence** (UC-521) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Carolyn_Lawrence_by_Gage_Skidmore.jpg)
@@ -504,6 +505,7 @@ derivative work: Masem (talk), CC BY 2.0 — [source](https://commons.wikimedia.
 - **Jill Talley** (UC-523) — Voice Chasers, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:41st_Annie_Awards,_Jill_Talley.jpg)
 - **Arleen Sorkin** (UC-524) — Kathy Hutchins, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Arleensorkin.jpg)
 - **Alan Oppenheimer** (UC-525) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Alan_Oppenheimer_(49645984282)_(headshot).jpg)
+- **Michael Bell** (UC-526) — Kevin Paul, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:Michael_Bell_at_Fan_Expo_Anaheim_2026.jpg)
 - **David Kaye** (UC-527) — Kevin Paul, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:David_Kaye_at_Fan_Expo_Anaheim_2026.jpg)
 - **Charles Martinet** (UC-528) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Charles_Martinet_Photo_Op_GalaxyCon_San_Jose_2024_(cropped).jpg)
 - **Jen Taylor** (UC-529) — Tim Blackmon for Galaxy Con, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Jen_Taylor_(53382420891).jpg)
@@ -541,7 +543,6 @@ derivative work: Electroguv (talk), CC BY-SA 2.0 — [source](https://commons.wi
 - **Kari Wahlgren** (UC-562) — TaurusEmerald, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Kari_Wahlgren_2025.jpg)
 - **Patrick Seitz** (UC-563) — Christmas4477, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Patrick_Seitz_headshot.jpg)
 - **Sam Riegel** (UC-564) — John Manard, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Sam_Riegel_at_Galaxy_Con_Columbus_(cropped).jpg)
-- **Blue Demon** (UC-565) — Secretaría de Cultura  de la Ciudad de México, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Luchador_Blue_Demon_en_Blue_Demon_y_las_invasoras_(1969).jpg)
 - **Último Guerrero** (UC-566) — ExtraTNA, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:U-Guerrero.jpg)
 - **Huracán Ramírez** (UC-567) — Unknown authorUnknown author, CC0 — [source](https://commons.wikimedia.org/wiki/File:Hurac%C3%A1n_y_Chaly.jpg)
 - **El Canek** (UC-568) — Fotosuabe, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Mil_Mascaras_vs_El_Canek.jpg)
@@ -565,7 +566,6 @@ Misticoflickr.jpg: kafka4prez, CC BY-SA 2.0 — [source](https://commons.wikimed
 - **Silver King** (UC-585) — LuchaTime, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Silver_King_(Luchador).jpg)
 - **Dos Caras** (UC-586) — Unknown authorUnknown author, Public domain — [source](https://commons.wikimedia.org/wiki/File:Dos_Caras_Top_Rope_Leap_1983.png)
 - **Blue Panther** (UC-587) — ゾーヒョー, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Blue_Panther_Jr.jpg)
-- **Gran Metalik** (UC-588) — ExtraTNA, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:MascaraDoradaMTY.jpg)
 - **Kendo Nagasaki** (UC-589) — Unknown authorUnknown author, Public domain — [source](https://commons.wikimedia.org/wiki/File:Kendo_Nagasaki_and_Dusty_Rhodes,_1982.png)
 - **Dick Beyer** (UC-590) — scizott, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Dick_Beyer_(cropped).jpg)
 - **John Francis Walker** (UC-591) — Thomas Cooper Gotch, Public domain — [source](https://commons.wikimedia.org/wiki/File:NY_YAG_YORAG_1207-001.jpg)
@@ -598,6 +598,7 @@ derivative work: Hic et nunc, CC BY-SA 3.0 — [source](https://commons.wikimedi
 - **Tom Hanks** (UC-621) — Raph_PH, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:TomHanksPrincEdw031223_(11_of_41)_(cropped).jpg)
 - **Guy Rolfe** (UC-622) — trailer screenshot (MGM), Public domain — [source](https://commons.wikimedia.org/wiki/File:Guy_Rolfe_in_Young_Bess_trailer.jpg)
 - **Jamie Clayton** (UC-624) — Jamie Clayton, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Jaimekj.png)
+- **Joseph Bishara** (UC-625) — Bisharajoseph, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Joseph_Bishara_low-res.png)
 - **Viola Davis** (UC-626) — Red Carpet Report on Mingle Media TV, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Viola_Davis_(cropped).jpg)
 - **Jessica Chastain** (UC-627) — Harald Krichel, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:Jessica_Chastain-64631_(cropped).jpg)
 - **Masako Nozawa** (UC-628) — Unknown Author, Public domain — [source](https://commons.wikimedia.org/wiki/File:%E9%87%8E%E6%B2%A2%E9%9B%85%E5%AD%90.png)
@@ -633,6 +634,7 @@ derivative work: Hic et nunc, CC BY-SA 3.0 — [source](https://commons.wikimedi
 - **Jason Marsden** (UC-678) — https://www.flickr.com/photos/greg2600, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Jason_Marsden_(43904363590).jpg)
 - **Jim Martin** (UC-681) — Nightscream, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:10.9.10JimMartinByLuigiNovi1.jpg)
 - **Brian Henson** (UC-683) — Billbarretta19, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:BillBarrettaBrianHenson1982_(cropped).jpg)
+- **James Doohan** (UC-684) — NASA, Public domain — [source](https://commons.wikimedia.org/wiki/File:Doohan_James_NASA_19670413.jpg)
 - **James Sloyan** (UC-685) — ABC Television
 
 Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.wikimedia.org/wiki/File:James_Sloyan.jpg)
@@ -750,8 +752,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **720**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **982**
+- Free-licensed portraits (attributed above): **722**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **981**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
 email and any specific asset comes down.

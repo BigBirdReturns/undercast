@@ -1,0 +1,45 @@
+#!/usr/bin/env node
+
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+
+const TASK_ID = 'ap_6dfcb7b9254c26dc3f4b46b8';
+const LEASE_ID = 'lease_51e3223a4810f3681aff9df4';
+const SOURCE_FINGERPRINT = 'f272dd90028ca998792a461c1547a334d58f7976484ff7ee2d299306763e0879';
+const read = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
+const stable = (value) => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])])) : value;
+const sha = (value) => crypto.createHash('sha256').update(value).digest('hex');
+const receipt = read('data/review/adapter-sdk/doctor-who-pilot-cycle-001.json');
+const autopilot = read('data/AUTOPILOT.json');
+const specimens = read('data/specimens.json');
+const sources = read('data/SOURCES.json');
+const audit = read('data/MEDIA-AUDIT.json');
+const recurse = (value, predicate, out = []) => { if (Array.isArray(value)) for (const child of value) recurse(child, predicate, out); else if (value && typeof value === 'object') { if (predicate(value)) out.push(value); for (const child of Object.values(value)) recurse(child, predicate, out); } return out; };
+const statePaths = ['data/WATERLINE-STATE.json', 'data/WATERLINE.json'].filter((p) => fs.existsSync(p));
+const cycles = statePaths.flatMap((p) => recurse(read(p), (row) => row.lease_id === LEASE_ID && row.outcome === 'completed'));
+const fail = (message) => { throw new Error(message); };
+const job = autopilot.jobs.find((row) => row.id === TASK_ID);
+if (!job || job.scope !== 'doctor-who' || job.status !== 'resolved') fail('pilot task is not resolved');
+if (job.source_fingerprint !== SOURCE_FINGERPRINT) fail('pilot source fingerprint drifted');
+if (!Array.isArray(job.wall_ids) || job.wall_ids.length !== 1) fail('pilot must resolve to exactly one wall id');
+const wallId = job.wall_ids[0];
+const wall = specimens.find((row) => row.id === wallId);
+if (!wall || wall.actor !== 'Dan Starkey' || wall.character !== 'Commander (The Sontarans)' || wall.universe !== 'Doctor Who' || wall.kind !== 'voice' || wall.transform !== 2) fail('canonical pilot row drifted');
+const source = sources.find((row) => row.id === wallId);
+if (!source || source.still !== null || source.portrait !== null) fail('audio-only pilot media must remain explicitly null');
+const items = recurse(audit, (row) => row.wall_id === wallId || row.id === wallId);
+const text = JSON.stringify(items);
+if (!text.includes('absent') || !text.includes('still') || !text.includes('portrait')) fail('both pilot media facets must be honestly absent');
+if (cycles.length !== 1) fail('pilot must have exactly one completed reviewed cycle receipt');
+const doctor = autopilot.jobs.filter((row) => row.scope === 'doctor-who');
+const queued = doctor.filter((row) => row.status === 'queued').length;
+const leased = doctor.filter((row) => row.status === 'leased').length;
+const drafted = doctor.filter((row) => row.status === 'drafted').length;
+const merged = doctor.filter((row) => row.status === 'merged').length;
+const resolved = doctor.filter((row) => row.status === 'resolved').length;
+if (doctor.length !== 316 || queued !== 315 || resolved !== 1 || leased + drafted + merged !== 0) fail('Doctor Who queue denominator or terminal state drifted');
+const clone = structuredClone(receipt); delete clone.receipt_sha256;
+if (receipt.receipt_sha256 !== sha(JSON.stringify(stable(clone)) + '\n')) fail('pilot receipt hash drifted');
+if (receipt.task.id !== TASK_ID || receipt.lease.id !== LEASE_ID || receipt.canonical.wall_id !== wallId) fail('pilot receipt identity drifted');
+if (receipt.boundary.second_lease_issued || receipt.boundary.generic_character_image_used || receipt.boundary.duplicate_portrait_bytes_used) fail('pilot boundary drifted');
+console.log('doctor-who-pilot-cycle: PASS — one exact source-bound voice role, two honest media absences, one reviewed cycle receipt, and no second lease');
