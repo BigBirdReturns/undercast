@@ -1,0 +1,105 @@
+name: dispatch-gredd-consensus-patch
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/dispatch-gredd-consensus-patch.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dispatch-gredd-consensus-patch
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/dispatch-gredd-consensus-patch.yml
+  TARGET_BRANCH: agent/doctor-who-gredd-cycle-002-publication
+  TARGET_PATCH: .github/workflows/patch-doctor-who-cycle-002-consensus.yml
+  TARGET_WORKFLOW: .github/workflows/complete-doctor-who-cycle-002-v2.yml
+  EXPECTED_TARGET_HEAD: 73c8f8a678bd3159aad695316edd33e2f9426cd6
+
+jobs:
+  dispatch:
+    if: github.repository == 'BigBirdReturns/undercast'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 256
+
+      - name: Patch the exact PR branch and retire this dispatcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          test -f "$SELF"
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+
+          dispatcher_head="$(git rev-parse HEAD)"
+          base_main="$(git rev-parse HEAD^)"
+          git fetch --no-tags --depth=256 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$dispatcher_head"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$EXPECTED_TARGET_HEAD"
+
+          git worktree add --detach /tmp/gredd-target "refs/remotes/origin/${TARGET_BRANCH}"
+          cd /tmp/gredd-target
+          target_base="$(git merge-base HEAD "$base_main")"
+          test "$target_base" = "$base_main"
+          cat > /tmp/expected-before.txt <<PATHS
+          .ci/doctor-who-cycle-002/patch-current.mjs.gz.b64
+          .ci/doctor-who-cycle-002/scripts.tgz.b64
+          .github/workflows/apply-doctor-who-cycle-002.yml
+          .github/workflows/complete-doctor-who-cycle-002-v2.yml
+          .github/workflows/patch-doctor-who-cycle-002-consensus.yml
+          PATHS
+          sort -o /tmp/expected-before.txt /tmp/expected-before.txt
+          git diff --name-only "$base_main"...HEAD | sort > /tmp/actual-before.txt
+          diff -u /tmp/expected-before.txt /tmp/actual-before.txt
+
+          sed -n "/^          python3 - <<'PY'$/,/^          PY$/p" "$TARGET_PATCH" \
+            | sed '1d;$d;s/^          //' \
+            > /tmp/patch-gredd-consensus.py
+          test -s /tmp/patch-gredd-consensus.py
+          python3 /tmp/patch-gredd-consensus.py
+
+          git rm -f "$TARGET_PATCH"
+          git add "$TARGET_WORKFLOW"
+          git diff --cached --check
+          git commit -m 'Doctor Who: require exact second-desk Gredd portrait consensus'
+
+          cat > /tmp/expected-after.txt <<PATHS
+          .ci/doctor-who-cycle-002/patch-current.mjs.gz.b64
+          .ci/doctor-who-cycle-002/scripts.tgz.b64
+          .github/workflows/apply-doctor-who-cycle-002.yml
+          .github/workflows/complete-doctor-who-cycle-002-v2.yml
+          PATHS
+          sort -o /tmp/expected-after.txt /tmp/expected-after.txt
+          git diff --name-only "$base_main"...HEAD | sort > /tmp/actual-after.txt
+          diff -u /tmp/expected-after.txt /tmp/actual-after.txt
+          target_head="$(git rev-parse HEAD)"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${EXPECTED_TARGET_HEAD}"
+
+          cd "$GITHUB_WORKSPACE"
+          git fetch --no-tags --depth=8 origin "refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$dispatcher_head"
+          git rm -f "$SELF"
+          git commit -m 'Transport: retire Gredd consensus dispatcher'
+          cleanup_head="$(git rev-parse HEAD)"
+          git push origin "HEAD:refs/heads/main" \
+            --force-with-lease="refs/heads/main:${dispatcher_head}"
+
+          echo "base_main=$base_main" >> "$GITHUB_STEP_SUMMARY"
+          echo "target_head=$target_head" >> "$GITHUB_STEP_SUMMARY"
+          echo "cleanup_head=$cleanup_head" >> "$GITHUB_STEP_SUMMARY"
+          echo "target_paths=4" >> "$GITHUB_STEP_SUMMARY"
+          echo "dispatcher_present=false" >> "$GITHUB_STEP_SUMMARY"
