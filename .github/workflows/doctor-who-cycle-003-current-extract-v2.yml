@@ -54,14 +54,10 @@ jobs:
           diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
           printf '%s\n' "$exact_main" > /tmp/exact-main.txt
           printf '%s\n' "$(git rev-parse HEAD)" > /tmp/rebased-carrier-head.txt
-          echo "exact_main=$exact_main" >> "$GITHUB_STEP_SUMMARY"
-          echo "rebased_carrier=$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install exact dependencies
         shell: bash
-        run: |
-          set -euo pipefail
-          npm ci
+        run: npm ci
 
       - name: Prove zero-in-flight active-estate custody
         shell: bash
@@ -103,7 +99,7 @@ jobs:
           diff -u /tmp/state-before.sha256 /tmp/state-after.sha256
           test -z "$(git status --porcelain)"
 
-      - name: Extract the deterministic next Doctor Who task without claiming it
+      - name: Extract one deterministic compatible task without claiming it
         shell: bash
         run: |
           set -euo pipefail
@@ -114,75 +110,68 @@ jobs:
             --limit 1 \
             --json \
             > /tmp/doctor-who-cycle-003-candidates.json
+          cat /tmp/doctor-who-cycle-003-candidates.json | tee /tmp/doctor-who-cycle-003-candidates.log
 
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          import crypto from 'node:crypto';
 
           const readJson = (path) => JSON.parse(fs.readFileSync(path, 'utf8'));
-          const candidates = readJson('/tmp/doctor-who-cycle-003-candidates.json');
-          const list = Array.isArray(candidates) ? candidates : (candidates.candidates || candidates.tasks || []);
-          if (list.length !== 1) throw new Error(`expected exactly one deterministic candidate, found ${list.length}`);
-          const selected = list[0];
-          const taskId = selected.id || selected.task_id;
-          if (!taskId) throw new Error('selected candidate has no task id');
+          const report = readJson('/tmp/doctor-who-cycle-003-candidates.json');
+          if (!Array.isArray(report.compatible)) throw new Error('candidates report has no compatible array');
+          if (!report.counts || report.counts.compatible < 1) throw new Error('candidates report declares no compatible tasks');
+          if (report.compatible.length !== 1) throw new Error(`expected one limited compatible candidate, found ${report.compatible.length}`);
 
-          const autopilot = readJson('data/AUTOPILOT.json');
-          const jobs = Array.isArray(autopilot) ? autopilot : (autopilot.jobs || autopilot.tasks || []);
+          const selected = report.compatible[0];
+          const taskId = selected.task_id;
+          if (!taskId) throw new Error('selected compatible candidate has no task_id');
+
+          const state = readJson('data/AUTOPILOT.json');
+          const jobs = Array.isArray(state) ? state : (state.jobs || state.tasks || []);
           const task = jobs.find((row) => row.id === taskId);
           if (!task) throw new Error(`selected task ${taskId} is absent from data/AUTOPILOT.json`);
           if (task.scope !== 'doctor-who') throw new Error(`selected task scope drifted: ${task.scope}`);
           if (task.status !== 'queued') throw new Error(`selected task is not queued: ${task.status}`);
-          const active = jobs.filter((row) => ['leased', 'submitted', 'review', 'in_flight'].includes(row.status));
-          if (active.length !== 0) throw new Error(`global in-flight work is not zero: ${active.map((row) => row.id).join(',')}`);
-
-          const sourceUrl = task.source || selected.source || task.source_url || selected.source_url || null;
-          const sourceContentSha = task.source_content_sha256 || selected.source_content_sha256 || null;
-          const sourceRevision = task.source_revision || selected.source_revision || task.revision_id || selected.revision_id || null;
-          const performer = task.performer || task.actor || selected.performer || selected.actor || null;
-          const character = task.character || task.role || selected.character || selected.role || null;
-          const fingerprint = task.source_fingerprint || selected.source_fingerprint || task.fingerprint || selected.fingerprint || null;
+          if (selected.source_fingerprint !== task.source_fingerprint) throw new Error('selected task source fingerprint drifted');
 
           const detail = {
+            report: {
+              version: report.version,
+              scope_id: report.scope_id,
+              profile: report.profile,
+              policy_sha256: report.policy_sha256,
+              counts: report.counts,
+            },
             selected,
             task,
             exact: {
-              task_id: taskId,
-              performer,
-              character,
-              source: sourceUrl,
-              source_revision: sourceRevision,
-              source_content_sha256: sourceContentSha,
-              source_fingerprint: fingerprint,
+              task_id: task.id,
+              performer: task.performer,
+              character: task.character,
+              franchise: task.franchise,
+              category: task.category,
+              performance_modes: task.performance_modes,
+              priority: task.priority,
+              sources: task.sources,
+              source_receipts: task.source_receipts || null,
+              source_fingerprint: task.source_fingerprint,
+              required_capabilities: task.required_capabilities,
             },
             boundary: {
               lease_issued: false,
               queue_mutated: false,
               global_in_flight: 0,
               selection_count: 1,
-              selection_strategy: selected.selection_strategy || 'priority-compatible',
               capability_profile: 'text-vision',
             },
           };
           fs.writeFileSync('/tmp/doctor-who-cycle-003-selected-task.json', `${JSON.stringify(detail, null, 2)}\n`);
-          fs.writeFileSync('/tmp/doctor-who-cycle-003-task-id.txt', `${taskId}\n`);
-
-          if (sourceContentSha) {
-            const contentPath = `preservation/source-content/${sourceContentSha}.txt`;
-            if (!fs.existsSync(contentPath)) throw new Error(`source content missing: ${contentPath}`);
-            fs.copyFileSync(contentPath, '/tmp/doctor-who-cycle-003-source-content.txt');
-            const actual = crypto.createHash('sha256').update(fs.readFileSync(contentPath)).digest('hex');
-            if (actual !== sourceContentSha) throw new Error(`source content hash mismatch: ${actual}`);
-          } else {
-            fs.writeFileSync('/tmp/doctor-who-cycle-003-source-content.txt', 'No source-content SHA was exposed directly by the selected task.\n');
-          }
+          fs.writeFileSync('/tmp/doctor-who-cycle-003-task-id.txt', `${task.id}\n`);
           NODE
 
           cat /tmp/doctor-who-cycle-003-selected-task.json | tee /tmp/doctor-who-cycle-003-selection.log
           sha256sum \
             /tmp/doctor-who-cycle-003-candidates.json \
             /tmp/doctor-who-cycle-003-selected-task.json \
-            /tmp/doctor-who-cycle-003-source-content.txt \
             > /tmp/doctor-who-cycle-003-selection.sha256
           diff -u /tmp/state-before.sha256 /tmp/state-after.sha256
           test -z "$(git status --porcelain)"
@@ -212,8 +201,8 @@ jobs:
             /tmp/doctor-who-cycle-002.log
             /tmp/star-trek-enwright.log
             /tmp/doctor-who-cycle-003-candidates.json
+            /tmp/doctor-who-cycle-003-candidates.log
             /tmp/doctor-who-cycle-003-selected-task.json
             /tmp/doctor-who-cycle-003-task-id.txt
-            /tmp/doctor-who-cycle-003-source-content.txt
             /tmp/doctor-who-cycle-003-selection.log
             /tmp/doctor-who-cycle-003-selection.sha256
