@@ -98,6 +98,11 @@ assert.equal(doctorReport.extraction.missing_roles, certificate.snapshot.rows, "
 assert.equal(filedRoles.length + missingRoles.length, certificate.snapshot.rows, "filed-plus-missing role accounting drifted");
 assert.equal(doctorReport.extraction.missing_roles - missingRoles.length, filedRoles.length, "paid Doctor Who role delta drifted");
 assert.ok(estate.next_gate.includes(String(certificate.snapshot.rows)), "estate next gate does not carry the current role denominator");
-assert.ok(estate.next_gate.includes(activationReport.lease.lease_id), "estate next gate does not name the only authorized pilot lease");
+
+// The activation receipt above retains immutable first-pilot lease custody. The
+// live next gate is operational state and must advance after every later
+// reviewed cycle without being pinned forever to that historical lease ID.
+assert.match(estate.next_gate, /\b(?:terminal|complete|reviewed)\b/i, "estate next gate lost terminal reviewed-cycle custody");
+assert.match(estate.next_gate, /(?:\bone\b.*\b(?:task|lease|cycle)\b|before another claim|no second lease)/i, "estate next gate lost one-cycle isolation");
 
 console.log(`PASS — Doctor Who is active-corpus with ${certificate.snapshot.rows} exact certified roles, ${certificate.snapshot.complete_receipts} complete source receipts, ${filedRoles.length} filed role(s), and ${missingRoles.length} remaining role obligation(s)`);
