@@ -90,7 +90,11 @@ Doctor Who membership is derived from the canonical normalized franchise identit
 
 Lawful retirement and certified-refresh adversarial proofs are separate worlds. The real Commander task may be `retired` and exit live source custody, while the refresh, stale-receipt, and forged-fingerprint fixtures are explicitly normalized to a non-retired `resolved` status before source validation. Retirement therefore cannot short-circuit the negative refresh proofs, and the negative refresh proofs cannot make retirement illegal.
 
-Presence is also part of custody. Before terminal exclusions or receipt validation, both permanent checkers rebuild the authoritative task set with canonical `collapseCoverage(data/CENSUS-COVERAGE.json, data/AUTOPILOT-SCOPES.json, data/CENSUS-MANIFEST.json)` and require its Doctor Who task IDs to equal the complete Doctor Who set in `data/AUTOPILOT.json`. Removing Mezz while leaving the remaining state internally valid therefore fails closed as a missing canonical obligation.
+Presence is also part of custody. Both permanent checkers rebuild the authoritative current task set with canonical `collapseCoverage(data/CENSUS-COVERAGE.json, data/AUTOPILOT-SCOPES.json, data/CENSUS-MANIFEST.json)` and require those Doctor Who task IDs to equal the non-retired Doctor Who jobs in `data/AUTOPILOT.json`. Removing Mezz while leaving the remaining state internally valid therefore fails closed as a missing current canonical obligation.
+
+Canonical sync does not delete an obligation merely because it leaves current coverage. It retains the exact job as `retired`, removes any lease, records `outcome.kind = not-in-latest-coverage` with `retired_at`, and appends a matching `task.retired` journal event. The checkers validate that retained retired jobs separately: they must be absent from current coverage, carry the canonical sync outcome, have no lease, and match exactly one retirement event by task, scope, performer, role, and timestamp. A covered retired task, an unreceipted retirement, or a deleted current task fails closed.
+
+Current correction-drill receipt SHA-256: `b4055b4f8902c3f47d20ee0bceb2fdd6cc7e11f4ca201bf652e29e2be30f4381`.
 
 Exact historical object recovery is also safe in the repository’s shallow PR checkout. Activation, pilot, and correction fetches disable automatic maintenance, retry only recognized Git lock/shallow-file races with bounded backoff, and recheck object visibility after a failed fetch before retrying. Missing commits, authentication failures, and other substantive fetch errors remain terminal.
 

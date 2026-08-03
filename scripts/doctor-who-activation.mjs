@@ -191,18 +191,55 @@ function isCanonicalDoctorTask(task) {
   return franchiseMatches;
 }
 
-function validateCanonicalDoctorTaskSet(jobs, coverage, scopesDoc, manifest) {
+function validateCanonicalDoctorTaskSet(jobs, coverage, scopesDoc, manifest, journal = []) {
   const expectedTasks = collapseCoverage(coverage, scopesDoc, manifest).filter(isCanonicalDoctorTask);
   assert.ok(expectedTasks.length > 0, "canonical Doctor Who task denominator is empty");
-  const actualTasks = (jobs || []).filter(isCanonicalDoctorTask);
   const expectedIds = expectedTasks.map((task) => task.id).sort();
-  const actualIds = actualTasks.map((task) => task.id).sort();
+  const expectedSet = new Set(expectedIds);
+  const actualTasks = (jobs || []).filter(isCanonicalDoctorTask);
+  const currentTasks = actualTasks.filter((task) => task.status !== "retired");
+  const retainedRetiredTasks = actualTasks.filter((task) => task.status === "retired");
+  const currentIds = currentTasks.map((task) => task.id).sort();
+  const coveredRetiredIds = retainedRetiredTasks
+    .filter((task) => expectedSet.has(task.id))
+    .map((task) => task.id)
+    .sort();
   assert.deepEqual(
-    actualIds,
-    expectedIds,
-    "current Doctor Who task denominator disagrees with canonical census coverage",
+    coveredRetiredIds,
+    [],
+    "retired Doctor Who tasks remain in current canonical coverage",
   );
-  return { expectedTasks, actualTasks };
+  assert.deepEqual(
+    currentIds,
+    expectedIds,
+    "current non-retired Doctor Who task denominator disagrees with canonical census coverage",
+  );
+  for (const task of retainedRetiredTasks) {
+    assert.equal(
+      task.outcome?.kind,
+      "not-in-latest-coverage",
+      `${task.id} retained retirement lacks the canonical sync outcome`,
+    );
+    assert.ok(
+      Number.isFinite(Date.parse(task.outcome?.retired_at || "")),
+      `${task.id} retained retirement lacks a valid retired_at timestamp`,
+    );
+    assert.ok(!task.lease, `${task.id} retained retirement still carries a lease`);
+    const retirementEvents = (journal || []).filter((row) =>
+      row?.op === "task.retired" &&
+      row.task_id === task.id &&
+      row.scope === task.scope &&
+      canonicalNormalize(row.performer) === canonicalNormalize(task.performer) &&
+      canonicalNormalize(row.character) === canonicalNormalize(task.character) &&
+      row.at === task.outcome.retired_at
+    );
+    assert.equal(
+      retirementEvents.length,
+      1,
+      `${task.id} retained retirement lacks one matching task.retired journal receipt`,
+    );
+  }
+  return { expectedTasks, currentTasks, retainedRetiredTasks };
 }
 
 function validateLiveDoctorSourceCustody(jobs) {
@@ -726,7 +763,7 @@ for (const file of requiredCodeFiles) {
   assert.equal(events[0].agent, report.lease.agent);
   const activationEvents = current.autopilotJournal.filter((row) => row.op === "scope.certified" && row.scope === SCOPE_ID && row.activated === true && row.at === report.activation.activated_at);
   assert.equal(activationEvents.length, 1, "reported activation event is missing or duplicated");
-validateCanonicalDoctorTaskSet(current.autopilot.jobs || [], current.coverage, current.scopesDoc, current.manifest);
+validateCanonicalDoctorTaskSet(current.autopilot.jobs || [], current.coverage, current.scopesDoc, current.manifest, current.autopilotJournal);
 const liveDoctorSourceTasks = validateLiveDoctorSourceCustody(current.autopilot.jobs || []);
 const job = current.autopilot.jobs.find((row) => row.id === report.lease.task.id);
 const historicalJob = historicalActivationTask(report.lease.task.id);
@@ -779,6 +816,7 @@ assert.throws(
     current.coverage,
     current.scopesDoc,
     current.manifest,
+    current.autopilotJournal,
   ),
   /task denominator disagrees with canonical census coverage/,
   "deleted Doctor Who task did not fail canonical coverage custody",
@@ -863,10 +901,40 @@ assert.throws(
   "unsupported Doctor Who task status did not fail canonical validation",
 );
 
+const retiredPilotAt = "2026-08-03T22:41:04.000Z";
+const retiredPilotCoverage = current.coverage.filter((row) => !(
+  canonicalNormalize(row.franchise) === DOCTOR_FRANCHISE &&
+  canonicalNormalize(row.performer) === canonicalNormalize(job.performer) &&
+  canonicalNormalize(row.character) === canonicalNormalize(job.character)
+));
 const retiredPilotState = structuredClone(current.autopilot);
 const retiredPilotJob = retiredPilotState.jobs.find((task) => task.id === report.lease.task.id);
 retiredPilotJob.status = "retired";
+retiredPilotJob.outcome = { kind: "not-in-latest-coverage", retired_at: retiredPilotAt };
+delete retiredPilotJob.lease;
+const retiredPilotJournal = [
+  ...current.autopilotJournal,
+  {
+    op: "task.retired",
+    task_id: retiredPilotJob.id,
+    at: retiredPilotAt,
+    scope: retiredPilotJob.scope,
+    performer: retiredPilotJob.performer,
+    character: retiredPilotJob.character,
+  },
+];
 validateState(retiredPilotState);
+const retiredPilotTaskSet = validateCanonicalDoctorTaskSet(
+  retiredPilotState.jobs,
+  retiredPilotCoverage,
+  current.scopesDoc,
+  current.manifest,
+  retiredPilotJournal,
+);
+assert.ok(
+  retiredPilotTaskSet.retainedRetiredTasks.some((task) => task.id === report.lease.task.id),
+  "sync-retained historical pilot was not preserved outside current coverage",
+);
 const retiredPilotSourceTasks = validateLiveDoctorSourceCustody(retiredPilotState.jobs);
 assert.ok(
   !retiredPilotSourceTasks.some((task) => task.id === report.lease.task.id),
@@ -876,6 +944,28 @@ assert.deepEqual(
   validateActivationTaskCustody(report.lease, historicalJob, retiredPilotJob),
   { status: "retired" },
   "lawfully retired historical pilot task was rejected",
+);
+assert.throws(
+  () => validateCanonicalDoctorTaskSet(
+    retiredPilotState.jobs,
+    current.coverage,
+    current.scopesDoc,
+    current.manifest,
+    retiredPilotJournal,
+  ),
+  /retired Doctor Who tasks remain in current canonical coverage/,
+  "retired task still represented by current coverage did not fail closed",
+);
+assert.throws(
+  () => validateCanonicalDoctorTaskSet(
+    retiredPilotState.jobs,
+    retiredPilotCoverage,
+    current.scopesDoc,
+    current.manifest,
+    current.autopilotJournal,
+  ),
+  /matching task\.retired journal receipt/,
+  "retained retired task without its sync journal receipt did not fail closed",
 );
 
   return true;
