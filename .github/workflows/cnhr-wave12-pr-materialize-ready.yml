@@ -1,0 +1,101 @@
+name: materialize-and-ready-clifford-number-hr-burden-allocation-wave-12
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cnhr-wave12-pr-materialize-ready.yml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: cnhr-wave12-burden-allocation-ready
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    if: github.event.pull_request.head.ref == 'agent/clifford-number-hr-burden-allocation-wave-12'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/clifford-number-hr-burden-allocation-wave-12
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Build exact current-main Wave 12 object and make PR reviewable
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .cnhr-wave12/build.py /tmp/cnhr-wave12-build.py
+          git fetch origin main
+          git merge-base --is-ancestor 6ea13541bfcb5194ba5f97773ff34ec623c0613e origin/main
+          git reset --hard origin/main
+          git clean -fdx
+          python /tmp/cnhr-wave12-build.py | tee /tmp/cnhr-wave12-identities.json
+
+          rm -rf /tmp/cnhr-wave11-root /tmp/cnhr-wave12-root
+          mkdir -p /tmp/cnhr-wave11-root /tmp/cnhr-wave12-root
+          python - <<'PY'
+          import json, shutil
+          from pathlib import Path
+          for rel, root in [
+              ('data/review/clifford-number/hr-discipline/wave-11/MANIFEST.json', Path('/tmp/cnhr-wave11-root')),
+              ('data/review/clifford-number/hr-discipline/wave-12/MANIFEST.json', Path('/tmp/cnhr-wave12-root')),
+          ]:
+              m=json.loads(Path(rel).read_text())
+              paths={r['path'] for r in m['files']}|{rel}
+              assert len(paths)==22
+              for p in sorted(paths):
+                  d=root/p; d.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(p,d)
+          PY
+
+          (cd /tmp/cnhr-wave11-root && node --check scripts/clifford-number-hr-accountability-consequences.mjs && node --check test/clifford-number-hr-accountability-consequences-fixtures.mjs && node scripts/clifford-number-hr-accountability-consequences.mjs --check --strict-root && node test/clifford-number-hr-accountability-consequences-fixtures.mjs)
+          (cd /tmp/cnhr-wave12-root && node --check scripts/clifford-number-hr-burden-allocation.mjs && node --check test/clifford-number-hr-burden-allocation-fixtures.mjs && node scripts/clifford-number-hr-burden-allocation.mjs --check --strict-root && node test/clifford-number-hr-burden-allocation-fixtures.mjs)
+
+          git diff --check
+          git add -A
+          python - <<'PY'
+          import json, subprocess
+          from pathlib import Path
+          rel='data/review/clifford-number/hr-discipline/wave-12/MANIFEST.json'
+          m=json.loads(Path(rel).read_text())
+          expected={r['path'] for r in m['files']}|{rel}
+          rows=subprocess.check_output(['git','diff','--cached','--name-status','origin/main','--'],text=True).splitlines()
+          observed={r.split('\t',1)[1]:r.split('\t',1)[0] for r in rows}
+          assert set(observed)==expected, (sorted(expected-set(observed)),sorted(set(observed)-expected))
+          assert len(observed)==22 and all(v=='A' for v in observed.values())
+          print('exact Wave 12 delta: 22 added, 0 modified, 0 deleted')
+          PY
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'research: add Clifford Number burden-allocation Wave 12'
+          git push --force origin HEAD:agent/clifford-number-hr-burden-allocation-wave-12
+
+          gh pr ready "$PR_NUMBER" --repo BigBirdReturns/undercast
+          python - <<'PY' >/tmp/cnhr-wave12-comment.md
+          import json
+          x=json.load(open('/tmp/cnhr-wave12-identities.json'))
+          print('Wave 12 materialized from current main with exactly 22 permanent files and no surviving builder or workflow paths.')
+          print()
+          print('```text')
+          print('strict valid corpus:               1')
+          print('adversarial corpus refusals:      34')
+          print('adversarial CLI refusals:          3')
+          print('files added:                       22')
+          print('files modified/deleted:             0')
+          print('manifest SHA-256:                  '+x['manifest_sha256'])
+          print('summary SHA-256:                   '+x['summary_sha256'])
+          print('matrix SHA-256:                    '+x['matrix_sha256'])
+          print('source-ID/URL map SHA-256:         '+x['source_map_sha256'])
+          print('```')
+          PY
+          gh pr comment "$PR_NUMBER" --repo BigBirdReturns/undercast --body-file /tmp/cnhr-wave12-comment.md
