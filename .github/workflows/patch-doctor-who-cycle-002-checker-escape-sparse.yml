@@ -1,0 +1,80 @@
+name: patch-doctor-who-cycle-002-checker-escape-sparse
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/patch-doctor-who-cycle-002-checker-escape-sparse.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patch-doctor-who-cycle-002-checker-escape-sparse-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 4
+          sparse-checkout: |
+            .github/workflows
+
+      - name: Double one checker escape and retire both patch carriers
+        shell: bash
+        env:
+          AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+          TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+          SELF: .github/workflows/patch-doctor-who-cycle-002-checker-escape-sparse.yml
+          PREVIOUS: .github/workflows/patch-doctor-who-cycle-002-checker-escape.yml
+          WRITER: .github/workflows/complete-doctor-who-cycle-002-v2.yml
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git fetch --no-tags --depth=4 origin \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/complete-doctor-who-cycle-002-v2.yml')
+          lines = path.read_text().splitlines()
+          matches = [i for i, line in enumerate(lines) if 'const receiptHashAfter =' in line]
+          if len(matches) != 1:
+              raise SystemExit(f'expected one receiptHashAfter line, found {matches}')
+          idx = matches[0]
+          before = lines[idx]
+          old = r'+ "\\n"'
+          new = r'+ "\\\\n"'
+          if before.count(old) != 1:
+              raise SystemExit(f'expected exact two-backslash token once; line={before!r}; count={before.count(old)}')
+          after = before.replace(old, new)
+          if after.count(new) != 1 or after == before:
+              raise SystemExit(f'four-backslash repair failed; before={before!r}; after={after!r}')
+          lines[idx] = after
+          path.write_text('\n'.join(lines) + '\n')
+          print(f'before={before!r}')
+          print(f'after={after!r}')
+          PY
+
+          test -f "$PREVIOUS"
+          git rm "$SELF" "$PREVIOUS"
+          git add "$WRITER"
+          git diff --cached --check
+          git commit \
+            -m 'Doctor Who: preserve newline escape in generated Gredd checker' \
+            -m 'double one writer-layer escape and retire temporary repair carriers'
+          patched_head="$(git rev-parse HEAD)"
+          echo "patched_head=$patched_head" >> "$GITHUB_STEP_SUMMARY"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
