@@ -12,6 +12,13 @@ const SOURCE_FINGERPRINT = 'f272dd90028ca998792a461c1547a334d58f7976484ff7ee2d29
 const SOURCE_CONTENT_SHA256 = '2ea0035e1f219abf4c846a65befb8cc447dbdf883b120bd25d7768c93f75f966';
 const PILOT_CLAIMED_AT = '2026-08-02T12:46:10-07:00';
 const PILOT_REVIEWED_AT = '2026-08-02T17:50:14-07:00';
+const PILOT_EXPIRES_AT = '2026-08-03T19:46:10.000Z';
+const PILOT_READINESS_TOKEN = '282a013eb9ce501b80a2e548b78f48915cb3e1e21df3c25c664382fcf975046e';
+const PILOT_CAPABILITY_PROFILE = 'text-vision';
+const PILOT_CAPABILITY_POLICY_SHA256 = '07fcbefca2326ec964a2a8ca3bdb29924976bbe4c906d6ef5cc019a1b1889c19';
+const PILOT_SELECTION_STRATEGY = 'priority-compatible';
+const PILOT_SELECTION_BASIS = 'Highest-priority queued tasks compatible with the reviewed capability profile.';
+const PILOT_CLAIM_EVENT_ID = 'apj_83ac485c5c4495fddc17ca56';
 const WORKFLOW_RUN = 30775406860;
 const WORKFLOW_JOB = 91569879972;
 const ARTIFACT_NAME = 'doctor-who-pilot-cycle-001-30775406860';
@@ -89,16 +96,24 @@ if (journal.some((row) => row.receipt_id === OLD_CYCLE_ID)) fail('superseded pil
 
 const boundaryStart = Date.parse(cycle.claimed_at);
 const boundaryEnd = Date.parse(cycle.reviewed_at);
-const boundaryClaims = autopilotJournal.filter((row) => {
-  if (row.op !== 'lease.claimed' || row.scope !== 'doctor-who') return false;
-  const at = Date.parse(row.at || '');
-  return Number.isFinite(at) && at >= boundaryStart && at <= boundaryEnd;
+const doctorClaims = autopilotJournal.filter((row) => row.op === 'lease.claimed' && row.scope === 'doctor-who');
+for (const row of doctorClaims) {
+  if (!Number.isFinite(Date.parse(row.at || ''))) fail('Doctor Who immutable lease claim has an invalid timestamp');
+}
+const boundaryClaims = doctorClaims.filter((row) => {
+  const at = Date.parse(row.at);
+  return at >= boundaryStart && at <= boundaryEnd;
 });
 if (boundaryClaims.length !== 1) fail('pilot reviewed boundary must contain exactly one Doctor Who lease claim');
 const claim = boundaryClaims[0];
+const claimBody = structuredClone(claim);
+delete claimBody.id;
+if (claim.version !== 1 || claim.id !== PILOT_CLAIM_EVENT_ID || claim.id !== 'apj_' + sha(JSON.stringify(claimBody)).slice(0, 24)) fail('pilot immutable lease claim content identity drifted');
 if (claim.lease_id !== LEASE_ID || claim.task_id !== TASK_ID || claim.at !== cycle.claimed_at) fail('pilot immutable lease claim identity drifted');
 if (claim.performer !== 'Dan Starkey' || claim.character !== 'Commander (The Sontarans)') fail('pilot immutable lease claim subject drifted');
-const exactLeaseClaims = autopilotJournal.filter((row) => row.op === 'lease.claimed' && row.scope === 'doctor-who' && row.lease_id === LEASE_ID);
+if (claim.agent !== 'luna' || claim.agent !== receipt.lease?.agent || claim.expires_at !== PILOT_EXPIRES_AT || claim.readiness_token !== PILOT_READINESS_TOKEN) fail('pilot immutable lease claim operator or readiness custody drifted');
+if (claim.capability_profile !== PILOT_CAPABILITY_PROFILE || claim.capability_policy_sha256 !== PILOT_CAPABILITY_POLICY_SHA256 || JSON.stringify(claim.required_capabilities) !== '[]' || claim.selection_strategy !== PILOT_SELECTION_STRATEGY || claim.selection_basis !== PILOT_SELECTION_BASIS) fail('pilot immutable lease claim capability custody drifted');
+const exactLeaseClaims = doctorClaims.filter((row) => row.lease_id === LEASE_ID);
 if (exactLeaseClaims.length !== 1) fail('pilot lease must have exactly one immutable claim event');
 
 const job = autopilot.jobs.find((row) => row.id === TASK_ID);
