@@ -1,0 +1,152 @@
+name: doctor-who-cycle-003-post-merge-receipt
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/doctor-who-cycle-003-post-merge-receipt.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-003-post-merge-receipt-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PRODUCT_PR: "228"
+  GUARDIAN_PR: "229"
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  receipt-and-close:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 256
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind canonical merge and permanent product
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=256 origin refs/heads/main:refs/remotes/origin/main
+          main_head="$(git rev-parse refs/remotes/origin/main)"
+          pr_json="$(gh pr view "$PRODUCT_PR" --repo "$GITHUB_REPOSITORY" --json number,state,mergedAt,mergeCommit,headRefOid,title,url)"
+          printf '%s\n' "$pr_json" > /tmp/product-pr.json
+          test "$(jq -r '.state' /tmp/product-pr.json)" = 'MERGED'
+          merge_head="$(jq -r '.mergeCommit.oid' /tmp/product-pr.json)"
+          product_head="$(jq -r '.headRefOid' /tmp/product-pr.json)"
+          test -n "$merge_head"
+          test -n "$product_head"
+          test "$main_head" = "$merge_head"
+          git checkout --detach "$main_head"
+          for required in \
+            images/uc-1348-portrait.jpg \
+            data/review/adapter-sdk/doctor-who-cycle-003-margaret-blaine.json \
+            data/review/media/doctor-who-cycle-003-annette-badland-portrait.json \
+            scripts/doctor-who-cycle-003.mjs; do
+            test -s "$required"
+          done
+          test "$(sha256sum images/uc-1348-portrait.jpg | awk '{print $1}')" = '20b605604fb184f280ea20a90f091a8bed081ff8383417fb87598681a6a02c8e'
+          printf '%s\n' "$main_head" > /tmp/main-head.txt
+          printf '%s\n' "$product_head" > /tmp/product-head.txt
+          printf '%s\n' "$merge_head" > /tmp/merge-head.txt
+          echo "main_head=$main_head" >> "$GITHUB_STEP_SUMMARY"
+          echo "product_head=$product_head" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Revalidate canonical cycle custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run doctor-who:cycle-003:check 2>&1 | tee /tmp/cycle-003-check.log
+          npm run doctor-who:cycle-002:check 2>&1 | tee /tmp/cycle-002-check.log
+          npm run doctor-who:pilot-cycle:check 2>&1 | tee /tmp/pilot-check.log
+          npm run doctor-who:correction-drill:check 2>&1 | tee /tmp/correction-check.log
+          npm run star-trek:enwright-cycle:check 2>&1 | tee /tmp/enwright-check.log
+          node scripts/autopilot.mjs validate 2>&1 | tee /tmp/autopilot-check.log
+          node scripts/media-audit.mjs gate --scope doctor-who 2>&1 | tee /tmp/media-check.log
+          node scripts/waterline.mjs validate --scope doctor-who 2>&1 | tee /tmp/doctor-who-waterline.log
+          node scripts/waterline.mjs validate --scope star-trek 2>&1 | tee /tmp/star-trek-waterline.log
+          grep -Fq 'phase=ready-for-cycle' /tmp/doctor-who-waterline.log
+          grep -Fq 'claim=allowed' /tmp/doctor-who-waterline.log
+          grep -Fq 'phase=ready-for-cycle' /tmp/star-trek-waterline.log
+          grep -Fq 'claim=allowed' /tmp/star-trek-waterline.log
+          sha256sum \
+            data/review/adapter-sdk/doctor-who-cycle-003-margaret-blaine.json \
+            data/review/media/doctor-who-cycle-003-annette-badland-portrait.json \
+            images/uc-1348-portrait.jpg \
+            /tmp/cycle-003-check.log \
+            > /tmp/canonical-receipt.sha256
+          test -z "$(git status --porcelain)"
+
+      - name: Receipt and close the non-authoritative guardian PR
+        shell: bash
+        run: |
+          set -euo pipefail
+          main_head="$(cat /tmp/main-head.txt)"
+          product_head="$(cat /tmp/product-head.txt)"
+          merge_head="$(cat /tmp/merge-head.txt)"
+          checker_sha="$(sha256sum /tmp/cycle-003-check.log | awk '{print $1}')"
+          receipt_sha="$(sha256sum /tmp/canonical-receipt.sha256 | awk '{print $1}')"
+          body="$(cat <<BODY
+          ## Canonical cycle-003 merge receipt
+
+          PR #228 is merged and canonical `main` is exactly its merge commit.
+
+          \`\`\`text
+          qualified product head: $product_head
+          canonical merge:        $merge_head
+          canonical main:         $main_head
+          cycle-003 checker SHA:   $checker_sha
+          receipt bundle SHA:      $receipt_sha
+          \`\`\`
+
+          The permanent Margaret Blaine cycle, Annette Badland attribution receipt, exact portrait bytes, prior Doctor Who cycle checkers, Star Trek Enwright checker, Autopilot state, media audit, and both active-estate waterlines all validate from the default branch. This guardian branch contains no product authority and is closed without merge.
+          BODY
+          )"
+          gh pr edit "$GUARDIAN_PR" --repo "$GITHUB_REPOSITORY" \
+            --title 'Doctor Who: canonical cycle-003 merge receipted' \
+            --body "$body"
+          gh pr close "$GUARDIAN_PR" --repo "$GITHUB_REPOSITORY" --comment 'Canonical cycle-003 merge and permanent checker verified; guardian retired without merge.'
+          gh pr view "$GUARDIAN_PR" --repo "$GITHUB_REPOSITORY" --json number,state,title,closedAt > /tmp/guardian-pr-after.json
+          test "$(jq -r '.state' /tmp/guardian-pr-after.json)" = 'CLOSED'
+          echo "cycle_003_checker_sha256=$checker_sha" >> "$GITHUB_STEP_SUMMARY"
+          echo "canonical_receipt_bundle_sha256=$receipt_sha" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload canonical post-merge evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-003-post-merge-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: warn
+          path: |
+            /tmp/product-pr.json
+            /tmp/main-head.txt
+            /tmp/product-head.txt
+            /tmp/merge-head.txt
+            /tmp/cycle-003-check.log
+            /tmp/cycle-002-check.log
+            /tmp/pilot-check.log
+            /tmp/correction-check.log
+            /tmp/enwright-check.log
+            /tmp/autopilot-check.log
+            /tmp/media-check.log
+            /tmp/doctor-who-waterline.log
+            /tmp/star-trek-waterline.log
+            /tmp/canonical-receipt.sha256
+            /tmp/guardian-pr-after.json
