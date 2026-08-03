@@ -1,0 +1,163 @@
+name: enwright-cycle-schema-probe
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/enwright-cycle-schema-probe.yml"
+
+permissions:
+  contents: read
+
+env:
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXACT_MAIN: ${{ github.event.pull_request.base.sha }}
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  SELF: .github/workflows/enwright-cycle-schema-probe.yml
+
+jobs:
+  probe:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Bind exact main and read-only transport
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=2 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          test "$(git rev-parse HEAD^)" = "$EXACT_MAIN"
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git diff --name-only "$EXACT_MAIN"...HEAD)" = "$SELF"
+
+      - name: Capture native result, growth, media, and cycle contracts
+        run: |
+          set -euo pipefail
+          out=/tmp/enwright-schema
+          mkdir -p "$out/files"
+
+          for file in \
+            AGENTS.md \
+            GROW.md \
+            LUNA.md \
+            docs/AUTOPILOT.md \
+            docs/AUTOPILOT-CAPABILITIES.md \
+            docs/MEDIA-AUDIT.md \
+            docs/WATERLINE.md \
+            docs/TRANSFORM-RUBRIC.md \
+            package.json \
+            scripts/autopilot.mjs \
+            scripts/lib/autopilot.mjs \
+            scripts/grow.mjs \
+            scripts/retrieve.mjs \
+            scripts/media-audit.mjs \
+            scripts/lib/media-audit.mjs \
+            scripts/waterline.mjs \
+            scripts/lib/waterline.mjs \
+            scripts/sync-sources.mjs \
+            scripts/shard.mjs \
+            scripts/build-contract.mjs \
+            scripts/validate.mjs; do
+              cp --parents "$file" "$out/files"
+          done
+
+          cp data/AUTOPILOT-CAPABILITIES.json "$out/"
+          cp data/AUTOPILOT-SCOPES.json "$out/"
+          cp data/MEDIA-AUDIT-SCOPES.json "$out/"
+          cp data/WATERLINE.json "$out/"
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const out = '/tmp/enwright-schema';
+          const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+          const write = (name, value) => fs.writeFileSync(path.join(out, name), JSON.stringify(value, null, 2) + '\n');
+
+          const specimens = read('data/specimens.json');
+          const sources = read('data/SOURCES.json');
+          const coverage = read('data/CENSUS-COVERAGE.json');
+          const manifest = read('data/CENSUS-MANIFEST.json');
+          const autopilot = read('data/AUTOPILOT.json');
+          const media = read('data/MEDIA-AUDIT.json');
+          const drafts = read('data/drafts.json');
+          const waterline = read('data/WATERLINE-STATE.json');
+
+          const doohanSpecimens = specimens.filter((row) => row.actor === 'James Doohan');
+          const doohanIds = new Set(doohanSpecimens.map((row) => row.id));
+          write('james-doohan-specimens.json', doohanSpecimens);
+          write('james-doohan-sources.json', sources.filter((row) => doohanIds.has(row.id)));
+          write('james-doohan-media.json', media.items.filter((row) => doohanIds.has(row.wall_id)));
+          write('voice-specimen-sample.json', specimens.filter((row) => row.kind === 'voice').slice(0, 80));
+          write('voice-source-sample.json', sources.filter((row) => specimens.some((specimen) => specimen.id === row.id && specimen.kind === 'voice')).slice(0, 80));
+
+          const taskId = 'ap_fddff4a188eb5eb9fbefd86f';
+          const sourceUrl = 'https://memory-alpha.fandom.com/wiki/Enwright';
+          const recursive = (value, predicate, outRows = []) => {
+            if (Array.isArray(value)) for (const child of value) recursive(child, predicate, outRows);
+            else if (value && typeof value === 'object') {
+              if (predicate(value)) outRows.push(value);
+              for (const child of Object.values(value)) recursive(child, predicate, outRows);
+            }
+            return outRows;
+          };
+          write('enwright-autopilot-task.json', autopilot.jobs.filter((row) => row.id === taskId));
+          write('enwright-coverage-matches.json', recursive(coverage, (row) => row.id === taskId || row.task_id === taskId || row.character === 'Enwright' || row.source === sourceUrl));
+          write('enwright-manifest-matches.json', recursive(manifest, (row) => row.id === taskId || row.task_id === taskId || row.character === 'Enwright' || row.source === sourceUrl));
+          write('leased-cycle-waterline.json', waterline.cycles.filter((row) => row.lease_id === 'lease_e6c0541e10146179ad56a867'));
+          write('current-drafts.json', drafts);
+
+          const maxId = Math.max(...specimens.map((row) => Number(String(row.id).replace(/^UC-/, ''))).filter(Number.isFinite));
+          write('canonical-summary.json', {
+            records: specimens.length,
+            next_wall_id: `UC-${String(maxId + 1).padStart(3, '0')}`,
+            james_doohan_records: doohanSpecimens.length,
+            voice_records: specimens.filter((row) => row.kind === 'voice').length,
+            current_drafts: drafts.length,
+          });
+
+          const fixtures = fs.readdirSync('scripts').filter((name) => /fixture|test/i.test(name));
+          write('relevant-script-index.json', {
+            fixtures,
+            review_receipts: fs.readdirSync('data/review/adapter-sdk').filter((name) => /cycle|pilot|media/i.test(name)).slice(-100),
+          });
+          NODE
+
+          grep -RIn --exclude='enwright-cycle-schema-probe.yml' \
+            -E 'decision.*draft|submit requires|complete requires|record-cycle|reviewed_by.*luna|until_source_changes|growth rejection|wall_ids|post-merge media' \
+            scripts docs test data/review/adapter-sdk \
+            > "$out/contract-grep.txt" || true
+
+          node scripts/autopilot.mjs status --scope star-trek --json > "$out/autopilot-status.json"
+          node scripts/waterline.mjs status --scope star-trek --json > "$out/waterline-status.json"
+          node scripts/media-audit.mjs status --scope star-trek --json > "$out/media-status.json"
+          node scripts/corpus-ops.mjs next --json > "$out/corpus-next.json"
+
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact schema evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: enwright-cycle-schema-${{ github.run_id }}
+          path: /tmp/enwright-schema
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
