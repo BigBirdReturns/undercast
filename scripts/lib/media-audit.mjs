@@ -38,10 +38,11 @@ export function normalize(value) {
 }
 
 export function scopeForSpecimen(scopes, specimen) {
-  return scopes.find((scope) =>
-    scope.status !== "retired"
-    && (!scope.match?.universe || normalize(scope.match.universe) === normalize(specimen.universe)),
-  );
+  const active = scopes.filter((scope) => scope.status !== "retired");
+  return active.find((scope) =>
+    scope.match?.universe
+    && normalize(scope.match.universe) === normalize(specimen.universe),
+  ) || active.find((scope) => !scope.match?.universe) || null;
 }
 
 export function mediaItemId(scope, wallId, side) {

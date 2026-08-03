@@ -39,14 +39,17 @@ const enforcedEvidence = [{ type: "second-desk-review", value: "Exact hash-bound
 
 {
   const scopes = [
-    { id: "star-trek", status: "active", match: { universe: "Star Trek" }, facets: ["still", "portrait"] },
     { id: "sitewide", status: "active", facets: ["still", "portrait"] },
+    { id: "doctor-who", status: "active", match: { universe: "Doctor Who" }, facets: ["still", "portrait"] },
+    { id: "star-trek", status: "active", match: { universe: "Star Trek" }, facets: ["still", "portrait"] },
   ];
   const starTrek = { id: "UC-001", universe: "Star Trek", actor: "Mark Allen Shepherd", character: "Morn" };
+  const doctorWho = { id: "UC-1345", universe: "Doctor Who", actor: "Dan Starkey", character: "Commander (The Sontarans)" };
   const horror = { id: "UC-025", universe: "Horror", actor: "Javier Botet", character: "Mama, the Crooked Man & others" };
-  assert.equal(scopeForSpecimen(scopes, starTrek)?.id, "star-trek", "specific first-match scope wins");
+  assert.equal(scopeForSpecimen(scopes, starTrek)?.id, "star-trek", "specific Star Trek scope outranks an earlier fallback");
+  assert.equal(scopeForSpecimen(scopes, doctorWho)?.id, "doctor-who", "specific Doctor Who scope outranks an earlier fallback");
   const fallback = scopeForSpecimen(scopes, horror);
-  assert.equal(fallback?.id, "sitewide", "non-Star-Trek specimen enters the fallback scope");
+  assert.equal(fallback?.id, "sitewide", "unmatched specimen enters the fallback scope");
   assert.deepEqual(fallback.facets, ["still", "portrait"], "fallback exposes both public card faces");
 }
 
