@@ -45,32 +45,31 @@ jobs:
 
           const source = process.env.SOURCE;
           const output = process.env.OUTPUT;
-          let workflow = await readFile(source, 'utf8');
-          const invalid = `          const staleAdapterCheck = 'runNode("scripts/census-adapter.mjs", ["check"]);';
-          const refreshedTerminalState = \`runNode("scripts/census-adapter.mjs", ["write"]);
-runNode("scripts/census-adapter.mjs", ["check"]);
-runNode("scripts/autopilot.mjs", ["sync", "--scope", "doctor-who", "--now", context.timestamps.final_at]);
-runNode("scripts/autopilot.mjs", ["validate"]);\`;
-          if (finalizer.split(staleAdapterCheck).length - 1 !== 1) throw new Error('unexpected terminal adapter check');
-`;
-          const valid = `          const staleAdapterCheck = 'runNode("scripts/census-adapter.mjs", ["check"]);';
-          const refreshedTerminalState = [
-            'runNode("scripts/census-adapter.mjs", ["write"]);',
-            'runNode("scripts/census-adapter.mjs", ["check"]);',
-            'runNode("scripts/autopilot.mjs", ["sync", "--scope", "doctor-who", "--now", context.timestamps.final_at]);',
-            'runNode("scripts/autopilot.mjs", ["validate"]);',
-          ].join('\\n');
-          if (finalizer.split(staleAdapterCheck).length - 1 !== 1) throw new Error('unexpected terminal adapter check');
-`;
-          if (workflow.split(invalid).length - 1 !== 1) throw new Error('malformed v2 workflow block drifted');
-          workflow = workflow.replace(invalid, valid);
+          const workflow = await readFile(source, 'utf8');
+          const lines = workflow.split('\n');
+          const start = lines.findIndex((line) => line.includes("const staleAdapterCheck = 'runNode(\"scripts/census-adapter.mjs\", [\"check\"]);';"));
+          const end = lines.findIndex((line, index) => index > start && line.includes("if (finalizer.split(staleAdapterCheck).length - 1 !== 1)"));
+          if (start < 0 || end < start || end - start !== 5) {
+            throw new Error(`malformed v2 workflow block drifted: start=${start} end=${end}`);
+          }
+          const replacement = [
+            "          const staleAdapterCheck = 'runNode(\"scripts/census-adapter.mjs\", [\"check\"]);';",
+            '          const refreshedTerminalState = [',
+            '            \'runNode("scripts/census-adapter.mjs", ["write"]);\',',
+            '            \'runNode("scripts/census-adapter.mjs", ["check"]);\',',
+            '            \'runNode("scripts/autopilot.mjs", ["sync", "--scope", "doctor-who", "--now", context.timestamps.final_at]);\',',
+            '            \'runNode("scripts/autopilot.mjs", ["validate"]);\',',
+            "          ].join('\\n');",
+            "          if (finalizer.split(staleAdapterCheck).length - 1 !== 1) throw new Error('unexpected terminal adapter check');",
+          ];
+          lines.splice(start, end - start + 1, ...replacement);
+          const corrected = lines.join('\n');
           await mkdir(dirname(output), { recursive: true });
-          await writeFile(output, workflow);
+          await writeFile(output, corrected);
           NODE
 
           test -s "$OUTPUT"
           grep -Fq "].join('\\n');" "$OUTPUT"
-          ! grep -Fxq 'runNode("scripts/census-adapter.mjs", ["check"]);' "$OUTPUT"
           ruby -e "require 'yaml'; YAML.load_file(ARGV[0]); puts 'YAML_OK'" "$OUTPUT"
           sha256sum "$SOURCE" "$OUTPUT" | tee /tmp/doctor-who-cycle-002-v2-corrected.sha256
           git diff --no-index -- "$SOURCE" "$OUTPUT" | tee /tmp/doctor-who-cycle-002-v2-corrected.diff || test "$?" -eq 1
