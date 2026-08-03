@@ -1,0 +1,259 @@
+name: doctor-who-cycle-003-margaret-media-review
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/doctor-who-cycle-003-margaret-media-review.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-003-margaret-media-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-003-margaret-media-review.yml
+  TASK_ID: ap_ba63d075857222943e609a7f
+  SOURCE_URL: https://tardis.fandom.com/wiki/Margaret_Blaine
+  SOURCE_PAGE_ID: "5369"
+  SOURCE_REVISION: "2696671"
+  SOURCE_CONTENT_SHA256: ef175ed98926056697d7f60f4dc0e56e76949328ea3f327baeb1fe086272b9fc
+
+jobs:
+  review:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 128
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Bind live main and prove the one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --porcelain)"
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git fetch --no-tags --depth=128 origin \
+            refs/heads/main:refs/remotes/origin/main \
+            "refs/heads/${{ github.event.pull_request.head.ref }}:refs/remotes/origin/${{ github.event.pull_request.head.ref }}"
+          test "$(git rev-parse refs/remotes/origin/${{ github.event.pull_request.head.ref }})" = "${{ github.event.pull_request.head.sha }}"
+          exact_main="$(git rev-parse refs/remotes/origin/main)"
+          test -n "$exact_main"
+          git rebase refs/remotes/origin/main
+          test "$(git merge-base HEAD refs/remotes/origin/main)" = "$exact_main"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$exact_main"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+          printf '%s\n' "$exact_main" > /tmp/exact-main.txt
+          printf '%s\n' "$(git rev-parse HEAD)" > /tmp/rebased-carrier-head.txt
+
+      - name: Install image inspection tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          identify -version
+
+      - name: Prove exact task and preserved source custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum \
+            data/AUTOPILOT.json \
+            data/MEDIA-AUDIT.json \
+            data/WATERLINE-STATE.json \
+            data/journal/autopilot.jsonl \
+            data/journal/media-audit.jsonl \
+            data/journal/waterline.jsonl \
+            > /tmp/state-before.sha256
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+
+          const autopilot = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const task = (autopilot.jobs || autopilot.tasks || autopilot).find((row) => row.id === process.env.TASK_ID);
+          if (!task) throw new Error(`missing task ${process.env.TASK_ID}`);
+          if (task.scope !== 'doctor-who' || task.status !== 'queued') throw new Error(`task custody drifted: ${task.scope}/${task.status}`);
+          if (task.performer !== 'Annette Badland' || task.character !== 'Margaret Blaine') throw new Error('task identity drifted');
+          if (task.performance_mode !== 'physical-prosthetic') throw new Error(`task mode drifted: ${task.performance_mode}`);
+          if (task.source !== process.env.SOURCE_URL) throw new Error(`task source drifted: ${task.source}`);
+
+          const census = JSON.parse(fs.readFileSync('data/CENSUS.json', 'utf8'));
+          const row = census.find((item) => item.performer === 'Annette Badland' && item.role === 'Margaret Blaine');
+          if (!row) throw new Error('Margaret Blaine census row missing');
+          if (String(row.pageid) !== process.env.SOURCE_PAGE_ID) throw new Error(`page id drifted: ${row.pageid}`);
+          if (String(row.revision_id) !== process.env.SOURCE_REVISION) throw new Error(`revision drifted: ${row.revision_id}`);
+          if (row.content_sha256 !== process.env.SOURCE_CONTENT_SHA256) throw new Error(`source content drifted: ${row.content_sha256}`);
+          if (row.source_fingerprint !== '2a3a77dddf94c4b2d99375482760fb4a4863a8838360f135b247b39706743119') throw new Error('source fingerprint drifted');
+
+          const contentPath = `preservation/source-content/${process.env.SOURCE_CONTENT_SHA256}.txt`;
+          const content = fs.readFileSync(contentPath);
+          const actual = crypto.createHash('sha256').update(content).digest('hex');
+          if (actual !== process.env.SOURCE_CONTENT_SHA256) throw new Error(`source-content bytes drifted: ${actual}`);
+          const text = content.toString('utf8');
+          for (const required of [
+            '|actor             = [[Annette Badland]]',
+            '[[File:MargaretBlaine.jpg',
+            '[[File:Boom Town - Margaret suits up.jpg',
+            '[[File:Boom Town - Margaret reveals her true form.jpg',
+            '[[File:WW3 - Harriet Jones meets Margaret Blaine.jpg',
+          ]) {
+            if (!text.includes(required)) throw new Error(`source no longer contains exact media pointer: ${required}`);
+          }
+          fs.writeFileSync('/tmp/margaret-source-row.json', `${JSON.stringify(row, null, 2)}\n`);
+          fs.copyFileSync(contentPath, '/tmp/margaret-source-content.txt');
+          NODE
+
+          test -z "$(git status --porcelain)"
+
+      - name: Query exact Fandom file pages and download source-named candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/margaret-media/files
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import crypto from 'node:crypto';
+
+          const api = 'https://tardis.fandom.com/api.php';
+          const titles = [
+            'File:MargaretBlaine.jpg',
+            'File:Boom Town - Margaret suits up.jpg',
+            'File:Boom Town - Margaret reveals her true form.jpg',
+            'File:WW3 - Harriet Jones meets Margaret Blaine.jpg',
+            'File:WW3 - The Slitheen meet in Downing Street.jpg',
+          ];
+          const headers = { 'user-agent': 'Undercast evidence review/1.0 (BigBirdReturns/undercast)' };
+          const query = new URLSearchParams({
+            action: 'query',
+            prop: 'imageinfo|revisions',
+            titles: titles.join('|'),
+            iiprop: 'url|mime|size|sha1|timestamp',
+            rvprop: 'ids|timestamp|content',
+            rvslots: 'main',
+            redirects: '1',
+            format: 'json',
+            formatversion: '2',
+            origin: '*',
+          });
+          const response = await fetch(`${api}?${query}`, { headers });
+          if (!response.ok) throw new Error(`Fandom API failed: ${response.status}`);
+          const payload = await response.json();
+          fs.writeFileSync('/tmp/margaret-media/fandom-api-response.json', `${JSON.stringify(payload, null, 2)}\n`);
+
+          const records = [];
+          for (const page of payload.query?.pages || []) {
+            if (page.missing) {
+              records.push({ title: page.title, missing: true });
+              continue;
+            }
+            const info = page.imageinfo?.[0];
+            if (!info?.url) {
+              records.push({ title: page.title, pageid: page.pageid, missing_imageinfo: true });
+              continue;
+            }
+            const safe = page.title.replace(/^File:/, '').replace(/[^A-Za-z0-9._-]+/g, '_');
+            const extension = path.extname(new URL(info.url).pathname) || '.bin';
+            const output = `/tmp/margaret-media/files/${String(records.length + 1).padStart(2, '0')}-${safe}${safe.endsWith(extension) ? '' : extension}`;
+            const imageResponse = await fetch(info.url, { headers });
+            if (!imageResponse.ok) throw new Error(`image download failed ${page.title}: ${imageResponse.status}`);
+            const bytes = Buffer.from(await imageResponse.arrayBuffer());
+            fs.writeFileSync(output, bytes);
+            records.push({
+              requested_title: titles.find((title) => title.toLowerCase() === page.title.toLowerCase()) || null,
+              title: page.title,
+              pageid: page.pageid,
+              file_page_url: `https://tardis.fandom.com/wiki/${encodeURIComponent(page.title.replace(/ /g, '_'))}`,
+              file_page_revision: page.revisions?.[0]?.revid || null,
+              file_page_timestamp: page.revisions?.[0]?.timestamp || null,
+              file_page_content: page.revisions?.[0]?.slots?.main?.content || null,
+              original_url: info.url,
+              description_url: info.descriptionurl || null,
+              mime: info.mime || null,
+              width: info.width || null,
+              height: info.height || null,
+              fandom_sha1: info.sha1 || null,
+              fandom_timestamp: info.timestamp || null,
+              output,
+              bytes: bytes.length,
+              sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+            });
+          }
+          fs.writeFileSync('/tmp/margaret-media/candidates.json', `${JSON.stringify(records, null, 2)}\n`);
+          if (!records.some((record) => record.title === 'File:MargaretBlaine.jpg' && record.sha256)) {
+            throw new Error('the exact MargaretBlaine.jpg source candidate was not recovered');
+          }
+          NODE
+
+          find /tmp/margaret-media/files -type f -print0 \
+            | sort -z \
+            | xargs -0 -r identify -format '%i\t%w\t%h\t%m\n' \
+            | tee /tmp/margaret-media/identify.tsv
+          find /tmp/margaret-media/files -type f -print0 \
+            | sort -z \
+            | xargs -0 -r sha256sum \
+            | tee /tmp/margaret-media/downloads.sha256
+          jq '.' /tmp/margaret-media/candidates.json | tee /tmp/margaret-media/candidates.pretty.json
+
+          sha256sum \
+            /tmp/margaret-media/fandom-api-response.json \
+            /tmp/margaret-media/candidates.json \
+            /tmp/margaret-media/identify.tsv \
+            /tmp/margaret-media/downloads.sha256 \
+            > /tmp/margaret-media/review-surface.sha256
+
+      - name: Prove the review lane changed no repository state
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum \
+            data/AUTOPILOT.json \
+            data/MEDIA-AUDIT.json \
+            data/WATERLINE-STATE.json \
+            data/journal/autopilot.jsonl \
+            data/journal/media-audit.jsonl \
+            data/journal/waterline.jsonl \
+            > /tmp/state-after.sha256
+          diff -u /tmp/state-before.sha256 /tmp/state-after.sha256
+          test -z "$(git status --porcelain)"
+          echo 'lease_issued=false' >> "$GITHUB_STEP_SUMMARY"
+          echo 'repository_mutated=false' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact media-review evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-003-margaret-media-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            /tmp/exact-main.txt
+            /tmp/rebased-carrier-head.txt
+            /tmp/expected-paths.txt
+            /tmp/actual-paths.txt
+            /tmp/state-before.sha256
+            /tmp/state-after.sha256
+            /tmp/margaret-source-row.json
+            /tmp/margaret-source-content.txt
+            /tmp/margaret-media/fandom-api-response.json
+            /tmp/margaret-media/candidates.json
+            /tmp/margaret-media/candidates.pretty.json
+            /tmp/margaret-media/identify.tsv
+            /tmp/margaret-media/downloads.sha256
+            /tmp/margaret-media/review-surface.sha256
+            /tmp/margaret-media/files
