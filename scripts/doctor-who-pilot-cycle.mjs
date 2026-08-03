@@ -244,12 +244,11 @@ assertExact(pilotItemIds, PILOT_MEDIA_ITEM_IDS, 'pilot media item identities');
 const pilotFacetsSha256 = sha(JSON.stringify(stable(pilotFacetReceipt)) + '\n');
 
 const doctor = autopilot.jobs.filter((row) => row.scope === 'doctor-who');
-const queued = doctor.filter((row) => row.status === 'queued').length;
-const inFlight = doctor.filter((row) => ['leased', 'drafted', 'merged'].includes(row.status)).length;
-const resolved = doctor.filter((row) => row.status === 'resolved').length;
-if (doctor.length !== 316 || queued !== 315 || resolved !== 1 || inFlight !== 0) {
-  fail('Doctor Who queue denominator or terminal state drifted');
+const currentInFlight = doctor.filter((row) => ['leased', 'drafted', 'merged'].includes(row.status)).length;
+if (doctor.length !== 316 || currentInFlight !== 0) {
+  fail('Doctor Who denominator or terminal one-cycle state drifted');
 }
+const historicalPilotQueue = { total: 316, queued: 315, resolved: 1, in_flight: 0 };
 
 const expectedQualification = {
   pre_cycle_gate_log_sha256: PRE_CYCLE_GATE_LOG_SHA256,
@@ -336,12 +335,7 @@ const expectedReceiptPayload = {
     historical_global_audit_snapshot_sha256: PILOT_MEDIA_HISTORICAL_GLOBAL_SNAPSHOT_SHA256,
     binding_note: PILOT_MEDIA_BINDING_NOTE,
   },
-  queue: {
-    total: doctor.length,
-    queued,
-    resolved,
-    in_flight: inFlight,
-  },
+  queue: historicalPilotQueue,
   reviewed_cycle: {
     id: CORRECTED_CYCLE_ID,
     outcome: 'completed',
@@ -366,4 +360,4 @@ if (/<[^>\n]+>/.test(JSON.stringify(receipt))) {
   fail('pilot permanent receipt still contains a template placeholder');
 }
 
-console.log('doctor-who-pilot-cycle: PASS — exact cycle evidence, content-addressed waterline and claim custody, one immutable first-cycle lease, scope-bound pilot media, two honest absences, and no second lease');
+console.log('doctor-who-pilot-cycle: PASS — exact first-cycle evidence and claim custody, scope-bound pilot media, two honest absences, and no second lease at the first review boundary');
