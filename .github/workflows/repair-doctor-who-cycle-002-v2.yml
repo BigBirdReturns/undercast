@@ -1,0 +1,110 @@
+name: repair-doctor-who-cycle-002-v2-carrier
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/repair-doctor-who-cycle-002-v2.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-doctor-who-cycle-002-v2-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+  SELF: .github/workflows/repair-doctor-who-cycle-002-v2.yml
+  TARGET: .github/workflows/complete-doctor-who-cycle-002-v2.yml
+  TARGET_BLOB: 0c61ca5ddcab969a33fc9038ed4a39d0115f6b93
+
+jobs:
+  repair:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 64
+
+      - name: Repair only the exact malformed Gredd v2 carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse "HEAD:$TARGET")" = "$TARGET_BLOB"
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          target = Path('.github/workflows/complete-doctor-who-cycle-002-v2.yml')
+          text = target.read_text(encoding='utf-8')
+
+          typo = 'GITHUB_STEP_SUMARY'
+          if text.count(typo) != 2:
+              raise SystemExit(f'expected two step-summary typos, found {text.count(typo)}')
+          text = text.replace(typo, 'GITHUB_STEP_SUMMARY')
+
+          dirty_before = '          test -r "$(git diff --name-only)"\n'
+          dirty_after = '          test -z "$(git diff --name-only)"\n'
+          if text.count(dirty_before) != 1:
+              raise SystemExit(f'expected one reverted clean-tree assertion, found {text.count(dirty_before)}')
+          text = text.replace(dirty_before, dirty_after)
+
+          lines = text.splitlines(keepends=True)
+          start = next(i for i, line in enumerate(lines) if 'git diff --cached --name-only "$EXACT_MAIN" | sort > /tmp/doctor-who-cycle-002-candidate-paths.txt' in line)
+          end = next(i for i in range(start + 1, len(lines)) if "mapfile -t image_paths < <(grep '^images/' /tmp/doctor-who-cycle-002-candidate-paths.txt" in lines[i])
+          malformed = [i for i in range(start + 1, end) if lines[i].lstrip().startswith('! grep -Eq')]
+          if len(malformed) != 1:
+              raise SystemExit(f'expected one malformed candidate transport guard, found {len(malformed)}')
+          indent = lines[malformed[0]][:len(lines[malformed[0]]) - len(lines[malformed[0]].lstrip())]
+          lines[malformed[0]] = indent + "! grep -Eq '^\\.github/|^\\.ci/' /tmp/doctor-who-cycle-002-candidate-paths.txt\n"
+          text = ''.join(lines)
+
+          if typo in text or dirty_before in text:
+              raise SystemExit('known malformed tokens survived repair')
+          if text.count("! grep -Eq '^\\.github/|^\\.ci/' /tmp/doctor-who-cycle-002-candidate-paths.txt") != 1:
+              raise SystemExit('candidate transport guard was not restored exactly once')
+          target.write_text(text, encoding='utf-8')
+          PY
+
+          grep -Fq 'adapter baseline refresh, and terminal waterline synchronization' "$TARGET"
+          ! grep -Fq 'GITHUB_STEP_SUMARY' "$TARGET"
+          ! grep -Fq 'test -r "$(git diff --name-only)"' "$TARGET"
+          grep -Fq "! grep -Eq '^\\.github/|^\\.ci/' /tmp/doctor-who-cycle-002-candidate-paths.txt" "$TARGET"
+
+          git rm -f "$SELF"
+          git add -- "$TARGET"
+          git diff --cached --check
+          printf '%s\n' "$SELF" "$TARGET" | sort > /tmp/expected-repair-paths.txt
+          git diff --cached --name-only | sort > /tmp/actual-repair-paths.txt
+          diff -u /tmp/expected-repair-paths.txt /tmp/actual-repair-paths.txt
+
+          git commit \
+            -m 'Doctor Who: repair the bounded Gredd v2 carrier' \
+            -m 'restore exact clean-tree and transport guards and correct step-summary writes' \
+            -m 'self-delete the repair carrier without issuing a lease'
+
+          git fetch --no-tags --depth=64 origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
+
+      - name: Upload exact repair evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-002-v2-repair-${{ github.run_id }}
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            /tmp/expected-repair-paths.txt
+            /tmp/actual-repair-paths.txt
