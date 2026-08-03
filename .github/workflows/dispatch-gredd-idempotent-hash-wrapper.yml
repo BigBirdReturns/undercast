@@ -1,0 +1,121 @@
+name: dispatch-gredd-idempotent-hash-wrapper
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/dispatch-gredd-idempotent-hash-wrapper.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dispatch-gredd-idempotent-hash-wrapper
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/dispatch-gredd-idempotent-hash-wrapper.yml
+  TARGET_BRANCH: agent/doctor-who-gredd-cycle-002-publication
+  TARGET_WORKFLOW: .github/workflows/complete-doctor-who-cycle-002-v2.yml
+  EXPECTED_TARGET_HEAD: f8c92535b985cdd9c385155f83064b28cc83ff94
+
+jobs:
+  dispatch:
+    if: github.repository == 'BigBirdReturns/undercast'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 256
+
+      - name: Patch the exact Gredd writer and retire this dispatcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          test -f "$SELF"
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+
+          dispatcher_head="$(git rev-parse HEAD)"
+          base_main="$(git rev-parse HEAD^)"
+          git fetch --no-tags --depth=256 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$dispatcher_head"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$EXPECTED_TARGET_HEAD"
+
+          git worktree add --detach /tmp/gredd-target "refs/remotes/origin/${TARGET_BRANCH}"
+          cd /tmp/gredd-target
+          target_base="$(git merge-base HEAD "$base_main")"
+          test "$target_base" = "$base_main"
+          cat > /tmp/expected-before.txt <<PATHS
+          .ci/doctor-who-cycle-002/patch-current.mjs.gz.b64
+          .ci/doctor-who-cycle-002/scripts.tgz.b64
+          .github/workflows/apply-doctor-who-cycle-002.yml
+          .github/workflows/complete-doctor-who-cycle-002-v2.yml
+          PATHS
+          sort -o /tmp/expected-before.txt /tmp/expected-before.txt
+          git diff --name-only "$base_main"...HEAD | sort > /tmp/actual-before.txt
+          diff -u /tmp/expected-before.txt /tmp/actual-before.txt
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/complete-doctor-who-cycle-002-v2.yml')
+          text = path.read_text()
+          old = '''          const receiptHashBefore = 'if (receipt.receipt_sha256 !== sha(JSON.stringify(stable(receiptBody)) + "\\\\n")) fail("cycle 002 receipt hash drifted");';
+          const receiptHashAfter = 'if (receipt.receipt_sha256 !== sha(JSON.stringify(stable(receiptBody), null, 2) + "\\\\n")) fail("cycle 002 receipt hash drifted");';
+          const receiptHashCount = finalizerText.split(receiptHashBefore).length - 1;
+          if (receiptHashCount !== 1) throw new Error(`expected one compact receipt hash checker, found ${receiptHashCount}`);
+          finalizerText = finalizerText.replace(receiptHashBefore, receiptHashAfter);
+'''
+          new = '''          const receiptHashBefore = 'if (receipt.receipt_sha256 !== sha(JSON.stringify(stable(receiptBody)) + "\\\\n")) fail("cycle 002 receipt hash drifted");';
+          const receiptHashAfter = 'if (receipt.receipt_sha256 !== sha(JSON.stringify(stable(receiptBody), null, 2) + "\\\\n")) fail("cycle 002 receipt hash drifted");';
+          const compactReceiptHashCount = finalizerText.split(receiptHashBefore).length - 1;
+          const prettyReceiptHashCount = finalizerText.split(receiptHashAfter).length - 1;
+          if (compactReceiptHashCount === 1 && prettyReceiptHashCount === 0) {
+            finalizerText = finalizerText.replace(receiptHashBefore, receiptHashAfter);
+          } else if (!(compactReceiptHashCount === 0 && prettyReceiptHashCount === 1)) {
+            throw new Error(`expected exactly one compact-or-pretty receipt hash checker, found compact=${compactReceiptHashCount} pretty=${prettyReceiptHashCount}`);
+          }
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one non-idempotent receipt wrapper, found {text.count(old)}')
+          path.write_text(text.replace(old, new))
+          PY
+
+          git add "$TARGET_WORKFLOW"
+          git diff --cached --check
+          git commit -m 'Doctor Who: make Gredd receipt wrapper idempotent'
+          cat > /tmp/expected-after.txt <<PATHS
+          .ci/doctor-who-cycle-002/patch-current.mjs.gz.b64
+          .ci/doctor-who-cycle-002/scripts.tgz.b64
+          .github/workflows/apply-doctor-who-cycle-002.yml
+          .github/workflows/complete-doctor-who-cycle-002-v2.yml
+          PATHS
+          sort -o /tmp/expected-after.txt /tmp/expected-after.txt
+          git diff --name-only "$base_main"...HEAD | sort > /tmp/actual-after.txt
+          diff -u /tmp/expected-after.txt /tmp/actual-after.txt
+          target_head="$(git rev-parse HEAD)"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${EXPECTED_TARGET_HEAD}"
+
+          cd "$GITHUB_WORKSPACE"
+          git fetch --no-tags --depth=8 origin "refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$dispatcher_head"
+          git rm -f "$SELF"
+          git commit -m 'Transport: retire idempotent Gredd hash dispatcher'
+          cleanup_head="$(git rev-parse HEAD)"
+          git push origin "HEAD:refs/heads/main" \
+            --force-with-lease="refs/heads/main:${dispatcher_head}"
+
+          echo "base_main=$base_main" >> "$GITHUB_STEP_SUMMARY"
+          echo "target_head=$target_head" >> "$GITHUB_STEP_SUMMARY"
+          echo "cleanup_head=$cleanup_head" >> "$GITHUB_STEP_SUMMARY"
+          echo "target_paths=4" >> "$GITHUB_STEP_SUMMARY"
+          echo "dispatcher_present=false" >> "$GITHUB_STEP_SUMMARY"
