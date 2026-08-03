@@ -1,0 +1,138 @@
+name: doctor-who-cycle-003-materializer-recovery
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/doctor-who-cycle-003-materializer-recovery.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-003-materializer-recovery-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-003-materializer-recovery.yml
+  EXACT_MAIN: 95c0a10b6e3c6e592ec30fae44bb8108b997ab49
+  OLD_CARRIER: 322cc619cbd497cda74aec205d9e235b33058279
+  OLD_TRANSPORT_SHA256: d824b3af5b5f02210c7893c8090077a887b649f8be5231ded1effe66d6169837
+  OLD_PATCH_SHA256: 2ab832438dc932a0b156b374fa16af6b1112f30067ed1a3cf7fc15b2066e4826
+
+jobs:
+  recover:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 32
+
+      - name: Bind exact current main and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=256 origin \
+            "$EXACT_MAIN" \
+            "$OLD_CARRIER" \
+            refs/heads/main:refs/remotes/origin/main \
+            "refs/heads/${{ github.event.pull_request.head.ref }}:refs/remotes/origin/${{ github.event.pull_request.head.ref }}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${{ github.event.pull_request.head.ref }})" = "${{ github.event.pull_request.head.sha }}"
+          git cat-file -e "$OLD_CARRIER^{commit}"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+
+      - name: Recover and decode the exact successful Gredd materializer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/cycle-003-recovery/old /tmp/cycle-003-recovery/current
+          git show "$OLD_CARRIER:.ci/doctor-who-cycle-002/scripts.tgz.b64" > /tmp/cycle-003-recovery/old/scripts.tgz.b64
+          tr -d '\n\r\t ' < /tmp/cycle-003-recovery/old/scripts.tgz.b64 | base64 --decode > /tmp/cycle-003-recovery/old/scripts.tgz
+          test "$(sha256sum /tmp/cycle-003-recovery/old/scripts.tgz | awk '{print $1}')" = "$OLD_TRANSPORT_SHA256"
+          mkdir -p /tmp/cycle-003-recovery/old/scripts
+          tar -xzf /tmp/cycle-003-recovery/old/scripts.tgz -C /tmp/cycle-003-recovery/old/scripts
+
+          git show "$OLD_CARRIER:.ci/doctor-who-cycle-002/patch-current.mjs.gz.b64" > /tmp/cycle-003-recovery/old/patch-current.mjs.gz.b64
+          tr -d '\n\r\t ' < /tmp/cycle-003-recovery/old/patch-current.mjs.gz.b64 | base64 --decode > /tmp/cycle-003-recovery/old/patch-current.mjs.gz
+          test "$(sha256sum /tmp/cycle-003-recovery/old/patch-current.mjs.gz | awk '{print $1}')" = "$OLD_PATCH_SHA256"
+          gzip -dc /tmp/cycle-003-recovery/old/patch-current.mjs.gz > /tmp/cycle-003-recovery/old/patch-current.mjs
+
+          git show "$OLD_CARRIER:.github/workflows/complete-doctor-who-cycle-002-v2.yml" > /tmp/cycle-003-recovery/old/complete-doctor-who-cycle-002-v2.yml
+          git show "$OLD_CARRIER:.github/workflows/apply-doctor-who-cycle-002.yml" > /tmp/cycle-003-recovery/old/apply-doctor-who-cycle-002.yml
+          node --check /tmp/cycle-003-recovery/old/patch-current.mjs
+          find /tmp/cycle-003-recovery/old/scripts -maxdepth 1 -type f -print | sort > /tmp/cycle-003-recovery/old/script-files.txt
+          while IFS= read -r file; do
+            case "$file" in
+              *.mjs|*.js) node --check "$file" ;;
+            esac
+          done < /tmp/cycle-003-recovery/old/script-files.txt
+
+          sha256sum \
+            /tmp/cycle-003-recovery/old/scripts.tgz.b64 \
+            /tmp/cycle-003-recovery/old/scripts.tgz \
+            /tmp/cycle-003-recovery/old/patch-current.mjs.gz.b64 \
+            /tmp/cycle-003-recovery/old/patch-current.mjs.gz \
+            /tmp/cycle-003-recovery/old/patch-current.mjs \
+            /tmp/cycle-003-recovery/old/complete-doctor-who-cycle-002-v2.yml \
+            /tmp/cycle-003-recovery/old/apply-doctor-who-cycle-002.yml \
+            > /tmp/cycle-003-recovery/old/recovery.sha256
+
+      - name: Export current permanent cycle and estate surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in \
+            package.json \
+            scripts/autopilot.mjs \
+            scripts/census-adapter.mjs \
+            scripts/media-audit.mjs \
+            scripts/waterline.mjs \
+            scripts/lib/autopilot-model.mjs \
+            scripts/doctor-who-activation.mjs \
+            scripts/doctor-who-pilot-cycle.mjs \
+            scripts/doctor-who-correction-drill.mjs \
+            scripts/doctor-who-cycle-002.mjs \
+            scripts/estate-certification-fixtures.mjs \
+            data/review/adapter-sdk/doctor-who-cycle-002-gredd.json \
+            images/uc-1347-portrait.jpg; do
+            mkdir -p "/tmp/cycle-003-recovery/current/$(dirname "$path")"
+            cp "$path" "/tmp/cycle-003-recovery/current/$path"
+          done
+          sha256sum \
+            package.json \
+            scripts/autopilot.mjs \
+            scripts/census-adapter.mjs \
+            scripts/media-audit.mjs \
+            scripts/waterline.mjs \
+            scripts/lib/autopilot-model.mjs \
+            scripts/doctor-who-activation.mjs \
+            scripts/doctor-who-pilot-cycle.mjs \
+            scripts/doctor-who-correction-drill.mjs \
+            scripts/doctor-who-cycle-002.mjs \
+            scripts/estate-certification-fixtures.mjs \
+            data/review/adapter-sdk/doctor-who-cycle-002-gredd.json \
+            images/uc-1347-portrait.jpg \
+            > /tmp/cycle-003-recovery/current/current.sha256
+          printf '%s\n' "$EXACT_MAIN" > /tmp/cycle-003-recovery/exact-main.txt
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact materializer recovery
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-003-materializer-recovery-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            /tmp/cycle-003-recovery
+            /tmp/expected-paths.txt
+            /tmp/actual-paths.txt
