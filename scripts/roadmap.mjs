@@ -9,7 +9,11 @@ import {
   validatePlaybooks,
   validateRoadmapState,
 } from "./lib/roadmap.mjs";
-import { executionBoundary, validateExecutionPolicy } from "./lib/execution-policy.mjs";
+import {
+  executionBoundary,
+  executionBoundaryForMilestone,
+  validateExecutionPolicy,
+} from "./lib/execution-policy.mjs";
 
 const args = process.argv.slice(2);
 const command = args.shift() || "status";
@@ -45,6 +49,7 @@ function summarize(roadmap, state, executionPolicy) {
     counts: {
       complete: milestones.filter((row) => row.state === "complete").length,
       ready: milestones.filter((row) => row.state === "ready").length,
+      reversible: milestones.filter((row) => row.state === "reversible").length,
       blocked: milestones.filter((row) => row.state === "blocked").length,
       total: milestones.length,
     },
@@ -55,18 +60,42 @@ function summarize(roadmap, state, executionPolicy) {
 
 function printRow(row) {
   const suffix = row.reasons.length ? ` — ${row.reasons.join("; ")}` : "";
-  console.log(`${String(row.seq).padStart(2, "0")} ${row.state.padEnd(8)} ${row.id} (${row.authority})${suffix}`);
+  console.log(`${String(row.seq).padStart(2, "0")} ${row.state.padEnd(10)} ${row.id} (${row.authority})${suffix}`);
 }
 
 function enrich(row, roadmap, playbooks, executionPolicy) {
   return {
     ...row,
     playbook: extractPlaybookSection(roadmap, playbooks, row.id),
-    execution: executionBoundary(executionPolicy),
+    execution: executionBoundaryForMilestone(executionPolicy, row.id, {
+      state: row.state,
+      missingDecisions: row.missing_decisions,
+    }),
   };
 }
 
+function printExecutionBoundary(row) {
+  console.log("\n### Execution boundary");
+  console.log(`- Scope: ${row.execution.execution_scope}`);
+  console.log(`- Owner contribution: ${row.execution.owner_contribution}`);
+  console.log("- Owner execution: prohibited; no local command, upload, transfer, contact, manual test, signature, or physical operation may be assigned to the owner.");
+  console.log(`- Missing physical/external evidence: ${row.execution.unavailable_evidence}`);
+  console.log(`- Missing owner decision: ${row.execution.missing_owner_decision}`);
+  console.log(`- Irreversible action without authority: ${row.execution.irreversible_without_authority}`);
+  if (row.execution.held_decisions.length) console.log(`- Held decisions: ${row.execution.held_decisions.join(", ")}`);
+  if (row.state === "reversible") {
+    console.log("- Authorized reversible work:");
+    for (const item of row.execution.reversible_work) console.log(`  - ${item}`);
+    console.log("- Held actions:");
+    for (const item of row.execution.held_actions) console.log(`  - ${item}`);
+  }
+}
+
 function printMilestone(row) {
+  if (row.state === "reversible") {
+    console.log(`## ${row.id} — reversible-work authorization`);
+    console.log("\nThe owner decision is absent. Only the exact reversible work in the execution boundary is authorized; the full playbook below is reference context, not full execution authority.\n");
+  }
   console.log(row.playbook);
   console.log("\n### Current roadmap state");
   console.log(`- State: ${row.state}`);
@@ -75,14 +104,16 @@ function printMilestone(row) {
   console.log(`- Dependencies: ${row.deps.join(", ") || "none"}`);
   if (row.decisions.length) console.log(`- Required owner decisions: ${row.decisions.join(", ")}`);
   if (row.triggers.length) console.log(`- Demand/scale triggers: ${row.triggers.map(([m,o,v]) => `${m} ${o} ${v}`).join(", ")}`);
-  if (row.reasons.length) console.log(`- Blocked by: ${row.reasons.join("; ")}`);
+  if (row.reasons.length) console.log(`- State basis: ${row.reasons.join("; ")}`);
   console.log(`- Canonical guide: ${row.guide}`);
-  console.log(`- Owner contribution: ${row.execution.owner_contribution}`);
-  console.log("- Owner execution: prohibited; no local command, upload, contact, manual test, signature, or physical operation may be assigned to the owner.");
-  console.log(`- Missing physical/external evidence: ${row.execution.unavailable_evidence}`);
-  console.log(`- Missing owner decision: ${row.execution.missing_owner_decision}`);
-  console.log(`- Irreversible action without authority: ${row.execution.irreversible_without_authority}`);
-  console.log("\nExecute only this playbook. Update roadmap state only through a reviewed pull request with the required authority and evidence receipts. Preserve unobserved physical events as unproven; continue every nondependent lane without assigning work to the owner.");
+  printExecutionBoundary(row);
+  if (row.state === "reversible") {
+    console.log("\nExecute only the authorized reversible work printed above. Do not perform held actions, invent the owner decision, or mark the milestone complete. Preserve unobserved physical events as unproven and continue every nondependent lane.");
+  } else if (row.state === "ready") {
+    console.log("\nExecute this playbook within its stated authority. Update roadmap state only through a reviewed pull request with the required evidence receipts. Preserve unobserved physical events as unproven; continue every nondependent lane without assigning work to the owner.");
+  } else {
+    console.log("\nThis milestone is not authorized for execution. The missing decision does not become an owner chore, and missing dependencies or triggers do not authorize later work.");
+  }
 }
 
 async function main() {
@@ -100,14 +131,14 @@ async function main() {
   validateExecutionPolicy(roadmap, executionPolicy, playbooks);
 
   if (command === "validate") {
-    console.log(`PASS — ${roadmap.milestones.length} milestones, ${roadmap.adoption.length} adoption stages, ${roadmap.scale.length} scale triggers, all playbooks present, and zero owner physical or local execution gates`);
+    console.log(`PASS — ${roadmap.milestones.length} milestones, ${roadmap.adoption.length} adoption stages, ${roadmap.scale.length} scale triggers, all playbooks present, reversible owner-decision custody active, and zero owner physical or local execution gates`);
     return;
   }
 
   if (command === "status") {
     const value = summarize(roadmap, state, executionPolicy);
     if (flag("json")) return console.log(JSON.stringify(value, null, 2));
-    console.log(`roadmap: ${value.counts.complete}/${value.counts.total} complete; ${value.counts.ready} ready; adoption=${value.adoption_stage.id}; owner-execution=prohibited`);
+    console.log(`roadmap: ${value.counts.complete}/${value.counts.total} complete; ${value.counts.ready} ready; ${value.counts.reversible} reversible; adoption=${value.adoption_stage.id}; owner-execution=prohibited`);
     value.milestones.forEach(printRow);
     if (value.fired_scale_triggers.length) {
       console.log("fired scale triggers:");
@@ -121,7 +152,7 @@ async function main() {
       .map((row) => enrich(row, roadmap, playbooks, executionPolicy));
     if (flag("json")) return console.log(JSON.stringify(rows, null, 2));
     if (!rows.length) {
-      console.log("roadmap: no milestone is ready; inspect `npm run roadmap -- status`");
+      console.log("roadmap: no ready or reversible milestone is available; inspect `npm run roadmap -- status`");
       process.exitCode = 3;
       return;
     }
