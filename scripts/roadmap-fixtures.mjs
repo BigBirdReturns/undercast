@@ -10,6 +10,7 @@ import {
   validateRoadmap,
   validateRoadmapState,
 } from "./lib/roadmap.mjs";
+import { validateExecutionPolicy } from "./lib/execution-policy.mjs";
 
 const roadmap = {
   version: 1,
@@ -80,6 +81,51 @@ Product instructions.
 - demand
 `;
 
+function executionPolicyFor(value) {
+  return {
+    version: 1,
+    id: "no-user-physical-dependency",
+    status: "active",
+    roadmap: "data/ROADMAP.json",
+    playbooks: value.document,
+    governing_document: "docs/NO-USER-PHYSICAL-DEPENDENCY.md",
+    principal: {
+      id: "project-owner",
+      allowed_contribution: "conversation-only",
+      physical_action_available: false,
+      local_machine_action_available: false,
+      external_contact_action_available: false,
+      artifact_transfer_action_available: false,
+    },
+    fallbacks: {
+      automatable_work: "execute-now",
+      public_network_evidence: "retrieve-and-record",
+      missing_physical_or_external_evidence: "record-unproven-and-continue",
+      missing_owner_decision: "continue-reversible-work-with-evidence-based-default",
+      irreversible_action_without_authority: "hold-only-that-action",
+    },
+    forbidden_gates: [
+      "owner-runs-local-command",
+      "owner-installs-or-configures-software",
+      "owner-uploads-or-transfers-artifact",
+      "owner-contacts-or-recruits-external-person",
+      "owner-performs-manual-environment-test",
+      "owner-signs-or-acknowledges-operational-package",
+      "owner-operates-or-actuates-physical-system",
+      "owner-visits-mails-or-ships-physical-object",
+    ],
+    milestones: Object.fromEntries(value.milestones.map((row) => [row.id, {
+      authority: row.authority,
+      owner_execution_required: false,
+      physical_action_required: false,
+      local_machine_action_required: false,
+      external_contact_required: false,
+      artifact_transfer_required: false,
+    }])),
+  };
+}
+
+const executionPolicy = executionPolicyFor(roadmap);
 const emptyState = {
   version: 1, updated_at: "", completed: [], decisions: [],
   metrics: { demand: null, quality: null }, notes: [],
@@ -87,6 +133,7 @@ const emptyState = {
 
 assert.equal(validateRoadmap(roadmap), true);
 assert.equal(validatePlaybooks(roadmap, playbooks), true);
+assert.equal(validateExecutionPolicy(roadmap, executionPolicy, playbooks), true);
 assert.match(extractPlaybookSection(roadmap, playbooks, "foundation"), /^## foundation/);
 assert.doesNotMatch(extractPlaybookSection(roadmap, playbooks, "foundation"), /^## product/m);
 assert.equal(validateRoadmapState(roadmap, emptyState), true);
@@ -109,6 +156,24 @@ assert.throws(() => validateRoadmap(cycle), /dependency cycle/);
 const badGuide = structuredClone(roadmap);
 badGuide.milestones[0].guide = "docs/PLAYBOOK.md#wrong";
 assert.throws(() => validateRoadmap(badGuide), /guide must be exactly/);
+
+const physicalOwner = structuredClone(executionPolicy);
+physicalOwner.milestones.product.physical_action_required = true;
+assert.throws(() => validateExecutionPolicy(roadmap, physicalOwner, playbooks), /physical_action_required must be false/);
+
+const missingPolicyMilestone = structuredClone(executionPolicy);
+delete missingPolicyMilestone.milestones.product;
+assert.throws(() => validateExecutionPolicy(roadmap, missingPolicyMilestone, playbooks), /milestone denominator drifted/);
+
+const authorityDrift = structuredClone(executionPolicy);
+authorityDrift.milestones.product.authority = "second-desk";
+assert.throws(() => validateExecutionPolicy(roadmap, authorityDrift, playbooks), /authority drifted/);
+
+const ownerUpload = playbooks.replace("1. Build product.", "1. The owner must upload a package.");
+assert.throws(() => validateExecutionPolicy(roadmap, executionPolicy, ownerUpload), /forbids owner-assigned/);
+
+const refusalBoundary = `${playbooks}\nDo not ask the owner to upload, contact, install, run, or test anything.\n`;
+assert.equal(validateExecutionPolicy(roadmap, executionPolicy, refusalBoundary), true);
 
 const machineClose = structuredClone(emptyState);
 machineClose.completed = [{
@@ -174,4 +239,4 @@ outOfOrder.completed.push({
 });
 assert.throws(() => validateRoadmapState(roadmap, outOfOrder), /completion receipts must be chronological/);
 
-console.log("PASS — roadmap DAG, exact playbooks, authority, triggers, adoption, and append-only completion receipts");
+console.log("PASS — roadmap DAG, exact playbooks, authority, triggers, adoption, append-only completion receipts, and no owner physical or local execution gates");
