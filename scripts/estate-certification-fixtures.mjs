@@ -78,6 +78,8 @@ const creditedReceipts = new Set(doctorObservations
 const modeCounts = Object.fromEntries([...new Set(doctorCoverage.map((row) => row.performance_mode || "unresolved"))]
   .sort()
   .map((mode) => [mode, doctorCoverage.filter((row) => (row.performance_mode || "unresolved") === mode).length]));
+const filedRoles = doctorCoverage.filter((row) => row.role_on_wall === true);
+const missingRoles = doctorCoverage.filter((row) => row.role_on_wall !== true);
 
 assert.equal(certificate.snapshot.rows, doctorCoverage.length, "certificate row denominator drifted from Doctor Who coverage");
 assert.equal(certificate.snapshot.sources, creditedReceipts.size, "certificate source denominator drifted from credited receipts");
@@ -85,8 +87,10 @@ assert.equal(certificate.snapshot.complete_receipts, creditedReceipts.size, "Doc
 assert.equal(doctorReport.extraction.exact_performer_role_credits, doctorCoverage.length, "semantic receipt and coverage disagree");
 assert.equal(doctorReport.extraction.credited_pages, creditedReceipts.size, "semantic receipt and credited source denominator disagree");
 assert.deepEqual(doctorReport.extraction.performance_modes, modeCounts, "performance-mode custody drifted");
-assert.equal(doctorReport.extraction.missing_roles, doctorCoverage.filter((row) => !row.role_on_wall).length, "missing-role denominator drifted");
+assert.equal(doctorReport.extraction.missing_roles, certificate.snapshot.rows, "semantic receipt lost the original missing-role denominator");
+assert.equal(filedRoles.length + missingRoles.length, certificate.snapshot.rows, "filed-plus-missing role accounting drifted");
+assert.equal(doctorReport.extraction.missing_roles - missingRoles.length, filedRoles.length, "paid Doctor Who role delta drifted");
 assert.ok(estate.next_gate.includes(String(certificate.snapshot.rows)), "estate next gate does not carry the current role denominator");
 assert.ok(estate.next_gate.includes(activationReport.lease.lease_id), "estate next gate does not name the only authorized pilot lease");
 
-console.log(`PASS — Doctor Who is active-corpus with ${certificate.snapshot.rows} exact roles, ${certificate.snapshot.complete_receipts} complete source receipts, one bounded Luna lease, and no canonical adoption`);
+console.log(`PASS — Doctor Who is active-corpus with ${certificate.snapshot.rows} exact certified roles, ${certificate.snapshot.complete_receipts} complete source receipts, ${filedRoles.length} filed role(s), and ${missingRoles.length} remaining role obligation(s)`);

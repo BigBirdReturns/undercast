@@ -42,7 +42,9 @@ const VEINS = {
   "Kaiju & tokusatsu": "Japanese kaiju / tokusatsu suit actors (Ultraman, Kamen Rider, Super Sentai, Gamera)",
   "Classic makeup":    "classic Hollywood makeup-transformation actors and the Universal Monsters tradition",
 };
-const SHELVES = ["Star Trek","Film","Babylon 5","Farscape","Horror","TV","Voice","Kaiju"];
+const SHELVES = ["Star Trek","Film","Babylon 5","Farscape","Horror","TV","Voice","Kaiju",
+  "Doctor Who",
+];
 
 // ---- the invariant: these licenses, and only these, are reusable ----
 const FREE = [/cc0/i, /public domain/i, /^\s*pd/i, /cc[-\s]?by([-\s]?sa)?/i];

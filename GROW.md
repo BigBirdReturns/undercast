@@ -25,7 +25,7 @@ themselves*, they don't belong here.
      "actor": "the real performer's name (exact — it's verified against Wikipedia)",
      "aliases": "optional verified alternate professional names for identity matching",
      "production": "film / series",
-     "universe": "one of: Star Trek, Film, Babylon 5, Farscape, Horror, TV, Voice, Kaiju",
+     "universe": "one of: Star Trek, Film, Babylon 5, Farscape, Horror, TV, Doctor Who, Voice, Kaiju",
      "years": "YYYY or YYYY–YY",
      "designer": "the maker(s): makeup/creature/costume designer or shop. Name several, separated by · & / — they become the maker index.",
      "transform": 1-5,
