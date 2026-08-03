@@ -9,17 +9,25 @@ const REQUIRED_FORBIDDEN_GATES = [
   "owner-operates-or-actuates-physical-system",
   "owner-visits-mails-or-ships-physical-object",
 ];
-const MILESTONE_FIELDS = [
-  "authority",
+const EXECUTION_FLAGS = [
   "owner_execution_required",
   "physical_action_required",
   "local_machine_action_required",
   "external_contact_required",
   "artifact_transfer_required",
 ];
-const PROHIBITED_ACTION = "contact|email|call|message|recruit|find|invite|visit|mail|ship|sign|acknowledge|upload|download|install|run|execute|configure|deploy|operate|actuate|photograph|record|test|verify|click|open";
-const DIRECT_ASSIGNMENT = new RegExp(`\\b(?:owner|project owner|user)\\b[^\\n]{0,120}\\b(?:must|should|needs? to|has to|is required to|will)\\s+(?:${PROHIBITED_ACTION})\\b`, "i");
-const DELEGATED_ASSIGNMENT = new RegExp(`\\b(?:ask|tell|have|require)\\s+(?:the\\s+)?(?:owner|project owner|user)\\s+to\\s+(?:${PROHIBITED_ACTION})\\b`, "i");
+const MILESTONE_FIELDS = [
+  "authority",
+  ...EXECUTION_FLAGS,
+  "reversible_without_owner_decision",
+  "reversible_work",
+  "held_decisions",
+  "held_actions",
+];
+const PROHIBITED_ACTION = "contact|email|call|message|recruit|find|locate|invite|visit|mail|ship|send|forward|deliver|transfer|move|copy|attach|provide|submit|sign|acknowledge|upload|download|install|run|execute|configure|deploy|operate|actuate|photograph|record|test|verify|click|open";
+const OPTIONAL_MANNER = "(?:(?:personally|manually|physically|locally|directly)\\s+)*";
+const DIRECT_ASSIGNMENT = new RegExp(`\\b(?:owner|project owner|user)\\b[^\\n]{0,120}\\b(?:must|should|needs? to|has to|is required to|will(?:\\s+be\\s+(?:required|expected|responsible)\\s+to)?)\\s+${OPTIONAL_MANNER}(?:${PROHIBITED_ACTION})\\b`, "i");
+const DELEGATED_ASSIGNMENT = new RegExp(`\\b(?:ask|tell|have|require)\\s+(?:the\\s+)?(?:owner|project owner|user)\\s+to\\s+${OPTIONAL_MANNER}(?:${PROHIBITED_ACTION})\\b`, "i");
 const NEGATED_BOUNDARY = /\b(?:do not|don't|never|must not|prohibit(?:ed|s)?|without requiring|does not require|not required)\b/i;
 
 function invariant(condition, message) {
@@ -35,10 +43,22 @@ function exactKeys(value, expected, label) {
 
 function exactStringSet(value, expected, label) {
   invariant(Array.isArray(value), `${label} must be an array`);
+  invariant(value.every((item) => typeof item === "string" && item.trim()), `${label} must contain non-empty strings`);
   invariant(new Set(value).size === value.length, `${label} must not contain duplicates`);
   const actual = [...value].sort();
   const want = [...expected].sort();
   invariant(JSON.stringify(actual) === JSON.stringify(want), `${label} must be exactly ${want.join(", ")}; found ${actual.join(", ")}`);
+}
+
+function nonEmptyStringList(value, label) {
+  invariant(Array.isArray(value), `${label} must be an array`);
+  invariant(value.length > 0, `${label} must not be empty`);
+  invariant(value.every((item) => typeof item === "string" && item.trim()), `${label} must contain non-empty strings`);
+  invariant(new Set(value).size === value.length, `${label} must not contain duplicates`);
+}
+
+function emptyStringList(value, label) {
+  invariant(Array.isArray(value) && value.length === 0, `${label} must be an empty array`);
 }
 
 function validatePlaybookAssignments(markdown) {
@@ -84,9 +104,20 @@ export function validateExecutionPolicy(roadmap, policy, playbooks = "") {
   invariant(JSON.stringify(policyIds) === JSON.stringify(roadmapIds), `EXECUTION-POLICY milestone denominator drifted; policy=${policyIds.join(", ")}; roadmap=${roadmapIds.join(", ")}`);
   for (const id of roadmapIds) {
     const row = policy.milestones[id];
+    const milestone = roadmapById.get(id);
     exactKeys(row, MILESTONE_FIELDS, `EXECUTION-POLICY milestone ${id}`);
-    invariant(row.authority === roadmapById.get(id).authority, `EXECUTION-POLICY milestone ${id} authority drifted`);
-    for (const key of MILESTONE_FIELDS.slice(1)) invariant(row[key] === false, `EXECUTION-POLICY milestone ${id}.${key} must be false`);
+    invariant(row.authority === milestone.authority, `EXECUTION-POLICY milestone ${id} authority drifted`);
+    for (const key of EXECUTION_FLAGS) invariant(row[key] === false, `EXECUTION-POLICY milestone ${id}.${key} must be false`);
+    exactStringSet(row.held_decisions, milestone.decisions, `EXECUTION-POLICY milestone ${id}.held_decisions`);
+    if (milestone.decisions.length) {
+      invariant(row.reversible_without_owner_decision === true, `EXECUTION-POLICY milestone ${id}.reversible_without_owner_decision must be true`);
+      nonEmptyStringList(row.reversible_work, `EXECUTION-POLICY milestone ${id}.reversible_work`);
+      nonEmptyStringList(row.held_actions, `EXECUTION-POLICY milestone ${id}.held_actions`);
+    } else {
+      invariant(row.reversible_without_owner_decision === false, `EXECUTION-POLICY milestone ${id}.reversible_without_owner_decision must be false`);
+      emptyStringList(row.reversible_work, `EXECUTION-POLICY milestone ${id}.reversible_work`);
+      emptyStringList(row.held_actions, `EXECUTION-POLICY milestone ${id}.held_actions`);
+    }
   }
 
   validatePlaybookAssignments(playbooks);
@@ -101,5 +132,21 @@ export function executionBoundary(policy) {
     unavailable_evidence: policy.fallbacks.missing_physical_or_external_evidence,
     missing_owner_decision: policy.fallbacks.missing_owner_decision,
     irreversible_without_authority: policy.fallbacks.irreversible_action_without_authority,
+  };
+}
+
+export function executionBoundaryForMilestone(policy, milestoneId, { state = null, missingDecisions = [] } = {}) {
+  const row = policy.milestones?.[milestoneId];
+  invariant(row, `execution policy has no milestone ${milestoneId}`);
+  const missing = [...missingDecisions];
+  return {
+    ...executionBoundary(policy),
+    milestone: milestoneId,
+    state,
+    execution_scope: state === "reversible" ? "reversible-only" : state === "ready" ? "full-within-authority" : "not-authorized",
+    reversible_work_eligible: state === "reversible" && row.reversible_without_owner_decision,
+    reversible_work: [...row.reversible_work],
+    held_decisions: missing,
+    held_actions: missing.length ? [...row.held_actions] : [],
   };
 }
