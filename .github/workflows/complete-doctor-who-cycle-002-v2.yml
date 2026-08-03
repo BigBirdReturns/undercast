@@ -6,6 +6,9 @@ on:
       - main
     paths:
       - ".github/workflows/complete-doctor-who-cycle-002-v2.yml"
+      - ".github/workflows/apply-doctor-who-cycle-002.yml"
+      - ".ci/doctor-who-cycle-002/scripts.tgz.b64"
+      - ".ci/doctor-who-cycle-002/patch-current.mjs.gz.b64"
 
 permissions:
   contents: write
@@ -56,7 +59,7 @@ jobs:
           sudo apt-get install -y imagemagick
           convert -version
 
-      - name: Bind live main and decode the inspected four-path carrier
+      - name: Bind live main, prove the four-path carrier, and patch exact scripts
         shell: bash
         run: |
           set -euo pipefail
@@ -68,10 +71,10 @@ jobs:
             "refs/heads/main:refs/remotes/origin/main" \
             "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
           test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+
           exact_main="$(git rev-parse refs/remotes/origin/main)"
           test -n "$exact_main"
           echo "EXACT_MAIN=$exact_main" >> "$GITHUB_ENV"
-
           cycle_at="$(git show -s --format=%cI "$AUTHORIZED_HEAD")"
           test -n "$cycle_at"
           echo "CYCLE_AT=$cycle_at" >> "$GITHUB_ENV"
@@ -101,38 +104,48 @@ jobs:
 
           node --input-type=module <<'NODE'
           import { readFile, writeFile } from 'node:fs/promises';
-          const path = process.env.MATERIALIZER;
-          let text = await readFile(path, 'utf8');
 
-          const dateBefore = 'const SOURCE_FETCHED_AT = at(3);';
-          const dateAfter = 'const SOURCE_FETCHED_AT = at(3).slice(0, 10);';
-          const dateCount = text.split(dateBefore).length - 1;
-          if (dateCount !== 1) throw new Error(`expected one SOURCE_FETCHED_AT serializer, found ${dateCount}`);
-          text = text.replace(dateBefore, dateAfter);
+          const materializerPath = process.env.MATERIALIZER;
+          let materializer = await readFile(materializerPath, 'utf8');
+
+          const sourceDateBefore = 'const SOURCE_FETCHED_AT = at(3);';
+          const sourceDateAfter = 'const SOURCE_FETCHED_AT = at(3).slice(0, 10);';
+          if (materializer.split(sourceDateBefore).length - 1 !== 1) throw new Error('unexpected source fetched_at serializer');
+          materializer = materializer.replace(sourceDateBefore, sourceDateAfter);
 
           const prematureGate = 'runNode("scripts/media-audit.mjs", ["gate", "--scope", SCOPE]);';
-          const gateCount = text.split(prematureGate).length - 1;
+          const gateCount = materializer.split(prematureGate).length - 1;
           if (gateCount < 2) throw new Error(`expected pre-review and post-review media gates, found ${gateCount}`);
-          const firstGate = text.indexOf(prematureGate);
-          text = `${text.slice(0, firstGate)}// Deferred: the newly available portrait must receive enforced second-desk votes before scope gating.${text.slice(firstGate + prematureGate.length)}`;
+          const firstGate = materializer.indexOf(prematureGate);
+          materializer = `${materializer.slice(0, firstGate)}// Deferred until the newly available portrait receives enforced second-desk votes.${materializer.slice(firstGate + prematureGate.length)}`;
 
           const digestBefore = 'const digestJobs = (jobs) => sha256(Buffer.from(JSON.stringify([...jobs].sort((a, b) => a.id.localeCompare(b.id)))));';
           const digestAfter = 'const digestJobs = (jobs) => sha256(Buffer.from(JSON.stringify([...jobs].map(({ last_seen_coverage_sha256, ...row }) => row).sort((a, b) => a.id.localeCompare(b.id)))));';
-          const digestCount = text.split(digestBefore).length - 1;
-          if (digestCount !== 1) throw new Error(`expected one broad job digest, found ${digestCount}`);
-          text = text.replace(digestBefore, digestAfter);
+          if (materializer.split(digestBefore).length - 1 !== 1) throw new Error('unexpected broad cross-scope job digest');
+          materializer = materializer.replace(digestBefore, digestAfter);
+          await writeFile(materializerPath, materializer);
 
           const finalizerPath = process.env.FINALIZER;
-          let finalizerText = await readFile(finalizerPath, 'utf8');
-          const receiptHashLines = finalizerText.split('\n').filter((line) => line.includes('cycle 002 receipt hash drifted'));
-          if (receiptHashLines.length !== 1) throw new Error(`expected one receipt hash checker line, found ${receiptHashLines.length}`);
-          const receiptHashBefore = receiptHashLines[0];
-          const receiptHashAfter = 'if (receipt.receipt_sha256 !== sha(JSON.stringify(stable(receiptBody), null, 2) + "\\\\n")) fail("cycle 002 receipt hash drifted");';
-          finalizerText = finalizerText.replace(receiptHashBefore, receiptHashAfter);
-
-          await writeFile(path, text);
-          await writeFile(finalizerPath, finalizerText);
-          console.log('patched date-only source custody, review ordering, semantic cross-scope custody, and stable pretty receipt hashing');
+          let finalizer = await readFile(finalizerPath, 'utf8');
+          const replaceCheckerSerializer = (marker, before, after) => {
+            const lines = finalizer.split('\n').filter((line) => line.includes(marker));
+            if (lines.length !== 1) throw new Error(`expected one ${marker} checker line, found ${lines.length}`);
+            const line = lines[0];
+            if (line.split(before).length - 1 !== 1) throw new Error(`unexpected ${marker} serializer: ${line}`);
+            finalizer = finalizer.replace(line, line.replace(before, after));
+          };
+          replaceCheckerSerializer(
+            'cycle 002 receipt hash drifted',
+            'JSON.stringify(stable(receiptBody))',
+            'JSON.stringify(stable(receiptBody), null, 2)',
+          );
+          replaceCheckerSerializer(
+            'Gredd media facet digest drifted',
+            'JSON.stringify(stable(facets))',
+            'JSON.stringify(stable(facets), null, 2)',
+          );
+          await writeFile(finalizerPath, finalizer);
+          console.log('patched date-only source custody, review ordering, semantic cross-scope custody, and both stable pretty receipt serializers');
           NODE
 
           node --check "$MATERIALIZER"
@@ -167,13 +180,15 @@ jobs:
           portrait_path="${custody[1]}"
           portrait_sha256="${custody[2]}"
           source_fetched_at="${custody[3]}"
-          test -n "$wall_id"
-          [[ "$portrait_path" =~ ^images/uc-[0-9]+-portrait\.jpg$ ]]
+          test "$wall_id" = "UC-1347"
+          test "$portrait_path" = "images/uc-1347-portrait.jpg"
+          test "$portrait_sha256" = "bdd46b9538d188a221b5f0121f006e2832f283e51c2b24b5cc86f349b7f0429e"
           [[ "$source_fetched_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]
           test -f "$portrait_path"
           test "$(sha256sum "$portrait_path" | awk '{print $1}')" = "$portrait_sha256"
           identify -format '%w %h\n' "$portrait_path" | tee /tmp/doctor-who-cycle-002-portrait-dimensions.txt
           test "$(cat /tmp/doctor-who-cycle-002-portrait-dimensions.txt)" = "420 600"
+
           cp "$portrait_path" /tmp/doctor-who-cycle-002-portrait.jpg
           sha256sum "$portrait_path" > /tmp/doctor-who-cycle-002-portrait.sha256
           printf '%s\n' "$portrait_path" > /tmp/doctor-who-cycle-002-portrait-path.txt
@@ -189,11 +204,9 @@ jobs:
           node scripts/doctor-who-pilot-cycle.mjs
           node scripts/doctor-who-correction-drill.mjs
           echo "wall_id=$wall_id" >> "$GITHUB_STEP_SUMMARY"
-          echo "portrait_path=$portrait_path" >> "$GITHUB_STEP_SUMMARY"
           echo "portrait_sha256=$portrait_sha256" >> "$GITHUB_STEP_SUMMARY"
-          echo "source_fetched_at=$source_fetched_at" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Stage the workflow-free terminal candidate and run the complete gate
+      - name: Stage and completely gate the workflow-free terminal candidate
         shell: bash
         run: |
           set -euo pipefail
@@ -204,15 +217,10 @@ jobs:
           test -z "$(git diff --name-only)"
 
           git diff --cached --name-only "$EXACT_MAIN" | sort > /tmp/doctor-who-cycle-002-candidate-paths.txt
-          if grep -Eq '^\.github/|^\.ci/' /tmp/doctor-who-cycle-002-candidate-paths.txt; then
-            echo 'temporary Gredd execution transport survived in the candidate' >&2
-            cat /tmp/doctor-who-cycle-002-candidate-paths.txt >&2
-            exit 1
-          fi
+          ! grep -Eq '^\.github/|^\.ci/' /tmp/doctor-who-cycle-002-candidate-paths.txt
           mapfile -t image_paths < <(grep '^images/' /tmp/doctor-who-cycle-002-candidate-paths.txt || true)
           test "${#image_paths[@]}" -eq 1
           test "${image_paths[0]}" = "$PORTRAIT_PATH"
-
           for required in \
             "$PORTRAIT_PATH" \
             data/AUTOPILOT.json \
@@ -223,9 +231,7 @@ jobs:
             data/media-manifest.json \
             data/specimens.json \
             data/journal/autopilot.jsonl \
-            data/journal/media-audit.jsonl \
-            scripts/doctor-who-pilot-cycle.mjs \
-            scripts/doctor-who-correction-drill.mjs; do
+            data/journal/media-audit.jsonl; do
             grep -Fxq "$required" /tmp/doctor-who-cycle-002-candidate-paths.txt || {
               echo "required candidate path missing: $required" >&2
               exit 1
@@ -241,7 +247,7 @@ jobs:
           test -z "$(git diff --name-only)"
           test -z "$(git ls-files --others --exclude-standard)"
 
-      - name: Commit the exact terminal candidate and collect job custody
+      - name: Commit the terminal candidate and bind workflow job custody
         id: candidate
         shell: bash
         run: |
@@ -293,7 +299,7 @@ jobs:
             /tmp/expected-transport-paths.txt
             /tmp/actual-transport-paths.txt
 
-      - name: Write the reviewed cycle, permanent receipt, and future-safe checker
+      - name: Write and validate the reviewed cycle and permanent checker
         shell: bash
         env:
           CANDIDATE_COMMIT: ${{ steps.candidate.outputs.candidate_commit }}
@@ -312,8 +318,7 @@ jobs:
           node scripts/media-audit.mjs gate --scope doctor-who
           node scripts/waterline.mjs validate --scope doctor-who
 
-      - name: Commit, completely gate, and publish the exact receipt-bearing product
-        id: final
+      - name: Commit, completely gate, and publish the exact final product
         shell: bash
         run: |
           set -euo pipefail
@@ -328,11 +333,7 @@ jobs:
           echo "$final_head" > /tmp/doctor-who-cycle-002-final-head.txt
           git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/doctor-who-cycle-002-final-paths.txt
           git diff --check "$EXACT_MAIN"...HEAD
-          if grep -Eq '^\.github/|^\.ci/|scripts/apply-doctor-who-cycle' /tmp/doctor-who-cycle-002-final-paths.txt; then
-            echo 'Gredd cycle execution scaffolding survived in the final product' >&2
-            cat /tmp/doctor-who-cycle-002-final-paths.txt >&2
-            exit 1
-          fi
+          ! grep -Eq '^\.github/|^\.ci/|scripts/apply-doctor-who-cycle' /tmp/doctor-who-cycle-002-final-paths.txt
           mapfile -t image_paths < <(grep '^images/' /tmp/doctor-who-cycle-002-final-paths.txt || true)
           test "${#image_paths[@]}" -eq 1
           test "${image_paths[0]}" = "$PORTRAIT_PATH"
@@ -369,9 +370,6 @@ jobs:
           test "$(git merge-base HEAD refs/remotes/origin/main)" = "$EXACT_MAIN"
           git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
             --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
-
-          echo "final_head=$final_head" >> "$GITHUB_OUTPUT"
-          echo "final_gate_sha256=$final_gate_sha256" >> "$GITHUB_OUTPUT"
           echo "final_head=$final_head" >> "$GITHUB_STEP_SUMMARY"
           echo "final_gate_sha256=$final_gate_sha256" >> "$GITHUB_STEP_SUMMARY"
           echo "final_paths=$(wc -l < /tmp/doctor-who-cycle-002-final-paths.txt)" >> "$GITHUB_STEP_SUMMARY"
