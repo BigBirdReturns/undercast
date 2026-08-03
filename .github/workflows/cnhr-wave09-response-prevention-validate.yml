@@ -1,0 +1,106 @@
+name: qualify-clifford-number-hr-response-prevention-wave-09
+
+on:
+  push:
+    branches:
+      - agent/clifford-number-hr-response-prevention-wave-09
+    paths:
+      - '.github/workflows/cnhr-wave09-response-prevention-validate.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cnhr-wave09-response-prevention-validate
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/clifford-number-hr-response-prevention-wave-09
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Validate exact Wave 09 packet and clean qualification workflow
+        shell: bash
+        env:
+          HR_PARENT: 75fd0a46d8201aae092df39cc6eabdbb48226cd7
+          MANIFEST_SHA256: d11a840fb194e2553481c2135b48483e7b815609b48d88b987fb41a7ed7dd4d0
+          HEAD_REF: agent/clifford-number-hr-response-prevention-wave-09
+        run: |
+          set -euo pipefail
+
+          git fetch origin main
+          git merge-base --is-ancestor "$HR_PARENT" origin/main
+          test "$(git merge-base origin/main HEAD)" = "$HR_PARENT"
+
+          python - <<'PY'
+          import json
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          root = Path('.')
+          manifest_rel = Path('data/review/clifford-number/hr-discipline/wave-09/MANIFEST.json')
+          manifest = json.loads(manifest_rel.read_text())
+          expected = {row['path'] for row in manifest['files']} | {str(manifest_rel)}
+          assert len(expected) == 22, len(expected)
+
+          packet_root = Path('/tmp/cnhr-wave09-root')
+          shutil.rmtree(packet_root, ignore_errors=True)
+          for rel in sorted(expected):
+              src = root / rel
+              dst = packet_root / rel
+              dst.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(src, dst)
+
+          hr_parent = '75fd0a46d8201aae092df39cc6eabdbb48226cd7'
+          main_changed = set(subprocess.check_output(
+              ['git', 'diff', '--name-only', hr_parent, 'origin/main', '--'], text=True
+          ).splitlines())
+          assert not (main_changed & expected), sorted(main_changed & expected)
+
+          merge_base = subprocess.check_output(
+              ['git', 'merge-base', 'origin/main', 'HEAD'], text=True
+          ).strip()
+          lines = subprocess.check_output(
+              ['git', 'diff', '--name-status', merge_base, 'HEAD', '--'], text=True
+          ).splitlines()
+          observed = {}
+          for line in lines:
+              status, path = line.split('\t', 1)
+              if path == '.github/workflows/cnhr-wave09-response-prevention-validate.yml':
+                  continue
+              observed[path] = status
+          assert set(observed) == expected, (
+              sorted(expected - set(observed)),
+              sorted(set(observed) - expected),
+          )
+          assert all(status == 'A' for status in observed.values()), observed
+          print('isolated Wave 09 root:', len(expected), 'exact files')
+          print('current-main overlap:', 0)
+          print('durable delta:', len(observed), 'added, 0 modified, 0 deleted')
+          PY
+
+          printf '%s  %s\n' "$MANIFEST_SHA256" \
+            data/review/clifford-number/hr-discipline/wave-09/MANIFEST.json \
+            | sha256sum --check --strict
+
+          cd /tmp/cnhr-wave09-root
+          node --check scripts/clifford-number-hr-response-prevention.mjs
+          node --check test/clifford-number-hr-response-prevention-fixtures.mjs
+          node scripts/clifford-number-hr-response-prevention.mjs --check --strict-root
+          node test/clifford-number-hr-response-prevention-fixtures.mjs
+          cd "$GITHUB_WORKSPACE"
+
+          rm .github/workflows/cnhr-wave09-response-prevention-validate.yml
+          git add -A
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore: retire Wave 09 qualification workflow'
+          git push origin HEAD:"${HEAD_REF}"
