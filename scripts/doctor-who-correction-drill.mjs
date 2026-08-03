@@ -23,7 +23,7 @@ const DOCTOR_FRANCHISE = canonicalNormalize("Doctor Who");
 const IDENTITY_SHA256 = "86845b0347983d9284d82d35ac7e0243ff3dba60ac714733231d700e34c7f53c";
 const HISTORICAL_PILOT_RECEIPT_SHA256 = "9ed078b768191a80845bab6ce221ea335960e3a3efeee95235d94a76cd8205eb";
 const DRILL_LEDGER_SHA256 = "19716a18783c169380f78aae7dcbb27c9ef8987b21565de0b6613f3c1ba17127";
-const RECEIPT_SHA256 = "4156f850256bd19ff46a644f6e05b6a0a92cecffd497080577f3e215f8c1276a";
+const RECEIPT_SHA256 = "b4055b4f8902c3f47d20ee0bceb2fdd6cc7e11f4ca201bf652e29e2be30f4381";
 const SCOPE_REPAIR_RECEIPT_SHA256 = "ea03a497d1e35533e9c91765e3aa0f0b4536e827dc767c763c35b506c95eed6f";
 const SCOPE_REPAIR_CODE_SHA256 = "cd4dfab241e22841e83f3edfb88883bacc78b33afbbef78e852d8a982fb686ac";
 const SCOPE_REPAIR_CODE_COMMIT = "f2d3f048a4ead24915ca9d2d92a05fa806829842";
@@ -317,21 +317,54 @@ function isCanonicalDoctorTask(task) {
   return franchiseMatches;
 }
 
-function validateCanonicalDoctorTaskSet(jobs, coverage, scopesDoc, manifest) {
+function validateCanonicalDoctorTaskSet(jobs, coverage, scopesDoc, manifest, journal = []) {
   const expectedTasks = collapseCoverage(coverage, scopesDoc, manifest).filter(isCanonicalDoctorTask);
   assert(expectedTasks.length > 0, "canonical Doctor Who task denominator is empty");
-  const actualTasks = (jobs || []).filter(isCanonicalDoctorTask);
   const expectedIds = expectedTasks.map((task) => task.id).sort();
-  const actualIds = actualTasks.map((task) => task.id).sort();
   const expectedSet = new Set(expectedIds);
-  const actualSet = new Set(actualIds);
-  const missing = expectedIds.filter((id) => !actualSet.has(id));
-  const extra = actualIds.filter((id) => !expectedSet.has(id));
+  const actualTasks = (jobs || []).filter(isCanonicalDoctorTask);
+  const currentTasks = actualTasks.filter((task) => task.status !== "retired");
+  const retainedRetiredTasks = actualTasks.filter((task) => task.status === "retired");
+  const currentIds = currentTasks.map((task) => task.id).sort();
+  const currentSet = new Set(currentIds);
+  const missing = expectedIds.filter((id) => !currentSet.has(id));
+  const extra = currentIds.filter((id) => !expectedSet.has(id));
+  const coveredRetiredIds = retainedRetiredTasks
+    .filter((task) => expectedSet.has(task.id))
+    .map((task) => task.id)
+    .sort();
   assert(
-    sameSet(actualIds, expectedIds),
-    `current Doctor Who task denominator disagrees with canonical census coverage; missing=${missing.join(",") || "none"}; extra=${extra.join(",") || "none"}`,
+    coveredRetiredIds.length === 0,
+    `retired Doctor Who tasks remain in current canonical coverage: ${coveredRetiredIds.join(",")}`,
   );
-  return { expectedTasks, actualTasks };
+  assert(
+    sameSet(currentIds, expectedIds),
+    `current non-retired Doctor Who task denominator disagrees with canonical census coverage; missing=${missing.join(",") || "none"}; extra=${extra.join(",") || "none"}`,
+  );
+  for (const task of retainedRetiredTasks) {
+    assert(
+      task.outcome?.kind === "not-in-latest-coverage",
+      `${task.id} retained retirement lacks the canonical sync outcome`,
+    );
+    assert(
+      Number.isFinite(Date.parse(task.outcome?.retired_at || "")),
+      `${task.id} retained retirement lacks a valid retired_at timestamp`,
+    );
+    assert(!task.lease, `${task.id} retained retirement still carries a lease`);
+    const retirementEvents = (journal || []).filter((row) =>
+      row?.op === "task.retired" &&
+      row.task_id === task.id &&
+      row.scope === task.scope &&
+      canonicalNormalize(row.performer) === canonicalNormalize(task.performer) &&
+      canonicalNormalize(row.character) === canonicalNormalize(task.character) &&
+      row.at === task.outcome.retired_at
+    );
+    assert(
+      retirementEvents.length === 1,
+      `${task.id} retained retirement lacks one matching task.retired journal receipt`,
+    );
+  }
+  return { expectedTasks, currentTasks, retainedRetiredTasks };
 }
 
 function validateLiveDoctorSourceCustody(jobs) {
@@ -777,12 +810,19 @@ assert(receipt.repairs?.retirement_refresh_fixture_decoupling?.refresh_fixture_s
 assert(receipt.repairs?.retirement_refresh_fixture_decoupling?.actual_retired_world_checked_separately === true, "retired world stopped being checked separately");
 assert(receipt.repairs?.retirement_refresh_fixture_decoupling?.stale_receipt_fixture_remains_active_after_retirement === true, "stale-receipt fixture became retirement-dependent");
 assert(receipt.repairs?.retirement_refresh_fixture_decoupling?.forged_fingerprint_fixture_remains_active_after_retirement === true, "forged-fingerprint fixture became retirement-dependent");
-assert(receipt.repairs?.canonical_task_set_custody?.review_thread === "PRRT_kwDOTQMkzs6WJSKr", "canonical task-set review binding drifted");
+assert(sameSet(receipt.repairs?.canonical_task_set_custody?.review_threads || [], ["PRRT_kwDOTQMkzs6WJSKr", "PRRT_kwDOTQMkzs6WJHVk"]), "canonical task-set review bindings drifted");
 assert(receipt.repairs?.canonical_task_set_custody?.canonical_constructor === "scripts/lib/autopilot-model.mjs#collapseCoverage", "canonical task constructor drifted");
-assert(receipt.repairs?.canonical_task_set_custody?.comparison === "exact canonical Doctor Who task-id set before terminal exclusions", "canonical task-set comparison drifted");
+assert(receipt.repairs?.canonical_task_set_custody?.comparison === "current canonical Doctor Who coverage equals the non-retired task-id set; sync-retained retired jobs are validated separately", "canonical task-set comparison drifted");
 assert(receipt.repairs?.canonical_task_set_custody?.deleted_task_fixture_id === "ap_0045a0e77c9d85b7771ebdc3", "deleted-task fixture identity drifted");
 assert(receipt.repairs?.canonical_task_set_custody?.deleted_task_fixture_fails_closed === true, "deleted-task refusal disappeared");
 assert(receipt.repairs?.canonical_task_set_custody?.live_exact_set_recomputed === true, "live canonical task-set recomputation was disabled");
+assert(receipt.repairs?.canonical_task_set_custody?.retained_retired_tasks_excluded_from_current_set === true, "retained retired tasks returned to the current coverage set");
+assert(receipt.repairs?.canonical_task_set_custody?.retained_retired_tasks_require_sync_outcome === true, "retained retirement lost canonical sync-outcome custody");
+assert(receipt.repairs?.canonical_task_set_custody?.retained_retired_tasks_require_matching_journal_event === true, "retained retirement lost journal custody");
+assert(receipt.repairs?.canonical_task_set_custody?.retained_retired_fixture_id === "ap_6dfcb7b9254c26dc3f4b46b8", "retained-retirement fixture identity drifted");
+assert(receipt.repairs?.canonical_task_set_custody?.retained_retired_fixture_passes === true, "canonical retained-retirement fixture stopped passing");
+assert(receipt.repairs?.canonical_task_set_custody?.covered_retired_fixture_fails_closed === true, "covered retired task refusal disappeared");
+assert(receipt.repairs?.canonical_task_set_custody?.missing_retirement_event_fixture_fails_closed === true, "missing retirement-event refusal disappeared");
 
 for (const flag of [
   "historical_drill_result_is_immutable",
@@ -822,6 +862,7 @@ assert(receipt.qualification?.canonical_scope_membership_enforced === true, "can
 assert(receipt.qualification?.normalized_cross_task_receipt_identity_enforced === true, "normalized cross-task receipt qualification drifted");
 assert(receipt.qualification?.retirement_refresh_fixture_decoupled === true, "retirement/refresh fixture qualification drifted");
 assert(receipt.qualification?.canonical_task_set_custody_enforced === true, "canonical task-set qualification drifted");
+assert(receipt.qualification?.canonical_retired_task_retention_preserved === true, "canonical retained-retirement qualification drifted");
 assert(receipt.qualification?.live_state_validated_without_freezing_future_operations === true, "future-safe qualification drifted");
 assert(receipt.qualification?.new_workflow_added === false, "Doctor Who drill claims a permanent workflow");
 assert(!/<[^>\n]*(?:TODO|TBD|PLACEHOLDER)[^>\n]*>/i.test(JSON.stringify(receipt)), "Doctor Who drill receipt contains an unresolved template placeholder");
@@ -850,7 +891,7 @@ assert(commanderTask?.scope === "doctor-who" && commanderTask?.performer === "Da
 assert(Array.isArray(commanderTask.wall_ids) && commanderTask.wall_ids.includes(WALL_ID), "Commander obligation lost UC-1345");
 assert(sliteTask?.scope === "doctor-who" && sliteTask?.performer === "Dan Starkey" && sliteTask?.character === "Slite", "distinct Slite obligation identity drifted");
 assert(!(sliteTask.wall_ids || []).includes(WALL_ID), "distinct Slite obligation was conflated with UC-1345");
-validateCanonicalDoctorTaskSet(autopilot.jobs || [], coverage, scopes, manifest);
+validateCanonicalDoctorTaskSet(autopilot.jobs || [], coverage, scopes, manifest, autopilotJournal);
 const liveDoctorSourceCustody = validateLiveDoctorSourceCustody(autopilot.jobs || []);
 const commanderReceipts = liveDoctorSourceCustody.identitiesByTask.get(COMMANDER_TASK_ID);
 const sliteReceipts = liveDoctorSourceCustody.identitiesByTask.get(SLITE_TASK_ID);
@@ -987,7 +1028,7 @@ const deletedMezzState = structuredClone(autopilot);
 deletedMezzState.jobs = deletedMezzState.jobs.filter((task) => task.id !== "ap_0045a0e77c9d85b7771ebdc3");
 validateState(deletedMezzState);
 expectFailure(
-  () => validateCanonicalDoctorTaskSet(deletedMezzState.jobs, coverage, scopes, manifest),
+  () => validateCanonicalDoctorTaskSet(deletedMezzState.jobs, coverage, scopes, manifest, autopilotJournal),
   /task denominator disagrees with canonical census coverage/,
   "deleted Doctor Who task",
 );
@@ -1089,12 +1130,65 @@ expectFailure(
   "unsupported Doctor Who task status",
 );
 
+const retiredCommanderAt = "2026-08-03T22:41:04.000Z";
+const retiredCommanderCoverage = coverage.filter((row) => !(
+  canonicalNormalize(row.franchise) === DOCTOR_FRANCHISE &&
+  canonicalNormalize(row.performer) === canonicalNormalize(commanderTask.performer) &&
+  canonicalNormalize(row.character) === canonicalNormalize(commanderTask.character)
+));
 const retiredCommanderState = structuredClone(autopilot);
-retiredCommanderState.jobs.find((task) => task.id === COMMANDER_TASK_ID).status = "retired";
+const retiredCommanderJob = retiredCommanderState.jobs.find((task) => task.id === COMMANDER_TASK_ID);
+retiredCommanderJob.status = "retired";
+retiredCommanderJob.outcome = { kind: "not-in-latest-coverage", retired_at: retiredCommanderAt };
+delete retiredCommanderJob.lease;
+const retiredCommanderJournal = [
+  ...autopilotJournal,
+  {
+    op: "task.retired",
+    task_id: retiredCommanderJob.id,
+    at: retiredCommanderAt,
+    scope: retiredCommanderJob.scope,
+    performer: retiredCommanderJob.performer,
+    character: retiredCommanderJob.character,
+  },
+];
 validateState(retiredCommanderState);
+const retiredCommanderTaskSet = validateCanonicalDoctorTaskSet(
+  retiredCommanderState.jobs,
+  retiredCommanderCoverage,
+  scopes,
+  manifest,
+  retiredCommanderJournal,
+);
+assert(
+  retiredCommanderTaskSet.retainedRetiredTasks.some((task) => task.id === COMMANDER_TASK_ID),
+  "sync-retained Commander was not preserved outside current coverage",
+);
 const retiredCommanderCustody = validateLiveDoctorSourceCustody(retiredCommanderState.jobs);
 assert(!retiredCommanderCustody.identitiesByTask.has(COMMANDER_TASK_ID), "retired Commander remained in live source custody");
 assert(retiredCommanderCustody.identitiesByTask.has(SLITE_TASK_ID), "Slite disappeared when Commander retired");
+expectFailure(
+  () => validateCanonicalDoctorTaskSet(
+    retiredCommanderState.jobs,
+    coverage,
+    scopes,
+    manifest,
+    retiredCommanderJournal,
+  ),
+  /retired Doctor Who tasks remain in current canonical coverage/,
+  "retired Commander still represented by current coverage",
+);
+expectFailure(
+  () => validateCanonicalDoctorTaskSet(
+    retiredCommanderState.jobs,
+    retiredCommanderCoverage,
+    scopes,
+    manifest,
+    autopilotJournal,
+  ),
+  /matching task\.retired journal receipt/,
+  "retained retired Commander without its sync journal receipt",
+);
 const badHistoricalObjects = { ...HISTORICAL_GIT_OBJECTS, [PATHS.sources]: "0".repeat(40) };
 expectFailure(
   () => assertHistoricalGitObjects(badHistoricalObjects),
