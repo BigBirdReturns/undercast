@@ -41,45 +41,66 @@ jobs:
           test "$(git rev-parse "HEAD:$TARGET")" = "$TARGET_BLOB"
           git config user.name undercast-estate-collector
           git config user.email undercast-estate-collector@users.noreply.github.com
+          sha256sum "$TARGET" > /tmp/gredd-v2-before.sha256
 
           python3 - <<'PY'
           from pathlib import Path
 
           target = Path('.github/workflows/complete-doctor-who-cycle-002-v2.yml')
-          text = target.read_text(encoding='utf-8')
+          data = target.read_bytes()
 
-          typo = 'GITHUB_STEP_SUMARY'
-          if text.count(typo) != 2:
-              raise SystemExit(f'expected two step-summary typos, found {text.count(typo)}')
-          text = text.replace(typo, 'GITHUB_STEP_SUMMARY')
+          typo = b'GITHUB_STEP_SUMARY'
+          if data.count(typo) != 2:
+              raise SystemExit(f'expected two step-summary typos, found {data.count(typo)}')
+          data = data.replace(typo, b'GITHUB_STEP_SUMMARY')
 
-          dirty_before = '          test -r "$(git diff --name-only)"\n'
-          dirty_after = '          test -z "$(git diff --name-only)"\n'
-          if text.count(dirty_before) != 1:
-              raise SystemExit(f'expected one reverted clean-tree assertion, found {text.count(dirty_before)}')
-          text = text.replace(dirty_before, dirty_after)
+          dirty_before = b'          test -r "$(git diff --name-only)"\n'
+          dirty_after = b'          test -z "$(git diff --name-only)"\n'
+          if data.count(dirty_before) != 1:
+              raise SystemExit(f'expected one reverted clean-tree assertion, found {data.count(dirty_before)}')
+          data = data.replace(dirty_before, dirty_after)
 
-          lines = text.splitlines(keepends=True)
-          start = next(i for i, line in enumerate(lines) if 'git diff --cached --name-only "$EXACT_MAIN" | sort > /tmp/doctor-who-cycle-002-candidate-paths.txt' in line)
-          end = next(i for i in range(start + 1, len(lines)) if "mapfile -t image_paths < <(grep '^images/' /tmp/doctor-who-cycle-002-candidate-paths.txt" in lines[i])
-          malformed = [i for i in range(start + 1, end) if lines[i].lstrip().startswith('! grep -Eq')]
+          lines = data.splitlines(keepends=True)
+          start_marker = b'git diff --cached --name-only "$EXACT_MAIN" | sort > /tmp/doctor-who-cycle-002-candidate-paths.txt'
+          end_marker = b"mapfile -t image_paths < <(grep '^images/' /tmp/doctor-who-cycle-002-candidate-paths.txt"
+          starts = [i for i, line in enumerate(lines) if start_marker in line]
+          if len(starts) != 1:
+              raise SystemExit(f'expected one candidate path marker, found {len(starts)}')
+          start = starts[0]
+          ends = [i for i in range(start + 1, len(lines)) if end_marker in lines[i]]
+          if len(ends) != 1:
+              raise SystemExit(f'expected one candidate image marker after path marker, found {len(ends)}')
+          end = ends[0]
+          malformed = [i for i in range(start + 1, end) if lines[i].lstrip().startswith(b'! grep -Eq')]
           if len(malformed) != 1:
               raise SystemExit(f'expected one malformed candidate transport guard, found {len(malformed)}')
-          indent = lines[malformed[0]][:len(lines[malformed[0]]) - len(lines[malformed[0]].lstrip())]
-          lines[malformed[0]] = indent + "! grep -Eq '^\\.github/|^\\.ci/' /tmp/doctor-who-cycle-002-candidate-paths.txt\n"
-          text = ''.join(lines)
+          bad = malformed[0]
+          indent = lines[bad][:len(lines[bad]) - len(lines[bad].lstrip())]
+          lines[bad] = indent + b"! grep -Eq '^\\.github/|^\\.ci/' /tmp/doctor-who-cycle-002-candidate-paths.txt\n"
+          data = b''.join(lines)
 
-          if typo in text or dirty_before in text:
+          if typo in data or dirty_before in data:
               raise SystemExit('known malformed tokens survived repair')
-          if text.count("! grep -Eq '^\\.github/|^\\.ci/' /tmp/doctor-who-cycle-002-candidate-paths.txt") != 1:
+          guard = b"! grep -Eq '^\\.github/|^\\.ci/' /tmp/doctor-who-cycle-002-candidate-paths.txt"
+          if data.count(guard) != 1:
               raise SystemExit('candidate transport guard was not restored exactly once')
-          target.write_text(text, encoding='utf-8')
+
+          # The invalid byte was confined to the replaced guard. Refuse any other
+          # non-UTF-8 corruption before making the carrier authoritative again.
+          data.decode('utf-8')
+          target.write_bytes(data)
           PY
 
+          sha256sum "$TARGET" > /tmp/gredd-v2-after.sha256
           grep -Fq 'adapter baseline refresh, and terminal waterline synchronization' "$TARGET"
           ! grep -Fq 'GITHUB_STEP_SUMARY' "$TARGET"
           ! grep -Fq 'test -r "$(git diff --name-only)"' "$TARGET"
           grep -Fq "! grep -Eq '^\\.github/|^\\.ci/' /tmp/doctor-who-cycle-002-candidate-paths.txt" "$TARGET"
+          python3 - <<'PY'
+          from pathlib import Path
+          Path('.github/workflows/complete-doctor-who-cycle-002-v2.yml').read_text(encoding='utf-8')
+          print('valid utf-8')
+          PY
 
           git rm -f "$SELF"
           git add -- "$TARGET"
@@ -90,7 +111,7 @@ jobs:
 
           git commit \
             -m 'Doctor Who: repair the bounded Gredd v2 carrier' \
-            -m 'restore exact clean-tree and transport guards and correct step-summary writes' \
+            -m 'remove the invalid byte and restore exact clean-tree, transport, and step-summary guards' \
             -m 'self-delete the repair carrier without issuing a lease'
 
           git fetch --no-tags --depth=64 origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
@@ -106,5 +127,7 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
           path: |
+            /tmp/gredd-v2-before.sha256
+            /tmp/gredd-v2-after.sha256
             /tmp/expected-repair-paths.txt
             /tmp/actual-repair-paths.txt
