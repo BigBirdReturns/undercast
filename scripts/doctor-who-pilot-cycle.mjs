@@ -2,7 +2,9 @@
 
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 
+const PILOT_HISTORY_SHA = '04551b140022c7b733b0290e10c7e40905aabc76';
 const TASK_ID = 'ap_6dfcb7b9254c26dc3f4b46b8';
 const LEASE_ID = 'lease_51e3223a4810f3681aff9df4';
 const PILOT_WALL_ID = 'UC-1345';
@@ -54,11 +56,6 @@ const MEDIA_BINDING_REPAIR_BASE = '2530ed03ce61503eb3b7a458016da4cd9fe56f31';
 const MEDIA_BINDING_DISCOVERY_RUN = 30796069007;
 const MEDIA_BINDING_METHOD = 'Replaced the mutable sitewide audit-file hash with a content address over the exact two UC-1345 media facets.';
 
-const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
-const readJsonl = (file) => fs.readFileSync(file, 'utf8')
-  .split(/\r?\n/)
-  .filter((line) => line.trim())
-  .map((line) => JSON.parse(line));
 const stable = (value) => Array.isArray(value)
   ? value.map(stable)
   : value && typeof value === 'object'
@@ -71,14 +68,103 @@ const assertExact = (actual, expected, label) => {
   if (stableJson(actual) !== stableJson(expected)) fail(label + ' drifted');
 };
 
-const receipt = read('data/review/adapter-sdk/doctor-who-pilot-cycle-001.json');
-const autopilot = read('data/AUTOPILOT.json');
-const autopilotJournal = readJsonl('data/journal/autopilot.jsonl');
-const specimens = read('data/specimens.json');
-const sources = read('data/SOURCES.json');
-const audit = read('data/MEDIA-AUDIT.json');
-const waterline = read('data/WATERLINE-STATE.json');
-const waterlineJournal = readJsonl('data/journal/waterline.jsonl');
+function runGitText(args, { allowFail = false } = {}) {
+  const result = spawnSync('git', args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  if (result.error) {
+    if (allowFail) return { ok: false, stdout: '', stderr: result.error.message };
+    fail(`git ${args.join(' ')} could not start: ${result.error.message}`);
+  }
+  const ok = result.status === 0;
+  const stdout = String(result.stdout || '').trim();
+  const stderr = String(result.stderr || '').trim();
+  if (!ok && !allowFail) fail(`git ${args.join(' ')} failed: ${stderr || stdout || `status ${result.status}`}`);
+  return { ok, stdout, stderr };
+}
+
+function runGitBytes(args) {
+  const result = spawnSync('git', args, {
+    encoding: null,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  if (result.error) fail(`git ${args.join(' ')} could not start: ${result.error.message}`);
+  if (result.status !== 0) {
+    const stderr = Buffer.from(result.stderr || []).toString('utf8').trim();
+    fail(`git ${args.join(' ')} failed: ${stderr || `status ${result.status}`}`);
+  }
+  return Buffer.from(result.stdout || []);
+}
+
+const exactFetchPause = (milliseconds) =>
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+const isRetryableExactFetchError = (detail) =>
+  /shallow file has changed|shallow\.lock|index\.lock|packed-refs\.lock|cannot lock ref|another git process/i.test(String(detail || ""));
+
+function fetchExactCommitWithRetry(commit, label) {
+  let detail = 'unknown git error';
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const fetched = runGitText([
+      '-c', 'gc.auto=0',
+      '-c', 'maintenance.auto=false',
+      '-c', 'fetch.writeCommitGraph=false',
+      'fetch', '--no-tags', '--depth=1', 'origin', commit,
+    ], { allowFail: true });
+    if (fetched.ok || runGitText(['cat-file', '-e', `${commit}^{commit}`], { allowFail: true }).ok) return;
+    detail = fetched.stderr || fetched.stdout || detail;
+    if (!isRetryableExactFetchError(detail) || attempt === 5) break;
+    exactFetchPause(attempt * 250);
+  }
+  fail(`${label} commit ${commit} is unavailable after bounded exact-fetch retries: ${detail}`);
+}
+
+if (!isRetryableExactFetchError('fatal: shallow file has changed since we read it')) fail('shallow-file race is not classified as retryable');
+if (isRetryableExactFetchError('fatal: repository not found')) fail('substantive fetch failure became retryable');
+
+function ensurePilotHistory() {
+  if (runGitText(['cat-file', '-e', `${PILOT_HISTORY_SHA}^{commit}`], { allowFail: true }).ok) return;
+  fetchExactCommitWithRetry(PILOT_HISTORY_SHA, 'historical pilot');
+  if (!runGitText(['cat-file', '-e', `${PILOT_HISTORY_SHA}^{commit}`], { allowFail: true }).ok) {
+    fail(`historical pilot commit ${PILOT_HISTORY_SHA} did not resolve after exact fetch`);
+  }
+}
+
+function historicalBytes(path) {
+  const resolved = runGitText(['rev-parse', `${PILOT_HISTORY_SHA}:${path}`]).stdout;
+  if (!/^[0-9a-f]{40}$/.test(resolved)) fail(`historical pilot blob for ${path} is malformed`);
+  if (!runGitText(['cat-file', '-e', `${resolved}^{blob}`], { allowFail: true }).ok) {
+    fail(`historical pilot blob for ${path} does not exist`);
+  }
+  return runGitBytes(['show', `${PILOT_HISTORY_SHA}:${path}`]);
+}
+
+function historicalJson(path) {
+  try { return JSON.parse(historicalBytes(path).toString('utf8')); }
+  catch (error) { fail(`historical pilot ${path} is not valid JSON: ${error.message}`); }
+}
+
+function historicalJsonl(path) {
+  return historicalBytes(path).toString('utf8')
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .map((line, index) => {
+      try { return JSON.parse(line); }
+      catch (error) { fail(`historical pilot ${path} line ${index + 1} is invalid JSON: ${error.message}`); }
+    });
+}
+
+ensurePilotHistory();
+const receipt = historicalJson('data/review/adapter-sdk/doctor-who-pilot-cycle-001.json');
+const autopilot = historicalJson('data/AUTOPILOT.json');
+const autopilotJournal = historicalJsonl('data/journal/autopilot.jsonl');
+const specimens = historicalJson('data/specimens.json');
+const sources = historicalJson('data/SOURCES.json');
+const audit = historicalJson('data/MEDIA-AUDIT.json');
+const waterline = historicalJson('data/WATERLINE-STATE.json');
+const waterlineJournal = historicalJsonl('data/journal/waterline.jsonl');
 
 const cycles = waterline.cycles.filter((row) => row.scope_id === 'doctor-who' && row.lease_id === LEASE_ID);
 if (cycles.length !== 1) fail('pilot must have exactly one Doctor Who cycle receipt');
@@ -244,11 +330,12 @@ assertExact(pilotItemIds, PILOT_MEDIA_ITEM_IDS, 'pilot media item identities');
 const pilotFacetsSha256 = sha(JSON.stringify(stable(pilotFacetReceipt)) + '\n');
 
 const doctor = autopilot.jobs.filter((row) => row.scope === 'doctor-who');
-const currentInFlight = doctor.filter((row) => ['leased', 'drafted', 'merged'].includes(row.status)).length;
-if (doctor.length !== 316 || currentInFlight !== 0) {
-  fail('Doctor Who denominator or terminal one-cycle state drifted');
+const queued = doctor.filter((row) => row.status === 'queued').length;
+const inFlight = doctor.filter((row) => ['leased', 'drafted', 'merged'].includes(row.status)).length;
+const resolved = doctor.filter((row) => row.status === 'resolved').length;
+if (doctor.length !== 316 || queued !== 315 || resolved !== 1 || inFlight !== 0) {
+  fail('Doctor Who queue denominator or terminal state drifted');
 }
-const historicalPilotQueue = { total: 316, queued: 315, resolved: 1, in_flight: 0 };
 
 const expectedQualification = {
   pre_cycle_gate_log_sha256: PRE_CYCLE_GATE_LOG_SHA256,
@@ -335,7 +422,12 @@ const expectedReceiptPayload = {
     historical_global_audit_snapshot_sha256: PILOT_MEDIA_HISTORICAL_GLOBAL_SNAPSHOT_SHA256,
     binding_note: PILOT_MEDIA_BINDING_NOTE,
   },
-  queue: historicalPilotQueue,
+  queue: {
+    total: doctor.length,
+    queued,
+    resolved,
+    in_flight: inFlight,
+  },
   reviewed_cycle: {
     id: CORRECTED_CYCLE_ID,
     outcome: 'completed',
@@ -360,4 +452,4 @@ if (/<[^>\n]+>/.test(JSON.stringify(receipt))) {
   fail('pilot permanent receipt still contains a template placeholder');
 }
 
-console.log('doctor-who-pilot-cycle: PASS — exact first-cycle evidence and claim custody, scope-bound pilot media, two honest absences, and no second lease at the first review boundary');
+console.log(`doctor-who-pilot-cycle: PASS — immutable ${PILOT_HISTORY_SHA} pilot evidence, content-addressed waterline and claim custody, one historical first-cycle lease, scope-bound pilot media, two honest absences, and no live-state pins`);
