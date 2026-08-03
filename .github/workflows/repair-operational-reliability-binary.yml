@@ -31,12 +31,12 @@ jobs:
           node-version: "24"
           cache: npm
 
-      - name: Apply the exact binary recovery repair
+      - name: Apply and commit the exact two-path repair candidate
+        id: candidate
         shell: bash
         run: |
           set -euo pipefail
           authorized_head="${{ github.event.pull_request.head.sha }}"
-          target_branch="${{ github.event.pull_request.head.ref }}"
           test "$(git rev-parse HEAD)" = "$authorized_head"
           test -z "$(git status --porcelain)"
           test "$(git rev-parse HEAD:scripts/operational-reliability.mjs)" = "b3e6fba443fd69b2d9138de44cb7610476c12f38"
@@ -53,6 +53,7 @@ jobs:
           PY
           python3 -m py_compile .ci/patch-operational-reliability-binary.py
           python3 .ci/patch-operational-reliability-binary.py
+          git restore --source=HEAD -- .ci/patch-operational-reliability-binary.py
           node --check scripts/operational-reliability.mjs
           node --check scripts/operational-reliability-fixtures.mjs
           ! grep -Fq 'unsupported by the text patch transport' scripts/operational-reliability.mjs
@@ -60,27 +61,6 @@ jobs:
           grep -Fq 'binary patch round-trip' scripts/operational-reliability-fixtures.mjs
           git diff --check -- scripts/operational-reliability.mjs scripts/operational-reliability-fixtures.mjs
 
-      - name: Install exact dependencies and rendered runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm ci
-          npx playwright install --with-deps chromium
-
-      - name: Run focused and complete qualification
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run operational:fixtures 2>&1 | tee /tmp/operational-binary-focused.log
-          npm run gate 2>&1 | tee /tmp/operational-binary-gate.log
-          grep -Fq 'binary patch round-trip' /tmp/operational-binary-focused.log
-
-      - name: Publish only the two permanent repair paths
-        shell: bash
-        run: |
-          set -euo pipefail
-          authorized_head="${{ github.event.pull_request.head.sha }}"
-          target_branch="${{ github.event.pull_request.head.ref }}"
           git config user.name undercast-estate-collector
           git config user.email undercast-estate-collector@users.noreply.github.com
           git add -- scripts/operational-reliability.mjs scripts/operational-reliability-fixtures.mjs
@@ -97,6 +77,36 @@ jobs:
             -m 'prove a binary image round-trip before complete repository qualification'
           product_head="$(git rev-parse HEAD)"
           printf '%s\n' "$product_head" > /tmp/operational-binary-product-head.txt
+          echo "product_head=$product_head" >> "$GITHUB_OUTPUT"
+          test -z "$(git status --porcelain)"
+
+      - name: Install exact dependencies and rendered runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run focused and complete qualification on the clean candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ steps.candidate.outputs.product_head }}"
+          test -z "$(git status --porcelain)"
+          npm run operational:fixtures 2>&1 | tee /tmp/operational-binary-focused.log
+          npm run gate 2>&1 | tee /tmp/operational-binary-gate.log
+          grep -Fq 'binary patch round-trip' /tmp/operational-binary-focused.log
+          test -z "$(git status --porcelain)"
+
+      - name: Publish the exact qualified candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          authorized_head="${{ github.event.pull_request.head.sha }}"
+          target_branch="${{ github.event.pull_request.head.ref }}"
+          product_head="${{ steps.candidate.outputs.product_head }}"
+          test "$(git rev-parse HEAD)" = "$product_head"
+          test -z "$(git status --porcelain)"
           git fetch --no-tags --depth=64 origin "refs/heads/${target_branch}:refs/remotes/origin/${target_branch}"
           test "$(git rev-parse refs/remotes/origin/${target_branch})" = "$authorized_head"
           git push origin "HEAD:refs/heads/${target_branch}" \
