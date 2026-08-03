@@ -6,6 +6,13 @@ import crypto from 'node:crypto';
 const TASK_ID = 'ap_6dfcb7b9254c26dc3f4b46b8';
 const LEASE_ID = 'lease_51e3223a4810f3681aff9df4';
 const PILOT_WALL_ID = 'UC-1345';
+const PILOT_MEDIA_ITEM_IDS = [
+  "ma_ee364d31319f0943c9c4f8ce",
+  "ma_f8ee1f03ec2173d75f6f85ea"
+];
+const PILOT_MEDIA_BINDING_SCOPE = 'doctor-who/UC-1345';
+const PILOT_MEDIA_HISTORICAL_GLOBAL_SNAPSHOT_SHA256 = '36810c36bbe43f98c556fcd2c151522f7ac7af70357afb02ee1a711bb12831e3';
+const PILOT_MEDIA_BINDING_NOTE = 'The completed pilot is bound only to its exact two media facets; unrelated scope votes may change the global audit without reopening this cycle.';
 const OLD_CYCLE_ID = 'cycle_6a43df725e8b67cfdf2d43c1';
 const CORRECTED_CYCLE_ID = 'cycle_93fcbfd214892eaf81d55fa3';
 const CORRECTED_JOURNAL_EVENT_ID = 'waterline_4f10ff223cf4ff5cd1ccb07a';
@@ -42,6 +49,10 @@ const REVIEW_COMMENT_ID = 3701437097;
 const EVIDENCE_CORRECTED_AT = '2026-08-02T23:58:53-07:00';
 const EVIDENCE_REPAIR_BASE = 'e0e74df6c059f6a702487e07bcd0b4e3dc5e73ef';
 const EVIDENCE_METHOD = 'Replaced template evidence with exact run, job, artifact, commit, and restart references; then recomputed the content-addressed cycle and journal identities.';
+const MEDIA_BINDING_CORRECTED_AT = '2026-08-03T01:49:25-07:00';
+const MEDIA_BINDING_REPAIR_BASE = '2530ed03ce61503eb3b7a458016da4cd9fe56f31';
+const MEDIA_BINDING_DISCOVERY_RUN = 30796069007;
+const MEDIA_BINDING_METHOD = 'Replaced the mutable sitewide audit-file hash with a content address over the exact two UC-1345 media facets.';
 
 const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 const readJsonl = (file) => fs.readFileSync(file, 'utf8')
@@ -65,8 +76,7 @@ const autopilot = read('data/AUTOPILOT.json');
 const autopilotJournal = readJsonl('data/journal/autopilot.jsonl');
 const specimens = read('data/specimens.json');
 const sources = read('data/SOURCES.json');
-const auditBytes = fs.readFileSync('data/MEDIA-AUDIT.json');
-const audit = JSON.parse(auditBytes);
+const audit = read('data/MEDIA-AUDIT.json');
 const waterline = read('data/WATERLINE-STATE.json');
 const waterlineJournal = readJsonl('data/journal/waterline.jsonl');
 
@@ -206,10 +216,32 @@ if (!source || source.still !== null || source.portrait !== null) {
 }
 const pilotItems = (audit.items || []).filter((row) => row.wall_id === PILOT_WALL_ID);
 if (pilotItems.length !== 2
-  || !pilotItems.every((row) => row.status === 'absent')
+  || !pilotItems.every((row) => row.scope === 'doctor-who'
+    && row.status === 'absent'
+    && row.asset === null)
   || stableJson(pilotItems.map((row) => row.side).sort()) !== stableJson(['portrait', 'still'])) {
   fail('both exact pilot media facets must be honestly absent');
 }
+const pilotFacetReceipt = [...pilotItems]
+  .sort((a, b) => a.side.localeCompare(b.side))
+  .map((item) => ({
+    id: item.id,
+    scope: item.scope,
+    wall_id: item.wall_id,
+    side: item.side,
+    actor: item.actor,
+    character: item.character,
+    expected_subject: item.expected_subject,
+    source_fetched_at: item.source_fetched_at,
+    asset: item.asset,
+    risk_codes: item.risk_codes,
+    votes: item.votes,
+    status: item.status,
+    claims: item.claims,
+  }));
+const pilotItemIds = pilotFacetReceipt.map((row) => row.id);
+assertExact(pilotItemIds, PILOT_MEDIA_ITEM_IDS, 'pilot media item identities');
+const pilotFacetsSha256 = sha(JSON.stringify(stable(pilotFacetReceipt)) + '\n');
 
 const doctor = autopilot.jobs.filter((row) => row.scope === 'doctor-who');
 const queued = doctor.filter((row) => row.status === 'queued').length;
@@ -250,6 +282,16 @@ const expectedCorrection = {
   corrected_journal_event_id: CORRECTED_JOURNAL_EVENT_ID,
   finding: 'PR #185 Codex review comment ' + REVIEW_COMMENT_ID,
   method: EVIDENCE_METHOD,
+  mutable_audit_decoupling: {
+    corrected_at: MEDIA_BINDING_CORRECTED_AT,
+    repair_base_main_sha: MEDIA_BINDING_REPAIR_BASE,
+    discovered_by_workflow_run: MEDIA_BINDING_DISCOVERY_RUN,
+    previous_global_audit_sha256: PILOT_MEDIA_HISTORICAL_GLOBAL_SNAPSHOT_SHA256,
+    corrected_binding_scope: PILOT_MEDIA_BINDING_SCOPE,
+    corrected_item_ids: PILOT_MEDIA_ITEM_IDS,
+    corrected_pilot_facets_sha256: pilotFacetsSha256,
+    method: MEDIA_BINDING_METHOD,
+  },
 };
 const expectedReceiptPayload = {
   version: 1,
@@ -287,7 +329,12 @@ const expectedReceiptPayload = {
       still: 'absent',
       portrait: 'absent',
     },
-    media_audit_sha256: sha(auditBytes),
+    binding_version: 2,
+    binding_scope: PILOT_MEDIA_BINDING_SCOPE,
+    pilot_item_ids: PILOT_MEDIA_ITEM_IDS,
+    pilot_facets_sha256: pilotFacetsSha256,
+    historical_global_audit_snapshot_sha256: PILOT_MEDIA_HISTORICAL_GLOBAL_SNAPSHOT_SHA256,
+    binding_note: PILOT_MEDIA_BINDING_NOTE,
   },
   queue: {
     total: doctor.length,
@@ -306,6 +353,9 @@ const expectedReceiptPayload = {
   qualification: expectedQualification,
   evidence_correction: expectedCorrection,
 };
+if (Object.prototype.hasOwnProperty.call(receipt.media || {}, 'media_audit_sha256')) {
+  fail('deprecated mutable sitewide media-audit binding survived');
+}
 const receiptPayload = structuredClone(receipt);
 delete receiptPayload.receipt_sha256;
 assertExact(receiptPayload, expectedReceiptPayload, 'pilot permanent receipt payload');
@@ -316,4 +366,4 @@ if (/<[^>\n]+>/.test(JSON.stringify(receipt))) {
   fail('pilot permanent receipt still contains a template placeholder');
 }
 
-console.log('doctor-who-pilot-cycle: PASS — exact cycle evidence, content-addressed waterline and claim custody, one immutable first-cycle lease, one source-bound voice role, two honest media absences, and no second lease');
+console.log('doctor-who-pilot-cycle: PASS — exact cycle evidence, content-addressed waterline and claim custody, one immutable first-cycle lease, scope-bound pilot media, two honest absences, and no second lease');
