@@ -1,0 +1,314 @@
+name: dispatch-complete-gredd-cycle-002-recovery
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/dispatch-complete-gredd-cycle-002-recovery.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: dispatch-complete-gredd-cycle-002-recovery
+  cancel-in-progress: false
+
+env:
+  AUTHORIZED_HEAD: 322cc619cbd497cda74aec205d9e235b33058279
+  TARGET_BRANCH: agent/doctor-who-gredd-cycle-002-publication
+  SOURCE_WORKFLOW: .github/workflows/complete-doctor-who-cycle-002-v2.yml
+  SELF_V1: .github/workflows/apply-doctor-who-cycle-002.yml
+  SELF_V2: .github/workflows/complete-doctor-who-cycle-002-v2.yml
+  TRANSPORT: .ci/doctor-who-cycle-002/scripts.tgz.b64
+  PATCH_TRANSPORT: .ci/doctor-who-cycle-002/patch-current.mjs.gz.b64
+  TRANSPORT_SHA256: d824b3af5b5f02210c7893c8090077a887b649f8be5231ded1effe66d6169837
+  PATCH_TRANSPORT_SHA256: 2ab832438dc932a0b156b374fa16af6b1112f30067ed1a3cf7fc15b2066e4826
+  MATERIALIZER: /tmp/doctor-who-cycle-002/apply-doctor-who-cycle-002.mjs
+  FINALIZER: /tmp/doctor-who-cycle-002/apply-doctor-who-cycle-finalize-002.mjs
+  PATCHER: /tmp/doctor-who-cycle-002/patch-current.mjs
+  CYCLE_CONTEXT: /tmp/doctor-who-cycle-002-context.json
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  cycle-002:
+    if: github.repository == 'BigBirdReturns/undercast'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 256
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Repair the source carrier and extract the exact reviewed v2 shell steps
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          test -f "$SOURCE_WORKFLOW"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('.github/workflows/complete-doctor-who-cycle-002-v2.yml')
+          text = source.read_text(encoding='utf-8')
+          before = (
+              '          const refreshedTerminalState = `runNode("scripts/census-adapter.mjs", ["write"]);\n'
+              'runNode("scripts/census-adapter.mjs", ["check"]);\n'
+              'runNode("scripts/autopilot.mjs", ["sync", "--scope", "doctor-who", "--now", context.timestamps.final_at]);\n'
+              'runNode("scripts/autopilot.mjs", ["validate"]);`;'
+          )
+          after = (
+              '          const refreshedTerminalState = \'runNode("scripts/census-adapter.mjs", ["write"]);\\n'
+              'runNode("scripts/census-adapter.mjs", ["check"]);\\n'
+              'runNode("scripts/autopilot.mjs", ["sync", "--scope", "doctor-who", "--now", context.timestamps.final_at]);\\n'
+              'runNode("scripts/autopilot.mjs", ["validate"]);\';'
+          )
+          if text.count(before) != 1:
+              raise SystemExit(f'expected one malformed terminal-state serializer, found {text.count(before)}')
+          text = text.replace(before, after)
+          if text.count(after) != 1 or 'const refreshedTerminalState = `runNode' in text:
+              raise SystemExit('terminal-state serializer repair did not close exactly')
+          source.write_text(text, encoding='utf-8')
+
+          lines = text.splitlines()
+          targets = {
+              'Install exact dependencies, rendered runtime, and deterministic image tooling': 'install',
+              'Bind live main, prove the four-path carrier, and patch exact scripts': 'bind',
+              'Claim, materialize, upload, review, and resolve exactly one Gredd task': 'materialize',
+              'Stage and completely gate the workflow-free terminal candidate': 'candidate-gate',
+              'Commit the terminal candidate and bind workflow job custody': 'candidate-commit',
+              'Write and validate the reviewed cycle and permanent checker': 'finalize',
+              'Commit, completely gate, and publish the exact final product': 'final-publish',
+          }
+          for name, slug in targets.items():
+              marker = f'      - name: {name}'
+              matches = [index for index, line in enumerate(lines) if line == marker]
+              if len(matches) != 1:
+                  raise SystemExit(f'{name}: expected one step, found {len(matches)}')
+              start = matches[0]
+              run_index = None
+              for index in range(start + 1, len(lines)):
+                  if lines[index].startswith('      - '):
+                      break
+                  if lines[index] == '        run: |':
+                      run_index = index
+                      break
+              if run_index is None:
+                  raise SystemExit(f'{name}: run block missing')
+              body = []
+              for index in range(run_index + 1, len(lines)):
+                  line = lines[index]
+                  if line.startswith('      - '):
+                      break
+                  if line.startswith('          '):
+                      body.append(line[10:])
+                  elif line == '':
+                      body.append('')
+                  else:
+                      raise SystemExit(f'{name}: unexpected indentation at line {index + 1}: {line!r}')
+              if not body or body[0] != 'set -euo pipefail':
+                  raise SystemExit(f'{name}: fail-closed shell preamble missing')
+              target = Path(f'/tmp/gredd-{slug}.sh')
+              target.write_text('\n'.join(body) + '\n')
+              target.chmod(0o700)
+          PY
+          sha256sum "$SOURCE_WORKFLOW" > /tmp/gredd-source-workflow-repair.sha256
+          sha256sum /tmp/gredd-*.sh > /tmp/gredd-dispatched-step-sha256.txt
+
+      - name: Install the exact runtime
+        shell: bash
+        run: /tmp/gredd-install.sh
+
+      - name: Bind live main and decode the reviewed carrier
+        shell: bash
+        run: /tmp/gredd-bind.sh
+
+      - name: Make generated digests escape-free and verify terminal synchronization
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path(os.environ['FINALIZER'])
+          lines = path.read_text().splitlines()
+
+          def patch_digest(message, compact_token, pretty_token):
+              matches = [index for index, line in enumerate(lines) if message in line]
+              if len(matches) != 1:
+                  raise SystemExit(f'{message}: expected one checker line, found {len(matches)}')
+              index = matches[0]
+              line = lines[index]
+              if compact_token in line:
+                  if line.count(compact_token) != 1:
+                      raise SystemExit(f'{message}: compact serializer is not unique')
+                  line = line.replace(compact_token, pretty_token)
+              elif line.count(pretty_token) != 1:
+                  raise SystemExit(f'{message}: neither compact nor pretty serializer is unique: {line!r}')
+              line, replacements = re.subn(r'''\+\s*(["'])\\+n\1''', '+ String.fromCharCode(10)', line)
+              if replacements != 1:
+                  raise SystemExit(f'{message}: expected one quoted newline token, found {replacements}: {line!r}')
+              lines[index] = line
+
+          patch_digest(
+              'cycle 002 receipt hash drifted',
+              'JSON.stringify(stable(receiptBody))',
+              'JSON.stringify(stable(receiptBody), null, 2)',
+          )
+          patch_digest(
+              'Gredd media facet digest drifted',
+              'JSON.stringify(stable(facets))',
+              'JSON.stringify(stable(facets), null, 2)',
+          )
+
+          styles = [
+              (
+                  "runNode('scripts/census-adapter.mjs', ['check']);",
+                  "runNode('scripts/census-adapter.mjs', ['write']);",
+              ),
+              (
+                  'runNode("scripts/census-adapter.mjs", ["check"]);',
+                  'runNode("scripts/census-adapter.mjs", ["write"]);',
+              ),
+          ]
+          selected = []
+          for check_line, write_line in styles:
+              checks = [index for index, line in enumerate(lines) if line.strip() == check_line]
+              writes = [index for index, line in enumerate(lines) if line.strip() == write_line]
+              if checks or writes:
+                  selected.append((check_line, write_line, checks, writes))
+          if len(selected) != 1:
+              raise SystemExit(f'expected one adapter quote style, found {len(selected)}')
+          check_line, write_line, checks, writes = selected[0]
+          if len(checks) != 1:
+              raise SystemExit(f'expected one adapter check, found {len(checks)}')
+          if len(writes) == 0:
+              index = checks[0]
+              indent = lines[index][:len(lines[index]) - len(lines[index].lstrip())]
+              lines.insert(index, indent + write_line)
+          elif len(writes) != 1 or writes[0] != checks[0] - 1:
+              raise SystemExit('adapter baseline write/check sequence drifted')
+
+          sync_lines = [
+              line for line in lines
+              if 'scripts/autopilot.mjs' in line
+              and 'sync' in line
+              and 'doctor-who' in line
+              and 'context.timestamps.final_at' in line
+          ]
+          if len(sync_lines) != 1:
+              raise SystemExit(f'expected one terminal Doctor Who Autopilot sync, found {len(sync_lines)}')
+
+          path.write_text('\n'.join(lines) + '\n')
+          PY
+          node --check "$FINALIZER"
+          grep -Fq 'JSON.stringify(stable(receiptBody), null, 2) + String.fromCharCode(10)' "$FINALIZER"
+          grep -Fq 'JSON.stringify(stable(facets), null, 2) + String.fromCharCode(10)' "$FINALIZER"
+          grep -Fq 'scripts/census-adapter.mjs' "$FINALIZER"
+          grep -Fq 'scripts/autopilot.mjs' "$FINALIZER"
+          sha256sum "$FINALIZER" > /tmp/doctor-who-cycle-002-finalizer-baseline-bound.sha256
+
+      - name: Materialize and resolve exactly one Gredd task
+        shell: bash
+        run: /tmp/gredd-materialize.sh
+
+      - name: Gate the workflow-free terminal candidate
+        shell: bash
+        run: /tmp/gredd-candidate-gate.sh
+
+      - name: Commit the exact terminal candidate and collect job custody
+        id: candidate
+        shell: bash
+        run: /tmp/gredd-candidate-commit.sh
+
+      - name: Upload exact terminal candidate evidence
+        id: candidate_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-002-candidate-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            /tmp/doctor-who-cycle-002-context.json
+            /tmp/doctor-who-cycle-002-materialize.log
+            /tmp/doctor-who-cycle-002-candidate-gate.log
+            /tmp/doctor-who-cycle-002-candidate-gate.sha256
+            /tmp/doctor-who-cycle-002-candidate-paths.txt
+            /tmp/doctor-who-cycle-002-candidate-commit.txt
+            /tmp/doctor-who-cycle-002-workflow-job.txt
+            /tmp/doctor-who-cycle-002-portrait.jpg
+            /tmp/doctor-who-cycle-002-portrait.sha256
+            /tmp/doctor-who-cycle-002-portrait-dimensions.txt
+            /tmp/doctor-who-cycle-002-portrait-path.txt
+            /tmp/doctor-who-cycle-002-wall-id.txt
+            /tmp/doctor-who-cycle-002-source-fetched-at.txt
+            /tmp/doctor-who-cycle-002-transport-sha256.txt
+            /tmp/doctor-who-cycle-002-finalizer-baseline-bound.sha256
+            /tmp/gredd-source-workflow-repair.sha256
+            /tmp/gredd-dispatched-step-sha256.txt
+            /tmp/expected-transport-paths.txt
+            /tmp/actual-transport-paths.txt
+
+      - name: Write the reviewed cycle, permanent receipt, and future-safe checker
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ steps.candidate.outputs.candidate_commit }}
+          WORKFLOW_JOB_ID: ${{ steps.candidate.outputs.workflow_job_id }}
+          CANDIDATE_GATE_SHA256: ${{ steps.candidate.outputs.candidate_gate_sha256 }}
+          CANDIDATE_ARTIFACT_NAME: doctor-who-cycle-002-candidate-${{ github.run_id }}
+          CANDIDATE_ARTIFACT_ID: ${{ steps.candidate_artifact.outputs.artifact-id }}
+          CANDIDATE_ARTIFACT_SHA256: ${{ steps.candidate_artifact.outputs.artifact-digest }}
+        run: /tmp/gredd-finalize.sh
+
+      - name: Commit, gate, and publish the exact receipt-bearing product
+        id: final
+        shell: bash
+        run: /tmp/gredd-final-publish.sh
+
+      - name: Upload complete cycle and final-gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-002-final-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: warn
+          path: |
+            /tmp/doctor-who-cycle-002-context.json
+            /tmp/doctor-who-cycle-002-receipt-input.json
+            /tmp/doctor-who-cycle-002-permanent-receipt.json
+            /tmp/doctor-who-cycle-002-materialize.log
+            /tmp/doctor-who-cycle-002-candidate-gate.log
+            /tmp/doctor-who-cycle-002-candidate-gate.sha256
+            /tmp/doctor-who-cycle-002-finalize.log
+            /tmp/doctor-who-cycle-002-final-gate.log
+            /tmp/doctor-who-cycle-002-final-gate.sha256
+            /tmp/doctor-who-cycle-002-candidate-paths.txt
+            /tmp/doctor-who-cycle-002-final-paths.txt
+            /tmp/doctor-who-cycle-002-candidate-commit.txt
+            /tmp/doctor-who-cycle-002-final-head.txt
+            /tmp/doctor-who-cycle-002-workflow-job.txt
+            /tmp/doctor-who-cycle-002-portrait.jpg
+            /tmp/doctor-who-cycle-002-portrait.sha256
+            /tmp/doctor-who-cycle-002-portrait-dimensions.txt
+            /tmp/doctor-who-cycle-002-portrait-path.txt
+            /tmp/doctor-who-cycle-002-wall-id.txt
+            /tmp/doctor-who-cycle-002-source-fetched-at.txt
+            /tmp/doctor-who-cycle-002-transport-sha256.txt
+            /tmp/doctor-who-cycle-002-finalizer-baseline-bound.sha256
+            /tmp/gredd-source-workflow-repair.sha256
+            /tmp/gredd-dispatched-step-sha256.txt
+            /tmp/expected-transport-paths.txt
+            /tmp/actual-transport-paths.txt
+            data/review/adapter-sdk/doctor-who-cycle-002-gredd.json
