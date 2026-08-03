@@ -14,7 +14,16 @@ const CASE_ID = "correction-exercise-doctor-who-001";
 const TRANSACTION_ID = "DOCTOR-WHO-CORRECTION-DRILL-001";
 const ROADMAP_MILESTONE = "adapter-sdk-and-second-gold-shard";
 const IDENTITY_SHA256 = "86845b0347983d9284d82d35ac7e0243ff3dba60ac714733231d700e34c7f53c";
-const PILOT_RECEIPT_SHA256 = "9ed078b768191a80845bab6ce221ea335960e3a3efeee95235d94a76cd8205eb";
+const HISTORICAL_PILOT_RECEIPT_SHA256 = "9ed078b768191a80845bab6ce221ea335960e3a3efeee95235d94a76cd8205eb";
+const PILOT_MEDIA_BINDING_SCOPE = "doctor-who/UC-1345";
+const PILOT_MEDIA_ITEM_IDS = ["ma_ee364d31319f0943c9c4f8ce", "ma_f8ee1f03ec2173d75f6f85ea"];
+const PILOT_MEDIA_FACETS_SHA256 = "d8f69833e561b9a01754d9ee906d30255f4c45ef1894ef289e2e12bc1ffc363b";
+const SCOPE_REPAIR_TRANSACTION = "DOCTOR-WHO-CORRECTION-DRILL-SCOPE-CUSTODY-001";
+const SCOPE_REPAIR_BASE_SHA = "e8f5cb652daa5ed325bc84d85d41412e7c4d44c3";
+const FAILED_CLAIM_RUN = 30801441270;
+const FAILED_CLAIM_JOB = 91646681213;
+const FAILED_CLAIM_ARTIFACT_ID = 8850976176;
+const FAILED_CLAIM_ARTIFACT_SHA256 = "612c0aac4ca41db3101bb0a72fe1701528f036ec9bf78da091bca70fa4496d5b";
 const SOURCE_URL = "https://tardis.fandom.com/wiki/Commander_(The_Sontarans)";
 const SOURCE_FINGERPRINT = "f272dd90028ca998792a461c1547a334d58f7976484ff7ee2d299306763e0879";
 const SOURCE_CONTENT_SHA256 = "2ea0035e1f219abf4c846a65befb8cc447dbdf883b120bd25d7768c93f75f966";
@@ -47,6 +56,7 @@ const PATHS = {
   waterlineState: "data/WATERLINE-STATE.json",
   roadmap: "data/ROADMAP.json",
   roadmapState: "data/ROADMAP-STATE.json",
+  scopeRepair: "data/review/adapter-sdk/doctor-who-correction-drill-001-scope-custody.json",
 };
 
 const readBytes = (file) => fs.readFileSync(file);
@@ -57,6 +67,72 @@ const fail = (message) => { throw new Error(message); };
 const assert = (condition, message) => { if (!condition) fail(message); };
 const sameSet = (left, right) =>
   left.length === right.length && left.every((value) => right.includes(value));
+
+const ACTIVE_JOB_STATUSES = new Set(["leased", "drafted", "merged"]);
+const rehashReceipt = (doc) => {
+  const clone = structuredClone(doc);
+  delete clone.receipt_sha256;
+  doc.receipt_sha256 = sha(`${stableJson(clone)}\n`);
+  return doc;
+};
+const expectFailure = (fn, pattern, label) => {
+  let message = "";
+  try { fn(); }
+  catch (error) { message = String(error?.message || error); }
+  assert(pattern.test(message), `${label} did not fail closed (${message || "no error"})`);
+};
+const pilotFacetReceipt = (items) => [...items]
+  .sort((left, right) => left.side.localeCompare(right.side))
+  .map((item) => ({
+    id: item.id,
+    scope: item.scope,
+    wall_id: item.wall_id,
+    side: item.side,
+    actor: item.actor,
+    character: item.character,
+    expected_subject: item.expected_subject,
+    source_fetched_at: item.source_fetched_at,
+    asset: item.asset,
+    risk_codes: item.risk_codes,
+    votes: item.votes,
+    status: item.status,
+    claims: item.claims,
+  }));
+const validateCurrentPilotReceipt = (pilotDoc, items) => {
+  assert(pilotDoc.task?.id === TASK_ID && pilotDoc.lease?.id === LEASE_ID, "pilot task or lease identity drifted");
+  assert(pilotDoc.task?.source_content_sha256 === SOURCE_CONTENT_SHA256, "pilot source-content identity drifted");
+  assert(pilotDoc.canonical?.wall_id === WALL_ID, "pilot canonical wall binding drifted");
+  assert(pilotDoc.media?.still === null && pilotDoc.media?.portrait === null, "pilot receipt no longer preserves both media absences");
+  assert(pilotDoc.media?.binding_version === 2 && pilotDoc.media?.binding_scope === PILOT_MEDIA_BINDING_SCOPE, "pilot scope-bound media binding drifted");
+  assert(sameSet(pilotDoc.media?.pilot_item_ids || [], PILOT_MEDIA_ITEM_IDS), "pilot media item identities drifted");
+  assert(pilotDoc.media?.pilot_facets_sha256 === PILOT_MEDIA_FACETS_SHA256, "pilot media facet receipt drifted");
+  assert(pilotDoc.media?.historical_global_audit_snapshot_sha256 === MEDIA_AUDIT_SHA256, "pilot historical global media snapshot drifted");
+  assert(!Object.hasOwn(pilotDoc.media || {}, "media_audit_sha256"), "deprecated mutable global media binding returned");
+  const facets = pilotFacetReceipt(items);
+  assert(sha(`${stableJson(facets)}\n`) === PILOT_MEDIA_FACETS_SHA256, "current exact pilot media facets drifted");
+  const decoupling = pilotDoc.evidence_correction?.mutable_audit_decoupling;
+  assert(decoupling?.previous_global_audit_sha256 === MEDIA_AUDIT_SHA256, "pilot media decoupling lost historical custody");
+  assert(decoupling?.corrected_binding_scope === PILOT_MEDIA_BINDING_SCOPE, "pilot media decoupling scope drifted");
+  assert(sameSet(decoupling?.corrected_item_ids || [], PILOT_MEDIA_ITEM_IDS), "pilot media decoupling item ids drifted");
+  assert(decoupling?.corrected_pilot_facets_sha256 === PILOT_MEDIA_FACETS_SHA256, "pilot media decoupling digest drifted");
+  const clone = structuredClone(pilotDoc);
+  delete clone.receipt_sha256;
+  assert(pilotDoc.receipt_sha256 === sha(`${stableJson(clone)}\n`), "current pilot receipt self-hash drifted");
+  assert(pilotDoc.boundary?.second_lease_issued === false, "pilot receipt now claims a second lease");
+  assert(pilotDoc.boundary?.roadmap_completion_claimed === false, "pilot receipt acquired roadmap completion authority");
+  return true;
+};
+const validateActiveLeaseIsolation = (jobs) => {
+  const active = (jobs || []).filter((job) => ACTIVE_JOB_STATUSES.has(job.status));
+  const leaseGroups = new Set();
+  for (const job of active) {
+    assert(job.scope !== "doctor-who", `Doctor Who acquired active work around the historical correction drill: ${job.id}`);
+    assert(String(job.lease?.id || "").trim(), `active job ${job.scope}:${job.id} lacks lease identity`);
+    leaseGroups.add(`${job.scope}|${job.lease.id}`);
+  }
+  assert(leaseGroups.size <= 1, `global one-cycle boundary has multiple active lease groups: ${[...leaseGroups].join(", ")}`);
+  return { active_jobs: active.length, lease_groups: [...leaseGroups] };
+};
 
 const ledgerBytes = readBytes(PATHS.ledger);
 const ledger = JSON.parse(ledgerBytes);
@@ -74,6 +150,7 @@ const waterline = read(PATHS.waterline);
 const waterlineState = read(PATHS.waterlineState);
 const roadmap = read(PATHS.roadmap);
 const roadmapState = read(PATHS.roadmapState);
+const scopeRepair = read(PATHS.scopeRepair);
 
 const ledgerErrors = validateCorrectionLedger(ledger, { expectedCaseType: "exercise" });
 assert(ledgerErrors.length === 0, `Doctor Who correction drill violates the generic correction contract:\n${ledgerErrors.join("\n")}`);
@@ -160,16 +237,7 @@ assert(pilotItems.length === 2, "UC-1345 must retain exactly two media facets");
 assert(new Set(pilotItems.map((entry) => entry.side)).size === 2, "UC-1345 media sides drifted");
 assert(pilotItems.every((entry) => entry.status === "absent"), "UC-1345 media debt is no longer honestly absent");
 
-assert(pilot.task?.id === TASK_ID && pilot.lease?.id === LEASE_ID, "pilot task or lease identity drifted");
-assert(pilot.task?.source_content_sha256 === SOURCE_CONTENT_SHA256, "pilot source-content identity drifted");
-assert(pilot.canonical?.wall_id === WALL_ID, "pilot canonical wall binding drifted");
-assert(pilot.media?.still === null && pilot.media?.portrait === null, "pilot receipt no longer preserves both media absences");
-assert(pilot.receipt_sha256 === PILOT_RECEIPT_SHA256, "pilot receipt declared content identity drifted");
-const pilotReceiptClone = structuredClone(pilot);
-delete pilotReceiptClone.receipt_sha256;
-assert(sha(`${stableJson(pilotReceiptClone)}\n`) === PILOT_RECEIPT_SHA256, "pilot receipt content hash drifted");
-assert(pilot.boundary?.second_lease_issued === false, "pilot receipt now claims a second lease");
-assert(pilot.boundary?.roadmap_completion_claimed === false, "pilot receipt acquired roadmap completion authority");
+validateCurrentPilotReceipt(pilot, pilotItems);
 
 const doctor = (autopilot.jobs || []).filter((job) => job.scope === "doctor-who");
 const task = doctor.find((job) => job.id === TASK_ID);
@@ -206,8 +274,7 @@ const resolved = doctor.filter((job) => job.status === "resolved").length;
 const inFlight = doctor.filter((job) => ["leased", "drafted", "merged"].includes(job.status)).length;
 assert(doctor.length === 316 && queued === 315 && resolved === 1 && inFlight === 0, "Doctor Who queue denominator or terminal state drifted");
 
-const activeJobs = (autopilot.jobs || []).filter((job) => ["leased", "drafted", "merged"].includes(job.status));
-assert(activeJobs.length === 0, `global one-cycle boundary drifted; active jobs: ${activeJobs.map((job) => `${job.scope}:${job.id}`).join(", ")}`);
+validateActiveLeaseIsolation(autopilot.jobs || []);
 
 assert(waterline.operations?.one_cycle_at_a_time === true, "waterline no longer requires one cycle at a time");
 const doctorWaterline = (waterline.scopes || []).find((entry) => entry.id === "doctor-who");
@@ -218,8 +285,10 @@ assert(
   doctorWaterline?.minimum_resolved_per_cycle === 1,
   "Doctor Who waterline contract drifted"
 );
-const openCycles = (waterlineState.cycles || []).filter((cycle) => !cycle.closed_at || !cycle.reviewed_at);
-assert(openCycles.length === 0, "an unclosed or unreviewed waterline cycle exists around the correction drill");
+const openDoctorCycles = (waterlineState.cycles || []).filter((cycle) =>
+  cycle.scope_id === "doctor-who" && (!cycle.closed_at || !cycle.reviewed_at)
+);
+assert(openDoctorCycles.length === 0, "an unclosed or unreviewed Doctor Who cycle exists around the correction drill");
 const pilotCycles = (waterlineState.cycles || []).filter((cycle) => cycle.scope_id === "doctor-who" && cycle.lease_id === LEASE_ID);
 assert(
   pilotCycles.length === 1 &&
@@ -266,7 +335,7 @@ assert(receipt.transaction === TRANSACTION_ID, "Doctor Who drill receipt transac
 assert(receipt.base_sha === BASE_SHA, "Doctor Who drill receipt base drifted");
 assert(receipt.target?.identity_sha256 === IDENTITY_SHA256, "Doctor Who drill receipt target identity drifted");
 assert(receipt.target?.source_content_sha256 === SOURCE_CONTENT_SHA256, "Doctor Who drill receipt source identity drifted");
-assert(receipt.inputs?.pilot_receipt?.receipt_sha256 === PILOT_RECEIPT_SHA256, "Doctor Who drill receipt lost pilot custody");
+assert(receipt.inputs?.pilot_receipt?.receipt_sha256 === HISTORICAL_PILOT_RECEIPT_SHA256, "Doctor Who drill receipt lost historical pilot custody");
 assert(receipt.inputs?.drill_ledger?.sha256 === DRILL_LEDGER_SHA256, "Doctor Who drill receipt lost ledger custody");
 assert(receipt.inputs?.production_corrections?.historical_sha256 === PRODUCTION_CORRECTIONS_SHA256, "Doctor Who drill receipt lost historical production-ledger custody");
 assert(receipt.inputs?.production_corrections?.admitted_cases_at_drill === 0 && receipt.inputs?.production_corrections?.live_growth_permitted === true, "Doctor Who drill receipt freezes or misstates the production ledger");
@@ -368,4 +437,60 @@ assert(receipt.receipt_sha256 === RECEIPT_SHA256, "Doctor Who drill receipt decl
 assert(sha(`${stableJson(receiptClone)}\n`) === RECEIPT_SHA256, "Doctor Who drill receipt content hash drifted");
 assert(!/<[^>\n]+>/.test(JSON.stringify(receipt)), "Doctor Who drill receipt contains a template placeholder");
 
-console.log("doctor-who-correction-drill: PASS — certified Commander/Slite source separation, rejected generic media, live production growth allowed, global zero-in-flight, and roadmap completion reserved for a separate reviewed transaction");
+assert(scopeRepair.version === 1 && scopeRepair.transaction === SCOPE_REPAIR_TRANSACTION, "Doctor Who drill scope-repair identity drifted");
+assert(scopeRepair.base_main_sha === SCOPE_REPAIR_BASE_SHA, "Doctor Who drill scope-repair base drifted");
+assert(scopeRepair.failed_claim?.run === FAILED_CLAIM_RUN && scopeRepair.failed_claim?.job === FAILED_CLAIM_JOB, "Doctor Who drill failed-claim run custody drifted");
+assert(scopeRepair.failed_claim?.artifact_id === FAILED_CLAIM_ARTIFACT_ID && scopeRepair.failed_claim?.artifact_sha256 === FAILED_CLAIM_ARTIFACT_SHA256, "Doctor Who drill failed-claim artifact custody drifted");
+assert(scopeRepair.repair?.historical_drill_receipt_immutable === true, "Doctor Who drill historical receipt was not preserved");
+assert(scopeRepair.repair?.current_pilot_self_hash_required === true, "Doctor Who drill current-pilot self-hash repair missing");
+assert(scopeRepair.repair?.exact_pilot_facets_required === true, "Doctor Who drill exact-facet repair missing");
+assert(scopeRepair.repair?.unrelated_single_cycle_allowed === true, "Doctor Who drill unrelated-cycle isolation missing");
+assert(scopeRepair.repair?.multiple_active_cycles_refused === true, "Doctor Who drill multiple-cycle refusal missing");
+assert(scopeRepair.code?.path === PATHS.scopeRepair.replace("data/review/adapter-sdk/doctor-who-correction-drill-001-scope-custody.json", "scripts/doctor-who-correction-drill.mjs"), "Doctor Who drill repair code path drifted");
+assert(scopeRepair.code?.sha256 === sha(readBytes(scopeRepair.code.path)), "Doctor Who drill repair code hash drifted");
+const scopeRepairClone = structuredClone(scopeRepair);
+delete scopeRepairClone.receipt_sha256;
+assert(scopeRepair.receipt_sha256 === sha(`${stableJson(scopeRepairClone)}\n`), "Doctor Who drill scope-repair receipt hash drifted");
+
+validateActiveLeaseIsolation([
+  { id: "fixture-star-one", scope: "star-trek", status: "leased", lease: { id: "lease_fixture_one" } },
+  { id: "fixture-doctor-queued", scope: "doctor-who", status: "queued" },
+]);
+expectFailure(
+  () => validateActiveLeaseIsolation([
+    { id: "fixture-star-one", scope: "star-trek", status: "leased", lease: { id: "lease_fixture_one" } },
+    { id: "fixture-star-two", scope: "star-trek", status: "drafted", lease: { id: "lease_fixture_two" } },
+  ]),
+  /multiple active lease groups/,
+  "multiple active lease groups",
+);
+expectFailure(
+  () => validateActiveLeaseIsolation([
+    { id: "fixture-doctor-active", scope: "doctor-who", status: "leased", lease: { id: "lease_fixture_doctor" } },
+  ]),
+  /Doctor Who acquired active work/,
+  "Doctor Who active-work isolation",
+);
+const sourceDrift = structuredClone(pilot);
+sourceDrift.task.source_content_sha256 = "0".repeat(64);
+rehashReceipt(sourceDrift);
+expectFailure(
+  () => validateCurrentPilotReceipt(sourceDrift, pilotItems),
+  /source-content identity drifted/,
+  "current pilot source drift",
+);
+const legacyBinding = structuredClone(pilot);
+legacyBinding.media = {
+  still: null,
+  portrait: null,
+  dispositions: { still: "absent", portrait: "absent" },
+  media_audit_sha256: MEDIA_AUDIT_SHA256,
+};
+rehashReceipt(legacyBinding);
+expectFailure(
+  () => validateCurrentPilotReceipt(legacyBinding, pilotItems),
+  /scope-bound media binding drifted/,
+  "legacy mutable media binding",
+);
+
+console.log("doctor-who-correction-drill: PASS — historical drill custody, exact Commander/Slite separation, scope-bound current pilot proof, one unrelated active cycle allowed, concurrent lease groups refused, and roadmap completion reserved");
