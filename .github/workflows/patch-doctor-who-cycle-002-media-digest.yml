@@ -1,0 +1,83 @@
+name: patch-doctor-who-cycle-002-media-digest
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/patch-doctor-who-cycle-002-media-digest.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patch-doctor-who-cycle-002-media-digest-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 4
+          sparse-checkout: |
+            .github/workflows
+
+      - name: Align only the generated Gredd media digest serializer
+        shell: bash
+        env:
+          AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+          TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+          SELF: .github/workflows/patch-doctor-who-cycle-002-media-digest.yml
+          WRITER: .github/workflows/complete-doctor-who-cycle-002-v2.yml
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+          git config user.name undercast-estate-collector
+          git config user.email undercast-estate-collector@users.noreply.github.com
+          git fetch --no-tags --depth=4 origin \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$AUTHORIZED_HEAD"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/complete-doctor-who-cycle-002-v2.yml')
+          text = path.read_text()
+          anchor = '          finalizerText = finalizerText.replace(receiptHashBefore, receiptHashAfter);\n'
+          if text.count(anchor) != 1:
+              raise SystemExit(f'expected one receipt replacement anchor, found {text.count(anchor)}')
+
+          insertion = '''          const mediaDigestLines = finalizerText.split('\\n').filter((line) => line.includes('Gredd media facet digest drifted'));
+          if (mediaDigestLines.length !== 1) throw new Error(`expected one Gredd media digest checker line, found ${mediaDigestLines.length}`);
+          const mediaDigestBefore = mediaDigestLines[0];
+          const mediaDigestToken = 'JSON.stringify(stable(facets))';
+          if (mediaDigestBefore.split(mediaDigestToken).length - 1 !== 1) throw new Error(`unexpected Gredd media digest checker: ${mediaDigestBefore}`);
+          const mediaDigestAfter = mediaDigestBefore.replace(mediaDigestToken, 'JSON.stringify(stable(facets), null, 2)');
+          finalizerText = finalizerText.replace(mediaDigestBefore, mediaDigestAfter);
+'''
+          updated = text.replace(anchor, anchor + insertion)
+          if updated.count("line.includes('Gredd media facet digest drifted')") != 1:
+              raise SystemExit('media digest marker patch did not land exactly once')
+          if updated.count("mediaDigestToken = 'JSON.stringify(stable(facets))'") != 1:
+              raise SystemExit('compact media digest token patch did not land exactly once')
+          path.write_text(updated)
+          PY
+
+          grep -Fq "line.includes('Gredd media facet digest drifted')" "$WRITER"
+          grep -Fq "JSON.stringify(stable(facets), null, 2)" "$WRITER"
+          git rm "$SELF"
+          git add "$WRITER"
+          git diff --cached --check
+          git commit \
+            -m 'Doctor Who: align Gredd media checker with receipt serialization' \
+            -m 'hash the same stable pretty JSON and trailing newline already bound by the reviewed facet receipt'
+          patched_head="$(git rev-parse HEAD)"
+          echo "patched_head=$patched_head" >> "$GITHUB_STEP_SUMMARY"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${AUTHORIZED_HEAD}"
