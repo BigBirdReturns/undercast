@@ -5,10 +5,13 @@ import { execFileSync } from "node:child_process";
 
 const BASE_MAIN = "39a58f2c5538da1adb7657623ee300dbca54a82d";
 const CYCLE004_MERGE = "efdce8dec82fb803fd165d7af0c1a6c77e3eecb8";
+const STILL_CORRECTION_MERGE = "84688c5308db55aae6a97a753d593aa15fe91d37";
 const ORIGINAL_RECEIPT_PATH = "data/review/adapter-sdk/doctor-who-cycle-004-jask-audio.json";
 const ORIGINAL_CHECKER_PATH = "scripts/doctor-who-cycle-004.mjs";
 const CORRECTION_RECEIPT_PATH = "data/review/adapter-sdk/doctor-who-cycle-004-jask-audio-still-correction.json";
 const CHECKER_PATH = "scripts/doctor-who-cycle-004-still-correction.mjs";
+const COMPOSABILITY_RECEIPT_PATH = "data/review/adapter-sdk/doctor-who-cycle-004-still-correction-composability.json";
+const COMPOSABILITY_TRANSACTION = "DOCTOR-WHO-CYCLE-004-STILL-CORRECTION-COMPOSABILITY-001";
 const TASK_ID = "ap_2dd55dca3530b84be1ad24a0";
 const WALL_ID = "UC-1349";
 const CYCLE_ID = "cycle_341356246d968c63327c8b92";
@@ -22,6 +25,9 @@ const SOURCE_IMAGE_SHA256 = "ed306bb55b5531ea0269fb9884e20030c8b8445cd4a1f7a1dbd
 const ORIGINAL_RECEIPT_FILE_SHA256 = "532594926e2ebe3b213a0ce59608c0e0b9e32f000fb75cb16c73e8b0137ca3cf";
 const ORIGINAL_RECEIPT_DECLARED_SHA256 = "95599028ecf635be649030a53a3fe830cc2daae2052e2ecd8a3226c3b5d41a17";
 const ORIGINAL_CHECKER_SHA256 = "429589f88f244bee23456d261f13fccc4be12c70565a0b825a32848bc77a71d3";
+const CORRECTION_RECEIPT_FILE_SHA256 = "c83e49859d358e46255935aa6fd8a8295981e18e0bb75acd492fa7904be29d42";
+const CORRECTION_RECEIPT_DECLARED_SHA256 = "9df7cd4f495a07a68fe23b7d399f6872918e4e608daa10b58ced298615e116d3";
+const ORIGINAL_CORRECTION_CHECKER_SHA256 = "1e21cd5424c713db6bee1855af91622225661f29d6afc873186bf6e0f3b8f3ec";
 const BEFORE_FACETS_SHA256 = "a66406eb21b3fc8023280c0ca0e7305603979662fb85124ae34b58e9006b305c";
 const AFTER_FACETS_SHA256 = "7571368da9fec6bb9a801c4b58a06ef9649ecf1315eab0e2c43ecf8916c7a179";
 const BEFORE_STILL_FACET_SHA256 = "f187f3728bcdbf94ae2a0fc227dfb6ae1733e076a0142a122849170ee7f16a12";
@@ -36,7 +42,7 @@ const UNCHANGED_SHA256 = {
   "data/journal/autopilot.jsonl": "0678c66e765608d768a8227943fdff42e914bfe1809ceda9bb73f621b041c96d",
   "data/journal/waterline.jsonl": "44f3add27dbc053c039aa86dea57766c509bd83f3bcdb3b746d97523bfe6746d"
 };
-const CANDIDATE = process.env.CYCLE004_STILL_CORRECTION_CANDIDATE === "1";
+const CANDIDATE = process.env.CYCLE004_STILL_CORRECTION_CANDIDATE === "1" || process.env.CYCLE004_STILL_COMPOSABILITY_CANDIDATE === "1";
 const sha = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const stable = (value) => Array.isArray(value) ? value.map(stable) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])])) : value;
 const stablePretty = (value) => `${JSON.stringify(stable(value), null, 2)}\n`;
@@ -45,6 +51,11 @@ const readJsonl = (path) => fs.readFileSync(path, "utf8").split(/\r?\n/).filter(
 const fail = (message) => { throw new Error(message); };
 const assert = (condition, message) => { if (!condition) fail(message); };
 const exact = (actual, expected, message) => { if (JSON.stringify(stable(actual)) !== JSON.stringify(stable(expected))) fail(message); };
+const expectFailure = (name, fn, pattern) => {
+  let error = null;
+  try { fn(); } catch (caught) { error = caught; }
+  assert(error && pattern.test(String(error.message || error)), `adversarial fixture did not fail: ${name}`);
+};
 const facetReceipt = (row) => ({ id: row.id, scope: row.scope, wall_id: row.wall_id, side: row.side, actor: row.actor, character: row.character, expected_subject: row.expected_subject, source_fetched_at: row.source_fetched_at, asset: row.asset, risk_codes: row.risk_codes, votes: row.votes, status: row.status, claims: row.claims });
 
 assert(sha(fs.readFileSync(ORIGINAL_RECEIPT_PATH)) === ORIGINAL_RECEIPT_FILE_SHA256, "original cycle-004 receipt bytes changed");
@@ -59,31 +70,63 @@ assert(original.media?.statuses?.still === "absent" && original.media?.facets_sh
 const originalStill = original.media?.facets?.find((row) => row.side === "still");
 assert(originalStill?.id === STILL_ITEM_ID && originalStill.status === "absent" && originalStill.asset === null, "original cycle-004 still receipt changed");
 
+const immutableObjects = [
+  [CYCLE004_MERGE, ORIGINAL_RECEIPT_PATH, ORIGINAL_RECEIPT_FILE_SHA256],
+  [CYCLE004_MERGE, ORIGINAL_CHECKER_PATH, ORIGINAL_CHECKER_SHA256],
+  [STILL_CORRECTION_MERGE, CORRECTION_RECEIPT_PATH, CORRECTION_RECEIPT_FILE_SHA256],
+  [STILL_CORRECTION_MERGE, CHECKER_PATH, ORIGINAL_CORRECTION_CHECKER_SHA256],
+  ...Object.entries(UNCHANGED_SHA256).map(([path, expected]) => [STILL_CORRECTION_MERGE, path, expected]),
+];
 if (process.env.SKIP_IMMUTABLE_GIT_CHECK !== "1" && fs.existsSync(".git")) {
   try {
-    execFileSync("git", ["cat-file", "-e", `${CYCLE004_MERGE}^{commit}`], { stdio: "ignore" });
-    for (const [path, expected] of [[ORIGINAL_RECEIPT_PATH, ORIGINAL_RECEIPT_FILE_SHA256], [ORIGINAL_CHECKER_PATH, ORIGINAL_CHECKER_SHA256]]) {
-      const bytes = execFileSync("git", ["show", `${CYCLE004_MERGE}:${path}`], { maxBuffer: 64 * 1024 * 1024 });
-      assert(sha(bytes) === expected, `immutable ${path} differs at cycle-004 merge`);
+    for (const commit of [CYCLE004_MERGE, STILL_CORRECTION_MERGE]) execFileSync("git", ["cat-file", "-e", `${commit}^{commit}`], { stdio: "ignore" });
+    for (const [commit, path, expected] of immutableObjects) {
+      const bytes = execFileSync("git", ["show", `${commit}:${path}`], { maxBuffer: 64 * 1024 * 1024 });
+      assert(sha(bytes) === expected, `immutable ${path} differs at ${commit}`);
     }
   } catch (error) {
-    fail(`immutable cycle-004 Git custody unavailable: ${error.message}`);
+    fail(`immutable cycle-004 correction Git custody unavailable: ${error.message}`);
   }
 }
 
-for (const [path, expected] of Object.entries(UNCHANGED_SHA256)) assert(sha(fs.readFileSync(path)) === expected, `${path} changed during still correction`);
+const validateLiveState = ({ autopilot, autopilotJournal, waterline }) => {
+  const job = autopilot.jobs.find((row) => row.id === TASK_ID);
+  assert(job?.status === "resolved" && JSON.stringify(job.wall_ids) === JSON.stringify([WALL_ID]), "Jask task was reopened or rebound");
+  assert(job.outcome?.media_review?.records?.[0]?.still?.disposition === "absent", "historical task media review was rewritten instead of corrected separately");
+  const doctorJobs = autopilot.jobs.filter((row) => row.scope === "doctor-who");
+  assert(doctorJobs.length === 316, "Doctor Who queue denominator changed");
+  assert(doctorJobs.filter((row) => row.status === "resolved").length >= 4, "Doctor Who resolved floor regressed below cycle 004");
+  assert(doctorJobs.filter((row) => ["leased", "drafted", "merged"].includes(row.status)).length === 0, "cycle-004 still correction checker found active Doctor Who work");
+  const claims = autopilotJournal.filter((row) => row.op === "lease.claimed" && row.scope === "doctor-who");
+  const cycle004Claims = claims.filter((row) => row.lease_id === LEASE_ID);
+  assert(cycle004Claims.length === 1 && cycle004Claims[0].task_id === TASK_ID, "cycle-004 lease claim is missing, duplicated, or rebound");
+  assert(claims.length >= 4, "Doctor Who claim history regressed below cycle 004");
+  const cycles = waterline.cycles.filter((row) => row.id === CYCLE_ID);
+  assert(cycles.length === 1 && cycles[0].lease_id === LEASE_ID && cycles[0].outcome === "completed" && cycles[0].task_statuses?.[TASK_ID] === "resolved", "reviewed cycle-004 was reopened or replaced");
+};
+
 const autopilot = read("data/AUTOPILOT.json");
-const job = autopilot.jobs.find((row) => row.id === TASK_ID);
-assert(job?.status === "resolved" && JSON.stringify(job.wall_ids) === JSON.stringify([WALL_ID]), "Jask task was reopened or rebound");
-assert(job.outcome?.media_review?.records?.[0]?.still?.disposition === "absent", "historical task media review was rewritten instead of corrected separately");
-const doctorJobs = autopilot.jobs.filter((row) => row.scope === "doctor-who");
-assert(doctorJobs.length === 316 && doctorJobs.filter((row) => row.status === "queued").length === 312 && doctorJobs.filter((row) => row.status === "resolved").length === 4, "Doctor Who queue denominator changed");
-assert(autopilot.jobs.filter((row) => ["leased", "drafted", "merged"].includes(row.status)).length === 0, "still correction left active corpus work");
-const claimCount = readJsonl("data/journal/autopilot.jsonl").filter((row) => row.op === "lease.claimed" && row.scope === "doctor-who").length;
-assert(claimCount === 4, "still correction issued or removed a Doctor Who lease");
+const autopilotJournal = readJsonl("data/journal/autopilot.jsonl");
 const waterline = read("data/WATERLINE-STATE.json");
-const cycle = waterline.cycles.find((row) => row.id === CYCLE_ID);
-assert(cycle?.lease_id === LEASE_ID && cycle.outcome === "completed" && cycle.task_statuses?.[TASK_ID] === "resolved", "reviewed cycle-004 was reopened or replaced");
+validateLiveState({ autopilot, autopilotJournal, waterline });
+
+const futureAutopilot = structuredClone(autopilot);
+const futureJob = futureAutopilot.jobs.find((row) => row.scope === "doctor-who" && row.status === "queued" && row.id !== TASK_ID);
+assert(futureJob, "future-cycle fixture lacks a queued Doctor Who job");
+futureJob.status = "resolved";
+futureJob.wall_ids = ["UC-FUTURE-FIXTURE"];
+const futureJournal = [...autopilotJournal, { id: "apj_future_fixture", op: "lease.claimed", scope: "doctor-who", lease_id: "lease_future_fixture", task_id: futureJob.id, at: "2099-01-01T00:00:00.000Z" }];
+validateLiveState({ autopilot: futureAutopilot, autopilotJournal: futureJournal, waterline });
+const reopened = structuredClone(autopilot); reopened.jobs.find((row) => row.id === TASK_ID).status = "queued";
+expectFailure("reopened Jask", () => validateLiveState({ autopilot: reopened, autopilotJournal, waterline }), /reopened or rebound/);
+const active = structuredClone(autopilot); active.jobs.find((row) => row.scope === "doctor-who" && row.status === "queued").status = "leased";
+expectFailure("active Doctor Who work", () => validateLiveState({ autopilot: active, autopilotJournal, waterline }), /active Doctor Who work/);
+const shortDenominator = structuredClone(autopilot); shortDenominator.jobs.splice(shortDenominator.jobs.findIndex((row) => row.scope === "doctor-who" && row.id !== TASK_ID), 1);
+expectFailure("changed denominator", () => validateLiveState({ autopilot: shortDenominator, autopilotJournal, waterline }), /denominator changed/);
+const missingClaim = autopilotJournal.filter((row) => row.lease_id !== LEASE_ID);
+expectFailure("missing cycle-004 claim", () => validateLiveState({ autopilot, autopilotJournal: missingClaim, waterline }), /missing, duplicated, or rebound/);
+const duplicatedClaim = [...autopilotJournal, structuredClone(autopilotJournal.find((row) => row.lease_id === LEASE_ID))];
+expectFailure("duplicated cycle-004 claim", () => validateLiveState({ autopilot, autopilotJournal: duplicatedClaim, waterline }), /missing, duplicated, or rebound/);
 
 const specimens = read("data/specimens.json");
 const sources = read("data/SOURCES.json");
@@ -114,23 +157,36 @@ const events = readJsonl("data/journal/media-audit.jsonl").filter((row) => MEDIA
 exact(events.map((row) => row.id).sort(), [...MEDIA_EVENT_IDS].sort(), "Jask still media journal custody drifted");
 assert(events.every((row) => row.item_id === STILL_ITEM_ID && row.wall_id === WALL_ID && row.asset_sha256 === STILL_SHA256 && row.op === "media-audit.enforced"), "Jask still journal event semantics drifted");
 
-if (CANDIDATE) {
-  console.log("doctor-who-cycle-004-still-correction: CANDIDATE PASS — exact Jask still is verified without reopening the task or issuing a lease");
-  process.exit(0);
-}
-
 assert(fs.existsSync(CORRECTION_RECEIPT_PATH), "Jask still correction receipt is absent");
+assert(sha(fs.readFileSync(CORRECTION_RECEIPT_PATH)) === CORRECTION_RECEIPT_FILE_SHA256, "Jask still correction receipt bytes changed");
 const correction = read(CORRECTION_RECEIPT_PATH);
 const correctionBody = structuredClone(correction); delete correctionBody.receipt_sha256;
+assert(correction.receipt_sha256 === CORRECTION_RECEIPT_DECLARED_SHA256, "Jask still correction declared receipt SHA changed");
 assert(correction.receipt_sha256 === sha(Buffer.from(stablePretty(correctionBody))), "Jask still correction receipt hash drifted");
 assert(correction.transaction === "DOCTOR-WHO-CYCLE-004-JASK-AUDIO-STILL-CORRECTION-001", "Jask still correction transaction drifted");
 assert(correction.base_main === BASE_MAIN && correction.prior_cycle.receipt_declared_sha256 === ORIGINAL_RECEIPT_DECLARED_SHA256 && correction.prior_cycle.receipt_file_sha256 === ORIGINAL_RECEIPT_FILE_SHA256 && correction.prior_cycle.checker_sha256 === ORIGINAL_CHECKER_SHA256, "Jask still correction lost original-cycle custody");
 assert(correction.media.before.facets_sha256 === BEFORE_FACETS_SHA256 && correction.media.before.still_facet_sha256 === BEFORE_STILL_FACET_SHA256 && correction.media.after.facets_sha256 === AFTER_FACETS_SHA256 && correction.media.after.still_facet_sha256 === AFTER_STILL_FACET_SHA256, "Jask still correction before/after custody drifted");
 assert(correction.media.after.asset.sha256 === STILL_SHA256 && correction.media.source.source_image_sha256 === SOURCE_IMAGE_SHA256, "Jask still correction source or derivative custody drifted");
-assert(correction.qualification?.checker === CHECKER_PATH && correction.qualification.checker_sha256 === sha(fs.readFileSync(CHECKER_PATH)), "Jask still correction checker binding drifted");
+assert(correction.qualification?.checker === CHECKER_PATH && correction.qualification.checker_sha256 === ORIGINAL_CORRECTION_CHECKER_SHA256, "Jask still correction original checker binding drifted");
 assert(correction.boundary?.task_reopened === false && correction.boundary?.lease_issued === false && correction.boundary?.reviewed_cycle_replaced === false && correction.boundary?.generic_sontaran_substitution === false && correction.boundary?.original_cycle_receipt_rewritten === false && correction.boundary?.roadmap_completion_claimed === false, "Jask still correction boundary drifted");
 for (const [path, expected] of Object.entries(UNCHANGED_SHA256)) assert(correction.unchanged[path] === expected, `Jask still correction receipt lost unchanged hash ${path}`);
 const evidence = JSON.stringify(correction.execution || {});
 for (const token of [correction.execution.workflow_run, correction.execution.workflow_job, correction.execution.artifact_id, correction.execution.artifact_sha256, correction.execution.candidate_commit, correction.execution.candidate_gate_sha256, correction.execution.verification_workflow_run, correction.execution.verification_workflow_job, correction.execution.verification_artifact_id, correction.execution.verification_artifact_sha256, STILL_SHA256, SOURCE_IMAGE_SHA256]) assert(evidence.includes(String(token)) || JSON.stringify(correction).includes(String(token)), `Jask still correction evidence lacks ${token}`);
 assert(!/<[^>\n]+>/.test(JSON.stringify(correction)), "Jask still correction receipt contains a template placeholder");
-console.log("doctor-who-cycle-004-still-correction: PASS — immutable cycle-004 absence history and exact post-merge Jask still correction are both intact");
+
+if (CANDIDATE) {
+  console.log("doctor-who-cycle-004-still-correction: CANDIDATE PASS — immutable correction-time custody, exact Jask media, and future-cycle composability fixtures are intact");
+  process.exit(0);
+}
+
+assert(fs.existsSync(COMPOSABILITY_RECEIPT_PATH), "cycle-004 still-correction composability receipt is absent");
+const composability = read(COMPOSABILITY_RECEIPT_PATH);
+const composabilityBody = structuredClone(composability); delete composabilityBody.receipt_sha256;
+assert(composability.receipt_sha256 === sha(Buffer.from(stablePretty(composabilityBody))), "cycle-004 still-correction composability receipt hash drifted");
+assert(composability.transaction === COMPOSABILITY_TRANSACTION, "cycle-004 still-correction composability transaction drifted");
+assert(composability.historical_custody?.still_correction_merge === STILL_CORRECTION_MERGE && composability.historical_custody?.correction_receipt_file_sha256 === CORRECTION_RECEIPT_FILE_SHA256 && composability.historical_custody?.correction_receipt_declared_sha256 === CORRECTION_RECEIPT_DECLARED_SHA256 && composability.historical_custody?.original_correction_checker_sha256 === ORIGINAL_CORRECTION_CHECKER_SHA256, "cycle-004 still-correction composability lost immutable historical custody");
+assert(composability.qualification?.checker === CHECKER_PATH && composability.qualification?.checker_sha256 === sha(fs.readFileSync(CHECKER_PATH)), "cycle-004 still-correction composability checker binding drifted");
+assert(composability.fixtures?.future_resolved_cycle_accepted === true && composability.fixtures?.reopened_jask_rejected === true && composability.fixtures?.active_work_rejected === true && composability.fixtures?.denominator_change_rejected === true && composability.fixtures?.missing_claim_rejected === true && composability.fixtures?.duplicate_claim_rejected === true, "cycle-004 still-correction composability fixtures are incomplete");
+assert(composability.boundary?.historical_receipt_rewritten === false && composability.boundary?.historical_checker_rewritten_at_immutable_merge === false && composability.boundary?.cycle_004_reopened === false && composability.boundary?.live_queue_snapshot_pinned === false && composability.boundary?.future_cycles_permitted === true && composability.boundary?.media_rejudged === false, "cycle-004 still-correction composability boundary drifted");
+assert(!/<[^>\n]+>/.test(JSON.stringify(composability)), "cycle-004 still-correction composability receipt contains a template placeholder");
+console.log("doctor-who-cycle-004-still-correction: PASS — immutable correction-time custody, exact Jask media, and adversarially proved future-cycle composability are intact");
