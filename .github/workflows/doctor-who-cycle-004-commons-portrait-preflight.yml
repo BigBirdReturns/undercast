@@ -73,6 +73,8 @@ jobs:
           import os
           import re
           import subprocess
+          import time
+          import urllib.error
           import urllib.parse
           import urllib.request
           from pathlib import Path
@@ -80,12 +82,31 @@ jobs:
           OUT = Path('/tmp/doctor-who-cycle-004-commons-portrait-preflight')
           CANDIDATES = OUT / 'candidates'
           API = 'https://commons.wikimedia.org/w/api.php'
-          UA = 'undercast-estate-collector/1.0 (read-only Commons category preflight)'
+          UA = 'undercast-estate-collector/1.0 (read-only Commons category preflight; sequential requests)'
 
-          def fetch_bytes(url: str) -> bytes:
-              request = urllib.request.Request(url, headers={'User-Agent': UA})
-              with urllib.request.urlopen(request, timeout=120) as response:
-                  return response.read()
+          def fetch_bytes(url: str, attempts: int = 7) -> bytes:
+              last_error: Exception | None = None
+              for attempt in range(attempts):
+                  request = urllib.request.Request(url, headers={'User-Agent': UA, 'Accept': '*/*'})
+                  try:
+                      with urllib.request.urlopen(request, timeout=120) as response:
+                          return response.read()
+                  except urllib.error.HTTPError as error:
+                      last_error = error
+                      if error.code not in {429, 500, 502, 503, 504} or attempt + 1 == attempts:
+                          raise
+                      retry_after = error.headers.get('Retry-After')
+                      delay = float(retry_after) if retry_after and retry_after.isdigit() else min(45.0, 3.0 * (2 ** attempt))
+                      print(f'retryable HTTP {error.code}; sleeping {delay:.1f}s before attempt {attempt + 2}/{attempts}', flush=True)
+                      time.sleep(delay)
+                  except (TimeoutError, urllib.error.URLError) as error:
+                      last_error = error
+                      if attempt + 1 == attempts:
+                          raise
+                      delay = min(30.0, 2.0 * (2 ** attempt))
+                      print(f'retryable network error {error}; sleeping {delay:.1f}s', flush=True)
+                      time.sleep(delay)
+              raise RuntimeError(f'fetch exhausted without result: {last_error}')
 
           def fetch_json(params: dict[str, str]) -> dict:
               return json.loads(fetch_bytes(API + '?' + urllib.parse.urlencode(params)).decode('utf-8'))
@@ -139,24 +160,29 @@ jobs:
           if len(members) < 3:
               raise SystemExit(f'Dan Starkey Commons category unexpectedly sparse: {len(members)}')
 
+          pageids = '|'.join(str(row['pageid']) for row in members)
+          metadata = fetch_json({
+              'action': 'query',
+              'prop': 'imageinfo',
+              'pageids': pageids,
+              'iiprop': 'url|size|mime|timestamp|user|sha1|extmetadata',
+              'iiurlwidth': '900',
+              'format': 'json',
+              'formatversion': '2',
+              'origin': '*',
+          })
+          pages_by_id = {int(row['pageid']): row for row in ((metadata.get('query') or {}).get('pages') or []) if row.get('pageid') is not None}
+
           rows = []
+          successful_portraits = []
           for index, member in enumerate(sorted(members, key=lambda row: (row.get('title') or '').casefold()), start=1):
-              pageid = member.get('pageid')
-              payload = fetch_json({
-                  'action': 'query',
-                  'prop': 'imageinfo',
-                  'pageids': str(pageid),
-                  'iiprop': 'url|size|mime|timestamp|user|sha1|extmetadata',
-                  'iiurlwidth': '1200',
-                  'format': 'json',
-                  'formatversion': '2',
-                  'origin': '*',
-              })
-              pages = ((payload.get('query') or {}).get('pages') or [])
-              if len(pages) != 1 or len(pages[0].get('imageinfo') or []) != 1:
+              pageid = int(member['pageid'])
+              page = pages_by_id.get(pageid) or {}
+              infos = page.get('imageinfo') or []
+              if len(infos) != 1:
                   rows.append({'title': member.get('title'), 'pageid': pageid, 'error': 'missing imageinfo'})
                   continue
-              info = pages[0]['imageinfo'][0]
+              info = infos[0]
               mime = info.get('mime')
               if mime not in {'image/jpeg', 'image/png'}:
                   rows.append({'title': member.get('title'), 'pageid': pageid, 'error': f'unsupported mime {mime}'})
@@ -164,20 +190,9 @@ jobs:
               origin = str(info.get('descriptionurl') or '').strip()
               download_url = info.get('thumburl') or info.get('url')
               license_name = meta_value(info, 'LicenseShortName') or meta_value(info, 'UsageTerms')
-              artist = meta_value(info, 'Artist')
               free_license = bool(re.search(r'CC\s*(?:BY|0)|public domain', license_name, re.I))
-              safe = f'{index:02d}'
-              source_path = CANDIDATES / f'{safe}-source'
-              portrait_path = CANDIDATES / f'{safe}-portrait.jpg'
-              source_path.write_bytes(fetch_bytes(download_url))
-              subprocess.run([
-                  'convert', str(source_path), '-auto-orient', '-strip',
-                  '-resize', '420x600^', '-gravity', 'center', '-extent', '420x600',
-                  '-quality', '88', str(portrait_path),
-              ], check=True)
-              portrait_sha = sha256_file(portrait_path)
-              rows.append({
-                  'candidate_index': safe,
+              base = {
+                  'candidate_index': f'{index:02d}',
                   'title': member.get('title'),
                   'pageid': pageid,
                   'description_url': origin,
@@ -189,28 +204,50 @@ jobs:
                   'timestamp': info.get('timestamp'),
                   'uploader': info.get('user'),
                   'api_sha1': info.get('sha1'),
-                  'artist': artist,
+                  'artist': meta_value(info, 'Artist'),
                   'license': license_name,
                   'credit': meta_value(info, 'Credit'),
                   'description': meta_value(info, 'ImageDescription'),
                   'free_license_candidate': free_license,
                   'already_used_origin': origin in existing_origins,
-                  'source_download_sha256': sha256_file(source_path),
-                  'portrait_path': str(portrait_path),
-                  'portrait_sha256': portrait_sha,
-                  'portrait_dimensions': subprocess.check_output(['identify', '-format', '%w %h', str(portrait_path)], text=True).strip(),
-                  'byte_distinct_from_all_existing_media': portrait_sha not in existing_hashes,
                   'boundary': {
                       'performer_identity_only': True,
                       'character_evidence': False,
                       'jask_or_generic_sontaran_depiction': False,
                       'adoption_requires_second_desk_review': True,
                   },
-              })
+              }
+              if not free_license or origin in existing_origins:
+                  rows.append(base)
+                  continue
+
+              safe = base['candidate_index']
+              source_path = CANDIDATES / f'{safe}-source'
+              portrait_path = CANDIDATES / f'{safe}-portrait.jpg'
+              try:
+                  source_path.write_bytes(fetch_bytes(download_url))
+                  subprocess.run([
+                      'convert', str(source_path), '-auto-orient', '-strip',
+                      '-resize', '420x600^', '-gravity', 'center', '-extent', '420x600',
+                      '-quality', '88', str(portrait_path),
+                  ], check=True)
+                  portrait_sha = sha256_file(portrait_path)
+                  base.update({
+                      'source_download_sha256': sha256_file(source_path),
+                      'portrait_path': str(portrait_path),
+                      'portrait_sha256': portrait_sha,
+                      'portrait_dimensions': subprocess.check_output(['identify', '-format', '%w %h', str(portrait_path)], text=True).strip(),
+                      'byte_distinct_from_all_existing_media': portrait_sha not in existing_hashes,
+                  })
+                  successful_portraits.append(str(portrait_path))
+              except Exception as error:
+                  base['download_or_transform_error'] = f'{type(error).__name__}: {error}'
+              rows.append(base)
+              time.sleep(2.0)
 
           eligible = [row for row in rows if row.get('free_license_candidate') and not row.get('already_used_origin') and row.get('byte_distinct_from_all_existing_media')]
           summary = {
-              'version': 1,
+              'version': 2,
               'exact_main': os.environ['EXACT_MAIN'],
               'lease_issued': False,
               'task_id': os.environ['TASK_ID'],
@@ -219,8 +256,10 @@ jobs:
               'category': 'Category:Dan Starkey',
               'category_members': len(members),
               'processed_candidates': len(rows),
+              'downloaded_derivatives': len(successful_portraits),
               'eligible_new_portrait_candidates': len(eligible),
               'eligible_candidate_indices': [row['candidate_index'] for row in eligible],
+              'candidate_errors': [row for row in rows if row.get('error') or row.get('download_or_transform_error')],
               'existing_dan_starkey_portraits': existing,
               'boundary': {
                   'no_media_adopted': True,
@@ -229,14 +268,23 @@ jobs:
               },
           }
           (OUT / 'category-api.json').write_text(json.dumps(category, indent=2) + '\n')
+          (OUT / 'metadata-api.json').write_text(json.dumps(metadata, indent=2) + '\n')
           (OUT / 'portrait-candidates.json').write_text(json.dumps(rows, indent=2) + '\n')
           (OUT / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
           print(json.dumps(summary, indent=2))
           PY
 
-          montage /tmp/doctor-who-cycle-004-commons-portrait-preflight/candidates/*-portrait.jpg \
-            -tile 4x -geometry 210x300+8+8 \
-            /tmp/doctor-who-cycle-004-commons-portrait-preflight/contact-sheet.jpg
+          shopt -s nullglob
+          portraits=(/tmp/doctor-who-cycle-004-commons-portrait-preflight/candidates/*-portrait.jpg)
+          if [ "${#portraits[@]}" -gt 0 ]; then
+            montage "${portraits[@]}" \
+              -tile 4x -geometry 210x300+8+8 \
+              /tmp/doctor-who-cycle-004-commons-portrait-preflight/contact-sheet.jpg
+          else
+            convert -size 840x300 xc:white -gravity center \
+              -pointsize 28 -annotate 0 'No portrait derivatives recovered' \
+              /tmp/doctor-who-cycle-004-commons-portrait-preflight/contact-sheet.jpg
+          fi
           find /tmp/doctor-who-cycle-004-commons-portrait-preflight -type f -print0 \
             | sort -z \
             | xargs -0 sha256sum \
@@ -244,6 +292,7 @@ jobs:
           test -z "$(git status --porcelain)"
 
       - name: Upload exact Commons portrait preflight
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: doctor-who-cycle-004-commons-portrait-preflight-${{ github.run_id }}
