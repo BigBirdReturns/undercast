@@ -1,0 +1,157 @@
+name: doctor-who-cycle-004-still-verification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-004-still-verification.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-004-still-verification-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  EXACT_MAIN: efdce8dec82fb803fd165d7af0c1a6c77e3eecb8
+  SELF: .github/workflows/doctor-who-cycle-004-still-verification.yml
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  FILE_TITLE: "File:Jask (The Sontaran Ordeal).jpg"
+  TASK_ID: ap_2dd55dca3530b84be1ad24a0
+  WALL_ID: UC-1349
+
+jobs:
+  verify:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 64
+
+      - name: Bind exact merged cycle and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=64 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${HEAD_BRANCH})" = "$HEAD_SHA"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+          node scripts/doctor-who-cycle-004.mjs
+          node scripts/media-audit.mjs gate --scope doctor-who
+          node scripts/waterline.mjs validate --scope doctor-who
+          test -z "$(git status --porcelain)"
+
+      - name: Install deterministic image tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+
+      - name: Recover the exact file named by the revision-bound source
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=/tmp/doctor-who-cycle-004-still-verification
+          mkdir -p "$out"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+
+          const out = '/tmp/doctor-who-cycle-004-still-verification';
+          const endpoint = new URL('https://tardis.fandom.com/api.php');
+          endpoint.search = new URLSearchParams({
+            action: 'query',
+            prop: 'imageinfo',
+            titles: process.env.FILE_TITLE,
+            iiprop: 'url|size|mime|timestamp|user|sha1|extmetadata',
+            format: 'json',
+            formatversion: '2',
+            origin: '*',
+          }).toString();
+          const response = await fetch(endpoint, {
+            headers: { 'user-agent': 'Undercast exact-character verification/1.0' },
+          });
+          if (!response.ok) throw new Error(`file API failed: ${response.status}`);
+          const doc = await response.json();
+          const pages = doc?.query?.pages || [];
+          if (pages.length !== 1 || pages[0].missing) throw new Error('exact Jask file is missing or ambiguous');
+          const page = pages[0];
+          const info = page?.imageinfo?.[0];
+          if (page.title !== process.env.FILE_TITLE || !info?.url) throw new Error('exact Jask file metadata drifted');
+          const imageResponse = await fetch(info.url, {
+            headers: { 'user-agent': 'Undercast exact-character verification/1.0' },
+          });
+          if (!imageResponse.ok) throw new Error(`image download failed: ${imageResponse.status}`);
+          const bytes = Buffer.from(await imageResponse.arrayBuffer());
+          const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+          fs.writeFileSync(`${out}/jask-source-image`, bytes);
+          fs.writeFileSync(`${out}/file-api.json`, `${JSON.stringify(doc, null, 2)}\n`);
+          fs.writeFileSync(`${out}/raw-metadata.json`, `${JSON.stringify({
+            version: 1,
+            exact_main: process.env.EXACT_MAIN,
+            task_id: process.env.TASK_ID,
+            wall_id: process.env.WALL_ID,
+            file_page_id: page.pageid,
+            file_title: page.title,
+            description_url: info.descriptionurl,
+            original_url: info.url,
+            mime: info.mime,
+            width: info.width,
+            height: info.height,
+            timestamp: info.timestamp,
+            uploader: info.user,
+            api_sha1: info.sha1,
+            source_bytes: bytes.length,
+            source_sha256: sha256,
+            extmetadata: info.extmetadata || {},
+            boundary: {
+              exact_character_only: true,
+              generic_sontaran_evidence: false,
+              no_adoption: true,
+              no_lease: true,
+            },
+          }, null, 2)}\n`);
+          NODE
+
+          convert "$out/jask-source-image" \
+            -auto-orient \
+            -strip \
+            -resize '640x640>' \
+            -sampling-factor 4:2:0 \
+            -quality 88 \
+            "$out/jask-still-candidate.jpg"
+          identify -format '%w %h\n' "$out/jask-source-image" > "$out/source-dimensions.txt"
+          identify -format '%w %h\n' "$out/jask-still-candidate.jpg" > "$out/candidate-dimensions.txt"
+          sha256sum "$out/jask-source-image" "$out/jask-still-candidate.jpg" > "$out/image-sha256.txt"
+          find images -type f -print0 | sort -z | xargs -0 sha256sum > "$out/existing-image-sha256.txt"
+          candidate_sha="$(sha256sum "$out/jask-still-candidate.jpg" | awk '{print $1}')"
+          if grep -Fq "$candidate_sha" "$out/existing-image-sha256.txt"; then
+            printf 'false\n' > "$out/byte-distinct.txt"
+          else
+            printf 'true\n' > "$out/byte-distinct.txt"
+          fi
+          cp /tmp/expected-paths.txt /tmp/actual-paths.txt "$out/"
+          printf '%s\n' "$EXACT_MAIN" > "$out/exact-main.txt"
+          printf '%s\n' "$HEAD_SHA" > "$out/carrier-head.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact post-merge still verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-004-still-verification-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: /tmp/doctor-who-cycle-004-still-verification
