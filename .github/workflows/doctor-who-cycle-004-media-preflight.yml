@@ -1,0 +1,330 @@
+name: doctor-who-cycle-004-media-preflight
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/doctor-who-cycle-004-media-preflight.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-004-media-preflight-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-004-media-preflight.yml
+  EXACT_MAIN: 92d667aaa468b053db2149770085707245da3ef4
+  TASK_ID: ap_2dd55dca3530b84be1ad24a0
+  SOURCE_PAGE_ID: "199222"
+  SOURCE_REVISION: "3732556"
+  SOURCE_CONTENT_SHA256: 19ac7f1f2428988546d752e03ad27a9864276c0ace08e8e122773f563f0d85fe
+  SOURCE_FINGERPRINT: e3497c3f35d8db0b07edfef2db873a234d6c47f60c9aa83928c018cbedc1e7d6
+  JASK_FILE_TITLE: "File:Jask (The Sontaran Ordeal).jpg"
+
+jobs:
+  preflight:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 64
+
+      - name: Bind exact current main and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=128 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${{ github.event.pull_request.head.ref }}:refs/remotes/origin/${{ github.event.pull_request.head.ref }}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${{ github.event.pull_request.head.ref }})" = "${{ github.event.pull_request.head.sha }}"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+          test "$(git rev-parse HEAD:data/AUTOPILOT.json)" = "$(git rev-parse "$EXACT_MAIN:data/AUTOPILOT.json")"
+          test "$(git rev-parse HEAD:data/CENSUS-COVERAGE.json)" = "$(git rev-parse "$EXACT_MAIN:data/CENSUS-COVERAGE.json")"
+          test "$(git rev-parse HEAD:data/CENSUS-MANIFEST.json)" = "$(git rev-parse "$EXACT_MAIN:data/CENSUS-MANIFEST.json")"
+
+      - name: Install deterministic image tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          identify -version
+
+      - name: Recover exact Jask art and independent Dan Starkey portrait candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/doctor-who-cycle-004-media-preflight
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import html
+          import json
+          import os
+          import re
+          import subprocess
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          OUT = Path('/tmp/doctor-who-cycle-004-media-preflight')
+          OUT.mkdir(parents=True, exist_ok=True)
+          CANDIDATES = OUT / 'portrait-candidates'
+          CANDIDATES.mkdir(exist_ok=True)
+          USER_AGENT = 'undercast-estate-collector/1.0 (read-only media preflight)'
+
+          def sha256_bytes(data: bytes) -> str:
+              return hashlib.sha256(data).hexdigest()
+
+          def sha256_file(path: Path) -> str:
+              return sha256_bytes(path.read_bytes())
+
+          def fetch_bytes(url: str) -> bytes:
+              request = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  return response.read()
+
+          def fetch_json(base: str, params: dict[str, str]) -> dict:
+              url = base + '?' + urllib.parse.urlencode(params)
+              return json.loads(fetch_bytes(url).decode('utf-8'))
+
+          def meta_value(info: dict, key: str) -> str:
+              value = ((info.get('extmetadata') or {}).get(key) or {}).get('value') or ''
+              value = html.unescape(str(value))
+              value = re.sub(r'<[^>]+>', ' ', value)
+              return re.sub(r'\s+', ' ', value).strip()
+
+          def convert(source: Path, target: Path, args: list[str]) -> None:
+              subprocess.run(['convert', str(source), '-auto-orient', '-strip', *args, str(target)], check=True)
+
+          existing_hashes: set[str] = set()
+          for path in Path('images').glob('*'):
+              if path.is_file():
+                  existing_hashes.add(sha256_file(path))
+          manifest = json.loads(Path('data/media-manifest.json').read_text())
+          for asset in (manifest.get('assets') or {}).values():
+              digest = str(asset.get('sha256') or '').strip()
+              if re.fullmatch(r'[0-9a-f]{64}', digest):
+                  existing_hashes.add(digest)
+
+          media_audit = json.loads(Path('data/MEDIA-AUDIT.json').read_text())
+          existing_dan_portraits = []
+          for item in media_audit.get('items') or []:
+              if item.get('side') != 'portrait' or item.get('actor') != 'Dan Starkey':
+                  continue
+              asset = item.get('asset') or {}
+              existing_dan_portraits.append({
+                  'wall_id': item.get('wall_id'),
+                  'character': item.get('character'),
+                  'src': asset.get('src'),
+                  'sha256': asset.get('sha256'),
+                  'origin': asset.get('origin'),
+                  'status': item.get('status'),
+              })
+          existing_origins = {str(row.get('origin') or '').strip() for row in existing_dan_portraits}
+
+          # Exact character artwork named by the revision-bound Jask source page.
+          fandom_api = 'https://tardis.fandom.com/api.php'
+          fandom = fetch_json(fandom_api, {
+              'action': 'query',
+              'prop': 'imageinfo',
+              'titles': os.environ['JASK_FILE_TITLE'],
+              'iiprop': 'url|size|mime|timestamp|user|sha1|extmetadata',
+              'iiurlwidth': '1200',
+              'format': 'json',
+              'formatversion': '2',
+              'origin': '*',
+          })
+          pages = ((fandom.get('query') or {}).get('pages') or [])
+          if len(pages) != 1 or pages[0].get('missing') is not None:
+              raise SystemExit(f'exact Jask file missing or ambiguous: {pages}')
+          page = pages[0]
+          if page.get('title') != os.environ['JASK_FILE_TITLE']:
+              raise SystemExit(f'exact Jask file title drifted: {page.get("title")}')
+          infos = page.get('imageinfo') or []
+          if len(infos) != 1:
+              raise SystemExit('exact Jask file lacks one imageinfo record')
+          info = infos[0]
+          jask_url = info.get('thumburl') or info.get('url')
+          if not jask_url:
+              raise SystemExit('exact Jask image lacks downloadable URL')
+          jask_source = OUT / 'jask-source-image'
+          jask_source.write_bytes(fetch_bytes(jask_url))
+          jask_still = OUT / 'jask-still-candidate.jpg'
+          convert(jask_source, jask_still, ['-resize', '640x640>', '-quality', '88'])
+          jask_dimensions = subprocess.check_output(['identify', '-format', '%w %h', str(jask_still)], text=True).strip()
+          jask_record = {
+              'source_task_id': os.environ['TASK_ID'],
+              'source_page_id': int(os.environ['SOURCE_PAGE_ID']),
+              'source_revision': int(os.environ['SOURCE_REVISION']),
+              'source_content_sha256': os.environ['SOURCE_CONTENT_SHA256'],
+              'source_fingerprint': os.environ['SOURCE_FINGERPRINT'],
+              'source_page_image_field': 'Jask (The Sontaran Ordeal).jpg',
+              'file_page_id': page.get('pageid'),
+              'file_title': page.get('title'),
+              'description_url': info.get('descriptionurl'),
+              'original_url': info.get('url'),
+              'download_url': jask_url,
+              'mime': info.get('mime'),
+              'width': info.get('width'),
+              'height': info.get('height'),
+              'timestamp': info.get('timestamp'),
+              'uploader': info.get('user'),
+              'api_sha1': info.get('sha1'),
+              'license': meta_value(info, 'LicenseShortName') or meta_value(info, 'UsageTerms'),
+              'artist': meta_value(info, 'Artist'),
+              'credit': meta_value(info, 'Credit'),
+              'source_download_sha256': sha256_file(jask_source),
+              'still_candidate_path': str(jask_still),
+              'still_candidate_sha256': sha256_file(jask_still),
+              'still_candidate_dimensions': jask_dimensions,
+              'byte_distinct_from_all_existing_media': sha256_file(jask_still) not in existing_hashes,
+              'boundary': {
+                  'exact_character_only': True,
+                  'generic_sontaran_evidence': False,
+                  'adoption_requires_second_desk_review': True,
+              },
+          }
+          (OUT / 'jask-file-api.json').write_text(json.dumps(fandom, indent=2) + '\n')
+          (OUT / 'jask-still-metadata.json').write_text(json.dumps(jask_record, indent=2) + '\n')
+
+          # Commons search for an independently licensed third Dan Starkey portrait.
+          commons_api = 'https://commons.wikimedia.org/w/api.php'
+          commons = fetch_json(commons_api, {
+              'action': 'query',
+              'generator': 'search',
+              'gsrsearch': 'Dan Starkey',
+              'gsrnamespace': '6',
+              'gsrlimit': '50',
+              'prop': 'imageinfo',
+              'iiprop': 'url|size|mime|timestamp|user|sha1|extmetadata',
+              'iiurlwidth': '1200',
+              'format': 'json',
+              'formatversion': '2',
+              'origin': '*',
+          })
+          commons_pages = ((commons.get('query') or {}).get('pages') or [])
+          rows = []
+          for index, candidate_page in enumerate(sorted(commons_pages, key=lambda row: (row.get('title') or '').casefold()), start=1):
+              candidate_infos = candidate_page.get('imageinfo') or []
+              if len(candidate_infos) != 1:
+                  continue
+              candidate_info = candidate_infos[0]
+              mime = candidate_info.get('mime')
+              if mime not in {'image/jpeg', 'image/png'}:
+                  continue
+              license_name = meta_value(candidate_info, 'LicenseShortName') or meta_value(candidate_info, 'UsageTerms')
+              free_license = bool(re.search(r'CC\s*(?:BY|0)|public domain', license_name, re.I))
+              origin = str(candidate_info.get('descriptionurl') or '').strip()
+              download_url = candidate_info.get('thumburl') or candidate_info.get('url')
+              if not download_url:
+                  continue
+              safe = f'{index:02d}'
+              thumb_path = CANDIDATES / f'{safe}-source'
+              portrait_path = CANDIDATES / f'{safe}-portrait.jpg'
+              try:
+                  thumb_path.write_bytes(fetch_bytes(download_url))
+                  convert(thumb_path, portrait_path, ['-resize', '420x600^', '-gravity', 'center', '-extent', '420x600', '-quality', '88'])
+                  portrait_sha = sha256_file(portrait_path)
+                  dimensions = subprocess.check_output(['identify', '-format', '%w %h', str(portrait_path)], text=True).strip()
+              except Exception as error:
+                  rows.append({
+                      'title': candidate_page.get('title'),
+                      'pageid': candidate_page.get('pageid'),
+                      'error': str(error),
+                  })
+                  continue
+              rows.append({
+                  'candidate_index': safe,
+                  'title': candidate_page.get('title'),
+                  'pageid': candidate_page.get('pageid'),
+                  'description_url': origin,
+                  'original_url': candidate_info.get('url'),
+                  'download_url': download_url,
+                  'mime': mime,
+                  'width': candidate_info.get('width'),
+                  'height': candidate_info.get('height'),
+                  'timestamp': candidate_info.get('timestamp'),
+                  'uploader': candidate_info.get('user'),
+                  'api_sha1': candidate_info.get('sha1'),
+                  'artist': meta_value(candidate_info, 'Artist'),
+                  'license': license_name,
+                  'credit': meta_value(candidate_info, 'Credit'),
+                  'description': meta_value(candidate_info, 'ImageDescription'),
+                  'free_license_candidate': free_license,
+                  'already_used_origin': origin in existing_origins,
+                  'source_download_sha256': sha256_file(thumb_path),
+                  'portrait_path': str(portrait_path),
+                  'portrait_sha256': portrait_sha,
+                  'portrait_dimensions': dimensions,
+                  'byte_distinct_from_all_existing_media': portrait_sha not in existing_hashes,
+                  'boundary': {
+                      'performer_identity_only': True,
+                      'character_evidence': False,
+                      'jask_or_generic_sontaran_depiction': False,
+                      'adoption_requires_second_desk_review': True,
+                  },
+              })
+
+          (OUT / 'commons-search-api.json').write_text(json.dumps(commons, indent=2) + '\n')
+          (OUT / 'existing-dan-starkey-portraits.json').write_text(json.dumps(existing_dan_portraits, indent=2) + '\n')
+          (OUT / 'portrait-candidates.json').write_text(json.dumps(rows, indent=2) + '\n')
+          eligible = [row for row in rows if row.get('free_license_candidate') and not row.get('already_used_origin') and row.get('byte_distinct_from_all_existing_media')]
+          summary = {
+              'version': 1,
+              'exact_main': os.environ['EXACT_MAIN'],
+              'lease_issued': False,
+              'task_id': os.environ['TASK_ID'],
+              'performer': 'Dan Starkey',
+              'role': 'Jask (The Sontaran Ordeal)',
+              'adjudicated_performance_kind': 'voice',
+              'source_page_id': int(os.environ['SOURCE_PAGE_ID']),
+              'source_revision': int(os.environ['SOURCE_REVISION']),
+              'source_content_sha256': os.environ['SOURCE_CONTENT_SHA256'],
+              'source_fingerprint': os.environ['SOURCE_FINGERPRINT'],
+              'jask_still': jask_record,
+              'existing_dan_starkey_portraits': existing_dan_portraits,
+              'commons_results': len(rows),
+              'eligible_new_portrait_candidates': len(eligible),
+              'eligible_candidate_indices': [row['candidate_index'] for row in eligible],
+              'boundary': {
+                  'no_media_adopted': True,
+                  'no_queue_or_corpus_mutation': True,
+                  'still_may_remain_honestly_absent': True,
+                  'portrait_may_remain_honestly_absent': True,
+              },
+          }
+          (OUT / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+          print(json.dumps(summary, indent=2))
+          PY
+
+          find /tmp/doctor-who-cycle-004-media-preflight -type f -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            > /tmp/doctor-who-cycle-004-media-preflight.sha256
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact read-only media preflight
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-004-media-preflight-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            /tmp/doctor-who-cycle-004-media-preflight
+            /tmp/doctor-who-cycle-004-media-preflight.sha256
+            /tmp/expected-paths.txt
+            /tmp/actual-paths.txt
