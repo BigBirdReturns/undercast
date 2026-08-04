@@ -77,3 +77,11 @@ npm run gate
 ```
 
 Snapshot updates are product changes: they require an explicit diff, the exact fixture-state contract, and the complete gate. They are never regenerated as an unreviewed side effect.
+
+## UX-02A — navigation continuity without promoting Connections
+
+UX-02A normalizes the existing archive navigation while preserving DEC-0009. Browse, Recognition Loop, Coverage, Makers, and About remain the permanent primary destinations. Connections stays contextual: Recognition retains its record-local control, and the secondary archive map retains Evidence paths without promoting it into top navigation.
+
+Every root page and generated live or retired permanent record loads one shared navigation controller. At narrow widths JavaScript progressively enhances the complete link set into an explicit disclosure with `aria-expanded`, 44-pixel-plus targets, link-close behavior, and Escape-key focus recovery. With JavaScript disabled the full existing navigation remains visible. Static `aria-current` values identify the current primary page or containing archive section without depending on script execution.
+
+Generated permanent-record pages remain disposable outputs. Qualification counts them from canonical live and tombstone records, validates every generated page, records a byte manifest, regenerates, and requires exact manifest replay; they are not misrepresented as committed product paths.

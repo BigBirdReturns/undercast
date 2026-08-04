@@ -116,6 +116,13 @@ test("archive navigation stays complete, consistent, and inside every viewport",
       await open(page,surface.path);
       await expect(page.locator(surface.ready).first()).toBeVisible();
       const nav=page.getByRole("navigation",{name:"Archive navigation",exact:true});
+      if(viewport.width<=700){
+        const menu=page.locator(".site-nav-toggle");
+        await expect(menu).toBeVisible();
+        await expect(menu).toHaveAttribute("aria-expanded","false");
+        await menu.click();
+        await expect(menu).toHaveAttribute("aria-expanded","true");
+      }
       await expect(nav).toBeVisible();
       for(const label of core) await expect(nav.getByRole("link",{name:label,exact:true})).toBeVisible();
       await expect(nav.getByRole("link",{name:"Constellations",exact:true})).toHaveCount(0);

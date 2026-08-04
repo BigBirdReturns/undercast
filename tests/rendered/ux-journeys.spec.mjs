@@ -82,18 +82,33 @@ test("recognition refuses external and non-wall return targets",async({page})=>{
 test("root surfaces orient, expose recovery paths, and avoid viewport overflow",async({page})=>{
   const errors=captureConsoleErrors(page);
   const surfaces=[
-    {path:"index.html",ready:"#result-status"},
-    {path:"recognition.html#UC-001",ready:"#record-title"},
-    {path:"coverage.html",ready:"#rows tr"},
-    {path:"constellation.html",ready:".person-row"},
-    {path:"records/UC-001/",ready:"#record-main"},
-    {path:"404.html",ready:"#recovery"}
+    {path:"index.html",ready:"#result-status",current:"Browse",map:"The wall"},
+    {path:"recognition.html#UC-001",ready:"#record-title",current:"Recognition Loop",map:"Recognition records"},
+    {path:"coverage.html",ready:"#rows tr",current:"Coverage",map:"Coverage & gaps"},
+    {path:"constellation.html",ready:".person-row",current:"",map:"Evidence paths"},
+    {path:"records/UC-001/",ready:"#record-main",current:"Permanent record",map:"Recognition records"},
+    {path:"404.html",ready:"#recovery",current:"",map:""}
   ];
   for(const surface of surfaces){
     await open(page,surface.path);
     await expect(page.locator(surface.ready).first()).toBeVisible();
-    await expect(page.getByRole("navigation",{name:"Archive navigation",exact:true})).toBeVisible();
-    await expect(page.getByRole("navigation",{name:"Archive paths",exact:true})).toBeVisible();
+    const primary=page.getByRole("navigation",{name:"Archive navigation",exact:true});
+    const archiveMap=page.getByRole("navigation",{name:"Archive paths",exact:true});
+    const compact=await page.evaluate(()=>matchMedia("(max-width: 700px)").matches);
+    const toggle=page.locator(".site-nav-toggle");
+    if(compact){
+      await expect(toggle).toBeVisible();
+      await expect(toggle).toHaveAttribute("aria-expanded","false");
+      await expect(primary).toBeHidden();
+      await toggle.click();
+    }
+    await expect(primary).toBeVisible();
+    await expect(archiveMap).toBeVisible();
+    if(surface.current) await expect(primary.getByRole("link",{name:surface.current,exact:true})).toHaveAttribute("aria-current","page");
+    if(surface.map) await expect(archiveMap.getByRole("link",{name:surface.map,exact:true})).toHaveAttribute("aria-current",/page|location/);
+    else await expect(archiveMap.locator("[aria-current]")).toHaveCount(0);
+    await expect(primary.getByRole("link",{name:"Connections",exact:true})).toHaveCount(0);
+    await expect(primary.getByRole("link",{name:"Constellations",exact:true})).toHaveCount(0);
     const overflow=await page.evaluate(()=>({width:document.documentElement.scrollWidth,viewport:document.documentElement.clientWidth}));
     expect(overflow.width,`${surface.path} page width`).toBeLessThanOrEqual(overflow.viewport+1);
   }
@@ -109,6 +124,12 @@ test("dark preference, theme persistence, and reduced motion compose",async({pag
 
   const toggle=page.locator("[data-theme-toggle]");
   await expect(toggle).toContainText("Light");
+  if(await page.evaluate(()=>matchMedia("(max-width: 700px)").matches)){
+    const menu=page.locator(".site-nav-toggle");
+    await expect(menu).toBeVisible();
+    if(await menu.getAttribute("aria-expanded")!=="true") await menu.click();
+  }
+  await expect(toggle).toBeVisible();
   await toggle.click();
   await expect(page.locator("html")).toHaveAttribute("data-theme","light");
 
@@ -116,4 +137,51 @@ test("dark preference, theme persistence, and reduced motion compose",async({pag
   await expect(page.locator("#rows tr").first()).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("data-theme","light");
   await expect(page.locator("[data-theme-toggle]")).toContainText("Dark");
+});
+
+test("mobile archive navigation is compact and keyboard recoverable",async({page})=>{
+  await page.setViewportSize({width:390,height:844});
+  await open(page,"coverage.html");
+  await expect(page.locator("#rows tr").first()).toBeVisible();
+
+  const nav=page.getByRole("navigation",{name:"Archive navigation",exact:true});
+  const toggle=page.locator(".site-nav-toggle");
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-label","Open archive menu");
+  await expect(toggle).toHaveAttribute("aria-expanded","false");
+  await expect(nav).toBeHidden();
+
+  await toggle.click();
+  await expect(nav).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-label","Close archive menu");
+  await expect(toggle).toHaveAttribute("aria-expanded","true");
+  await expect(nav.getByRole("link",{name:"Coverage",exact:true})).toHaveAttribute("aria-current","page");
+  await expect(nav.getByRole("link",{name:"Connections",exact:true})).toHaveCount(0);
+
+  await nav.getByRole("link",{name:"Coverage",exact:true}).focus();
+  await page.keyboard.press("Escape");
+  await expect(nav).toBeHidden();
+  await expect(toggle).toHaveAttribute("aria-label","Open archive menu");
+  await expect(toggle).toHaveAttribute("aria-expanded","false");
+  await expect(toggle).toBeFocused();
+});
+
+test("archive navigation remains complete without JavaScript",async({browser})=>{
+  const baseURL=String(test.info().project.use.baseURL||"http://127.0.0.1:4173");
+  const context=await browser.newContext({javaScriptEnabled:false,viewport:{width:390,height:844},baseURL});
+  const page=await context.newPage();
+  try{
+    await page.goto(sitePath("coverage.html"),{waitUntil:"domcontentloaded"});
+    const nav=page.getByRole("navigation",{name:"Archive navigation",exact:true});
+    const archiveMap=page.getByRole("navigation",{name:"Archive paths",exact:true});
+    await expect(nav).toBeVisible();
+    for(const label of ["Browse","Recognition Loop","Coverage","Makers","About"]){
+      await expect(nav.getByRole("link",{name:label,exact:true})).toBeVisible();
+    }
+    await expect(nav.getByRole("link",{name:"Connections",exact:true})).toHaveCount(0);
+    await expect(archiveMap.getByRole("link",{name:"Coverage & gaps",exact:true})).toHaveAttribute("aria-current","page");
+    await expect(page.locator(".site-nav-toggle")).toHaveCount(0);
+  }finally{
+    await context.close();
+  }
 });
