@@ -6,6 +6,7 @@ TARGET_EXPECTED_SHA="634f0a69b95b65c22c6bc680941570f543143e9f"
 QUALIFIED_BRANCH="agent/ux-02-qualified-product-4fe"
 QUALIFIED_EXPECTED_SHA="4fe485057180d3b3947bc5c70c5241ae21e5a106"
 COMPOSITION_SHA256="f4ce4e4a0c3cf736adc703fd0c1f1bd0115db52bb9ade545bb5bb7afaf1908a8"
+CURRENT_LOCATION_FIX_SHA256="18c838abd554449a0457a0f51e7bb5bdad03a1dc6e9f4c022601ebb6be8e6398"
 EVIDENCE="${EVIDENCE:-${RUNNER_TEMP:-/tmp}/ux-02a-dec0016-evidence}"
 mkdir -p "$EVIDENCE"
 STAGE="bootstrap"
@@ -32,7 +33,9 @@ QUALIFIED_SHA="$(git rev-parse refs/remotes/origin/${QUALIFIED_BRANCH})"
 test "$TARGET_SHA" = "$TARGET_EXPECTED_SHA"
 test "$QUALIFIED_SHA" = "$QUALIFIED_EXPECTED_SHA"
 git show "$TARGET_SHA:tmp/ux-02-navigation-continuity-v6.py" > /tmp/ux-02-navigation-continuity-v6.py
+git show "$SOURCE_SHA:tmp/ux02a-current-location-fix.py" > /tmp/ux02a-current-location-fix.py
 test "$(sha256sum /tmp/ux-02-navigation-continuity-v6.py | awk '{print $1}')" = "$COMPOSITION_SHA256"
+test "$(sha256sum /tmp/ux02a-current-location-fix.py | awk '{print $1}')" = "$CURRENT_LOCATION_FIX_SHA256"
 
 STAGE="reset-clean-main"
 git reset --hard "$BASE_SHA"
@@ -40,6 +43,9 @@ git clean -fdx
 
 STAGE="apply-semantic-composition"
 python /tmp/ux-02-navigation-continuity-v6.py
+
+STAGE="pay-current-location-review"
+python /tmp/ux02a-current-location-fix.py
 
 STAGE="install-runtime"
 npm ci 2>&1 | tee "$EVIDENCE/npm-ci.log"
@@ -155,6 +161,7 @@ test -z "$(git status --porcelain)"
   printf 'prior_target=%s\n' "$TARGET_SHA"
   printf 'qualified_source=%s\n' "$QUALIFIED_SHA"
   printf 'composition_sha256=%s\n' "$COMPOSITION_SHA256"
+  printf 'current_location_fix_sha256=%s\n' "$CURRENT_LOCATION_FIX_SHA256"
   printf 'product=%s\n' "$PRODUCT_SHA"
   printf 'decision=DEC-0016\n'
   printf 'generated_records=%s\n' "$GENERATED_RECORDS"
