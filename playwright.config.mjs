@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const journey = testMatch => ({ testMatch });
+const uxJourney = journey(/(?:ux-journeys|recovery-journeys)\.spec\.mjs/);
 
 export default defineConfig({
   testDir: "./tests/rendered",
@@ -19,11 +20,12 @@ export default defineConfig({
   },
   projects: [
     { name: "chromium-desktop", testMatch: /site\.spec\.mjs/, use: { ...devices["Desktop Chrome"] } },
-    { name: "ux-chromium-desktop", ...journey(/ux-journeys\.spec\.mjs/), use: { ...devices["Desktop Chrome"] } },
-    { name: "ux-firefox-desktop", ...journey(/ux-journeys\.spec\.mjs/), use: { ...devices["Desktop Firefox"] } },
-    { name: "ux-webkit-desktop", ...journey(/ux-journeys\.spec\.mjs/), use: { ...devices["Desktop Safari"] } },
-    { name: "ux-chromium-mobile", ...journey(/ux-journeys\.spec\.mjs/), use: { ...devices["Pixel 5"] } },
-    { name: "ux-webkit-mobile", ...journey(/ux-journeys\.spec\.mjs/), use: { ...devices["iPhone 13"] } }
+    { name: "ux-chromium-desktop", ...uxJourney, use: { ...devices["Desktop Chrome"] } },
+    { name: "ux-firefox-desktop", ...uxJourney, use: { ...devices["Desktop Firefox"] } },
+    { name: "ux-webkit-desktop", ...uxJourney, use: { ...devices["Desktop Safari"] } },
+    { name: "ux-chromium-mobile", ...uxJourney, use: { ...devices["Pixel 5"] } },
+    { name: "ux-webkit-mobile", ...uxJourney, use: { ...devices["iPhone 13"] } },
+    { name: "ux-visual-chromium", ...journey(/visual-baselines\.spec\.mjs/), use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1, colorScheme: "light", reducedMotion: "reduce", locale: "en-US", timezoneId: "UTC" } }
   ],
   webServer: {
     command: "node scripts/build-record-pages.mjs && node scripts/serve-test.mjs",

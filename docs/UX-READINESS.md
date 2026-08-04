@@ -37,3 +37,43 @@ The next bounded harness product should add deterministic screenshot baselines f
 ## System preference custody
 
 Without an explicit saved choice, the shared theme follows the operating-system color preference and responds to later preference changes. Once a reader chooses a theme, that explicit choice persists across root surfaces and takes precedence over subsequent system changes.
+
+## UX-02 — deterministic visual and recovery contracts
+
+UX-02 adds a test-owned visual contract without changing corpus, source, media, queue, lease, or public-record authority.
+
+The deterministic Chromium baseline covers five root surfaces:
+
+- wall
+- Recognition
+- Coverage
+- Constellation
+- not-found recovery
+
+It also pins four distinct permanent-record states through `tests/rendered/fixtures/visual-records.json`:
+
+- complete portrait and still
+- exactly one present media facet
+- voice-only performance
+- both media facets honestly absent
+
+Root screenshots mask corpus-variable result regions so ordinary evidence growth does not become visual churn. Permanent-record fixtures remain exact IDs and fail closed when an ID disappears or no longer satisfies its declared state.
+
+The recovery matrix injects and proves:
+
+- manifest/index failure with canonical-specimen fallback
+- simultaneous index and canonical fallback failure, followed by in-page retry
+- shard failure with zero partial filtered results, followed by retry
+- constellation graph failure with an honest unavailable state, followed by reload recovery
+- offline cited-image fallback, followed by successful reload
+
+The complete repository gate retains the established desktop Chromium suite, runs the mobile Chromium UX and recovery journeys, and then checks the committed visual baselines. The full compatibility command runs the behavioral journeys across desktop Chromium, Firefox, and WebKit plus mobile Chromium and mobile WebKit.
+
+```text
+npm run test:visual
+npm run test:visual:update
+npm run test:ux
+npm run gate
+```
+
+Snapshot updates are product changes: they require an explicit diff, the exact fixture-state contract, and the complete gate. They are never regenerated as an unreviewed side effect.
