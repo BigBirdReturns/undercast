@@ -27,327 +27,63 @@ jobs:
           node-version: "24"
           cache: npm
 
-      - name: Materialize and qualify the permanent repair
+      - name: Execute corrected task-id-first carrier
         shell: bash
         run: |
           set -euo pipefail
-
-          BRANCH='agent/doctor-who-lifecycle-task-id-first-custody'
           SOURCE_SHA="$(git rev-parse HEAD)"
-          product_paths=(
-            data/review/adapter-sdk/doctor-who-correction-drill-001.json
-            docs/DOCTOR-WHO-CORRECTION-DRILL.md
-            scripts/doctor-who-activation.mjs
-            scripts/doctor-who-correction-drill.mjs
-          )
-          expected='data/review/adapter-sdk/doctor-who-correction-drill-001.json
-          docs/DOCTOR-WHO-CORRECTION-DRILL.md
-          scripts/doctor-who-activation.mjs
-          scripts/doctor-who-correction-drill.mjs'
-
-          git fetch --no-tags origin main
-          BASE_SHA="$(git rev-parse origin/main)"
-          git reset --hard "$BASE_SHA"
-
+          export SOURCE_SHA
           python - <<'PY'
           from pathlib import Path
-          import copy
-          import hashlib
-          import json
+          from textwrap import dedent
+          import os
+          import subprocess
 
-          activation_path = Path('scripts/doctor-who-activation.mjs')
-          correction_path = Path('scripts/doctor-who-correction-drill.mjs')
-          receipt_path = Path('data/review/adapter-sdk/doctor-who-correction-drill-001.json')
-          docs_path = Path('docs/DOCTOR-WHO-CORRECTION-DRILL.md')
-
-          def replace_once(text, old, new, label):
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected one anchor, found {count}')
-              return text.replace(old, new, 1)
-
-          old_activation_lifecycle = '''function doctorTaskLifecycle(journal) {
-            const byTask = new Map();
-            for (const row of journal || []) {
-              if (!["task.retired", "task.reopened"].includes(row?.op)) continue;
-              if (row.scope !== SCOPE_ID) continue;
-              assert.ok(String(row.task_id || "").trim(), `${row.op} Doctor Who lifecycle event lacks task identity`);
-              if (!byTask.has(row.task_id)) byTask.set(row.task_id, []);
-              byTask.get(row.task_id).push(row);
-            }
-            return byTask;
-          }'''
-          new_activation_lifecycle = '''function doctorTaskLifecycle(journal, durableDoctorTaskIds) {
-            assert.ok(
-              durableDoctorTaskIds instanceof Set,
-              "Doctor Who lifecycle replay lacks durable task identities",
-            );
-            const lifecycleRows = [];
-            const doctorTaskIds = new Set(durableDoctorTaskIds);
-            for (const row of journal || []) {
-              if (!["task.retired", "task.reopened"].includes(row?.op)) continue;
-              lifecycleRows.push(row);
-              if (row.scope !== SCOPE_ID) continue;
-              const taskId = String(row.task_id || "").trim();
-              assert.ok(taskId, `${row.op} Doctor Who lifecycle event lacks task identity`);
-              doctorTaskIds.add(taskId);
-            }
-            const byTask = new Map();
-            for (const row of lifecycleRows) {
-              const taskId = String(row.task_id || "").trim();
-              if (!doctorTaskIds.has(taskId)) continue;
-              assert.ok(taskId, `${row.op} Doctor Who lifecycle event lacks task identity`);
-              assert.equal(
-                row.task_id,
-                taskId,
-                `${row.op} Doctor Who lifecycle event has malformed task identity`,
-              );
-              if (!byTask.has(taskId)) byTask.set(taskId, []);
-              byTask.get(taskId).push(row);
-            }
-            return byTask;
-          }'''
-
-          old_correction_lifecycle = '''function doctorTaskLifecycle(journal) {
-            const byTask = new Map();
-            for (const row of journal || []) {
-              if (!["task.retired", "task.reopened"].includes(row?.op)) continue;
-              if (row.scope !== SCOPE_ID) continue;
-              assert(String(row.task_id || "").trim(), `${row.op} Doctor Who lifecycle event lacks task identity`);
-              if (!byTask.has(row.task_id)) byTask.set(row.task_id, []);
-              byTask.get(row.task_id).push(row);
-            }
-            return byTask;
-          }'''
-          new_correction_lifecycle = '''function doctorTaskLifecycle(journal, durableDoctorTaskIds) {
-            assert(
-              durableDoctorTaskIds instanceof Set,
-              "Doctor Who lifecycle replay lacks durable task identities",
-            );
-            const lifecycleRows = [];
-            const doctorTaskIds = new Set(durableDoctorTaskIds);
-            for (const row of journal || []) {
-              if (!["task.retired", "task.reopened"].includes(row?.op)) continue;
-              lifecycleRows.push(row);
-              if (row.scope !== SCOPE_ID) continue;
-              const taskId = String(row.task_id || "").trim();
-              assert(taskId, `${row.op} Doctor Who lifecycle event lacks task identity`);
-              doctorTaskIds.add(taskId);
-            }
-            const byTask = new Map();
-            for (const row of lifecycleRows) {
-              const taskId = String(row.task_id || "").trim();
-              if (!doctorTaskIds.has(taskId)) continue;
-              assert(taskId, `${row.op} Doctor Who lifecycle event lacks task identity`);
-              assert(
-                row.task_id === taskId,
-                `${row.op} Doctor Who lifecycle event has malformed task identity`,
-              );
-              if (!byTask.has(taskId)) byTask.set(taskId, []);
-              byTask.get(taskId).push(row);
-            }
-            return byTask;
-          }'''
-
-          activation = activation_path.read_text()
-          activation = replace_once(
-              activation,
-              old_activation_lifecycle,
-              new_activation_lifecycle,
-              'activation task-id-first lifecycle selector',
+          workflow_path = '.github/workflows/repair-doctor-who-lifecycle-task-id-first-custody.yml'
+          source_sha = os.environ['SOURCE_SHA']
+          carrier = subprocess.check_output(
+              ['git', 'show', f'{source_sha}^:{workflow_path}'],
+              text=True,
           )
-          activation = replace_once(
-              activation,
-              'const lifecycleByTask = doctorTaskLifecycle(journal);',
-              'const lifecycleByTask = doctorTaskLifecycle(journal, new Set(actualById.keys()));',
-              'activation lifecycle call',
-          )
+          marker = '        run: |\n'
+          if carrier.count(marker) != 1:
+              raise SystemExit(f'parent carrier run block count={carrier.count(marker)}')
+          script = dedent(carrier.split(marker, 1)[1])
 
-          wrong_scope_pilot_fixture = '''
-          const compoundWrongScopeThenRetryPilotJournal = [
-            ...reopenedPilotJournal,
-            {
-              op: "task.reopened",
-              task_id: job.id,
-              at: "2026-08-03T22:43:04.000Z",
-              scope: "star-trek",
-              performer: job.performer,
-              character: job.character,
-              reason: "retry_due",
-            },
-            {
-              op: "task.reopened",
-              task_id: job.id,
-              at: "2026-08-03T22:44:04.000Z",
-              scope: job.scope,
-              performer: job.performer,
-              character: job.character,
-              reason: "retry_due",
-            },
-          ];
-          assert.throws(
-            () => validateCanonicalDoctorTaskSet(
-              current.autopilot.jobs,
-              current.coverage,
-              current.scopesDoc,
-              current.manifest,
-              compoundWrongScopeThenRetryPilotJournal,
-            ),
-            /task.reopened scope disagrees with its durable job/,
-            "a later valid reopen concealed an earlier wrong-scope reopen",
-          );
+          old_hash = "stable_json = json.dumps(stable(hash_document), ensure_ascii=False, indent=2) + '\\n'"
+          new_hash = "stable_json = json.dumps(stable(hash_document), ensure_ascii=False, separators=(',', ':')) + '\\n'"
+          if script.count(old_hash) != 1:
+              raise SystemExit(f'receipt hash anchor count={script.count(old_hash)}')
+          script = script.replace(old_hash, new_hash, 1)
 
-          '''
-          activation = replace_once(
-              activation,
-              'const staleReopenedPilotState = structuredClone(current.autopilot);',
-              wrong_scope_pilot_fixture + 'const staleReopenedPilotState = structuredClone(current.autopilot);',
-              'activation wrong-scope compound fixture',
-          )
-          activation_path.write_text(activation)
+          gate_marker = "PY\n\nnode --check scripts/doctor-who-activation.mjs"
+          if script.count(gate_marker) != 1:
+              raise SystemExit(f'post-patch gate anchor count={script.count(gate_marker)}')
+          checker_patch = r'''PY
 
-          correction = correction_path.read_text()
-          correction = replace_once(
-              correction,
-              old_correction_lifecycle,
-              new_correction_lifecycle,
-              'correction task-id-first lifecycle selector',
-          )
-          correction = replace_once(
-              correction,
-              'const lifecycleByTask = doctorTaskLifecycle(journal);',
-              'const lifecycleByTask = doctorTaskLifecycle(journal, new Set(actualById.keys()));',
-              'correction lifecycle call',
-          )
+python - <<'PY2'
+from pathlib import Path
 
-          wrong_scope_commander_fixture = '''
-          const compoundWrongScopeThenRetryCommanderJournal = [
-            ...reopenedCommanderJournal,
-            {
-              op: "task.reopened",
-              task_id: commanderTask.id,
-              at: "2026-08-03T22:43:04.000Z",
-              scope: "star-trek",
-              performer: commanderTask.performer,
-              character: commanderTask.character,
-              reason: "retry_due",
-            },
-            {
-              op: "task.reopened",
-              task_id: commanderTask.id,
-              at: "2026-08-03T22:44:04.000Z",
-              scope: commanderTask.scope,
-              performer: commanderTask.performer,
-              character: commanderTask.character,
-              reason: "retry_due",
-            },
-          ];
-          expectFailure(
-            () => validateCanonicalDoctorTaskSet(
-              autopilot.jobs,
-              coverage,
-              scopes,
-              manifest,
-              compoundWrongScopeThenRetryCommanderJournal,
-            ),
-            /task.reopened scope disagrees with its durable job/,
-            "later valid reopen concealing an earlier wrong-scope reopen",
-          );
+path = Path('scripts/doctor-who-correction-drill.mjs')
+text = path.read_text()
+old_threads = 'assert(sameSet(receipt.repairs?.canonical_task_set_custody?.review_threads || [], ["PRRT_kwDOTQMkzs6WJSKr", "PRRT_kwDOTQMkzs6WJHVk", "PRRT_kwDOTQMkzs6WJ7tK", "PRRT_kwDOTQMkzs6WKLNx", "PRRT_kwDOTQMkzs6WKZdv"]), "canonical task-set review bindings drifted");'
+new_threads = 'assert(sameSet(receipt.repairs?.canonical_task_set_custody?.review_threads || [], ["PRRT_kwDOTQMkzs6WJSKr", "PRRT_kwDOTQMkzs6WJHVk", "PRRT_kwDOTQMkzs6WJ7tK", "PRRT_kwDOTQMkzs6WKLNx", "PRRT_kwDOTQMkzs6WKZdv", "PRRT_kwDOTQMkzs6WLMz4"]), "canonical task-set review bindings drifted");'
+if text.count(old_threads) != 1:
+    raise SystemExit(f'review-thread assertion count={text.count(old_threads)}')
+text = text.replace(old_threads, new_threads, 1)
+anchor = 'assert(receipt.repairs?.canonical_task_set_custody?.compound_wrong_release_then_valid_latest_fixture_fails_closed === true, "compound release-reason refusal disappeared");'
+addition = anchor + '''
+assert(receipt.repairs?.canonical_task_set_custody?.lifecycle_rows_selected_by_durable_task_id === true, "durable task-id lifecycle selection disappeared");
+assert(receipt.repairs?.canonical_task_set_custody?.lifecycle_row_scope_validated_after_task_binding === true, "lifecycle scope validation moved before task binding");
+assert(receipt.repairs?.canonical_task_set_custody?.compound_wrong_scope_then_retry_fixture_fails_closed === true, "compound wrong-scope refusal disappeared");
+assert(receipt.qualification?.durable_task_id_lifecycle_selection_enforced === true, "task-id-first lifecycle qualification disappeared");'''
+if text.count(anchor) != 1:
+    raise SystemExit(f'new custody assertion anchor count={text.count(anchor)}')
+path.write_text(text.replace(anchor, addition, 1))
+PY2
 
-          '''
-          correction = replace_once(
-              correction,
-              'const staleReopenedCommanderState = structuredClone(autopilot);',
-              wrong_scope_commander_fixture + 'const staleReopenedCommanderState = structuredClone(autopilot);',
-              'correction wrong-scope compound fixture',
-          )
-
-          receipt = json.loads(receipt_path.read_text())
-          old_receipt_hash = receipt['receipt_sha256']
-
-          matches = []
-          def find_custody(value):
-              if isinstance(value, dict):
-                  if 'canonical_task_set_custody' in value:
-                      matches.append(value['canonical_task_set_custody'])
-                  for child in value.values():
-                      find_custody(child)
-              elif isinstance(value, list):
-                  for child in value:
-                      find_custody(child)
-          find_custody(receipt)
-          if len(matches) != 1:
-              raise SystemExit(f'canonical task custody matches={len(matches)}')
-          custody = matches[0]
-          thread_id = 'PRRT_kwDOTQMkzs6WLMz4'
-          if thread_id not in custody['review_threads']:
-              custody['review_threads'].append(thread_id)
-          custody['lifecycle_rows_selected_by_durable_task_id'] = True
-          custody['lifecycle_row_scope_validated_after_task_binding'] = True
-          custody['compound_wrong_scope_then_retry_fixture_fails_closed'] = True
-          receipt['qualification']['durable_task_id_lifecycle_selection_enforced'] = True
-
-          def stable(value):
-              if isinstance(value, list):
-                  return [stable(item) for item in value]
-              if isinstance(value, dict):
-                  return {key: stable(value[key]) for key in sorted(value)}
-              return value
-
-          hash_document = copy.deepcopy(receipt)
-          hash_document.pop('receipt_sha256', None)
-          stable_json = json.dumps(stable(hash_document), ensure_ascii=False, indent=2) + '\n'
-          new_receipt_hash = hashlib.sha256(stable_json.encode()).hexdigest()
-          receipt['receipt_sha256'] = new_receipt_hash
-          receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + '\n')
-
-          correction = replace_once(
-              correction,
-              f'const RECEIPT_SHA256 = "{old_receipt_hash}";',
-              f'const RECEIPT_SHA256 = "{new_receipt_hash}";',
-              'correction receipt constant',
-          )
-          correction_path.write_text(correction)
-
-          docs = docs_path.read_text()
-          docs_marker = f'\n\nCurrent correction-drill receipt SHA-256: `{old_receipt_hash}`.'
-          docs_replacement = (
-              '\n\nLifecycle membership is now bound by durable Doctor Who task identity before any mutable journal scope is trusted. '
-              'The checkers first establish the Doctor Who task-id set from durable state and Doctor Who-scoped lifecycle rows, then replay every lifecycle row for those task IDs. '
-              'A forged wrong-scope intermediate reopen is therefore retained for validation and rejected against its durable job; it cannot disappear before a later valid-looking retry.\n\n'
-              f'Current correction-drill receipt SHA-256: `{new_receipt_hash}`.'
-          )
-          docs = replace_once(
-              docs,
-              docs_marker,
-              docs_replacement,
-              'correction drill documentation receipt',
-          )
-          docs_path.write_text(docs)
-          print(new_receipt_hash)
+node --check scripts/doctor-who-activation.mjs'''
+          script = script.replace(gate_marker, checker_patch, 1)
+          Path('/tmp/task-id-first-carrier-final.sh').write_text(script)
           PY
-
-          node --check scripts/doctor-who-activation.mjs
-          node --check scripts/doctor-who-correction-drill.mjs
-          git diff --check
-          test "$(git diff --name-only "$BASE_SHA" | sort)" = "$expected"
-
-          git config user.name undercast-transaction-bot
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -- "${product_paths[@]}"
-          git commit -m 'Corrections: bind lifecycle rows by durable task id'
-          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = 1
-          test "$(git diff --name-only "$BASE_SHA"..HEAD | sort)" = "$expected"
-          test -z "$(git status --porcelain)"
-
-          npm ci
-          npx playwright install --with-deps chromium
-          npm run gate
-          test -z "$(git status --porcelain)"
-
-          git fetch --no-tags origin main
-          test "$(git rev-parse origin/main)" = "$BASE_SHA"
-          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = 1
-          test "$(git diff --name-only "$BASE_SHA"..HEAD | sort)" = "$expected"
-          git diff --check "$BASE_SHA"..HEAD
-          git push --force-with-lease="refs/heads/$BRANCH:$SOURCE_SHA" origin "HEAD:refs/heads/$BRANCH"
+          bash /tmp/task-id-first-carrier-final.sh
