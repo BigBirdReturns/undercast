@@ -59,11 +59,11 @@ corpus-disjoint wayfinding correction under the UX finishing program in issue #2
   or navigation authority.
 
 This decision does **not** add a public destination. Browse, Recognition Loop,
-Coverage, Makers and About remain the permanent primary destinations. Connections
-and Constellations remain contextual or secondary under DEC-0009. The correction
-adds no reveal mechanic, specimen field, schema concept, account layer, service,
-corpus interpretation or aesthetic system, and it does not reopen general product
-development under DEC-0012.
+Coverage, Makers and About remain the permanent primary destinations.
+Connections and Constellations remain contextual or secondary under DEC-0009. The
+correction adds no reveal mechanic, specimen field, schema concept, account layer,
+service, corpus interpretation or aesthetic system, and it does not reopen general
+product development under DEC-0012.
 '''.strip()
 
 decisions_path.write_text(decisions.rstrip() + "\n\n---\n\n" + decision + "\n")
