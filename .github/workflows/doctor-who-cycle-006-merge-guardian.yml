@@ -1,0 +1,172 @@
+name: doctor-who-cycle-006-merge-guardian
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-006-merge-guardian.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-006-merge-guardian
+  cancel-in-progress: true
+
+env:
+  EXACT_MAIN: c340dc710e423a86b2ad3afa3fcf38a2751e8eb7
+  TARGET_PR: "320"
+  TARGET_BRANCH: agent/doctor-who-cycle-006-kayste-completion
+  GUARDIAN_BRANCH: agent/doctor-who-cycle-006-merge-guardian
+  GUARDIAN_HEAD: ${{ github.event.pull_request.head.sha }}
+  SELF: .github/workflows/doctor-who-cycle-006-merge-guardian.yml
+  EVIDENCE: /tmp/doctor-who-cycle-006-merge-guardian
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  guard:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-006-merge-guardian'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.GUARDIAN_HEAD }}
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Bind exact unchanged main and one-file guardian
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          test "$(git rev-parse HEAD)" = "$GUARDIAN_HEAD"
+          git fetch --no-tags origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${GUARDIAN_BRANCH}:refs/remotes/origin/${GUARDIAN_BRANCH}" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${GUARDIAN_BRANCH})" = "$GUARDIAN_HEAD"
+          test "$(git diff --name-only "$EXACT_MAIN"...HEAD)" = "$SELF"
+          target_head="$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})"
+          printf '%s\n' "$target_head" > "$EVIDENCE/target-head.txt"
+          printf '%s\n' "$EXACT_MAIN" > "$EVIDENCE/exact-main.txt"
+          pr_head="$(gh pr view "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)"
+          test "$pr_head" = "$target_head"
+          state="$(gh pr view "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --json state,isDraft,mergeable --jq '[.state,.isDraft,.mergeable]|@tsv')"
+          printf '%s\n' "$state" > "$EVIDENCE/pr-state.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Check out exact workflow-free target product
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_head="$(cat "$EVIDENCE/target-head.txt")"
+          git checkout --detach "$target_head"
+          test "$(git rev-parse HEAD)" = "$target_head"
+          test "$(git merge-base "$EXACT_MAIN" HEAD)" = "$EXACT_MAIN"
+          test -z "$(git ls-tree -r --name-only HEAD | grep -E '^\.ci/doctor-who-cycle-006/|^\.github/workflows/complete-doctor-who-cycle-006-kayste\.yml$' || true)"
+          test -f data/review/adapter-sdk/doctor-who-cycle-006-kayste.json
+          test -f scripts/doctor-who-cycle-006.mjs
+          test -z "$(git status --porcelain)"
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > "$EVIDENCE/product-paths.txt"
+          gh pr view "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --json files --jq '.files[].path' | sort > "$EVIDENCE/pr-paths.txt"
+          diff -u "$EVIDENCE/product-paths.txt" "$EVIDENCE/pr-paths.txt"
+          test -z "$(grep -E '^\.ci/|^\.github/workflows/complete-doctor-who-cycle-006-kayste\.yml$|^tmp/' "$EVIDENCE/product-paths.txt" || true)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Validate exact Kayste product custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const taskId = 'ap_c8e74653ac0877837814db21';
+          const wallId = 'UC-1351';
+          const portraitSha = '0c08fa4fa7f597ee55589e884e8a9d60f3e4e79500a714ff69891ad7f13d9368';
+          const sourceSha = '3ff314fbae95a13aead70ca7934692859d27e1ab57d7289b608692dd44bf06e2';
+          const fingerprint = '5a28fd22ffbd22398bd63338896f32f83edc5b88dc9248e3045fb5e5e85f82e2';
+          const sha = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+          const read = (path) => JSON.parse(fs.readFileSync(path, 'utf8'));
+          const auto = read('data/AUTOPILOT.json');
+          const doctor = auto.jobs.filter((job) => job.scope === 'doctor-who');
+          const active = auto.jobs.filter((job) => ['leased','drafted','merged'].includes(job.status));
+          const counts = doctor.reduce((out, job) => ((out[job.status] = (out[job.status] || 0) + 1), out), {});
+          if (doctor.length !== 316 || counts.queued !== 310 || counts.resolved !== 6 || active.length !== 0) throw new Error(`queue custody drifted ${JSON.stringify({counts,active:active.length})}`);
+          const task = doctor.find((job) => job.id === taskId);
+          if (!task || task.status !== 'resolved' || task.source_fingerprint !== fingerprint || task.source_receipts?.[0]?.content_sha256 !== sourceSha) throw new Error('Kayste task custody drifted');
+          const records = read('data/specimens.json');
+          const record = records.find((entry) => entry.id === wallId);
+          if (!record || record.actor !== 'Dan Starkey' || record.character !== 'Kayste' || record.kind !== 'voice' || record.production !== 'Terror of the Sontarans' || record.years !== '2015') throw new Error('UC-1351 canonical semantics drifted');
+          if (record.portrait?.src !== 'images/uc-1351-portrait.jpg' || record.portrait?.kind !== 'portrait' || record.portrait?.origin !== 'https://commons.wikimedia.org/wiki/File:Dan_Starkey_(27229445610).jpg' || record.portrait?.license !== 'CC BY-SA 2.0' || record.portrait?.author !== 'Supercon Convention') throw new Error('UC-1351 portrait attribution drifted');
+          if (record.still || record.image) throw new Error('Kayste character still is not honestly absent');
+          const portrait = fs.readFileSync('images/uc-1351-portrait.jpg');
+          if (portrait.length !== 63017 || sha(portrait) !== portraitSha) throw new Error('Kayste portrait bytes drifted');
+          const audit = read('data/MEDIA-AUDIT.json');
+          const items = audit.items.filter((item) => item.wall_id === wallId && item.scope === 'doctor-who');
+          const p = items.find((item) => item.side === 'portrait');
+          const s = items.find((item) => item.side === 'still');
+          if (!p || p.status !== 'verified' || p.asset?.sha256 !== portraitSha || p.asset?.src !== 'images/uc-1351-portrait.jpg') throw new Error('Kayste portrait media ruling drifted');
+          if (!s || s.status !== 'absent' || s.asset !== null) throw new Error('Kayste still absence drifted');
+          const receipt = read('data/review/adapter-sdk/doctor-who-cycle-006-kayste.json');
+          if (receipt.task?.id !== taskId || receipt.canonical?.wall_id !== wallId || receipt.boundary?.seventh_lease_issued !== false) throw new Error('cycle-006 receipt boundary drifted');
+          const waterline = read('data/WATERLINE-STATE.json');
+          const cycles = waterline.cycles.filter((cycle) => cycle.scope_id === 'doctor-who');
+          if (cycles.length !== 6) throw new Error(`expected six reviewed Doctor Who cycles, found ${cycles.length}`);
+          const last = cycles.at(-1);
+          if (last.outcome !== 'completed' || last.task_ids?.length !== 1 || last.task_ids[0] !== taskId || last.task_statuses?.[taskId] !== 'resolved') throw new Error('cycle-006 waterline custody drifted');
+          const coverage = read('data/CENSUS-COVERAGE.json').find((row) => row.source === 'https://tardis.fandom.com/wiki/Kayste');
+          if (!coverage || coverage.role_on_wall !== true || coverage.wall_ids?.length !== 1 || coverage.wall_ids[0] !== wallId) throw new Error('Kayste census coverage drifted');
+          fs.writeFileSync(process.env.EVIDENCE + '/custody.json', JSON.stringify({counts, task_id:taskId, wall_id:wallId, cycle_id:last.id, lease_id:last.lease_id, portrait_sha256:portraitSha, receipt_sha256:sha(fs.readFileSync('data/review/adapter-sdk/doctor-who-cycle-006-kayste.json'))}, null, 2) + '\n');
+          NODE
+          node scripts/doctor-who-cycle-005.mjs | tee "$EVIDENCE/cycle-005.log"
+          node scripts/doctor-who-cycle-006.mjs | tee "$EVIDENCE/cycle-006.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Run complete repository gate on exact product
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate 2>&1 | tee "$EVIDENCE/complete-gate.log"
+          sha256sum "$EVIDENCE/complete-gate.log" > "$EVIDENCE/complete-gate.sha256"
+          test -z "$(git status --porcelain)"
+
+      - name: Promote and merge only exact qualified head
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_head="$(cat "$EVIDENCE/target-head.txt")"
+          git fetch --no-tags origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$target_head"
+          test "$(gh pr view "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)" = "$target_head"
+          gh pr ready "$TARGET_PR" --repo "$GITHUB_REPOSITORY"
+          gh pr merge "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --squash --match-head-commit "$target_head" \
+            --subject 'Doctor Who: complete reviewed cycle 006 for Kayste (#320)' \
+            --body 'Resolve the exact source-preserved Dan Starkey voice obligation for Kayste as UC-1351; adopt only the independently reviewed CC BY-SA performer portrait; keep the Kayste character still honestly absent; receipt cycle 006; preserve 310 queued obligations, zero work in flight, and no seventh lease. Complete candidate, receipt-bearing, and guardian gates passed.'
+          merge_sha="$(gh pr view "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --json mergeCommit --jq .mergeCommit.oid)"
+          test -n "$merge_sha"
+          printf '%s\n' "$merge_sha" > "$EVIDENCE/merge-commit.txt"
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$merge_sha"
+
+      - name: Upload exact guardian evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-006-merge-guardian-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: warn
+          path: ${{ env.EVIDENCE }}
