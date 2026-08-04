@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -57,6 +57,10 @@ try {
   expect("--from starts at exact step id", selectSteps({ from: "media-audit" })[0].id, "media-audit");
   expect("--skip-rendered removes only rendered work", selectSteps({ skipRendered: true }).some((step) => step.rendered), false);
   expectThrows("unknown --from fails closed", () => selectSteps({ from: "does-not-exist" }), /matched no gate step/);
+
+  const archiveWorkflow = await readFile(new URL("../.github/workflows/validate.yml", import.meta.url), "utf8");
+  const checkoutDepth = Number(archiveWorkflow.match(/uses:\s*actions\/checkout@v4[\s\S]{0,160}?fetch-depth:\s*(\d+)/)?.[1]);
+  expect("canonical workflow fetches enough history for immutable receipts", checkoutDepth === 0 || checkoutDepth >= 256, true);
 
   console.log(failures ? `\n${failures} gate fixture(s) FAILED` : "\nall gate fixtures pass");
   if (failures) process.exitCode = 1;
