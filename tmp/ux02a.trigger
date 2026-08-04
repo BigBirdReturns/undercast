@@ -1,0 +1,6 @@
+DEC-0016 registered push transaction
+main=f183545aa2ec80879d3d18913c1a14e60cb34fe8
+target=634f0a69b95b65c22c6bc680941570f543143e9f
+qualified=4fe485057180d3b3947bc5c70c5241ae21e5a106
+fix=18c838abd554449a0457a0f51e7bb5bdad03a1dc6e9f4c022601ebb6be8e6398
+event=final-complete-carrier-push
