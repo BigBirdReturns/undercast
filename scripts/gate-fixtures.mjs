@@ -60,7 +60,7 @@ try {
 
   const archiveWorkflow = await readFile(new URL("../.github/workflows/validate.yml", import.meta.url), "utf8");
   const checkoutDepth = Number(archiveWorkflow.match(/uses:\s*actions\/checkout@v4[\s\S]{0,160}?fetch-depth:\s*(\d+)/)?.[1]);
-  expect("canonical workflow fetches enough history for immutable receipts", checkoutDepth === 0 || checkoutDepth >= 256, true);
+  expect("canonical workflow fetches full immutable receipt history", checkoutDepth, 0);
 
   console.log(failures ? `\n${failures} gate fixture(s) FAILED` : "\nall gate fixtures pass");
   if (failures) process.exitCode = 1;
