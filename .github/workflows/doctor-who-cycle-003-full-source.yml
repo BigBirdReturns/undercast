@@ -1,0 +1,76 @@
+name: doctor-who-cycle-003-full-source
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/doctor-who-cycle-003-full-source.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-003-full-source-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-003-full-source.yml
+  EXACT_MAIN: 95c0a10b6e3c6e592ec30fae44bb8108b997ab49
+
+jobs:
+  export:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 8
+
+      - name: Bind exact main and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=8 origin \
+            refs/heads/main:refs/remotes/origin/main \
+            "refs/heads/${{ github.event.pull_request.head.ref }}:refs/remotes/origin/${{ github.event.pull_request.head.ref }}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${{ github.event.pull_request.head.ref }})" = "${{ github.event.pull_request.head.sha }}"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+
+      - name: Export exact current repository source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/doctor-who-cycle-003-source
+          git archive --format=tar "$EXACT_MAIN" \
+            | gzip -9 > /tmp/doctor-who-cycle-003-source/repository.tar.gz
+          git ls-tree -r --name-only "$EXACT_MAIN" \
+            > /tmp/doctor-who-cycle-003-source/tracked-paths.txt
+          git ls-tree -r -l "$EXACT_MAIN" \
+            > /tmp/doctor-who-cycle-003-source/tracked-tree.txt
+          sha256sum \
+            /tmp/doctor-who-cycle-003-source/repository.tar.gz \
+            /tmp/doctor-who-cycle-003-source/tracked-paths.txt \
+            /tmp/doctor-who-cycle-003-source/tracked-tree.txt \
+            > /tmp/doctor-who-cycle-003-source/source.sha256
+          printf '%s\n' "$EXACT_MAIN" > /tmp/doctor-who-cycle-003-source/exact-main.txt
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-003-full-source-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            /tmp/doctor-who-cycle-003-source
+            /tmp/expected-paths.txt
+            /tmp/actual-paths.txt
