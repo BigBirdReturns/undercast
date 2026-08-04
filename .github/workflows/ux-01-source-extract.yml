@@ -1,0 +1,65 @@
+name: ux-01-source-extract
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/ux-01-source-extract.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+
+      - name: Prove one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          git fetch --no-tags --depth=2 origin refs/heads/main:refs/remotes/origin/main
+          exact_main="$(git rev-parse refs/remotes/origin/main)"
+          printf '%s\n' "$exact_main" > /tmp/exact-main.txt
+          git diff --name-only "$exact_main"...HEAD | sort > /tmp/changed-paths.txt
+          printf '%s\n' '.github/workflows/ux-01-source-extract.yml' > /tmp/expected-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/changed-paths.txt
+          test -z "$(git status --porcelain)"
+
+      - name: Package UX-owned source and current projections
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf /tmp/ux-01-source.tgz \
+            AGENTS.md GROW.md LUNA.md \
+            package.json package-lock.json playwright.config.mjs \
+            index.html recognition.html coverage.html constellation.html 404.html \
+            assets scripts tests schema docs \
+            data/index.json data/shard-manifest.json data/archive.json \
+            data/specimens.json data/SOURCES.json data/species.json \
+            data/constellations.json data/CENSUS-COVERAGE.json \
+            data/CENSUS-SUMMARY.json data/CENSUS-FERENGI-TEST.json \
+            data/media-live.json 2>/tmp/tar-warnings.txt
+          sha256sum /tmp/ux-01-source.tgz > /tmp/ux-01-source.sha256
+          test -z "$(git status --porcelain)"
+
+      - name: Upload source packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: ux-01-source-${{ github.run_id }}
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            /tmp/exact-main.txt
+            /tmp/changed-paths.txt
+            /tmp/ux-01-source.tgz
+            /tmp/ux-01-source.sha256
+            /tmp/tar-warnings.txt
