@@ -1,0 +1,95 @@
+name: repair-doctor-who-lifecycle-task-id-first-custody-final
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-doctor-who-lifecycle-task-id-first-custody-final
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.head_ref == 'agent/doctor-who-lifecycle-task-id-first-custody-v2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/doctor-who-lifecycle-task-id-first-custody-v2
+          fetch-depth: 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Materialize and qualify the exact repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          export SOURCE_SHA
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+          import os
+          import subprocess
+
+          source_sha = os.environ['SOURCE_SHA']
+          source_workflow = '.github/workflows/repair-doctor-who-lifecycle-task-id-first-custody.yml'
+          carrier = subprocess.check_output(
+              ['git', 'show', f'{source_sha}^:{source_workflow}'],
+              text=True,
+          )
+          marker = '        run: |\n'
+          if carrier.count(marker) != 1:
+              raise SystemExit(f'parent carrier run block count={carrier.count(marker)}')
+          script = dedent(carrier.split(marker, 1)[1])
+
+          old_branch = "BRANCH='agent/doctor-who-lifecycle-task-id-first-custody'"
+          new_branch = "BRANCH='agent/doctor-who-lifecycle-task-id-first-custody-v2'"
+          if script.count(old_branch) != 1:
+              raise SystemExit(f'branch anchor count={script.count(old_branch)}')
+          script = script.replace(old_branch, new_branch, 1)
+
+          old_hash = "stable_json = json.dumps(stable(hash_document), ensure_ascii=False, indent=2) + '\\n'"
+          new_hash = "stable_json = json.dumps(stable(hash_document), ensure_ascii=False, separators=(',', ':')) + '\\n'"
+          if script.count(old_hash) != 1:
+              raise SystemExit(f'receipt hash anchor count={script.count(old_hash)}')
+          script = script.replace(old_hash, new_hash, 1)
+
+          gate_marker = "PY\n\nnode --check scripts/doctor-who-activation.mjs"
+          if script.count(gate_marker) != 1:
+              raise SystemExit(f'post-patch gate anchor count={script.count(gate_marker)}')
+          checker_patch = r'''PY
+
+python - <<'PY2'
+from pathlib import Path
+
+path = Path('scripts/doctor-who-correction-drill.mjs')
+text = path.read_text()
+old_threads = 'assert(sameSet(receipt.repairs?.canonical_task_set_custody?.review_threads || [], ["PRRT_kwDOTQMkzs6WJSKr", "PRRT_kwDOTQMkzs6WJHVk", "PRRT_kwDOTQMkzs6WJ7tK", "PRRT_kwDOTQMkzs6WKLNx", "PRRT_kwDOTQMkzs6WKZdv"]), "canonical task-set review bindings drifted");'
+new_threads = 'assert(sameSet(receipt.repairs?.canonical_task_set_custody?.review_threads || [], ["PRRT_kwDOTQMkzs6WJSKr", "PRRT_kwDOTQMkzs6WJHVk", "PRRT_kwDOTQMkzs6WJ7tK", "PRRT_kwDOTQMkzs6WKLNx", "PRRT_kwDOTQMkzs6WKZdv", "PRRT_kwDOTQMkzs6WLMz4"]), "canonical task-set review bindings drifted");'
+if text.count(old_threads) != 1:
+    raise SystemExit(f'review-thread assertion count={text.count(old_threads)}')
+text = text.replace(old_threads, new_threads, 1)
+anchor = 'assert(receipt.repairs?.canonical_task_set_custody?.compound_wrong_release_then_valid_latest_fixture_fails_closed === true, "compound release-reason refusal disappeared");'
+addition = anchor + '''
+assert(receipt.repairs?.canonical_task_set_custody?.lifecycle_rows_selected_by_durable_task_id === true, "durable task-id lifecycle selection disappeared");
+assert(receipt.repairs?.canonical_task_set_custody?.lifecycle_row_scope_validated_after_task_binding === true, "lifecycle scope validation moved before task binding");
+assert(receipt.repairs?.canonical_task_set_custody?.compound_wrong_scope_then_retry_fixture_fails_closed === true, "compound wrong-scope refusal disappeared");
+assert(receipt.qualification?.durable_task_id_lifecycle_selection_enforced === true, "task-id-first lifecycle qualification disappeared");'''
+if text.count(anchor) != 1:
+    raise SystemExit(f'new custody assertion anchor count={text.count(anchor)}')
+path.write_text(text.replace(anchor, addition, 1))
+PY2
+
+node --check scripts/doctor-who-activation.mjs'''
+          script = script.replace(gate_marker, checker_patch, 1)
+          Path('/tmp/task-id-first-final-carrier.sh').write_text(script)
+          PY
+          bash /tmp/task-id-first-final-carrier.sh
