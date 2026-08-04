@@ -57,7 +57,7 @@ jobs:
           github-token: ${{ github.token }}
           repository: BigBirdReturns/undercast
           run-id: 30864593885
-      - name: Decode and bind exact chunked transport
+      - name: Decode, bind, and future-proof exact chunked transport
         shell: bash
         run: |
           set -euo pipefail
@@ -71,6 +71,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import glob, hashlib, json, os
+
           binder = Path('/tmp/doctor-who-cycle-003/01-bind-decode.sh')
           text = binder.read_text()
           old = 'cat > /tmp/expected-transport-paths.txt <<PATHS\n$TRANSPORT\n$SELF\nPATHS\n'
@@ -88,6 +89,160 @@ jobs:
           manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
           PY
           bash "$CYCLE_ASSET_DIR/01-bind-decode.sh"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json
+
+          path = Path('scripts/doctor-who-correction-drill.mjs')
+          before = path.read_text()
+          before_sha = hashlib.sha256(before.encode()).hexdigest()
+
+          old_function = '''function validateActiveLeaseIsolation(jobs, unreceiptedGroups, { doctorWhoAllowed }) {
+            const active = (jobs || []).filter((job) => ACTIVE_JOB_STATUSES.has(job.status));
+            const leaseGroups = new Map();
+            const addGroup = (scope, leaseId, members, source) => {
+              assert(String(scope || "").trim() && String(leaseId || "").trim(), `${source} lease group lacks scope or lease identity`);
+              if (!doctorWhoAllowed) assert(scope !== "doctor-who", `Doctor Who acquired ${source} work before milestone completion: ${leaseId}`);
+              const key = `${scope}|${leaseId}`;
+              if (!leaseGroups.has(key)) leaseGroups.set(key, []);
+              leaseGroups.get(key).push(...members);
+            };
+            for (const job of active) {
+              const leaseId = String(job.lease?.id || "").trim();
+              assert(leaseId, `active job ${job.scope}:${job.id} lacks lease identity`);
+              addGroup(job.scope, leaseId, [job.id], "active");
+            }
+            for (const group of unreceiptedGroups || []) {
+              addGroup(group.scope_id, group.lease_id, (group.task_ids || []).map((id) => `journal:${id}`), "unreceipted journal");
+            }
+            assert(leaseGroups.size <= 1, `global one-cycle boundary has multiple active or unreceipted lease groups: ${[...leaseGroups.keys()].join(", ")}`);
+            return { active, unreceiptedGroups: unreceiptedGroups || [], leaseGroups };
+          }'''
+          new_function = '''function validateActiveLeaseIsolation(jobs, unreceiptedGroups, { doctorWhoAllowed, doctorWhoTerminalReceiptPending = false }) {
+            const active = (jobs || []).filter((job) => ACTIVE_JOB_STATUSES.has(job.status));
+            const jobById = new Map((jobs || []).map((job) => [job.id, job]));
+            const leaseGroups = new Map();
+            const addGroup = (scope, leaseId, members, source) => {
+              assert(String(scope || "").trim() && String(leaseId || "").trim(), `${source} lease group lacks scope or lease identity`);
+              if (!doctorWhoAllowed && scope === "doctor-who") {
+                const terminalReceiptPending = doctorWhoTerminalReceiptPending
+                  && source === "unreceipted journal"
+                  && active.length === 0
+                  && members.length === 1
+                  && members.every((member) => {
+                    const taskId = String(member).replace(/^journal:/, "");
+                    const job = jobById.get(taskId);
+                    return job?.scope === "doctor-who" && job.status === "resolved";
+                  });
+                assert(terminalReceiptPending, `Doctor Who acquired ${source} work before milestone completion: ${leaseId}`);
+              }
+              const key = `${scope}|${leaseId}`;
+              if (!leaseGroups.has(key)) leaseGroups.set(key, []);
+              leaseGroups.get(key).push(...members);
+            };
+            for (const job of active) {
+              const leaseId = String(job.lease?.id || "").trim();
+              assert(leaseId, `active job ${job.scope}:${job.id} lacks lease identity`);
+              addGroup(job.scope, leaseId, [job.id], "active");
+            }
+            for (const group of unreceiptedGroups || []) {
+              addGroup(group.scope_id, group.lease_id, (group.task_ids || []).map((id) => `journal:${id}`), "unreceipted journal");
+            }
+            assert(leaseGroups.size <= 1, `global one-cycle boundary has multiple active or unreceipted lease groups: ${[...leaseGroups.keys()].join(", ")}`);
+            return { active, unreceiptedGroups: unreceiptedGroups || [], leaseGroups };
+          }'''
+          if before.count(old_function) != 1:
+              raise SystemExit('active-lease isolation function drifted')
+          after = before.replace(old_function, new_function, 1)
+
+          old_live = '''const unreceiptedLeaseGroups = unreceiptedJournalLeaseGroups(waterline, waterlineState, autopilotJournal);
+          const activeLeaseState = validateActiveLeaseIsolation(autopilot.jobs || [], unreceiptedLeaseGroups, {
+            doctorWhoAllowed: roadmapCompletion.completed,
+          });'''
+          new_live = '''const unreceiptedLeaseGroups = unreceiptedJournalLeaseGroups(waterline, waterlineState, autopilotJournal);
+          const reviewedDoctorWhoCycles = (waterlineState.cycles || []).filter((cycle) =>
+            cycle.scope_id === "doctor-who" && cycle.outcome === "completed" && cycle.closed_at && cycle.reviewed_at
+          ).length;
+          const doctorWhoTerminalReceiptPending = !roadmapCompletion.completed
+            && reviewedDoctorWhoCycles >= 1
+            && unreceiptedLeaseGroups.length === 1
+            && unreceiptedLeaseGroups[0].scope_id === "doctor-who"
+            && (unreceiptedLeaseGroups[0].task_ids || []).length === 1;
+          const activeLeaseState = validateActiveLeaseIsolation(autopilot.jobs || [], unreceiptedLeaseGroups, {
+            doctorWhoAllowed: roadmapCompletion.completed,
+            doctorWhoTerminalReceiptPending,
+          });'''
+          if after.count(old_live) != 1:
+              raise SystemExit('live lease-isolation composition drifted')
+          after = after.replace(old_live, new_live, 1)
+
+          old_fixture = '''validateActiveLeaseIsolation([
+            { id: "fixture-star", scope: "star-trek", status: "leased", lease: { id: "lease_fixture" } },
+            { id: "fixture-doctor-queued", scope: "doctor-who", status: "queued" },
+          ], [], { doctorWhoAllowed: false });
+          expectFailure('''
+          new_fixture = '''validateActiveLeaseIsolation([
+            { id: "fixture-star", scope: "star-trek", status: "leased", lease: { id: "lease_fixture" } },
+            { id: "fixture-doctor-queued", scope: "doctor-who", status: "queued" },
+          ], [], { doctorWhoAllowed: false });
+          validateActiveLeaseIsolation([
+            { id: "fixture-doctor-resolved", scope: "doctor-who", status: "resolved" },
+          ], [{ scope_id: "doctor-who", lease_id: "lease_terminal_receipt_pending", task_ids: ["fixture-doctor-resolved"] }], {
+            doctorWhoAllowed: false,
+            doctorWhoTerminalReceiptPending: true,
+          });
+          expectFailure(
+            () => validateActiveLeaseIsolation([
+              { id: "fixture-doctor-queued", scope: "doctor-who", status: "queued" },
+            ], [{ scope_id: "doctor-who", lease_id: "lease_nonterminal", task_ids: ["fixture-doctor-queued"] }], {
+              doctorWhoAllowed: false,
+              doctorWhoTerminalReceiptPending: true,
+            }),
+            /before milestone completion/,
+            "nonterminal Doctor Who unreceipted group",
+          );
+          expectFailure('''
+          if after.count(old_fixture) != 1:
+              raise SystemExit('embedded lease fixture anchor drifted')
+          after = after.replace(old_fixture, new_fixture, 1)
+
+          old_message = 'one unrelated active lease group, future certified refreshes and corrections, and separately reviewed roadmap completion'
+          new_message = 'one globally bounded active or resolved receipt-pending lease group, future certified refreshes and corrections, and separately reviewed roadmap completion'
+          if after.count(old_message) != 1:
+              raise SystemExit('pass-message anchor drifted')
+          after = after.replace(old_message, new_message, 1)
+          path.write_text(after)
+          after_sha = hashlib.sha256(after.encode()).hexdigest()
+          report = {
+            'version': 1,
+            'transaction': 'DOCTOR-WHO-CYCLE-003-RECEIPT-REQUIRED-CUSTODY',
+            'base_main': '95c0a10b6e3c6e592ec30fae44bb8108b997ab49',
+            'failed_run': 30868357154,
+            'failed_job': 91865101803,
+            'failed_artifact_id': 8876995578,
+            'failed_artifact_sha256': 'd2e7a9d4e4e0d62fa44548a6345365789505a1125d4f248c081bb0c9a7339315',
+            'checker': str(path),
+            'checker_sha256_before': before_sha,
+            'checker_sha256_after': after_sha,
+            'correction': 'Permit exactly one resolved Doctor Who journal lease group to remain receipt-pending after at least one reviewed Doctor Who cycle, while retaining the global single-group lock.',
+            'refusals': [
+              'active Doctor Who task',
+              'queued or other nonterminal task',
+              'multiple tasks in one pending group',
+              'multiple active or unreceipted lease groups',
+              'first Doctor Who work without a prior reviewed cycle',
+            ],
+            'boundary': {
+              'candidate_receipt_still_required': True,
+              'second_concurrent_lease_allowed': False,
+              'roadmap_completion_claimed': False,
+              'historical_drill_receipt_mutated': False,
+            },
+          }
+          Path('/tmp/doctor-who-cycle-003-receipt-required-custody.json').write_text(json.dumps(report, indent=2) + '\n')
+          PY
+          node --check scripts/doctor-who-correction-drill.mjs
       - name: Claim, materialize, review, and resolve exactly one Jask task
         shell: bash
         run: bash "$CYCLE_ASSET_DIR/02-materialize.sh"
