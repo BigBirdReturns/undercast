@@ -1,0 +1,83 @@
+name: doctor-who-cycle-004-still-correction-source
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-004-still-correction-source.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-004-still-correction-source-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  EXACT_MAIN: efdce8dec82fb803fd165d7af0c1a6c77e3eecb8
+  SELF: .github/workflows/doctor-who-cycle-004-still-correction-source.yml
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+
+jobs:
+  export:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 128
+
+      - name: Bind exact main and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=128 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${HEAD_BRANCH})" = "$HEAD_SHA"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+          node scripts/doctor-who-cycle-004.mjs
+          node scripts/media-audit.mjs gate --scope doctor-who
+          node scripts/waterline.mjs validate --scope doctor-who
+
+      - name: Export exact tracked source and historical cycle objects
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=/tmp/doctor-who-cycle-004-still-correction-source
+          mkdir -p "$out"
+          git archive --format=tar.gz --prefix=undercast/ "$EXACT_MAIN" > "$out/undercast-${EXACT_MAIN}.tar.gz"
+          git ls-tree -r --full-tree "$EXACT_MAIN" > "$out/exact-tree.txt"
+          git ls-tree -r --name-only "$EXACT_MAIN" | sort > "$out/exact-paths.txt"
+          git show -s --format='%H%n%T%n%P%n%cI%n%s' "$EXACT_MAIN" > "$out/exact-commit.txt"
+          git show "$EXACT_MAIN:data/review/adapter-sdk/doctor-who-cycle-004-jask-audio.json" > "$out/cycle-004-receipt.json"
+          git show "$EXACT_MAIN:scripts/doctor-who-cycle-004.mjs" > "$out/cycle-004-checker.mjs"
+          sha256sum \
+            "$out/undercast-${EXACT_MAIN}.tar.gz" \
+            "$out/exact-tree.txt" \
+            "$out/exact-paths.txt" \
+            "$out/exact-commit.txt" \
+            "$out/cycle-004-receipt.json" \
+            "$out/cycle-004-checker.mjs" \
+            > "$out/export.sha256"
+          printf '%s\n' "$EXACT_MAIN" > "$out/exact-main.txt"
+          printf '%s\n' "$HEAD_SHA" > "$out/carrier-head.txt"
+          cp /tmp/expected-paths.txt /tmp/actual-paths.txt "$out/"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact correction source
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-004-still-correction-source-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: /tmp/doctor-who-cycle-004-still-correction-source
