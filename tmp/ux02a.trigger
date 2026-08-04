@@ -1,6 +1,0 @@
-DEC-0016 canonical main-push transaction
-base=0fc0a3f65633c481d0ef0b316f3e1dc2936d7b12
-carrier=40ef8f4eddc5ba0c65d8bf2c628fa88667cb2d96
-target_pr=255
-review_fix=18c838abd554449a0457a0f51e7bb5bdad03a1dc6e9f4c022601ebb6be8e6398
-merge=false
