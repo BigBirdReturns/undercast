@@ -1,4 +1,4 @@
-name: materialize-ux-02-navigation-continuity-v6
+name: materialize-ux-02-navigation-continuity-dec0016
 
 on:
   push:
@@ -11,37 +11,37 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: materialize-ux-02-navigation-continuity-v6
+  group: materialize-ux-02-navigation-continuity-dec0016
   cancel-in-progress: true
 
 jobs:
   materialize:
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EVIDENCE: ${{ runner.temp }}/ux-02a-dec0016-evidence
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/ux-02-navigation-parity
-          fetch-depth: 4
+          fetch-depth: 8
 
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: npm
 
-      - name: Reconstruct, qualify, and publish DEC-bound UX product
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Reconstruct exact DEC-0016 product and prove policy preflight
+        id: reconstruct
         shell: bash
         run: |
           set -euo pipefail
-
-          EVIDENCE="${RUNNER_TEMP}/ux-02a-dec0015-evidence"
           mkdir -p "$EVIDENCE"
 
           post_comment() {
             local body="$1"
-            jq -n --arg body "$body" '{body: $body}' > /tmp/ux-comment.json
+            jq -n --arg body "$body" '{body:$body}' > /tmp/ux-comment.json
             curl --silent --show-error --fail-with-body \
               -X POST \
               -H "Accept: application/vnd.github+json" \
@@ -52,17 +52,148 @@ jobs:
               >/dev/null || true
           }
 
-          on_error() {
-            local status="$?"
-            printf 'status=failure\nexit=%s\nrun=%s\ntransport=%s\n' "$status" "$GITHUB_RUN_ID" "$GITHUB_SHA" > "$EVIDENCE/status.txt"
-            post_comment "UX-02A DEC-0015 materializer run ${GITHUB_RUN_ID} failed with status ${status} on transport head ${GITHUB_SHA}."
-            exit "$status"
-          }
-          trap on_error ERR
-
-          BRANCH='agent/ux-02-navigation-parity'
           SOURCE_SHA="$(git rev-parse HEAD)"
           PATCH='tmp/ux-02-navigation-continuity-v6.py'
+          git show "$SOURCE_SHA:$PATCH" > /tmp/ux-02-navigation-continuity-v6.py
+          git fetch --no-tags origin main
+          BASE_SHA="$(git rev-parse origin/main)"
+          git reset --hard "$BASE_SHA"
+          printf 'SOURCE_SHA=%s\nBASE_SHA=%s\n' "$SOURCE_SHA" "$BASE_SHA" >> "$GITHUB_ENV"
+
+          post_comment "UX-02A DEC-0016 materializer run ${GITHUB_RUN_ID} started on transport head ${SOURCE_SHA}; UX-03, DEC-0009, DEC-0012 and DEC-0015 remain binding."
+
+          python /tmp/ux-02-navigation-continuity-v6.py
+          npm ci 2>&1 | tee "$EVIDENCE/npm-ci.log"
+          node scripts/shard.mjs 2>&1 | tee "$EVIDENCE/shard-before.log"
+          node scripts/build-record-pages.mjs 2>&1 | tee "$EVIDENCE/records-before.log"
+          node --check assets/site-navigation.js
+          node --check scripts/site-seams.mjs
+          node --check tests/rendered/site.spec.mjs
+          node --check tests/rendered/ux-journeys.spec.mjs
+          node scripts/site-seams.mjs 2>&1 | tee "$EVIDENCE/site-seams.log"
+          grep -Fq '## DEC-0016 — Compact archive navigation is progressive enhancement, not a new destination' docs/DECISIONS.md
+          grep -Fq 'DEC-0015 remains the authority for dense mobile evidence' docs/DECISIONS.md
+          grep -Fq 'Connections and Constellations remain contextual or secondary under DEC-0009' docs/DECISIONS.md
+          git diff --check
+
+          EXPECTED_RECORDS="$(node --input-type=module -e 'import {readFileSync} from "node:fs"; const live=JSON.parse(readFileSync("data/specimens.json","utf8")); const retired=JSON.parse(readFileSync("data/tombstones.json","utf8")); console.log(live.length+(retired.records||[]).length);')"
+          GENERATED_RECORDS="$(find records -mindepth 2 -maxdepth 2 -type f -name index.html | wc -l | tr -d ' ')"
+          test "$GENERATED_RECORDS" = "$EXPECTED_RECORDS"
+          find records -mindepth 2 -maxdepth 2 -type f -name index.html -print0 \
+            | LC_ALL=C sort -z \
+            | xargs -0 sha256sum \
+            > "$EVIDENCE/generated-records-before.sha256"
+
+          while IFS= read -r -d '' file; do
+            grep -Fq '../../assets/site-navigation.js' "$file" || { printf 'record lacks shared controller: %s\n' "$file" >&2; exit 1; }
+            grep -Fq 'class="archive-map"' "$file" || { printf 'record lacks archive map: %s\n' "$file" >&2; exit 1; }
+            grep -Fq 'aria-current="location">Recognition records' "$file" || { printf 'record lacks current archive section: %s\n' "$file" >&2; exit 1; }
+            if grep -Eq '<a[^>]*>Connections</a>' "$file"; then
+              printf 'record promoted Connections into primary navigation: %s\n' "$file" >&2
+              exit 1
+            fi
+          done < <(find records -mindepth 2 -maxdepth 2 -type f -name index.html -print0)
+
+          permanent_paths=(
+            404.html
+            assets/site-navigation.js
+            assets/site-shell.css
+            constellation.html
+            coverage.html
+            data/archive.json
+            docs/DECISIONS.md
+            docs/UX-READINESS.md
+            index.html
+            recognition.html
+            scripts/build-record-pages.mjs
+            scripts/site-seams.mjs
+            tests/rendered/site.spec.mjs
+            tests/rendered/ux-journeys.spec.mjs
+          )
+          mapfile -t actual_paths < <({ git diff --name-only "$BASE_SHA"; git ls-files --others --exclude-standard; } | LC_ALL=C sort -u)
+          test "${#actual_paths[@]}" = "${#permanent_paths[@]}"
+          for file in "${permanent_paths[@]}"; do
+            printf '%s\n' "${actual_paths[@]}" | grep -Fxq "$file"
+          done
+          if printf '%s\n' "${actual_paths[@]}" | grep -Eq '^records/|^\.github/|^tmp/|^\.ci/'; then
+            printf 'transport or generated output entered the permanent denominator\n' >&2
+            exit 1
+          fi
+
+          git config user.name undercast-transaction-bot
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- "${permanent_paths[@]}"
+          git commit -m 'UX: normalize mobile archive navigation and current location'
+          PRODUCT_SHA="$(git rev-parse HEAD)"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = 1
+          test -z "$(git status --porcelain)"
+          printf 'PRODUCT_SHA=%s\nGENERATED_RECORDS=%s\n' "$PRODUCT_SHA" "$GENERATED_RECORDS" >> "$GITHUB_ENV"
+
+          cat > /tmp/pr-event.json <<'JSON'
+          {
+            "pull_request": {
+              "labels": [{"name": "owner-approved-product-change"}],
+              "body": "Implements DEC-0016 while preserving DEC-0009, DEC-0012 and DEC-0015."
+            }
+          }
+          JSON
+          node scripts/corpus-ops.mjs check-pr --base "$BASE_SHA" --event /tmp/pr-event.json --json 2>&1 | tee "$EVIDENCE/collection-policy.log"
+
+      - name: Replay all generated permanent records byte-for-byte
+        id: records
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-record-pages.mjs 2>&1 | tee "$EVIDENCE/records-replay.log"
+          find records -mindepth 2 -maxdepth 2 -type f -name index.html -print0 \
+            | LC_ALL=C sort -z \
+            | xargs -0 sha256sum \
+            > "$EVIDENCE/generated-records-after.sha256"
+          diff -u "$EVIDENCE/generated-records-before.sha256" "$EVIDENCE/generated-records-after.sha256" | tee "$EVIDENCE/generated-records.diff"
+          node scripts/shard.mjs 2>&1 | tee "$EVIDENCE/shard-replay.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Install supported browser engines
+        id: browsers
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 900s npx playwright install --with-deps chromium firefox webkit 2>&1 | tee "$EVIDENCE/playwright-install.log"
+
+      - name: Run five-engine UX matrix
+        id: ux
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 900s npm run test:ux 2>&1 | tee "$EVIDENCE/test-ux.log"
+
+      - name: Run canonical complete repository gate
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 1200s npm run gate 2>&1 | tee "$EVIDENCE/gate.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Verify stable main and publish workflow-free product
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          post_comment() {
+            local body="$1"
+            jq -n --arg body "$body" '{body:$body}' > /tmp/ux-comment.json
+            curl --silent --show-error --fail-with-body \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              --data @/tmp/ux-comment.json \
+              "https://api.github.com/repos/BigBirdReturns/undercast/issues/255/comments" \
+              >/dev/null || true
+          }
+
           permanent_paths=(
             404.html
             assets/site-navigation.js
@@ -80,114 +211,14 @@ jobs:
             tests/rendered/ux-journeys.spec.mjs
           )
 
-          is_permanent_path() {
-            local candidate="$1"
-            local allowed
-            for allowed in "${permanent_paths[@]}"; do
-              [[ "$candidate" == "$allowed" ]] && return 0
-            done
-            return 1
-          }
-
-          record_manifest() {
-            find records -mindepth 2 -maxdepth 2 -type f -name index.html -print0 \
-              | LC_ALL=C sort -z \
-              | xargs -0 sha256sum
-          }
-
-          post_comment "UX-02A DEC-0015 materializer run ${GITHUB_RUN_ID} started on transport head ${SOURCE_SHA}; DEC-0009 and collection-only custody remain binding."
-          git show "$SOURCE_SHA:$PATCH" > /tmp/ux-02-navigation-continuity-v6.py
-          git fetch --no-tags origin main
-          BASE_SHA="$(git rev-parse origin/main)"
-          git reset --hard "$BASE_SHA"
-
-          python /tmp/ux-02-navigation-continuity-v6.py
-          npm ci 2>&1 | tee "$EVIDENCE/npm-ci.log"
-          node scripts/shard.mjs 2>&1 | tee "$EVIDENCE/shard-before.log"
-          node scripts/build-record-pages.mjs 2>&1 | tee "$EVIDENCE/records-before.log"
-          node --check assets/site-navigation.js
-          node --check scripts/site-seams.mjs
-          node --check tests/rendered/site.spec.mjs
-          node --check tests/rendered/ux-journeys.spec.mjs
-          node scripts/site-seams.mjs 2>&1 | tee "$EVIDENCE/site-seams.log"
-          grep -Fq '## DEC-0015 — Compact navigation and current-location semantics are part of the frozen product contract' docs/DECISIONS.md
-          grep -Fq 'Connections and Constellations remain contextual or secondary under DEC-0009' docs/DECISIONS.md
-          git diff --check
-
-          EXPECTED_RECORDS="$(node --input-type=module -e 'import {readFileSync} from "node:fs"; const live=JSON.parse(readFileSync("data/specimens.json","utf8")); const retired=JSON.parse(readFileSync("data/tombstones.json","utf8")); console.log(live.length+(retired.records||[]).length);')"
-          GENERATED_RECORDS="$(find records -mindepth 2 -maxdepth 2 -type f -name index.html | wc -l | tr -d ' ')"
-          test "$GENERATED_RECORDS" = "$EXPECTED_RECORDS"
-          record_manifest > "$EVIDENCE/generated-records-before.sha256"
-
-          while IFS= read -r -d '' file; do
-            grep -Fq '../../assets/site-navigation.js' "$file" || { printf 'record lacks shared controller: %s\n' "$file" >&2; exit 1; }
-            grep -Fq 'class="archive-map"' "$file" || { printf 'record lacks archive map: %s\n' "$file" >&2; exit 1; }
-            grep -Fq 'aria-current="location">Recognition records' "$file" || { printf 'record lacks current archive section: %s\n' "$file" >&2; exit 1; }
-            if grep -Eq '<a[^>]*>Connections</a>' "$file"; then
-              printf 'record promoted Connections into primary navigation: %s\n' "$file" >&2
-              exit 1
-            fi
-          done < <(find records -mindepth 2 -maxdepth 2 -type f -name index.html -print0)
-
-          mapfile -t actual_paths < <({ git diff --name-only "$BASE_SHA"; git ls-files --others --exclude-standard; } | LC_ALL=C sort -u)
-          declare -A actual_set=()
-          for file in "${actual_paths[@]}"; do actual_set["$file"]=1; done
-
-          unexpected=()
-          for file in "${actual_paths[@]}"; do
-            is_permanent_path "$file" || unexpected+=("$file")
-          done
-          if ((${#unexpected[@]})); then
-            printf 'unexpected UX-02A DEC-0015 path: %s\n' "${unexpected[@]}" >&2
-            exit 1
-          fi
-          for file in "${permanent_paths[@]}"; do
-            if [[ -z "${actual_set[$file]+x}" ]]; then
-              printf 'missing required UX-02A DEC-0015 path: %s\n' "$file" >&2
-              exit 1
-            fi
-          done
-          test "${#actual_paths[@]}" = "${#permanent_paths[@]}"
-          if printf '%s\n' "${actual_paths[@]}" | grep -Eq '^records/|^\.github/|^tmp/|^\.ci/'; then
-            printf 'transport or generated output entered the permanent denominator\n' >&2
-            exit 1
-          fi
-
-          git config user.name undercast-transaction-bot
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -- "${permanent_paths[@]}"
-          git commit -m 'UX: normalize mobile archive navigation and current location'
-          PRODUCT_SHA="$(git rev-parse HEAD)"
-          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = 1
-          test -z "$(git status --porcelain)"
-
-          cat > /tmp/pr-event.json <<'JSON'
-          {
-            "pull_request": {
-              "labels": [{"name": "owner-approved-product-change"}],
-              "body": "Implements DEC-0015 while preserving DEC-0009 and DEC-0012."
-            }
-          }
-          JSON
-          node scripts/corpus-ops.mjs check-pr --base "$BASE_SHA" --event /tmp/pr-event.json --json 2>&1 | tee "$EVIDENCE/collection-policy.log"
-
-          node scripts/build-record-pages.mjs 2>&1 | tee "$EVIDENCE/records-replay.log"
-          record_manifest > "$EVIDENCE/generated-records-after.sha256"
-          diff -u "$EVIDENCE/generated-records-before.sha256" "$EVIDENCE/generated-records-after.sha256" | tee "$EVIDENCE/generated-records.diff"
-          node scripts/shard.mjs 2>&1 | tee "$EVIDENCE/shard-replay.log"
-          test -z "$(git status --porcelain)"
-
-          npx playwright install --with-deps chromium firefox webkit 2>&1 | tee "$EVIDENCE/playwright-install.log"
-          npm run test:ux 2>&1 | tee "$EVIDENCE/test-ux.log"
-          npm run gate 2>&1 | tee "$EVIDENCE/gate.log"
-          test -z "$(git status --porcelain)"
-
           git fetch --no-tags origin main
           test "$(git rev-parse origin/main)" = "$BASE_SHA"
           test "$(git rev-list --count "$BASE_SHA"..HEAD)" = 1
           mapfile -t final_paths < <(git diff --name-only "$BASE_SHA"..HEAD | LC_ALL=C sort)
           test "${#final_paths[@]}" = "${#permanent_paths[@]}"
-          for file in "${final_paths[@]}"; do is_permanent_path "$file"; done
+          for file in "${permanent_paths[@]}"; do
+            printf '%s\n' "${final_paths[@]}" | grep -Fxq "$file"
+          done
           if printf '%s\n' "${final_paths[@]}" | grep -Eq '^records/|^\.github/|^tmp/|^\.ci/'; then
             printf 'workflow, transport, or generated-record path survived product publication\n' >&2
             exit 1
@@ -199,20 +230,37 @@ jobs:
             printf 'run=%s\n' "$GITHUB_RUN_ID"
             printf 'base=%s\n' "$BASE_SHA"
             printf 'product=%s\n' "$PRODUCT_SHA"
-            printf 'decision=DEC-0015\n'
+            printf 'decision=DEC-0016\n'
             printf 'generated_records=%s\n' "$GENERATED_RECORDS"
             printf 'changed_paths=%s\n' "${#final_paths[@]}"
             printf '%s\n' "${final_paths[@]}"
           } > "$EVIDENCE/qualification.txt"
 
-          git push --force-with-lease="refs/heads/$BRANCH:$SOURCE_SHA" origin "HEAD:refs/heads/$BRANCH"
-          post_comment "UX-02A DEC-0015 materializer run ${GITHUB_RUN_ID} passed the collection-policy preflight, generated-record manifest replay, five-engine UX matrix, committed visual baselines, and complete repository gate; it published exact one-commit product ${PRODUCT_SHA} on base ${BASE_SHA}."
+          git push --force-with-lease="refs/heads/agent/ux-02-navigation-parity:$SOURCE_SHA" origin "HEAD:refs/heads/agent/ux-02-navigation-parity"
+          post_comment "UX-02A DEC-0016 materializer run ${GITHUB_RUN_ID} passed policy preflight, generated-record replay, the five-engine UX matrix, visual baselines and the complete repository gate; it published exact one-commit product ${PRODUCT_SHA} on base ${BASE_SHA}."
 
-      - name: Upload DEC-0015 UX qualification evidence
+      - name: Report failed stage
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          printf 'status=failure\nrun=%s\ntransport=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" > "$EVIDENCE/status.txt"
+          jq -n --arg body "UX-02A DEC-0016 materializer run ${GITHUB_RUN_ID} failed at the named Actions stage on transport head ${GITHUB_SHA}." '{body:$body}' > /tmp/ux-comment.json
+          curl --silent --show-error --fail-with-body \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data @/tmp/ux-comment.json \
+            "https://api.github.com/repos/BigBirdReturns/undercast/issues/255/comments" \
+            >/dev/null || true
+
+      - name: Upload DEC-0016 UX qualification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ux-02a-dec0015-${{ github.run_id }}
-          path: ${{ runner.temp }}/ux-02a-dec0015-evidence
+          name: ux-02a-dec0016-${{ github.run_id }}
+          path: ${{ runner.temp }}/ux-02a-dec0016-evidence
           if-no-files-found: warn
           retention-days: 30
