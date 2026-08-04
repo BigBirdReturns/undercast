@@ -1,6 +1,6 @@
-DEC-0016 reviewed-current-location synchronization
-main=c8f9b4e676e0d5336c77e92940a85109fbd8026c
+DEC-0016 observable reviewed-current-location transaction
+main=69a61204ec59654ffb2f403c06c0084d53db7230
 target=634f0a69b95b65c22c6bc680941570f543143e9f
 qualified=4fe485057180d3b3947bc5c70c5241ae21e5a106
 fix=18c838abd554449a0457a0f51e7bb5bdad03a1dc6e9f4c022601ebb6be8e6398
-event=synchronize-after-receipt-install
+event=synchronize-after-precheckout-receipt
