@@ -1,0 +1,243 @@
+name: doctor-who-cycle-005-kaarsh-still-verification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-005-kaarsh-still-verification.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-005-kaarsh-still-verification-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-005-kaarsh-still-verification.yml
+  EXACT_MAIN: 84688c5308db55aae6a97a753d593aa15fe91d37
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  PREFLIGHT_RUN: "30881936380"
+  PREFLIGHT_ARTIFACT: doctor-who-cycle-005-preflight-30881936380
+  PREFLIGHT_ARTIFACT_SHA256: deb156aa9ab2cca23a5743671d1ea095877815b72568185bc632ec38c2adcacd
+  PREFLIGHT: /tmp/doctor-who-cycle-005-preflight-artifact
+  OUT: /tmp/doctor-who-cycle-005-kaarsh-still-verification
+
+jobs:
+  verify:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 64
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact corrected main and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=64 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${HEAD_BRANCH})" = "$HEAD_SHA"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+          test -z "$(git status --porcelain)"
+
+      - name: Install deterministic image tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          identify -version
+
+      - name: Download exact corrected-main preflight artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PREFLIGHT_ARTIFACT }}
+          path: ${{ env.PREFLIGHT }}
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: ${{ env.PREFLIGHT_RUN }}
+
+      - name: Recover the exact source-named Kaarsh file
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          test -f "$PREFLIGHT/selected-task.json"
+          test -f "$PREFLIGHT/source-01.wikitext"
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+
+          const preflight = process.env.PREFLIGHT;
+          const out = process.env.OUT;
+          const packet = JSON.parse(fs.readFileSync(`${preflight}/selected-task.json`, 'utf8'));
+          const sourceBody = fs.readFileSync(`${preflight}/source-01.wikitext`, 'utf8');
+          const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+
+          if (packet.exact_main !== process.env.EXACT_MAIN) throw new Error('preflight exact main drifted');
+          if (packet.lease_issued !== false) throw new Error('preflight unexpectedly issued a lease');
+          if (packet.task?.id !== 'ap_ed7221a03fdd4679379e23f8') throw new Error('selected task drifted');
+          if (packet.task?.performer !== 'Dan Starkey' || packet.task?.character !== 'Kaarsh') throw new Error('selected performer-role drifted');
+          if (packet.task?.status !== 'queued') throw new Error('Kaarsh is no longer queued');
+          if (packet.task?.source_fingerprint !== 'ba3075acf7a348064e8e11359afa0ecc35fa231f8867e8c9496e101884366d43') throw new Error('Kaarsh source fingerprint drifted');
+          const receipt = packet.task?.source_receipts?.[0];
+          if (!receipt || receipt.pageid !== 89948 || receipt.revision !== 2331498 || receipt.content_sha256 !== 'a656f352afef65b58a8945b08b0fbf869c6943a932125643cb60e236ff7cd3d4') throw new Error('Kaarsh source receipt drifted');
+          if (!/^\|image\s*=\s*Kaarsh\.jpg\s*$/m.test(sourceBody)) throw new Error('revision-bound source no longer names Kaarsh.jpg');
+          if (!/^\|voice actor\s*=\s*Dan Starkey}}\s*$/m.test(sourceBody)) throw new Error('revision-bound source no longer names Dan Starkey as voice actor');
+
+          const endpoint = new URL('https://tardis.fandom.com/api.php');
+          endpoint.search = new URLSearchParams({
+            action: 'query',
+            titles: 'File:Kaarsh.jpg',
+            prop: 'imageinfo',
+            iiprop: 'url|size|mime|timestamp|user|sha1',
+            format: 'json',
+            formatversion: '2',
+            origin: '*',
+          }).toString();
+          const apiResponse = await fetch(endpoint, {headers: {'user-agent': 'Undercast exact-media verification/1.0'}});
+          if (!apiResponse.ok) throw new Error(`file API failed: ${apiResponse.status}`);
+          const apiBytes = Buffer.from(await apiResponse.arrayBuffer());
+          fs.writeFileSync(`${out}/file-api.json`, apiBytes);
+          const api = JSON.parse(apiBytes.toString('utf8'));
+          const page = api?.query?.pages?.[0];
+          const info = page?.imageinfo?.[0];
+          if (!page || page.missing || page.title !== 'File:Kaarsh.jpg' || !Number.isInteger(page.pageid) || page.pageid <= 0) throw new Error('Kaarsh file page identity drifted');
+          if (!info?.url || !info?.descriptionurl || !Number.isInteger(info.width) || !Number.isInteger(info.height)) throw new Error('Kaarsh imageinfo incomplete');
+
+          const imageResponse = await fetch(info.url, {headers: {'user-agent': 'Undercast exact-media verification/1.0'}});
+          if (!imageResponse.ok) throw new Error(`Kaarsh image fetch failed: ${imageResponse.status}`);
+          const imageBytes = Buffer.from(await imageResponse.arrayBuffer());
+          if (imageBytes.length < 1024) throw new Error('Kaarsh source image is implausibly small');
+          fs.writeFileSync(`${out}/source-image.bin`, imageBytes);
+
+          const metadata = {
+            version: 1,
+            exact_main: process.env.EXACT_MAIN,
+            task_id: packet.task.id,
+            performer: packet.task.performer,
+            character: packet.task.character,
+            performance_mode: packet.task.performance_modes,
+            source_page: receipt.source,
+            source_page_id: receipt.pageid,
+            source_revision: receipt.revision,
+            source_content_sha256: receipt.content_sha256,
+            source_fingerprint: packet.task.source_fingerprint,
+            file_title: page.title,
+            file_page_id: page.pageid,
+            file_description_url: info.descriptionurl,
+            original_url: info.url,
+            api_mime: info.mime ?? null,
+            delivered_content_type: imageResponse.headers.get('content-type'),
+            api_width: info.width,
+            api_height: info.height,
+            source_bytes: imageBytes.length,
+            source_sha256: sha256(imageBytes),
+            uploader: info.user ?? null,
+            uploaded_at: info.timestamp ?? null,
+            mediawiki_sha1: info.sha1 ?? null,
+            preflight_run: Number(process.env.PREFLIGHT_RUN),
+            preflight_artifact: process.env.PREFLIGHT_ARTIFACT,
+            preflight_artifact_sha256: process.env.PREFLIGHT_ARTIFACT_SHA256,
+            lease_issued: false,
+            repository_mutated: false,
+            visual_review_required: true,
+          };
+          fs.writeFileSync(`${out}/source-metadata.json`, `${JSON.stringify(metadata, null, 2)}\n`);
+          fs.writeFileSync(`${out}/selected-task.json`, `${JSON.stringify(packet, null, 2)}\n`);
+          fs.writeFileSync(`${out}/source-01.wikitext`, sourceBody);
+          NODE
+
+          identify -format '%m %w %h\n' "$OUT/source-image.bin" > "$OUT/source-identify.txt"
+          read -r source_format source_width source_height < "$OUT/source-identify.txt"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path = `${process.env.OUT}/source-metadata.json`;
+          const row = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const [format, width, height] = fs.readFileSync(`${process.env.OUT}/source-identify.txt`, 'utf8').trim().split(/\s+/);
+          if (Number(width) !== row.api_width || Number(height) !== row.api_height) throw new Error('downloaded image dimensions disagree with API');
+          row.delivered_format = format;
+          fs.writeFileSync(path, `${JSON.stringify(row, null, 2)}\n`);
+          NODE
+
+      - name: Derive a deterministic review candidate and prove byte novelty
+        shell: bash
+        run: |
+          set -euo pipefail
+          convert "$OUT/source-image.bin" \
+            -auto-orient \
+            -resize '640x640>' \
+            -strip \
+            -colorspace sRGB \
+            -quality 92 \
+            "$OUT/kaarsh-still-candidate.jpg"
+          identify -format '%m %w %h\n' "$OUT/kaarsh-still-candidate.jpg" > "$OUT/candidate-identify.txt"
+          candidate_sha256="$(sha256sum "$OUT/kaarsh-still-candidate.jpg" | awk '{print $1}')"
+          candidate_bytes="$(wc -c < "$OUT/kaarsh-still-candidate.jpg")"
+          find images -type f -print0 | sort -z | xargs -0 sha256sum > "$OUT/existing-image-sha256.txt"
+          ! grep -Fq "$candidate_sha256" "$OUT/existing-image-sha256.txt"
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const out = process.env.OUT;
+          const metadata = JSON.parse(fs.readFileSync(`${out}/source-metadata.json`, 'utf8'));
+          const bytes = fs.readFileSync(`${out}/kaarsh-still-candidate.jpg`);
+          const [format, width, height] = fs.readFileSync(`${out}/candidate-identify.txt`, 'utf8').trim().split(/\s+/);
+          const report = {
+            ...metadata,
+            candidate: {
+              path: 'kaarsh-still-candidate.jpg',
+              format,
+              width: Number(width),
+              height: Number(height),
+              bytes: bytes.length,
+              sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+              transform: "ImageMagick 6: auto-orient; resize 640x640>; strip; sRGB; JPEG quality 92",
+              byte_distinct_from_every_existing_repository_image: true,
+            },
+            boundary: {
+              exact_file_named_by_revision_bound_source: true,
+              performer_identity_claim: false,
+              generic_sontaran_substitution: false,
+              candidate_adopted: false,
+              lease_issued: false,
+            },
+          };
+          fs.writeFileSync(`${out}/verification.json`, `${JSON.stringify(report, null, 2)}\n`);
+          NODE
+          sha256sum "$OUT"/* > "$OUT/all-files.sha256.tmp"
+          mv "$OUT/all-files.sha256.tmp" "$OUT/all-files.sha256"
+          cp /tmp/expected-paths.txt "$OUT/"
+          cp /tmp/actual-paths.txt "$OUT/"
+          printf '%s\n' "$EXACT_MAIN" > "$OUT/exact-main.txt"
+          printf '%s\n' "$HEAD_SHA" > "$OUT/carrier-head.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact read-only Kaarsh still verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-005-kaarsh-still-verification-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: ${{ env.OUT }}
