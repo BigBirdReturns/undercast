@@ -1,0 +1,183 @@
+name: doctor-who-cycle-003-jask-portrait
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/doctor-who-cycle-003-jask-portrait.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-003-jask-portrait-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-003-jask-portrait.yml
+  EXACT_MAIN: 95c0a10b6e3c6e592ec30fae44bb8108b997ab49
+  COMMONS_TITLE: File:Dan Starkey by Gage Skidmore.jpg
+
+jobs:
+  prepare:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 8
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Bind exact main and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=8 origin \
+            refs/heads/main:refs/remotes/origin/main \
+            "refs/heads/${{ github.event.pull_request.head.ref }}:refs/remotes/origin/${{ github.event.pull_request.head.ref }}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${{ github.event.pull_request.head.ref }})" = "${{ github.event.pull_request.head.sha }}"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+
+      - name: Install deterministic image tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          convert -version
+
+      - name: Fetch licensed independent portrait and derive exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/doctor-who-cycle-003-jask-portrait
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const title = process.env.COMMONS_TITLE;
+          const params = new URLSearchParams({
+            action: 'query',
+            format: 'json',
+            formatversion: '2',
+            prop: 'imageinfo',
+            iiprop: 'url|size|sha1|mime|extmetadata',
+            titles: title,
+            origin: '*',
+          });
+          const endpoint = `https://commons.wikimedia.org/w/api.php?${params}`;
+          const response = await fetch(endpoint, { headers: { 'user-agent': 'undercast-estate-collector/1.0 (BigBirdReturns/undercast)' } });
+          if (!response.ok) throw new Error(`Commons metadata request failed: ${response.status}`);
+          const doc = await response.json();
+          const page = doc?.query?.pages?.[0];
+          const info = page?.imageinfo?.[0];
+          if (!info?.url || !info?.descriptionurl) throw new Error('Commons image metadata is incomplete');
+          const ext = info.extmetadata || {};
+          const strip = (value = '') => String(value).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+          const license = strip(ext.LicenseShortName?.value || ext.License?.value || '');
+          if (!/CC BY-SA 3\.0/i.test(license)) throw new Error(`unexpected license: ${license}`);
+          const author = strip(ext.Artist?.value || '');
+          if (!/Gage Skidmore/i.test(author)) throw new Error(`unexpected author: ${author}`);
+          const metadata = {
+            version: 1,
+            title,
+            pageid: page.pageid,
+            canonical_title: page.title,
+            original_url: info.url,
+            description_url: info.descriptionurl,
+            source_sha1: info.sha1,
+            source_width: info.width,
+            source_height: info.height,
+            source_bytes: info.size,
+            source_mime: info.mime,
+            license,
+            author,
+            attribution: strip(ext.Attribution?.value || ext.Credit?.value || author),
+            description: strip(ext.ImageDescription?.value || ''),
+            fetched_at: new Date().toISOString(),
+            boundary: {
+              performer_identity_only: true,
+              character_evidence: false,
+              jask_or_generic_sontaran_depiction: false,
+            },
+          };
+          fs.writeFileSync('/tmp/doctor-who-cycle-003-jask-portrait/commons-metadata.json', JSON.stringify(metadata, null, 2) + '\n');
+          const image = await fetch(info.url, { headers: { 'user-agent': 'undercast-estate-collector/1.0 (BigBirdReturns/undercast)' } });
+          if (!image.ok) throw new Error(`Commons image download failed: ${image.status}`);
+          fs.writeFileSync('/tmp/doctor-who-cycle-003-jask-portrait/source.jpg', Buffer.from(await image.arrayBuffer()));
+          NODE
+
+          source_sha256="$(sha256sum /tmp/doctor-who-cycle-003-jask-portrait/source.jpg | awk '{print $1}')"
+          convert /tmp/doctor-who-cycle-003-jask-portrait/source.jpg \
+            -auto-orient \
+            -resize '420x600^' \
+            -gravity center \
+            -extent 420x600 \
+            -strip \
+            -interlace Plane \
+            -quality 88 \
+            /tmp/doctor-who-cycle-003-jask-portrait/portrait.jpg
+          portrait_sha256="$(sha256sum /tmp/doctor-who-cycle-003-jask-portrait/portrait.jpg | awk '{print $1}')"
+          test "$portrait_sha256" != "$source_sha256"
+          identify -format '%w %h\n' /tmp/doctor-who-cycle-003-jask-portrait/portrait.jpg \
+            > /tmp/doctor-who-cycle-003-jask-portrait/portrait-dimensions.txt
+          test "$(cat /tmp/doctor-who-cycle-003-jask-portrait/portrait-dimensions.txt)" = '420 600'
+
+          find images -type f -size +0c -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            > /tmp/doctor-who-cycle-003-jask-portrait/existing-image-sha256.txt
+          ! grep -Fq "$portrait_sha256" /tmp/doctor-who-cycle-003-jask-portrait/existing-image-sha256.txt
+          ! grep -Fq 'Dan_Starkey_by_Gage_Skidmore' data/SOURCES.json data/specimens.json data/media-manifest.json
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const metadataPath = '/tmp/doctor-who-cycle-003-jask-portrait/commons-metadata.json';
+          const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+          const sha = (path) => crypto.createHash('sha256').update(fs.readFileSync(path)).digest('hex');
+          metadata.source_sha256 = sha('/tmp/doctor-who-cycle-003-jask-portrait/source.jpg');
+          metadata.portrait_sha256 = sha('/tmp/doctor-who-cycle-003-jask-portrait/portrait.jpg');
+          metadata.portrait_width = 420;
+          metadata.portrait_height = 600;
+          metadata.transform = {
+            auto_orient: true,
+            resize: '420x600^',
+            gravity: 'center',
+            extent: '420x600',
+            strip: true,
+            interlace: 'Plane',
+            quality: 88,
+          };
+          fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2) + '\n');
+          NODE
+
+          sha256sum \
+            /tmp/doctor-who-cycle-003-jask-portrait/commons-metadata.json \
+            /tmp/doctor-who-cycle-003-jask-portrait/source.jpg \
+            /tmp/doctor-who-cycle-003-jask-portrait/portrait.jpg \
+            /tmp/doctor-who-cycle-003-jask-portrait/existing-image-sha256.txt \
+            > /tmp/doctor-who-cycle-003-jask-portrait/portrait-preparation.sha256
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact portrait preparation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-003-jask-portrait-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            /tmp/doctor-who-cycle-003-jask-portrait
+            /tmp/expected-paths.txt
+            /tmp/actual-paths.txt
