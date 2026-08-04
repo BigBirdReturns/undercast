@@ -15,19 +15,11 @@ concurrency:
   group: dec0016-navigation-workflow-run
   cancel-in-progress: true
 
-# Bounded DEC-0016 transaction body. A successful same-repository
-# archive-contract run on the exact never-merge carrier releases this writer.
-# Restored to steady state after the qualified navigation product merges.
+# Bounded DEC-0016 transaction body. The workflow-run plane is shared by all
+# archive-contract completions, so the first step selects exact never-merge PR
+# #305. Immutable carrier bytes are still enforced after checkout.
 jobs:
   apply:
-    if: >-
-      ${{
-        github.event_name == 'workflow_run' &&
-        github.event.workflow_run.event == 'pull_request' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.head_repository.full_name == github.repository &&
-        github.event.workflow_run.head_branch == 'agent/collection-only-operations'
-      }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -37,15 +29,32 @@ jobs:
       TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
       TRIGGER_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
+      - name: Select exact carrier archive run
+        id: guard
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_JSON: ${{ toJSON(github.event.workflow_run) }}
+        run: |
+          set -euo pipefail
+          eligible=false
+          if [[ "$EVENT_NAME" == "workflow_run" ]] && \
+             jq -e '.event == "pull_request" and .conclusion == "success" and any(.pull_requests[]?; .number == 305)' \
+               <<<"$WORKFLOW_RUN_JSON" >/dev/null; then
+            eligible=true
+          fi
+          printf 'eligible=%s\n' "$eligible" >> "$GITHUB_OUTPUT"
+
       - name: Record DEC-0016 workflow-run transaction start
+        if: steps.guard.outputs.eligible == 'true'
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$EVIDENCE"
-          printf 'status=started\nrun=%s\ntrigger_run=%s\nevent_head=%s\ncarrier=%s\n' \
+          printf 'status=started\nrun=%s\ntrigger_run=%s\nevent_head=%s\ncarrier=%s\npr=305\n' \
             "$GITHUB_RUN_ID" "$TRIGGER_RUN_ID" "$TRIGGER_HEAD_SHA" "$EXPECTED_CARRIER_SHA" \
             > "$EVIDENCE/start.txt"
-          jq -n --arg body "UX-02A DEC-0016 workflow-run ${GITHUB_RUN_ID} started after archive-contract run ${TRIGGER_RUN_ID}; event head ${TRIGGER_HEAD_SHA}, immutable carrier ${EXPECTED_CARRIER_SHA}." '{body:$body}' > /tmp/ux02a-start.json
+          jq -n --arg body "UX-02A DEC-0016 workflow-run ${GITHUB_RUN_ID} selected carrier PR #305 after archive-contract run ${TRIGGER_RUN_ID}; event head ${TRIGGER_HEAD_SHA}, immutable carrier ${EXPECTED_CARRIER_SHA}." '{body:$body}' > /tmp/ux02a-start.json
           curl --silent --show-error --fail-with-body \
             -X POST \
             -H "Accept: application/vnd.github+json" \
@@ -56,11 +65,13 @@ jobs:
             >/dev/null
 
       - uses: actions/checkout@v4
+        if: steps.guard.outputs.eligible == 'true'
         with:
           ref: 40ef8f4eddc5ba0c65d8bf2c628fa88667cb2d96
           fetch-depth: 0
 
       - name: Verify exact carrier bytes
+        if: steps.guard.outputs.eligible == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -69,11 +80,13 @@ jobs:
           test "$(sha256sum tmp/ux02a-current-location-fix.py | awk '{print $1}')" = "18c838abd554449a0457a0f51e7bb5bdad03a1dc6e9f4c022601ebb6be8e6398"
 
       - uses: actions/setup-node@v4
+        if: steps.guard.outputs.eligible == 'true'
         with:
           node-version: '24'
           cache: npm
 
       - name: Materialize, qualify, and publish DEC-0016
+        if: steps.guard.outputs.eligible == 'true'
         shell: bash
         run: |
           cp tmp/ux02a-materialize.sh /tmp/ux02a-materialize.sh
@@ -81,14 +94,14 @@ jobs:
           bash /tmp/ux02a-materialize.sh
 
       - name: Record failed DEC-0016 workflow-run transaction
-        if: failure()
+        if: steps.guard.outputs.eligible == 'true' && failure()
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$EVIDENCE"
           stage="$(awk -F= '$1=="stage"{print $2}' "$EVIDENCE/status.txt" 2>/dev/null || true)"
           stage="${stage:-unknown}"
-          jq -n --arg body "UX-02A DEC-0016 workflow-run ${GITHUB_RUN_ID} failed at stage ${stage}; event head ${TRIGGER_HEAD_SHA}, immutable carrier ${EXPECTED_CARRIER_SHA}. No product authority was published." '{body:$body}' > /tmp/ux02a-failure.json
+          jq -n --arg body "UX-02A DEC-0016 workflow-run ${GITHUB_RUN_ID} failed at stage ${stage}; carrier PR #305, event head ${TRIGGER_HEAD_SHA}, immutable carrier ${EXPECTED_CARRIER_SHA}. No product authority was published." '{body:$body}' > /tmp/ux02a-failure.json
           curl --silent --show-error --fail-with-body \
             -X POST \
             -H "Accept: application/vnd.github+json" \
@@ -99,7 +112,7 @@ jobs:
             >/dev/null || true
 
       - name: Upload DEC-0016 qualification evidence
-        if: always()
+        if: always() && steps.guard.outputs.eligible == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ux-02a-dec0016-final-${{ github.run_id }}
