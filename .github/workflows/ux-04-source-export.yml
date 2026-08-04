@@ -1,46 +1,238 @@
-name: ux-04-source-export
+name: ux-04-makers-qualification
 
 on:
   pull_request:
     branches: [main]
     paths:
       - ".github/workflows/ux-04-source-export.yml"
+      - ".ci/ux-04-patch/**"
 
 permissions:
   contents: read
 
+concurrency:
+  group: ux-04-makers-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  PATCH_SHA256: 664410bedfe676a2a0786102f33d21782d2bda869be747e878a5aa43e0d70386
+
 jobs:
-  export:
+  qualify:
     if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 1
+          fetch-depth: 0
 
-      - name: Bind and package exact UX-04 checkout
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Reconstruct exact DEC-0017 candidate on live main
         shell: bash
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
           test -z "$(git status --porcelain)"
-          printf '%s\n' "$HEAD_SHA" > /tmp/source-head.txt
-          printf '%s\n' "$BASE_SHA" > /tmp/source-main.txt
-          tar --exclude=.git --exclude=node_modules --exclude=test-results --exclude=playwright-report -czf /tmp/undercast-ux-04-source.tgz .
-          sha256sum /tmp/undercast-ux-04-source.tgz > /tmp/source-sha256.txt
+          test "$(find .ci/ux-04-patch -maxdepth 1 -type f -name 'part-*' | wc -l | tr -d ' ')" = 6
+          cat .ci/ux-04-patch/part-* | base64 -d | gzip -dc > /tmp/ux-04-product.patch
+          printf '%s  %s\n' "$PATCH_SHA256" /tmp/ux-04-product.patch | sha256sum -c -
+          printf '%s\n' "$HEAD_SHA" > /tmp/transport-head.txt
+          printf '%s\n' "$PATCH_SHA256" > /tmp/patch-sha256.txt
 
-      - uses: actions/upload-artifact@v4
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            "+refs/heads/$HEAD_BRANCH:refs/remotes/origin/$HEAD_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/$HEAD_BRANCH)" = "$HEAD_SHA"
+          exact_main="$(git rev-parse refs/remotes/origin/main)"
+          printf '%s\n' "$exact_main" > /tmp/exact-main.txt
+          git checkout --detach "$exact_main"
+          test -z "$(git status --porcelain)"
+          git apply --whitespace=error-all /tmp/ux-04-product.patch
+
+          cat > /tmp/expected-product-paths.txt <<'PATHS'
+          404.html
+          assets/makers.css
+          constellation.html
+          coverage.html
+          data/archive.json
+          docs/DECISIONS.md
+          docs/UX-READINESS.md
+          index.html
+          makers.html
+          playwright.config.mjs
+          recognition.html
+          scripts/build-contract.mjs
+          scripts/lib/site-sweep.mjs
+          scripts/site-seams.mjs
+          scripts/site-sweep.mjs
+          sitemap.xml
+          tests/rendered/makers-discovery.spec.mjs
+          tests/rendered/site.spec.mjs
+          tests/rendered/ux-journeys.spec.mjs
+          PATHS
+          { git diff --name-only; git ls-files --others --exclude-standard; } | sort -u > /tmp/actual-product-paths.txt
+          diff -u /tmp/expected-product-paths.txt /tmp/actual-product-paths.txt
+          test "$(wc -l < /tmp/expected-product-paths.txt | tr -d ' ')" = 19
+          test "$(git diff --unified=0 -- docs/DECISIONS.md | grep -c '^+## DEC-0017')" = 1
+          if grep -Eq '^(data/(?!archive\.json)|images/|preservation/|schema/|records/|\.github/|\.ci/|tmp/)' /tmp/actual-product-paths.txt; then
+            echo 'UX-04 crossed a protected corpus or transport boundary' >&2
+            exit 1
+          fi
+          git diff --check
+          node --check tests/rendered/makers-discovery.spec.mjs
+          node --check tests/rendered/site.spec.mjs
+          node --check tests/rendered/ux-journeys.spec.mjs
+          node --check scripts/build-contract.mjs
+          node --check scripts/site-seams.mjs
+          node --check scripts/site-sweep.mjs
+          node --check scripts/lib/site-sweep.mjs
+
+          node scripts/shard.mjs 2>&1 | tee /tmp/shard.log
+          { git diff --name-only; git ls-files --others --exclude-standard; } | sort -u > /tmp/after-shard-paths.txt
+          diff -u /tmp/expected-product-paths.txt /tmp/after-shard-paths.txt
+          node scripts/site-seams.mjs | tee /tmp/site-seams.log
+          node scripts/site-sweep-fixtures.mjs | tee /tmp/site-sweep-fixtures.log
+          node scripts/site-sweep.mjs | tee /tmp/site-sweep.log
+          node scripts/corpus-audit.mjs | tee /tmp/corpus-audit.log
+
+      - name: Install exact dependencies and browser engines
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium firefox webkit
+          node scripts/build-record-pages.mjs
+          { git diff --name-only; git ls-files --others --exclude-standard; } | sort -u > /tmp/after-record-build-paths.txt
+          diff -u /tmp/expected-product-paths.txt /tmp/after-record-build-paths.txt
+
+      - name: Prove exact-label Makers behavior and unchanged visual contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx playwright test tests/rendered/makers-discovery.spec.mjs \
+            --project=ux-chromium-desktop \
+            --project=ux-firefox-desktop \
+            --project=ux-webkit-desktop \
+            --project=ux-chromium-mobile \
+            --project=ux-webkit-mobile 2>&1 | tee /tmp/makers-suite.log
+          npm run test:visual 2>&1 | tee /tmp/visual-suite.log
+          npm run test:ux 2>&1 | tee /tmp/ux-suite.log
+          { git diff --name-only; git ls-files --others --exclude-standard; } | sort -u > /tmp/after-focused-tests-paths.txt
+          diff -u /tmp/expected-product-paths.txt /tmp/after-focused-tests-paths.txt
+
+      - name: Commit candidate, enforce collection policy, and run complete gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          exact_main="$(cat /tmp/exact-main.txt)"
+          git config user.name undercast-ux-collector
+          git config user.email undercast-ux-collector@users.noreply.github.com
+          xargs -d '\n' git add -- < /tmp/expected-product-paths.txt
+          git commit -m 'UX: build exact-label Makers discovery'
+          candidate="$(git rev-parse HEAD)"
+          printf '%s\n' "$candidate" > /tmp/candidate-head.txt
+          test "$(git rev-list --count "$exact_main"..HEAD)" = 1
+          test -z "$(git status --porcelain)"
+          git diff --name-only "$exact_main"...HEAD | sort > /tmp/committed-product-paths.txt
+          diff -u /tmp/expected-product-paths.txt /tmp/committed-product-paths.txt
+
+          cat > /tmp/pr-event.json <<'JSON'
+          {
+            "pull_request": {
+              "labels": [{"name": "owner-approved-product-change"}],
+              "body": "Implements DEC-0017 while preserving DEC-0009, DEC-0012, DEC-0015 and the separately qualified DEC-0016 navigation lane."
+            }
+          }
+          JSON
+          node scripts/corpus-ops.mjs check-pr --base "$exact_main" --event /tmp/pr-event.json --json 2>&1 | tee /tmp/collection-policy.log
+          node scripts/shard.mjs > /tmp/post-commit-shard.log
+          test -z "$(git status --porcelain)"
+          npm run gate 2>&1 | tee /tmp/complete-gate.log
+          test -z "$(git status --porcelain)"
+
+      - name: Capture representative Makers evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ux-04-renders
+          node scripts/serve-test.mjs >/tmp/ux-04-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:4173/undercast/makers.html >/dev/null && break
+            sleep 0.25
+          done
+          node --input-type=module <<'NODE'
+          import { chromium } from "@playwright/test";
+          const browser = await chromium.launch();
+          for (const [name, viewport, path] of [
+            ["makers-desktop-michael-westmore", { width: 1440, height: 1000 }, "makers.html?credit=Michael%20Westmore"],
+            ["makers-mobile-sonic-team", { width: 393, height: 852 }, "makers.html?credit=Sonic%20Team"],
+          ]) {
+            const page = await browser.newPage({ viewport });
+            await page.route("**/*", route => {
+              const url = new URL(route.request().url());
+              if (url.hostname === "fonts.googleapis.com") return route.fulfill({ status: 200, contentType: "text/css", body: "" });
+              if (url.hostname === "fonts.gstatic.com") return route.fulfill({ status: 200, contentType: "font/woff2", body: Buffer.alloc(0) });
+              return route.continue();
+            });
+            await page.goto(`http://127.0.0.1:4173/undercast/${path}`, { waitUntil: "domcontentloaded" });
+            await page.locator("#maker-results").waitFor({ state: "attached" });
+            await page.locator("#maker-results").evaluate(node => new Promise(resolve => {
+              if (node.getAttribute("aria-busy") === "false") return resolve();
+              const observer = new MutationObserver(() => {
+                if (node.getAttribute("aria-busy") === "false") { observer.disconnect(); resolve(); }
+              });
+              observer.observe(node, { attributes: true, attributeFilter: ["aria-busy"] });
+            }));
+            await page.locator(".credit-card[open]").scrollIntoViewIfNeeded();
+            await page.screenshot({ path: `/tmp/ux-04-renders/${name}.png`, fullPage: true, animations: "disabled" });
+            await page.close();
+          }
+          await browser.close();
+          NODE
+          sha256sum /tmp/ux-04-renders/*.png > /tmp/ux-04-renders/sha256.txt
+          printf '%s\n' "$(cat /tmp/exact-main.txt)" > /tmp/ux-04-renders/exact-main.txt
+          printf '%s\n' "$(cat /tmp/candidate-head.txt)" > /tmp/ux-04-renders/candidate-head.txt
+
+      - name: Upload UX-04 qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: ux-04-source-${{ github.run_id }}
-          retention-days: 7
-          if-no-files-found: error
+          name: ux-04-makers-${{ github.run_id }}
+          retention-days: 30
+          if-no-files-found: warn
           path: |
-            /tmp/undercast-ux-04-source.tgz
-            /tmp/source-head.txt
-            /tmp/source-main.txt
-            /tmp/source-sha256.txt
+            /tmp/transport-head.txt
+            /tmp/patch-sha256.txt
+            /tmp/exact-main.txt
+            /tmp/candidate-head.txt
+            /tmp/expected-product-paths.txt
+            /tmp/actual-product-paths.txt
+            /tmp/after-shard-paths.txt
+            /tmp/after-record-build-paths.txt
+            /tmp/after-focused-tests-paths.txt
+            /tmp/committed-product-paths.txt
+            /tmp/shard.log
+            /tmp/post-commit-shard.log
+            /tmp/site-seams.log
+            /tmp/site-sweep-fixtures.log
+            /tmp/site-sweep.log
+            /tmp/corpus-audit.log
+            /tmp/makers-suite.log
+            /tmp/visual-suite.log
+            /tmp/ux-suite.log
+            /tmp/collection-policy.log
+            /tmp/complete-gate.log
+            /tmp/ux-04-renders
+            /tmp/ux-04-server.log
+            test-results
+            playwright-report
