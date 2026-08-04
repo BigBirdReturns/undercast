@@ -1,8 +1,9 @@
 name: apply-collection-only-operations
 
 on:
-  push:
-    branches: [agent/collection-only-operations]
+  workflow_run:
+    workflows: [archive-contract]
+    types: [completed]
   workflow_dispatch: {}
 
 permissions:
@@ -11,27 +12,42 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: apply-collection-only-operations
+  group: dec0016-navigation-workflow-run
   cancel-in-progress: true
 
-# Bounded DEC-0016 transaction body; restored after the qualified product merges.
+# Bounded DEC-0016 transaction body. A successful same-repository
+# archive-contract run on the exact never-merge carrier releases this writer.
+# Restored to steady state after the qualified navigation product merges.
 jobs:
   apply:
+    if: >-
+      ${{
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.event == 'pull_request' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.head_branch == 'agent/collection-only-operations' &&
+        github.event.workflow_run.head_sha == '40ef8f4eddc5ba0c65d8bf2c628fa88667cb2d96'
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
       GH_TOKEN: ${{ github.token }}
       EVIDENCE: ${{ runner.temp }}/ux-02a-dec0016-evidence
-      EVENT_HEAD_SHA: ${{ github.sha }}
+      EXPECTED_CARRIER_SHA: 40ef8f4eddc5ba0c65d8bf2c628fa88667cb2d96
+      TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+      TRIGGER_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
-      - name: Record DEC-0016 push transaction start
+      - name: Record DEC-0016 workflow-run transaction start
         shell: bash
         run: |
           set -euo pipefail
+          test "$TRIGGER_HEAD_SHA" = "$EXPECTED_CARRIER_SHA"
           mkdir -p "$EVIDENCE"
-          printf 'status=started\nrun=%s\nevent_head=%s\n' \
-            "$GITHUB_RUN_ID" "$EVENT_HEAD_SHA" > "$EVIDENCE/start.txt"
-          jq -n --arg body "UX-02A DEC-0016 push run ${GITHUB_RUN_ID} started on carrier ${EVENT_HEAD_SHA}." '{body:$body}' > /tmp/ux02a-start.json
+          printf 'status=started\nrun=%s\ntrigger_run=%s\ncarrier=%s\n' \
+            "$GITHUB_RUN_ID" "$TRIGGER_RUN_ID" "$TRIGGER_HEAD_SHA" \
+            > "$EVIDENCE/start.txt"
+          jq -n --arg body "UX-02A DEC-0016 workflow-run ${GITHUB_RUN_ID} started on carrier ${TRIGGER_HEAD_SHA} after archive-contract run ${TRIGGER_RUN_ID}." '{body:$body}' > /tmp/ux02a-start.json
           curl --silent --show-error --fail-with-body \
             -X POST \
             -H "Accept: application/vnd.github+json" \
@@ -43,8 +59,16 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          ref: agent/collection-only-operations
+          ref: 40ef8f4eddc5ba0c65d8bf2c628fa88667cb2d96
           fetch-depth: 0
+
+      - name: Verify exact carrier bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CARRIER_SHA"
+          test "$(sha256sum tmp/ux02a-materialize.sh | awk '{print $1}')" = "5a4b741e697ab0b8456cd1917de2da0b556919ba67a8d82b227f8e570bf91d57"
+          test "$(sha256sum tmp/ux02a-current-location-fix.py | awk '{print $1}')" = "18c838abd554449a0457a0f51e7bb5bdad03a1dc6e9f4c022601ebb6be8e6398"
 
       - uses: actions/setup-node@v4
         with:
@@ -58,7 +82,7 @@ jobs:
           chmod +x /tmp/ux02a-materialize.sh
           bash /tmp/ux02a-materialize.sh
 
-      - name: Record failed DEC-0016 push transaction
+      - name: Record failed DEC-0016 workflow-run transaction
         if: failure()
         shell: bash
         run: |
@@ -66,7 +90,7 @@ jobs:
           mkdir -p "$EVIDENCE"
           stage="$(awk -F= '$1=="stage"{print $2}' "$EVIDENCE/status.txt" 2>/dev/null || true)"
           stage="${stage:-unknown}"
-          jq -n --arg body "UX-02A DEC-0016 push run ${GITHUB_RUN_ID} failed at stage ${stage} on carrier ${EVENT_HEAD_SHA}; no product authority was published." '{body:$body}' > /tmp/ux02a-failure.json
+          jq -n --arg body "UX-02A DEC-0016 workflow-run ${GITHUB_RUN_ID} failed at stage ${stage} on carrier ${TRIGGER_HEAD_SHA}; no product authority was published." '{body:$body}' > /tmp/ux02a-failure.json
           curl --silent --show-error --fail-with-body \
             -X POST \
             -H "Accept: application/vnd.github+json" \
