@@ -44,6 +44,7 @@
     const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[ch]);
     const safeUrl = value => { try { const url = new URL(value, location.href); return /^https:$/.test(url.protocol) ? url.href : ""; } catch { return ""; } };
     const params = new URLSearchParams(location.search);
+    const mobileMapMedia = matchMedia("(max-width:800px)");
     let graph;
 
     function nodeLink(node, inner, {edgeId = "", legacySelected = false} = {}) {
@@ -81,6 +82,13 @@
       const record = edge.record_id ? `<a class="record-open" href="recognition.html#${encodeURIComponent(edge.record_id)}">${esc(edge.record_id)} · open record <span aria-hidden="true">→</span></a>` : "";
       return `<div class="node-shell">${selection}${record}</div>`;
     }
+    function roleGroup(label, className, roleEdges, nodes, edges, legacySelectedEdge) {
+      if (!roleEdges.length) return `<div class="role-group ${className} is-empty" aria-hidden="true"></div>`;
+      const selectedEdge = params.get("edge") || legacySelectedEdge;
+      const open = !mobileMapMedia.matches || roleEdges.some(edge => edge.id === selectedEdge);
+      const count = `${roleEdges.length} role${roleEdges.length === 1 ? "" : "s"}`;
+      return `<details class="role-group ${className}"${open ? " open" : ""}><summary><span>${esc(label)}</span><b>${esc(count)}</b></summary><div class="role-stack">${roleEdges.map(edge => roleCard(edge,nodes,edges,legacySelectedEdge)).join("")}</div></details>`;
+    }
     function render() {
       const id = $("constellation").value; const view = graph.constellations.find(item => item.id === id) || graph.constellations[0];
       const nodeSet = new Set(view.node_ids), edgeSet = new Set(view.edge_ids);
@@ -100,7 +108,7 @@
         const trek = roles.filter(edge => followToFranchise(edge.to, edges)?.id === "franchise:star-trek");
         const elsewhere = roles.filter(edge => !trek.includes(edge));
         const personInner = `<span class="person-no">${String(index+1).padStart(2,"0")}</span><div><span class="node-type">Performer anchor</span><h2>${esc(person.label)}</h2><p>${esc(person.description)}</p></div><span class="node-foot">${person.record_ids?.length ? `${person.record_ids.length} wall record${person.record_ids.length === 1 ? "" : "s"}` : "context anchor"}</span>`;
-        return `<article class="person-row">${nodeLink(person,personInner).replace('class="node"','class="node person-node"')}<div class="role-stack role-stack-trek">${trek.map(edge => roleCard(edge,nodes,edges,legacySelectedEdge)).join("")}</div><div class="role-stack role-stack-elsewhere">${elsewhere.map(edge => roleCard(edge,nodes,edges,legacySelectedEdge)).join("")}</div></article>`;
+        return `<article class="person-row">${nodeLink(person,personInner).replace('class="node"','class="node person-node"')}${roleGroup("In Star Trek","role-group-trek",trek,nodes,edges,legacySelectedEdge)}${roleGroup("Known elsewhere","role-group-elsewhere",elsewhere,nodes,edges,legacySelectedEdge)}</article>`;
       }).join("");
       $("scope-note").textContent = graph.semantics;
       $("edges").innerHTML = edges.map(edge => {
@@ -117,7 +125,9 @@
     }).then(response => { if (!response.ok) throw Error(response.status); return response.json(); }).then(data => {
       graph = data; const requested = params.get("id");
       $("constellation").innerHTML = graph.constellations.map(item => `<option value="${esc(item.id)}"${item.id === requested ? " selected" : ""}>${esc(item.title)}</option>`).join("");
-      $("constellation").addEventListener("change", () => { params.delete("node"); params.delete("edge"); render(); }); render();
+      $("constellation").addEventListener("change", () => { params.delete("node"); params.delete("edge"); render(); });
+      if(mobileMapMedia.addEventListener) mobileMapMedia.addEventListener("change",render); else mobileMapMedia.addListener(render);
+      render();
     }).catch(error => {
       $("summary").textContent = "Constellation data could not be loaded. No connection has been inferred.";
       $("empty").hidden = false;

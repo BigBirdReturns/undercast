@@ -77,3 +77,38 @@ npm run gate
 ```
 
 Snapshot updates are product changes: they require an explicit diff, the exact fixture-state contract, and the complete gate. They are never regenerated as an unreviewed side effect.
+
+## UX-03 — mobile and dense-data usability
+
+UX-03 keeps the same evidence and page ownership while replacing narrow-screen
+compression with deliberate traversal:
+
+- Coverage preserves the accessible table and explicit table roles, while its mobile
+  presentation turns every row into a five-field labelled card. Filters become one
+  column and evidence links retain full-size targets.
+- The wall keeps search and sort immediately available in a compact sticky control
+  block. Shelf, decade and sourced-species facets move into a native mobile
+  disclosure; active URL facets open it and remain named in the summary.
+- Recognition adds a mobile-only, hash-safe section map for images, hands, work,
+  reveal, prior familiarity, the memory pass, and recognition paths. Its controls
+  scroll within the record without replacing the `#UC-…` identity fragment.
+- Constellation keeps its desktop three-axis map. On mobile, each performer exposes
+  separate native disclosures for Star Trek roles and roles known elsewhere; an exact
+  selected edge opens its own group automatically.
+- Shared mobile navigation targets meet the 44-pixel interaction floor.
+
+The dedicated mobile-density fixtures run only in the two mobile compatibility
+projects. Desktop Chromium, Firefox and WebKit retain the existing continuity and
+recovery matrix; mobile Chromium and mobile WebKit add the four dense-data journeys.
+The deterministic desktop screenshots are replayed unchanged.
+
+```text
+npx playwright test tests/rendered/mobile-density.spec.mjs \
+  --project=ux-chromium-mobile --project=ux-webkit-mobile
+npm run test:ux
+npm run test:visual
+npm run gate
+```
+
+The mobile projections are interfaces over current canonical data. They do not write
+coverage, graph, specimen, source, media, queue, lease, or waterline authority.
