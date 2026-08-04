@@ -203,3 +203,29 @@ The frozen v1 product receives this bounded owner-approved correction:
 This decision changes presentation and wayfinding only. It adds no schema concept,
 reinterprets no unresolved credit as a finished card, and does not reopen general
 product development under DEC-0012.
+
+---
+
+## DEC-0014 — Deterministic visual baselines and honest recovery are part of the frozen product contract
+
+**Status:** Active · Ratified by owner direction in issue #242, implemented by #260, 2026-08-04
+
+DEC-0012 remains the default operating rule. This decision authorizes one
+bounded, corpus-disjoint product correction under the UX finishing program in
+issue #242:
+
+- Commit deterministic visual baselines for the five root surfaces and four
+  exact permanent-record evidence states.
+- Exercise index, canonical fallback, shard, constellation graph and cited-image
+  failures across the supported desktop and mobile browser matrix.
+- When both the generated index and canonical specimen fallback are unavailable,
+  the wall may publish an honest failure state with an in-page Retry control.
+  Retry must clear failed manifest, index, record and shard caches before booting
+  again.
+- A failed dependency must never authorize partial, stale or fabricated content.
+  Recovery UI preserves the evidence boundary and source provenance.
+
+The screenshots, browser fixtures and derived archive projection are regression
+evidence, not a second corpus authority. This decision adds no public destination,
+reveal mechanic, specimen field, schema concept, account layer or service. It does
+not reopen general product development or relax collection-only corpus custody.
