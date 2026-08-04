@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 const read = path => readFileSync(path, "utf8");
 const files = Object.fromEntries([
   "index.html","recognition.html","coverage.html","constellation.html","404.html",
-  "assets/site-shell.css","assets/constellation.css","assets/record-page.css","scripts/build-record-pages.mjs",
+  "assets/site-shell.css","assets/site-theme.js","assets/constellation.css","assets/record-page.css","scripts/build-record-pages.mjs",
   "schema/specimen.schema.json","schema/source.schema.json"
 ].map(path => [path, read(path)]));
 const errors = [];
@@ -58,6 +58,14 @@ expect(has("recognition.html", /<main id="record-view"/), "recognition: persiste
 expect(has("recognition.html", /connections-nav[\s\S]{0,220}prefers-reduced-motion/), "recognition: Connections ignores reduced motion");
 expect(has("recognition.html", /data\/archive\.json",\{cache:"no-store"\}/), "recognition: archive snapshot is not fresh");
 expect(has("recognition.html", /graphMeta\?\.sha256/), "recognition: constellation graph is not snapshot-versioned");
+expect(has("assets/site-theme.js", /storedTheme\(\) \|\| preferredTheme\(\)/), "theme: system color preference is ignored when no explicit choice exists");
+expect(has("assets/site-theme.js", /if \(!storedTheme\(\)\) applyTheme/), "theme: system changes do not compose with explicit preference custody");
+expect(has("index.html", /function recognitionHref\(id\)/), "index: recognition links do not carry exact wall context");
+expect(has("index.html", /loop\.href=recognitionHref\(s\.id\)/), "index: card record links bypass wall-context custody");
+expect(has("recognition.html", /function returnWallHref\(\)/), "recognition: safe wall return resolver is missing");
+expect(has("recognition.html", /target\.origin!==location\.origin/), "recognition: wall return is not same-origin constrained");
+expect(has("recognition.html", /id=\"return-wall\"/), "recognition: contextual return control is missing");
+expect(has("recognition.html", /function recognitionHref\(id\)/), "recognition: connected-record links drop the original wall context");
 // The draggable comparison seam was retired: it composited two half-faces into
 // one frame, which only reads as a morph for a matched pair. The reveal is now
 // the side-by-side plates (whole image at a time, works for every pair). Guard

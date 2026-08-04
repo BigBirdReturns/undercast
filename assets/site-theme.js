@@ -31,8 +31,15 @@
     }
   };
 
-  const initial = storedTheme() || "light";
+  const preferredTheme = () => media.matches ? "dark" : "light";
+  const initial = storedTheme() || preferredTheme();
   applyTheme(initial, false);
+
+  const followSystemPreference = event => {
+    if (!storedTheme()) applyTheme(event.matches ? "dark" : "light", false);
+  };
+  if (typeof media.addEventListener === "function") media.addEventListener("change", followSystemPreference);
+  else if (typeof media.addListener === "function") media.addListener(followSystemPreference);
 
   const wire = () => {
     applyTheme(root.dataset.theme || initial, false);
