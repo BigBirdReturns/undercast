@@ -191,12 +191,101 @@ function isCanonicalDoctorTask(task) {
   return franchiseMatches;
 }
 
+const CANONICAL_REOPEN_REASONS = new Set([
+  "coverage_returned",
+  "retry_due",
+  "source_changed",
+  "source_identity_cleared",
+]);
+const RETIREMENT_RELEASE_REASONS = new Set(["coverage_returned", "source_changed"]);
+
+function doctorTaskLifecycle(journal) {
+  const byTask = new Map();
+  for (const row of journal || []) {
+    if (!["task.retired", "task.reopened"].includes(row?.op)) continue;
+    if (row.scope !== SCOPE_ID) continue;
+    assert.ok(String(row.task_id || "").trim(), `${row.op} Doctor Who lifecycle event lacks task identity`);
+    if (!byTask.has(row.task_id)) byTask.set(row.task_id, []);
+    byTask.get(row.task_id).push(row);
+  }
+  return byTask;
+}
+
+function validateDoctorLifecycleIdentity(row, task) {
+  assert.equal(task.scope, row.scope, `${task.id} ${row.op} scope disagrees with its durable job`);
+  assert.equal(
+    canonicalNormalize(task.performer),
+    canonicalNormalize(row.performer),
+    `${task.id} ${row.op} performer disagrees with its durable job`,
+  );
+  assert.equal(
+    canonicalNormalize(task.character),
+    canonicalNormalize(row.character),
+    `${task.id} ${row.op} role disagrees with its durable job`,
+  );
+}
+
+function validateDoctorTaskLifecycle(rows, expectedSet, actualById) {
+  assert.ok(Array.isArray(rows) && rows.length > 0, "Doctor Who lifecycle replay received no rows");
+  const taskId = rows[0].task_id;
+  const task = actualById.get(taskId);
+  assert.ok(task, `${taskId} Doctor Who lifecycle lacks a durable Autopilot job`);
+  let previous = null;
+  let activeRetirement = null;
+
+  for (const row of rows) {
+    assert.equal(row.task_id, taskId, `${taskId} lifecycle replay crossed task identity`);
+    const at = Date.parse(row.at || "");
+    assert.ok(Number.isFinite(at), `${taskId} ${row.op} has an invalid timestamp`);
+    if (previous) {
+      const previousAt = Date.parse(previous.at || "");
+      assert.ok(at > previousAt, `${taskId} lifecycle timestamps must increase in append order`);
+    }
+    validateDoctorLifecycleIdentity(row, task);
+
+    if (row.op === "task.retired") {
+      activeRetirement = row;
+    } else {
+      assert.ok(
+        CANONICAL_REOPEN_REASONS.has(row.reason),
+        `${taskId} Doctor Who reopen has unsupported reason ${row.reason || "<missing>"}`,
+      );
+      if (activeRetirement) {
+        assert.ok(
+          RETIREMENT_RELEASE_REASONS.has(row.reason),
+          `${taskId} reopen reason ${row.reason} cannot release a retirement`,
+        );
+        activeRetirement = null;
+      }
+    }
+    previous = row;
+  }
+
+  const latest = rows.at(-1);
+  if (latest.op === "task.reopened") {
+    assert.ok(expectedSet.has(taskId), `${taskId} latest Doctor Who reopen lacks current canonical coverage`);
+    assert.notEqual(task.status, "retired", `${taskId} latest Doctor Who reopen still points to a retired task`);
+    assert.notEqual(
+      task.outcome?.kind,
+      "not-in-latest-coverage",
+      `${taskId} latest Doctor Who reopen retained the retirement outcome`,
+    );
+    assert.equal(
+      task.outcome?.retired_at,
+      undefined,
+      `${taskId} latest Doctor Who reopen retained retired_at custody`,
+    );
+  }
+  return { latest, activeRetirement };
+}
+
 function validateCanonicalDoctorTaskSet(jobs, coverage, scopesDoc, manifest, journal = []) {
   const expectedTasks = collapseCoverage(coverage, scopesDoc, manifest).filter(isCanonicalDoctorTask);
   assert.ok(expectedTasks.length > 0, "canonical Doctor Who task denominator is empty");
   const expectedIds = expectedTasks.map((task) => task.id).sort();
   const expectedSet = new Set(expectedIds);
   const actualTasks = (jobs || []).filter(isCanonicalDoctorTask);
+  const actualById = new Map(actualTasks.map((task) => [task.id, task]));
   const currentTasks = actualTasks.filter((task) => task.status !== "retired");
   const retainedRetiredTasks = actualTasks.filter((task) => task.status === "retired");
   const currentIds = currentTasks.map((task) => task.id).sort();
@@ -214,32 +303,39 @@ function validateCanonicalDoctorTaskSet(jobs, coverage, scopesDoc, manifest, jou
     expectedIds,
     "current non-retired Doctor Who task denominator disagrees with canonical census coverage",
   );
-  for (const task of retainedRetiredTasks) {
-    assert.equal(
-      task.outcome?.kind,
-      "not-in-latest-coverage",
-      `${task.id} retained retirement lacks the canonical sync outcome`,
-    );
+
+  const lifecycleByTask = doctorTaskLifecycle(journal);
+  const latestReopens = [];
+  const unreopenedRetirements = [];
+  for (const rows of lifecycleByTask.values()) {
+    const lifecycle = validateDoctorTaskLifecycle(rows, expectedSet, actualById);
+    if (lifecycle.latest.op === "task.reopened") latestReopens.push(lifecycle.latest);
+    if (lifecycle.activeRetirement) unreopenedRetirements.push(lifecycle.activeRetirement);
+  }
+
+  const unreopenedById = new Map(unreopenedRetirements.map((row) => [row.task_id, row]));
+  for (const retirement of unreopenedRetirements) {
     assert.ok(
-      Number.isFinite(Date.parse(task.outcome?.retired_at || "")),
-      `${task.id} retained retirement lacks a valid retired_at timestamp`,
+      !expectedSet.has(retirement.task_id),
+      `${retirement.task_id} has an unreopened retirement but remains in current canonical coverage`,
     );
+    const task = actualById.get(retirement.task_id);
+    assert.ok(
+      task,
+      `${retirement.task_id} has an unreopened Doctor Who retirement but is missing from durable Autopilot state`,
+    );
+    assert.equal(task.status, "retired", `${task.id} unreopened retirement is not retained as retired`);
+    assert.equal(task.outcome?.kind, "not-in-latest-coverage", `${task.id} retained retirement lacks the canonical sync outcome`);
+    assert.equal(task.outcome?.retired_at, retirement.at, `${task.id} retained retirement timestamp disagrees with its latest journal lifecycle`);
     assert.ok(!task.lease, `${task.id} retained retirement still carries a lease`);
-    const retirementEvents = (journal || []).filter((row) =>
-      row?.op === "task.retired" &&
-      row.task_id === task.id &&
-      row.scope === task.scope &&
-      canonicalNormalize(row.performer) === canonicalNormalize(task.performer) &&
-      canonicalNormalize(row.character) === canonicalNormalize(task.character) &&
-      row.at === task.outcome.retired_at
-    );
-    assert.equal(
-      retirementEvents.length,
-      1,
-      `${task.id} retained retirement lacks one matching task.retired journal receipt`,
+  }
+  for (const task of retainedRetiredTasks) {
+    assert.ok(
+      unreopenedById.has(task.id),
+      `${task.id} retained retirement is not backed by the latest unreopened journal lifecycle`,
     );
   }
-  return { expectedTasks, currentTasks, retainedRetiredTasks };
+  return { expectedTasks, currentTasks, retainedRetiredTasks, latestReopens, unreopenedRetirements };
 }
 
 function validateLiveDoctorSourceCustody(jobs) {
@@ -913,7 +1009,11 @@ retiredPilotJob.status = "retired";
 retiredPilotJob.outcome = { kind: "not-in-latest-coverage", retired_at: retiredPilotAt };
 delete retiredPilotJob.lease;
 const retiredPilotJournal = [
-  ...current.autopilotJournal,
+  ...current.autopilotJournal.filter((row) => !(
+    ["task.retired", "task.reopened"].includes(row?.op) &&
+    row.task_id === report.lease.task.id &&
+    row.scope === SCOPE_ID
+  )),
   {
     op: "task.retired",
     task_id: retiredPilotJob.id,
@@ -956,16 +1056,299 @@ assert.throws(
   /retired Doctor Who tasks remain in current canonical coverage/,
   "retired task still represented by current coverage did not fail closed",
 );
+const missingRetirementReceiptPilotJournal = current.autopilotJournal.filter((row) => !(
+  ["task.retired", "task.reopened"].includes(row?.op) &&
+  row.task_id === report.lease.task.id &&
+  row.scope === SCOPE_ID
+));
 assert.throws(
   () => validateCanonicalDoctorTaskSet(
     retiredPilotState.jobs,
     retiredPilotCoverage,
     current.scopesDoc,
     current.manifest,
-    current.autopilotJournal,
+    missingRetirementReceiptPilotJournal,
   ),
-  /matching task\.retired journal receipt/,
+  /not backed by the latest unreopened journal lifecycle/,
   "retained retired task without its sync journal receipt did not fail closed",
+);
+const deletedRetiredPilotState = structuredClone(retiredPilotState);
+deletedRetiredPilotState.jobs = deletedRetiredPilotState.jobs.filter((task) => task.id !== report.lease.task.id);
+assert.throws(
+  () => validateCanonicalDoctorTaskSet(
+    deletedRetiredPilotState.jobs,
+    retiredPilotCoverage,
+    current.scopesDoc,
+    current.manifest,
+    retiredPilotJournal,
+  ),
+  /Doctor Who lifecycle lacks a durable Autopilot job/,
+  "deleted sync-retained historical pilot did not fail journal lifecycle custody",
+);
+
+const reopenedPilotAt = "2026-08-03T22:42:04.000Z";
+const reopenedPilotJournal = [
+  ...retiredPilotJournal,
+  {
+    op: "task.reopened",
+    task_id: job.id,
+    at: reopenedPilotAt,
+    scope: job.scope,
+    performer: job.performer,
+    character: job.character,
+    reason: "coverage_returned",
+  },
+];
+const reopenedPilotTaskSet = validateCanonicalDoctorTaskSet(
+  current.autopilot.jobs,
+  current.coverage,
+  current.scopesDoc,
+  current.manifest,
+  reopenedPilotJournal,
+);
+assert.ok(
+  !reopenedPilotTaskSet.unreopenedRetirements.some((row) => row.task_id === report.lease.task.id),
+  "a later task.reopened event failed to release historical retirement presence custody",
+);
+assert.ok(
+  reopenedPilotTaskSet.latestReopens.some((row) => row.task_id === report.lease.task.id),
+  "canonical reopened pilot disappeared from latest lifecycle custody",
+);
+
+const malformedReopenedPilotJournal = [
+  ...retiredPilotJournal,
+  { op: "task.reopened", task_id: job.id, scope: job.scope },
+];
+assert.throws(
+  () => validateCanonicalDoctorTaskSet(
+    current.autopilot.jobs,
+    current.coverage,
+    current.scopesDoc,
+    current.manifest,
+    malformedReopenedPilotJournal,
+  ),
+  /task.reopened has an invalid timestamp/,
+  "malformed Doctor Who reopen released retirement custody",
+);
+
+const unknownReasonReopenedPilotJournal = [
+  ...retiredPilotJournal,
+  {
+    op: "task.reopened",
+    task_id: job.id,
+    at: reopenedPilotAt,
+    scope: job.scope,
+    performer: job.performer,
+    character: job.character,
+    reason: "forged_release",
+  },
+];
+assert.throws(
+  () => validateCanonicalDoctorTaskSet(
+    current.autopilot.jobs,
+    current.coverage,
+    current.scopesDoc,
+    current.manifest,
+    unknownReasonReopenedPilotJournal,
+  ),
+  /Doctor Who reopen has unsupported reason/,
+  "unknown Doctor Who reopen reason released retirement custody",
+);
+
+const forgedIdentityReopenedPilotJournal = [
+  ...retiredPilotJournal,
+  {
+    op: "task.reopened",
+    task_id: job.id,
+    at: reopenedPilotAt,
+    scope: job.scope,
+    performer: "Forged Performer",
+    character: job.character,
+    reason: "coverage_returned",
+  },
+];
+assert.throws(
+  () => validateCanonicalDoctorTaskSet(
+    current.autopilot.jobs,
+    current.coverage,
+    current.scopesDoc,
+    current.manifest,
+    forgedIdentityReopenedPilotJournal,
+  ),
+  /task.reopened performer disagrees with its durable job/,
+  "forged Doctor Who reopen identity released retirement custody",
+);
+
+const wrongReleaseReasonPilotJournal = [
+  ...retiredPilotJournal,
+  {
+    op: "task.reopened",
+    task_id: job.id,
+    at: reopenedPilotAt,
+    scope: job.scope,
+    performer: job.performer,
+    character: job.character,
+    reason: "retry_due",
+  },
+];
+assert.throws(
+  () => validateCanonicalDoctorTaskSet(
+    current.autopilot.jobs,
+    current.coverage,
+    current.scopesDoc,
+    current.manifest,
+    wrongReleaseReasonPilotJournal,
+  ),
+  /cannot release a retirement/,
+  "non-release Doctor Who reopen reason released retirement custody",
+);
+
+const nonMonotonicReopenedPilotJournal = [
+  ...retiredPilotJournal,
+  {
+    op: "task.reopened",
+    task_id: job.id,
+    at: retiredPilotAt,
+    scope: job.scope,
+    performer: job.performer,
+    character: job.character,
+    reason: "coverage_returned",
+  },
+];
+let nonMonotonicReopenError = "";
+try {
+  validateCanonicalDoctorTaskSet(
+    current.autopilot.jobs,
+    current.coverage,
+    current.scopesDoc,
+    current.manifest,
+    nonMonotonicReopenedPilotJournal,
+  );
+} catch (error) {
+  nonMonotonicReopenError = String(error?.message || error);
+}
+assert.match(
+  nonMonotonicReopenError,
+  /lifecycle timestamps must increase in append order/,
+  `non-monotonic Doctor Who reopen error mismatch (${nonMonotonicReopenError || "no error"})`,
+);
+
+assert.throws(
+  () => validateCanonicalDoctorTaskSet(
+    deletedRetiredPilotState.jobs,
+    retiredPilotCoverage,
+    current.scopesDoc,
+    current.manifest,
+    reopenedPilotJournal,
+  ),
+  /Doctor Who lifecycle lacks a durable Autopilot job/,
+  "orphan Doctor Who reopen released retirement custody without a covered live task",
+);
+const compoundMalformedThenRetryPilotJournal = [
+  ...retiredPilotJournal,
+  { op: "task.reopened", task_id: job.id, scope: job.scope },
+  {
+    op: "task.reopened",
+    task_id: job.id,
+    at: "2026-08-03T22:43:04.000Z",
+    scope: job.scope,
+    performer: job.performer,
+    character: job.character,
+    reason: "retry_due",
+  },
+];
+assert.throws(
+  () => validateCanonicalDoctorTaskSet(
+    current.autopilot.jobs,
+    current.coverage,
+    current.scopesDoc,
+    current.manifest,
+    compoundMalformedThenRetryPilotJournal,
+  ),
+  /task.reopened has an invalid timestamp/,
+  "a later valid reopen concealed an earlier malformed reopen",
+);
+
+const compoundNonMonotonicThenRetryPilotJournal = [
+  ...retiredPilotJournal,
+  {
+    op: "task.reopened",
+    task_id: job.id,
+    at: retiredPilotAt,
+    scope: job.scope,
+    performer: job.performer,
+    character: job.character,
+    reason: "coverage_returned",
+  },
+  {
+    op: "task.reopened",
+    task_id: job.id,
+    at: "2026-08-03T22:43:04.000Z",
+    scope: job.scope,
+    performer: job.performer,
+    character: job.character,
+    reason: "retry_due",
+  },
+];
+assert.throws(
+  () => validateCanonicalDoctorTaskSet(
+    current.autopilot.jobs,
+    current.coverage,
+    current.scopesDoc,
+    current.manifest,
+    compoundNonMonotonicThenRetryPilotJournal,
+  ),
+  /lifecycle timestamps must increase in append order/,
+  "a later retry reopen concealed a non-monotonic retirement release",
+);
+
+const compoundWrongReleaseThenValidPilotJournal = [
+  ...retiredPilotJournal,
+  {
+    op: "task.reopened",
+    task_id: job.id,
+    at: reopenedPilotAt,
+    scope: job.scope,
+    performer: job.performer,
+    character: job.character,
+    reason: "retry_due",
+  },
+  {
+    op: "task.reopened",
+    task_id: job.id,
+    at: "2026-08-03T22:43:04.000Z",
+    scope: job.scope,
+    performer: job.performer,
+    character: job.character,
+    reason: "coverage_returned",
+  },
+];
+assert.throws(
+  () => validateCanonicalDoctorTaskSet(
+    current.autopilot.jobs,
+    current.coverage,
+    current.scopesDoc,
+    current.manifest,
+    compoundWrongReleaseThenValidPilotJournal,
+  ),
+  /cannot release a retirement/,
+  "a later valid reopen concealed a non-release retirement reason",
+);
+
+const staleReopenedPilotState = structuredClone(current.autopilot);
+const staleReopenedPilotJob = staleReopenedPilotState.jobs.find((task) => task.id === job.id);
+staleReopenedPilotJob.outcome = { kind: "not-in-latest-coverage", retired_at: retiredPilotAt };
+validateState(staleReopenedPilotState);
+assert.throws(
+  () => validateCanonicalDoctorTaskSet(
+    staleReopenedPilotState.jobs,
+    current.coverage,
+    current.scopesDoc,
+    current.manifest,
+    reopenedPilotJournal,
+  ),
+  /retained the retirement outcome/,
+  "a latest reopen retained stale retirement outcome custody",
 );
 
   return true;
