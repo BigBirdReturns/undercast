@@ -1,0 +1,8 @@
+RD-W03 bounded main-push transaction
+base=c340dc710e423a86b2ad3afa3fcf38a2751e8eb7
+archive_sha256=0bd47b05ae713e7f0acbd9ec1e27bc3e3c170fd4a4b014a18e3e571261bcaac5
+archive_paths=39
+product_branches=6
+carrier_pr=316
+merge=false
+outside_human_dependency=false
