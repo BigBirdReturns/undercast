@@ -1,0 +1,153 @@
+name: doctor-who-cycle-006-writer-builder
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-006-writer-builder.yml"
+      - ".ci/doctor-who-cycle-006-builder/derive.py"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: doctor-who-cycle-006-writer-builder-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  EXACT_MAIN: c340dc710e423a86b2ad3afa3fcf38a2751e8eb7
+  TARGET_BRANCH: agent/doctor-who-cycle-006-kayste-completion
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  BUILDER_BRANCH: agent/doctor-who-cycle-006-writer-builder
+  DERIVER: .ci/doctor-who-cycle-006-builder/derive.py
+  WORKFLOW: .github/workflows/doctor-who-cycle-006-writer-builder.yml
+  SOURCE_COMMIT: 87894051e3c0c3b177579f5c59c5fa122e1c4d8a
+  SOURCE_TRANSPORT_SHA256: b0d0ca739415ff4224f88b98422ed7891bca3e4c1b48f41cee77dcbd3ba240a1
+  SOURCE_DIR: /tmp/doctor-who-cycle-006-builder-source
+  OUTPUT_DIR: /tmp/doctor-who-cycle-006-builder-output
+  CARRIER_DIR: /tmp/doctor-who-cycle-006-builder-carrier
+  EVIDENCE_DIR: /tmp/doctor-who-cycle-006-builder-evidence
+
+jobs:
+  build:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-006-writer-builder'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_HEAD }}
+          fetch-depth: 0
+          filter: blob:none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact builder and current-main floor
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          git fetch --no-tags origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${BUILDER_BRANCH}:refs/remotes/origin/${BUILDER_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${BUILDER_BRANCH})" = "$AUTHORIZED_HEAD"
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-builder-paths.txt
+          printf '%s\n' "$DERIVER" "$WORKFLOW" | sort > /tmp/expected-builder-paths.txt
+          diff -u /tmp/expected-builder-paths.txt /tmp/actual-builder-paths.txt
+          test -z "$(git status --porcelain)"
+          python3 -m py_compile "$DERIVER"
+
+      - name: Recover exact successful cycle-005 transaction source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$SOURCE_DIR" "$OUTPUT_DIR" "$CARRIER_DIR" "$EVIDENCE_DIR"
+          mkdir -p "$SOURCE_DIR" "$OUTPUT_DIR" "$CARRIER_DIR" "$EVIDENCE_DIR" /tmp/source-carrier/.ci/doctor-who-cycle-005
+          for path in \
+            .ci/doctor-who-cycle-005/scripts.tgz.b64 \
+            .ci/doctor-who-cycle-005/scripts.tgz.b64.part-002 \
+            .ci/doctor-who-cycle-005/scripts.tgz.b64.part-003 \
+            .ci/doctor-who-cycle-005/scripts.tgz.b64.part-004 \
+            .ci/doctor-who-cycle-005/scripts.tgz.b64.part-005 \
+            .ci/doctor-who-cycle-005/scripts.tgz.b64.part-006 \
+            .ci/doctor-who-cycle-005/scripts.tgz.b64.part-007 \
+            .ci/doctor-who-cycle-005/scripts.tgz.b64.part-008; do
+            mkdir -p "/tmp/source-carrier/$(dirname "$path")"
+            git show "$SOURCE_COMMIT:$path" > "/tmp/source-carrier/$path"
+          done
+          cat /tmp/source-carrier/.ci/doctor-who-cycle-005/scripts.tgz.b64* \
+            | tr -d '\n\r\t ' | base64 --decode > /tmp/cycle-005-source.tgz
+          test "$(sha256sum /tmp/cycle-005-source.tgz | awk '{print $1}')" = "$SOURCE_TRANSPORT_SHA256"
+          tar -xzf /tmp/cycle-005-source.tgz -C "$SOURCE_DIR"
+          node --check "$SOURCE_DIR/apply-doctor-who-cycle-005.mjs"
+          node --check "$SOURCE_DIR/apply-doctor-who-cycle-finalize-005.mjs"
+          find "$SOURCE_DIR" -type f -print0 | sort -z | xargs -0 sha256sum > "$EVIDENCE_DIR/source-files.sha256"
+
+      - name: Derive and statically qualify exact cycle-006 carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$DERIVER" "$SOURCE_DIR" "$OUTPUT_DIR" "$CARRIER_DIR" | tee "$EVIDENCE_DIR/build-receipt.log"
+          cp "$CARRIER_DIR/BUILD-RECEIPT.json" "$EVIDENCE_DIR/BUILD-RECEIPT.json"
+          node --check "$OUTPUT_DIR/apply-doctor-who-cycle-006.mjs"
+          node --check "$OUTPUT_DIR/apply-doctor-who-cycle-finalize-006.mjs"
+          for script in "$OUTPUT_DIR"/*.sh; do bash -n "$script"; done
+          test -s "$CARRIER_DIR/.github/workflows/complete-doctor-who-cycle-006-kayste.yml"
+          mapfile -t shards < <(find "$CARRIER_DIR/.ci/doctor-who-cycle-006" -maxdepth 1 -type f -name 'scripts.tgz.b64*' | sort)
+          parts="$(jq -r '.transport_parts' "$CARRIER_DIR/BUILD-RECEIPT.json")"
+          test "${#shards[@]}" -eq "$parts"
+          cat "${shards[@]}" | tr -d '\n\r\t ' | base64 --decode > /tmp/reconstructed-cycle-006.tgz
+          test "$(sha256sum /tmp/reconstructed-cycle-006.tgz | awk '{print $1}')" = "$(jq -r '.transport_sha256' "$CARRIER_DIR/BUILD-RECEIPT.json")"
+          rm -rf /tmp/reconstructed-cycle-006
+          grep -R -n -E 'ap_ed7221a03fdd4679379e23f8|Kaarsh|UC-1350|ccf68328d7cbb9a84844b4693c0e3029fb1200d5869513b0ecf68d7228af0cad' "$OUTPUT_DIR" && exit 1 || true
+          grep -R -q 'ap_c8e74653ac0877837814db21' "$OUTPUT_DIR"
+          grep -R -q 'UC-1351' "$OUTPUT_DIR"
+          grep -R -q '0c08fa4fa7f597ee55589e884e8a9d60f3e4e79500a714ff69891ad7f13d9368' "$OUTPUT_DIR"
+          find "$OUTPUT_DIR" -type f -print0 | sort -z | xargs -0 sha256sum > "$EVIDENCE_DIR/output-files.sha256"
+          find "$CARRIER_DIR" -type f -print0 | sort -z | xargs -0 sha256sum > "$EVIDENCE_DIR/carrier-files.sha256"
+
+      - name: Publish exact never-merge cycle-006 carrier branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git switch --detach "$EXACT_MAIN"
+          rm -rf .ci/doctor-who-cycle-006 .github/workflows/complete-doctor-who-cycle-006-kayste.yml
+          mkdir -p .ci/doctor-who-cycle-006 .github/workflows
+          cp "$CARRIER_DIR"/.ci/doctor-who-cycle-006/scripts.tgz.b64* .ci/doctor-who-cycle-006/
+          cp "$CARRIER_DIR/.github/workflows/complete-doctor-who-cycle-006-kayste.yml" .github/workflows/
+          git add .ci/doctor-who-cycle-006 .github/workflows/complete-doctor-who-cycle-006-kayste.yml
+          git diff --cached --name-only | sort > /tmp/actual-carrier-paths.txt
+          {
+            printf '%s\n' .github/workflows/complete-doctor-who-cycle-006-kayste.yml
+            find .ci/doctor-who-cycle-006 -type f | sort
+          } | sort > /tmp/expected-carrier-paths.txt
+          diff -u /tmp/expected-carrier-paths.txt /tmp/actual-carrier-paths.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Transport: launch bounded Doctor Who cycle 006 for Kayste'
+          carrier="$(git rev-parse HEAD)"
+          printf '%s\n' "$carrier" > "$EVIDENCE_DIR/carrier-commit.txt"
+          if git ls-remote --exit-code --heads origin "$TARGET_BRANCH" >/tmp/existing-target.txt 2>/dev/null; then
+            existing="$(awk '{print $1}' /tmp/existing-target.txt)"
+            git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${existing}" origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          else
+            git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          fi
+          test "$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')" = "$carrier"
+
+      - name: Upload exact builder and carrier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-006-writer-builder-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: warn
+          path: |
+            ${{ env.EVIDENCE_DIR }}
+            ${{ env.OUTPUT_DIR }}
+            ${{ env.CARRIER_DIR }}/BUILD-RECEIPT.json
