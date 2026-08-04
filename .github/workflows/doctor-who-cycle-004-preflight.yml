@@ -1,0 +1,249 @@
+name: doctor-who-cycle-004-preflight
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-004-preflight.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-004-preflight-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-004-preflight.yml
+  EXACT_MAIN: b8d935167ab896580a136488e4615f399fae66aa
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+
+jobs:
+  preflight:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 128
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact current main and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=128 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${HEAD_BRANCH})" = "$HEAD_SHA"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+          test -z "$(git status --porcelain)"
+
+      - name: Install exact dependencies
+        shell: bash
+        run: npm ci
+
+      - name: Prove current rolling custody before selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/doctor-who-cycle-004-preflight
+          node scripts/autopilot.mjs validate | tee /tmp/doctor-who-cycle-004-preflight/autopilot-validate.log
+          node scripts/autopilot.mjs readiness --scope doctor-who --require-active --json \
+            > /tmp/doctor-who-cycle-004-preflight/readiness.json
+          node scripts/autopilot.mjs status --scope doctor-who --json \
+            > /tmp/doctor-who-cycle-004-preflight/status.json
+          node scripts/waterline.mjs validate --scope doctor-who \
+            | tee /tmp/doctor-who-cycle-004-preflight/waterline.log
+          node scripts/media-audit.mjs gate --scope doctor-who \
+            | tee /tmp/doctor-who-cycle-004-preflight/media-gate.log
+          node scripts/doctor-who-activation.mjs \
+            | tee /tmp/doctor-who-cycle-004-preflight/activation.log
+          node scripts/doctor-who-pilot-cycle.mjs \
+            | tee /tmp/doctor-who-cycle-004-preflight/pilot.log
+          node scripts/doctor-who-correction-drill.mjs \
+            | tee /tmp/doctor-who-cycle-004-preflight/correction-drill.log
+          node scripts/doctor-who-cycle-002.mjs \
+            | tee /tmp/doctor-who-cycle-004-preflight/cycle-002.log
+          node scripts/doctor-who-cycle-003.mjs \
+            | tee /tmp/doctor-who-cycle-004-preflight/cycle-003.log
+          test -z "$(git status --porcelain)"
+
+      - name: Select the deterministic next compatible task without claiming it
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/autopilot.mjs candidates \
+            --scope doctor-who \
+            --capability-profile text-vision \
+            --limit 200 \
+            --json \
+            > /tmp/doctor-who-cycle-004-preflight/candidates.json
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import crypto from 'node:crypto';
+
+          const out = '/tmp/doctor-who-cycle-004-preflight';
+          const report = JSON.parse(fs.readFileSync(`${out}/candidates.json`, 'utf8'));
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const readiness = JSON.parse(fs.readFileSync(`${out}/readiness.json`, 'utf8'));
+          const status = JSON.parse(fs.readFileSync(`${out}/status.json`, 'utf8'));
+
+          if (report.scope_id !== 'doctor-who') throw new Error('candidate scope drifted');
+          if (report.profile?.id !== 'text-vision') throw new Error('candidate profile drifted');
+          if (!Array.isArray(report.compatible) || report.compatible.length < 1) throw new Error('no compatible Doctor Who task exists');
+          const selected = report.compatible[0];
+          const jobs = state.jobs.filter((job) => job.scope === 'doctor-who');
+          const active = jobs.filter((job) => ['leased', 'drafted', 'merged'].includes(job.status));
+          if (active.length !== 0) throw new Error(`Doctor Who has ${active.length} in-flight job(s)`);
+          const task = jobs.find((job) => job.id === selected.task_id);
+          if (!task) throw new Error('selected task is absent from durable Autopilot state');
+          if (task.status !== 'queued') throw new Error(`selected task is ${task.status}, not queued`);
+          if (task.source_fingerprint !== selected.source_fingerprint) throw new Error('selected source fingerprint drifted');
+          if (!Array.isArray(task.source_receipts) || task.source_receipts.length < 1) throw new Error('selected task lacks source receipts');
+          if (!Array.isArray(readiness) || readiness.length !== 1 || readiness[0].scope_id !== 'doctor-who') throw new Error('readiness shape drifted');
+          if (readiness[0].effective_status !== 'active' || readiness[0].lease_status !== 'ready' || !readiness[0].lease_token) throw new Error('Doctor Who is not lease-ready');
+          if (status.in_flight !== 0) throw new Error('status reports in-flight Doctor Who work');
+
+          const queue = jobs.reduce((acc, job) => {
+            acc[job.status] = (acc[job.status] || 0) + 1;
+            return acc;
+          }, {});
+          const packet = {
+            version: 1,
+            exact_main: process.env.EXACT_MAIN,
+            lease_issued: false,
+            selection_strategy: 'deterministic-first-compatible-read-only',
+            profile: report.profile,
+            policy_sha256: report.policy_sha256,
+            counts: report.counts,
+            queue,
+            selected,
+            task,
+            readiness: readiness[0],
+          };
+          fs.writeFileSync(`${out}/selected-task.json`, `${JSON.stringify(packet, null, 2)}\n`);
+          fs.writeFileSync(`${out}/selected-task-id.txt`, `${task.id}\n`);
+          fs.writeFileSync(`${out}/selected-source-fingerprint.txt`, `${task.source_fingerprint}\n`);
+
+          const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+          fs.writeFileSync(`${out}/selection-sha256.txt`, `${sha256(Buffer.from(JSON.stringify(packet)))}\n`);
+          NODE
+          test -z "$(git status --porcelain)"
+
+      - name: Recover every revision-bound source body for the selected task
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+
+          const out = '/tmp/doctor-who-cycle-004-preflight';
+          const packet = JSON.parse(fs.readFileSync(`${out}/selected-task.json`, 'utf8'));
+          const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+          const recovered = [];
+
+          for (const [index, receipt] of packet.task.source_receipts.entries()) {
+            const source = new URL(receipt.source);
+            const endpoint = new URL('/api.php', source.origin);
+            endpoint.search = new URLSearchParams({
+              action: 'query',
+              prop: 'revisions',
+              revids: String(receipt.revision),
+              rvprop: 'ids|timestamp|content',
+              rvslots: 'main',
+              format: 'json',
+              formatversion: '2',
+              origin: '*',
+            }).toString();
+            const response = await fetch(endpoint, {
+              headers: { 'user-agent': 'Undercast exact-source recovery/1.0 (repository evidence transaction)' },
+            });
+            if (!response.ok) throw new Error(`source fetch failed ${response.status}: ${receipt.source}`);
+            const doc = await response.json();
+            const page = doc?.query?.pages?.[0];
+            const revision = page?.revisions?.[0];
+            const content = revision?.slots?.main?.content ?? revision?.slots?.main?.['*'] ?? revision?.['*'];
+            if (page?.pageid !== receipt.pageid) throw new Error(`source page ID drifted: ${receipt.source}`);
+            if (revision?.revid !== receipt.revision) throw new Error(`source revision drifted: ${receipt.source}`);
+            if (revision?.timestamp !== receipt.timestamp) throw new Error(`source timestamp drifted: ${receipt.source}`);
+            if (typeof content !== 'string') throw new Error(`source body missing: ${receipt.source}`);
+            const bytes = Buffer.from(content);
+            const digest = sha256(bytes);
+            if (digest !== receipt.content_sha256) throw new Error(`source content SHA drifted: ${receipt.source}`);
+            const bodyPath = `${out}/source-${String(index + 1).padStart(2, '0')}.wikitext`;
+            fs.writeFileSync(bodyPath, bytes);
+            recovered.push({
+              ...receipt,
+              api: endpoint.toString(),
+              recovered_path: bodyPath,
+              recovered_bytes: bytes.length,
+              recovered_sha256: digest,
+            });
+          }
+
+          fs.writeFileSync(`${out}/recovered-sources.json`, `${JSON.stringify(recovered, null, 2)}\n`);
+          NODE
+          test -z "$(git status --porcelain)"
+
+      - name: Export current permanent cycle-control surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=/tmp/doctor-who-cycle-004-preflight/current
+          for file in \
+            package.json \
+            scripts/autopilot.mjs \
+            scripts/lib/autopilot.mjs \
+            scripts/media-audit.mjs \
+            scripts/waterline.mjs \
+            scripts/doctor-who-activation.mjs \
+            scripts/doctor-who-pilot-cycle.mjs \
+            scripts/doctor-who-correction-drill.mjs \
+            scripts/doctor-who-cycle-002.mjs \
+            scripts/doctor-who-cycle-003.mjs \
+            data/AUTOPILOT-CAPABILITIES.json \
+            data/AUTOPILOT-CERTIFICATIONS.json \
+            data/AUTOPILOT-SCOPES.json \
+            data/CENSUS-COVERAGE.json \
+            data/CENSUS-MANIFEST.json \
+            data/ESTATE-REGISTRY.json \
+            data/MEDIA-AUDIT.json \
+            data/WATERLINE-STATE.json \
+            data/review/adapter-sdk/doctor-who-cycle-002-gredd.json \
+            data/review/adapter-sdk/doctor-who-cycle-003-jask.json; do
+            mkdir -p "$root/$(dirname "$file")"
+            cp "$file" "$root/$file"
+          done
+          git ls-tree -r --full-tree "$EXACT_MAIN" > /tmp/doctor-who-cycle-004-preflight/exact-tree.txt
+          sha256sum $(find "$root" -type f -print | sort) \
+            > /tmp/doctor-who-cycle-004-preflight/current-surfaces.sha256
+          printf '%s\n' "$EXACT_MAIN" > /tmp/doctor-who-cycle-004-preflight/exact-main.txt
+          printf '%s\n' "$HEAD_SHA" > /tmp/doctor-who-cycle-004-preflight/carrier-head.txt
+          cp /tmp/expected-paths.txt /tmp/doctor-who-cycle-004-preflight/
+          cp /tmp/actual-paths.txt /tmp/doctor-who-cycle-004-preflight/
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact read-only cycle-004 preflight
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-004-preflight-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: /tmp/doctor-who-cycle-004-preflight
