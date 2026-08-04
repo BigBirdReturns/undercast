@@ -1,0 +1,8 @@
+DEC-0016 immutable script-runner trigger
+runner-main=98bf3eda1dc51f3a1aa3307360de03cd912b928b
+materializer-commit=d51e52ed54b7eef00d585f0dff1e94cf72870ecb
+materializer-blob=66743db30b74cd5b32df7dd59ab0dbc53b232f76
+target-branch=agent/ux-02-navigation-parity
+target-head=634f0a69b95b65c22c6bc680941570f543143e9f
+qualified-ancestor=4fe485057180d3b3947bc5c70c5241ae21e5a106
+trigger=2026-08-04T18:25:00Z
