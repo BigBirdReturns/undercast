@@ -1,0 +1,140 @@
+name: doctor-who-cycle-006-postmerge-cleanup
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-006-postmerge-cleanup.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-006-postmerge-cleanup
+  cancel-in-progress: true
+
+env:
+  TARGET_PR: "320"
+  TARGET_BRANCH: agent/doctor-who-cycle-006-kayste-completion
+  CLEANUP_PR: "321"
+  EVIDENCE: /tmp/doctor-who-cycle-006-postmerge-cleanup
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  contain:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-006-merge-guardian'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          filter: blob:none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Prove target merge is contained by current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          gh pr view "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --json state,mergedAt,mergeCommit,headRefName,url > "$EVIDENCE/target-pr.json"
+          test "$(jq -r .state "$EVIDENCE/target-pr.json")" = "MERGED"
+          test "$(jq -r .headRefName "$EVIDENCE/target-pr.json")" = "$TARGET_BRANCH"
+          merge_sha="$(jq -r .mergeCommit.oid "$EVIDENCE/target-pr.json")"
+          test -n "$merge_sha" -a "$merge_sha" != null
+          printf '%s\n' "$merge_sha" > "$EVIDENCE/merge-commit.txt"
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          printf '%s\n' "$main_sha" > "$EVIDENCE/current-main.txt"
+          git merge-base --is-ancestor "$merge_sha" "$main_sha"
+          test -f data/review/adapter-sdk/doctor-who-cycle-006-kayste.json
+          test -f scripts/doctor-who-cycle-006.mjs
+          test ! -e .github/workflows/complete-doctor-who-cycle-006-kayste.yml
+          test ! -d .ci/doctor-who-cycle-006
+          test ! -e tmp/ux02a.trigger
+          test -z "$(git status --porcelain)"
+
+      - name: Reverify permanent cycle-006 custody on current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          node scripts/doctor-who-cycle-005.mjs | tee "$EVIDENCE/cycle-005.log"
+          node scripts/doctor-who-cycle-006.mjs | tee "$EVIDENCE/cycle-006.log"
+          node scripts/autopilot.mjs validate | tee "$EVIDENCE/autopilot.log"
+          node scripts/waterline.mjs validate --scope doctor-who | tee "$EVIDENCE/waterline.log"
+          node scripts/media-audit.mjs gate --scope doctor-who | tee "$EVIDENCE/media-gate.log"
+          node scripts/invariant.mjs | tee "$EVIDENCE/invariant.log"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const read = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
+          const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
+          const auto = read('data/AUTOPILOT.json');
+          const doctor = auto.jobs.filter((j) => j.scope === 'doctor-who');
+          const counts = doctor.reduce((o,j)=>((o[j.status]=(o[j.status]||0)+1),o),{});
+          const active = auto.jobs.filter((j)=>['leased','drafted','merged'].includes(j.status));
+          if (doctor.length !== 316 || counts.queued !== 310 || counts.resolved !== 6 || active.length !== 0) throw new Error('post-merge queue custody drifted');
+          const task = doctor.find((j)=>j.id==='ap_c8e74653ac0877837814db21');
+          if (!task || task.status !== 'resolved') throw new Error('Kayste task is not resolved');
+          const record = read('data/specimens.json').find((r)=>r.id==='UC-1351');
+          if (!record || record.character !== 'Kayste' || record.portrait?.src !== 'images/uc-1351-portrait.jpg' || record.still) throw new Error('Kayste canonical media drifted');
+          const portrait = fs.readFileSync('images/uc-1351-portrait.jpg');
+          if (portrait.length !== 63017 || sha(portrait) !== '0c08fa4fa7f597ee55589e884e8a9d60f3e4e79500a714ff69891ad7f13d9368') throw new Error('Kayste portrait bytes drifted');
+          const receiptBytes = fs.readFileSync('data/review/adapter-sdk/doctor-who-cycle-006-kayste.json');
+          fs.writeFileSync(process.env.EVIDENCE + '/postmerge.json', JSON.stringify({counts, active: active.length, task_id: task.id, wall_id: record.id, receipt_sha256: sha(receiptBytes), portrait_sha256: sha(portrait)}, null, 2) + '\n');
+          NODE
+          test -z "$(git status --porcelain)"
+
+      - name: Upload post-merge containment evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-006-postmerge-cleanup-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: ${{ env.EVIDENCE }}
+
+      - name: Close temporary PRs and delete temporary branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          declare -A expected=(
+            [311]='agent/doctor-who-cycle-006-preflight'
+            [314]='agent/doctor-who-cycle-006-kayste-media-preflight'
+            [316]='agent/doctor-who-cycle-006-current-main-rebind'
+            [317]='agent/doctor-who-cycle-006-writer-source-recovery'
+            [318]='agent/doctor-who-cycle-006-writer-source-publication'
+            [319]='agent/doctor-who-cycle-006-writer-builder'
+            [321]='agent/doctor-who-cycle-006-merge-guardian'
+          )
+          for pr in "${!expected[@]}"; do
+            head="$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json headRefName --jq .headRefName 2>/dev/null || true)"
+            if [[ "$head" == "${expected[$pr]}" ]]; then
+              state="$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json state --jq .state)"
+              if [[ "$state" == OPEN ]]; then gh pr close "$pr" --repo "$GITHUB_REPOSITORY" --comment 'Closed after cycle-006 product containment; this was a never-merge temporary lane.'; fi
+            fi
+          done
+          branches=(
+            agent/doctor-who-cycle-006-preflight
+            agent/doctor-who-cycle-006-kayste-media-preflight
+            agent/doctor-who-cycle-006-current-main-rebind
+            agent/doctor-who-cycle-006-writer-source-recovery
+            agent/doctor-who-cycle-006-writer-source-publication
+            agent/doctor-who-cycle-006-writer-builder
+            agent/doctor-who-cycle-006-kayste-completion
+            agent/doctor-who-cycle-006-merge-guardian
+          )
+          for branch in "${branches[@]}"; do
+            ref="heads/${branch}"
+            if gh api "repos/${GITHUB_REPOSITORY}/git/ref/${ref}" >/dev/null 2>&1; then
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/${ref}"
+            fi
+          done
