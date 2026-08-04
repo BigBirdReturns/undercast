@@ -199,14 +199,18 @@ const CANONICAL_REOPEN_REASONS = new Set([
 ]);
 const RETIREMENT_RELEASE_REASONS = new Set(["coverage_returned", "source_changed"]);
 
-function doctorTaskLifecycle(journal) {
+function doctorTaskLifecycle(journal, actualById) {
   const byTask = new Map();
   for (const row of journal || []) {
     if (!["task.retired", "task.reopened"].includes(row?.op)) continue;
-    if (row.scope !== SCOPE_ID) continue;
-    assert.ok(String(row.task_id || "").trim(), `${row.op} Doctor Who lifecycle event lacks task identity`);
-    if (!byTask.has(row.task_id)) byTask.set(row.task_id, []);
-    byTask.get(row.task_id).push(row);
+    const taskId = String(row.task_id || "").trim();
+    const claimsDoctorScope = row.scope === SCOPE_ID;
+    const isDurableDoctorTask = Boolean(taskId) && actualById.has(taskId);
+    if (!claimsDoctorScope && !isDurableDoctorTask) continue;
+    assert.ok(taskId, `${row.op} Doctor Who lifecycle event lacks task identity`);
+    assert.ok(isDurableDoctorTask, `${taskId} Doctor Who lifecycle lacks a durable Autopilot job`);
+    if (!byTask.has(taskId)) byTask.set(taskId, []);
+    byTask.get(taskId).push(row);
   }
   return byTask;
 }
@@ -304,7 +308,7 @@ function validateCanonicalDoctorTaskSet(jobs, coverage, scopesDoc, manifest, jou
     "current non-retired Doctor Who task denominator disagrees with canonical census coverage",
   );
 
-  const lifecycleByTask = doctorTaskLifecycle(journal);
+  const lifecycleByTask = doctorTaskLifecycle(journal, actualById);
   const latestReopens = [];
   const unreopenedRetirements = [];
   for (const rows of lifecycleByTask.values()) {
@@ -1333,6 +1337,39 @@ assert.throws(
   ),
   /cannot release a retirement/,
   "a later valid reopen concealed a non-release retirement reason",
+);
+
+const compoundWrongScopeThenRetryPilotJournal = [
+  ...retiredPilotJournal,
+  {
+    op: "task.reopened",
+    task_id: job.id,
+    at: reopenedPilotAt,
+    scope: "star-trek",
+    performer: job.performer,
+    character: job.character,
+    reason: "coverage_returned",
+  },
+  {
+    op: "task.reopened",
+    task_id: job.id,
+    at: "2026-08-03T22:43:04.000Z",
+    scope: job.scope,
+    performer: job.performer,
+    character: job.character,
+    reason: "retry_due",
+  },
+];
+assert.throws(
+  () => validateCanonicalDoctorTaskSet(
+    current.autopilot.jobs,
+    current.coverage,
+    current.scopesDoc,
+    current.manifest,
+    compoundWrongScopeThenRetryPilotJournal,
+  ),
+  /task.reopened scope disagrees with its durable job/,
+  "a later retry reopen concealed an earlier wrong-scope reopen",
 );
 
 const staleReopenedPilotState = structuredClone(current.autopilot);

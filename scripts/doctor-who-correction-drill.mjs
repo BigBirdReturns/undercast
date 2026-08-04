@@ -23,7 +23,7 @@ const DOCTOR_FRANCHISE = canonicalNormalize("Doctor Who");
 const IDENTITY_SHA256 = "86845b0347983d9284d82d35ac7e0243ff3dba60ac714733231d700e34c7f53c";
 const HISTORICAL_PILOT_RECEIPT_SHA256 = "9ed078b768191a80845bab6ce221ea335960e3a3efeee95235d94a76cd8205eb";
 const DRILL_LEDGER_SHA256 = "19716a18783c169380f78aae7dcbb27c9ef8987b21565de0b6613f3c1ba17127";
-const RECEIPT_SHA256 = "5045a6111a5a4b4affa5004502a5a4fea7420fd858125265602167a83e8e90fd";
+const RECEIPT_SHA256 = "38ad71c17f8399ae74b73cd26b8a594e773df24ebe30762795a640e7094cedf2";
 const SCOPE_REPAIR_RECEIPT_SHA256 = "ea03a497d1e35533e9c91765e3aa0f0b4536e827dc767c763c35b506c95eed6f";
 const SCOPE_REPAIR_CODE_SHA256 = "cd4dfab241e22841e83f3edfb88883bacc78b33afbbef78e852d8a982fb686ac";
 const SCOPE_REPAIR_CODE_COMMIT = "f2d3f048a4ead24915ca9d2d92a05fa806829842";
@@ -325,14 +325,18 @@ const CANONICAL_REOPEN_REASONS = new Set([
 ]);
 const RETIREMENT_RELEASE_REASONS = new Set(["coverage_returned", "source_changed"]);
 
-function doctorTaskLifecycle(journal) {
+function doctorTaskLifecycle(journal, actualById) {
   const byTask = new Map();
   for (const row of journal || []) {
     if (!["task.retired", "task.reopened"].includes(row?.op)) continue;
-    if (row.scope !== SCOPE_ID) continue;
-    assert(String(row.task_id || "").trim(), `${row.op} Doctor Who lifecycle event lacks task identity`);
-    if (!byTask.has(row.task_id)) byTask.set(row.task_id, []);
-    byTask.get(row.task_id).push(row);
+    const taskId = String(row.task_id || "").trim();
+    const claimsDoctorScope = row.scope === SCOPE_ID;
+    const isDurableDoctorTask = Boolean(taskId) && actualById.has(taskId);
+    if (!claimsDoctorScope && !isDurableDoctorTask) continue;
+    assert(taskId, `${row.op} Doctor Who lifecycle event lacks task identity`);
+    assert(isDurableDoctorTask, `${taskId} Doctor Who lifecycle lacks a durable Autopilot job`);
+    if (!byTask.has(taskId)) byTask.set(taskId, []);
+    byTask.get(taskId).push(row);
   }
   return byTask;
 }
@@ -427,7 +431,7 @@ function validateCanonicalDoctorTaskSet(jobs, coverage, scopesDoc, manifest, jou
     `current non-retired Doctor Who task denominator disagrees with canonical census coverage; missing=${missing.join(",") || "none"}; extra=${extra.join(",") || "none"}`,
   );
 
-  const lifecycleByTask = doctorTaskLifecycle(journal);
+  const lifecycleByTask = doctorTaskLifecycle(journal, actualById);
   const latestReopens = [];
   const unreopenedRetirements = [];
   for (const rows of lifecycleByTask.values()) {
@@ -572,12 +576,29 @@ function unreceiptedJournalLeaseGroups(config, state, journal) {
     .filter((group) => !receipted.has(cycleReceiptKey(group.scope_id, group.lease_id)));
 }
 
-function validateActiveLeaseIsolation(jobs, unreceiptedGroups, { doctorWhoAllowed }) {
+function validateActiveLeaseIsolation(jobs, unreceiptedGroups, { doctorWhoAllowed, doctorWhoTerminalReceiptPending = false }) {
   const active = (jobs || []).filter((job) => ACTIVE_JOB_STATUSES.has(job.status));
+  const jobById = new Map((jobs || []).map((job) => [job.id, job]));
   const leaseGroups = new Map();
   const addGroup = (scope, leaseId, members, source) => {
     assert(String(scope || "").trim() && String(leaseId || "").trim(), `${source} lease group lacks scope or lease identity`);
-    if (!doctorWhoAllowed) assert(scope !== "doctor-who", `Doctor Who acquired ${source} work before milestone completion: ${leaseId}`);
+    if (!doctorWhoAllowed && scope === "doctor-who") {
+      const terminalReceiptPending = doctorWhoTerminalReceiptPending
+        && source === "unreceipted journal"
+        && active.length === 0
+        && members.length === 1
+        && members.every((member) => {
+          const taskId = String(member).replace(/^journal:/, "");
+          const job = jobById.get(taskId);
+          const terminalLeaseId = String(job?.outcome?.media_review?.lease_id || "").trim();
+          return job?.scope === "doctor-who"
+            && job.status === "resolved"
+            && job.outcome?.kind === "audited-wall"
+            && terminalLeaseId
+            && terminalLeaseId === leaseId;
+        });
+      assert(terminalReceiptPending, `Doctor Who acquired ${source} work before milestone completion: ${leaseId}`);
+    }
     const key = `${scope}|${leaseId}`;
     if (!leaseGroups.has(key)) leaseGroups.set(key, []);
     leaseGroups.get(key).push(...members);
@@ -904,7 +925,7 @@ assert(receipt.repairs?.retirement_refresh_fixture_decoupling?.refresh_fixture_s
 assert(receipt.repairs?.retirement_refresh_fixture_decoupling?.actual_retired_world_checked_separately === true, "retired world stopped being checked separately");
 assert(receipt.repairs?.retirement_refresh_fixture_decoupling?.stale_receipt_fixture_remains_active_after_retirement === true, "stale-receipt fixture became retirement-dependent");
 assert(receipt.repairs?.retirement_refresh_fixture_decoupling?.forged_fingerprint_fixture_remains_active_after_retirement === true, "forged-fingerprint fixture became retirement-dependent");
-assert(sameSet(receipt.repairs?.canonical_task_set_custody?.review_threads || [], ["PRRT_kwDOTQMkzs6WJSKr", "PRRT_kwDOTQMkzs6WJHVk", "PRRT_kwDOTQMkzs6WJ7tK", "PRRT_kwDOTQMkzs6WKLNx", "PRRT_kwDOTQMkzs6WKZdv"]), "canonical task-set review bindings drifted");
+assert(sameSet(receipt.repairs?.canonical_task_set_custody?.review_threads || [], ["PRRT_kwDOTQMkzs6WJSKr", "PRRT_kwDOTQMkzs6WJHVk", "PRRT_kwDOTQMkzs6WJ7tK", "PRRT_kwDOTQMkzs6WKLNx", "PRRT_kwDOTQMkzs6WKZdv", "PRRT_kwDOTQMkzs6WLMz4", "PRRT_kwDOTQMkzs6WLbqi"]), "canonical task-set review bindings drifted");
 assert(receipt.repairs?.canonical_task_set_custody?.canonical_constructor === "scripts/lib/autopilot-model.mjs#collapseCoverage", "canonical task constructor drifted");
 assert(receipt.repairs?.canonical_task_set_custody?.comparison === "current canonical Doctor Who coverage equals the non-retired task-id set; sync-retained retired jobs are validated separately", "canonical task-set comparison drifted");
 assert(receipt.repairs?.canonical_task_set_custody?.deleted_task_fixture_id === "ap_0045a0e77c9d85b7771ebdc3", "deleted-task fixture identity drifted");
@@ -943,6 +964,12 @@ assert(receipt.repairs?.canonical_task_set_custody?.latest_reopen_rejects_stale_
 assert(receipt.repairs?.canonical_task_set_custody?.compound_malformed_then_retry_fixture_fails_closed === true, "compound malformed-reopen refusal disappeared");
 assert(receipt.repairs?.canonical_task_set_custody?.compound_non_monotonic_then_retry_fixture_fails_closed === true, "compound chronology refusal disappeared");
 assert(receipt.repairs?.canonical_task_set_custody?.compound_wrong_release_then_valid_latest_fixture_fails_closed === true, "compound release-reason refusal disappeared");
+assert(receipt.repairs?.canonical_task_set_custody?.lifecycle_rows_selected_by_durable_task_identity === true, "durable-task lifecycle selection disappeared");
+assert(receipt.repairs?.canonical_task_set_custody?.journal_scope_is_validated_not_used_as_selector === true, "journal scope regained selector authority");
+assert(receipt.repairs?.canonical_task_set_custody?.compound_wrong_scope_then_retry_fixture_fails_closed === true, "compound wrong-scope refusal disappeared");
+assert(receipt.repairs?.canonical_task_set_custody?.jask_terminal_receipt_pending_custody_preserved === true, "Jask terminal receipt-pending custody disappeared");
+assert(receipt.repairs?.canonical_task_set_custody?.terminal_receipt_pending_group_bound_to_resolved_task_lease === true, "terminal receipt-pending lease binding disappeared");
+assert(receipt.repairs?.canonical_task_set_custody?.fabricated_terminal_lease_fixture_fails_closed === true, "fabricated terminal lease refusal disappeared");
 
 for (const flag of [
   "historical_drill_result_is_immutable",
@@ -986,6 +1013,9 @@ assert(receipt.qualification?.canonical_retired_task_retention_preserved === tru
 assert(receipt.qualification?.journal_retirement_presence_custody_enforced === true, "journal retirement-presence qualification drifted");
 assert(receipt.qualification?.canonical_reopen_release_custody_enforced === true, "canonical reopen-release qualification drifted");
 assert(receipt.qualification?.full_reopen_lifecycle_replay_enforced === true, "full reopen-lifecycle qualification drifted");
+assert(receipt.qualification?.lifecycle_scope_binding_enforced === true, "lifecycle scope-binding qualification drifted");
+assert(receipt.qualification?.jask_terminal_receipt_pending_custody_preserved === true, "Jask terminal-interval qualification drifted");
+assert(receipt.qualification?.terminal_receipt_pending_lease_provenance_enforced === true, "terminal receipt-pending lease provenance qualification drifted");
 assert(receipt.qualification?.live_state_validated_without_freezing_future_operations === true, "future-safe qualification drifted");
 assert(receipt.qualification?.new_workflow_added === false, "Doctor Who drill claims a permanent workflow");
 assert(!/<[^>\n]*(?:TODO|TBD|PLACEHOLDER)[^>\n]*>/i.test(JSON.stringify(receipt)), "Doctor Who drill receipt contains an unresolved template placeholder");
@@ -1048,8 +1078,17 @@ assert(correctionBaseline.boundary?.production_ledger_mutated_by_exercise === fa
 assert(waterline.operations?.one_cycle_at_a_time === true, "global one-cycle policy is disabled");
 const roadmapCompletion = validateRoadmapCompletion(roadmap, roadmapState);
 const unreceiptedLeaseGroups = unreceiptedJournalLeaseGroups(waterline, waterlineState, autopilotJournal);
+const reviewedDoctorWhoCycles = (waterlineState.cycles || []).filter((cycle) =>
+  cycle.scope_id === "doctor-who" && cycle.outcome === "completed" && cycle.closed_at && cycle.reviewed_at
+).length;
+const doctorWhoTerminalReceiptPending = !roadmapCompletion.completed
+  && reviewedDoctorWhoCycles >= 1
+  && unreceiptedLeaseGroups.length === 1
+  && unreceiptedLeaseGroups[0].scope_id === "doctor-who"
+  && (unreceiptedLeaseGroups[0].task_ids || []).length === 1;
 const activeLeaseState = validateActiveLeaseIsolation(autopilot.jobs || [], unreceiptedLeaseGroups, {
   doctorWhoAllowed: roadmapCompletion.completed,
+  doctorWhoTerminalReceiptPending,
 });
 validateOpenCycles(waterlineState.cycles || [], activeLeaseState, {
   doctorWhoAllowed: roadmapCompletion.completed,
@@ -1060,6 +1099,52 @@ validateActiveLeaseIsolation([
   { id: "fixture-star", scope: "star-trek", status: "leased", lease: { id: "lease_fixture" } },
   { id: "fixture-doctor-queued", scope: "doctor-who", status: "queued" },
 ], [], { doctorWhoAllowed: false });
+validateActiveLeaseIsolation([
+  {
+    id: "fixture-doctor-resolved",
+    scope: "doctor-who",
+    status: "resolved",
+    outcome: {
+      kind: "audited-wall",
+      media_review: { lease_id: "lease_terminal_receipt_pending" },
+    },
+  },
+], [{ scope_id: "doctor-who", lease_id: "lease_terminal_receipt_pending", task_ids: ["fixture-doctor-resolved"] }], {
+  doctorWhoAllowed: false,
+  doctorWhoTerminalReceiptPending: true,
+});
+expectFailure(
+  () => validateActiveLeaseIsolation([
+    {
+      id: "fixture-doctor-resolved-mismatched-lease",
+      scope: "doctor-who",
+      status: "resolved",
+      outcome: {
+        kind: "audited-wall",
+        media_review: { lease_id: "lease_real_terminal" },
+      },
+    },
+  ], [{
+    scope_id: "doctor-who",
+    lease_id: "lease_fabricated_terminal",
+    task_ids: ["fixture-doctor-resolved-mismatched-lease"],
+  }], {
+    doctorWhoAllowed: false,
+    doctorWhoTerminalReceiptPending: true,
+  }),
+  /before milestone completion/,
+  "mismatched terminal Doctor Who lease provenance",
+);
+expectFailure(
+  () => validateActiveLeaseIsolation([
+    { id: "fixture-doctor-queued", scope: "doctor-who", status: "queued" },
+  ], [{ scope_id: "doctor-who", lease_id: "lease_nonterminal", task_ids: ["fixture-doctor-queued"] }], {
+    doctorWhoAllowed: false,
+    doctorWhoTerminalReceiptPending: true,
+  }),
+  /before milestone completion/,
+  "nonterminal Doctor Who unreceipted group",
+);
 expectFailure(
   () => validateActiveLeaseIsolation([
     { id: "fixture-star-a", scope: "star-trek", status: "leased", lease: { id: "lease_a" } },
@@ -1578,6 +1663,39 @@ expectFailure(
   "later valid reopen concealing a non-release retirement reason",
 );
 
+const compoundWrongScopeThenRetryCommanderJournal = [
+  ...retiredCommanderJournal,
+  {
+    op: "task.reopened",
+    task_id: commanderTask.id,
+    at: reopenedCommanderAt,
+    scope: "star-trek",
+    performer: commanderTask.performer,
+    character: commanderTask.character,
+    reason: "coverage_returned",
+  },
+  {
+    op: "task.reopened",
+    task_id: commanderTask.id,
+    at: "2026-08-03T22:43:04.000Z",
+    scope: commanderTask.scope,
+    performer: commanderTask.performer,
+    character: commanderTask.character,
+    reason: "retry_due",
+  },
+];
+expectFailure(
+  () => validateCanonicalDoctorTaskSet(
+    autopilot.jobs,
+    coverage,
+    scopes,
+    manifest,
+    compoundWrongScopeThenRetryCommanderJournal,
+  ),
+  /task.reopened scope disagrees with its durable job/,
+  "later retry reopen concealing an earlier wrong-scope reopen",
+);
+
 const staleReopenedCommanderState = structuredClone(autopilot);
 const staleReopenedCommanderJob = staleReopenedCommanderState.jobs.find((task) => task.id === COMMANDER_TASK_ID);
 staleReopenedCommanderJob.outcome = { kind: "not-in-latest-coverage", retired_at: retiredCommanderAt };
@@ -1609,5 +1727,5 @@ expectFailure(
 );
 
 console.log(
-  "doctor-who-correction-drill: PASS — exact base:path Git-object custody, reconstructed drill-time evidence, Commander/Slite separation, scope-bound pilot proof, one unrelated active lease group, future certified refreshes and corrections, and separately reviewed roadmap completion",
+  "doctor-who-correction-drill: PASS — exact base:path Git-object custody, reconstructed drill-time evidence, Commander/Slite separation, scope-bound pilot proof, one globally bounded active or resolved receipt-pending lease group, future certified refreshes and corrections, and separately reviewed roadmap completion",
 );
