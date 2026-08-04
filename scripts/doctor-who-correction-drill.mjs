@@ -478,12 +478,24 @@ function unreceiptedJournalLeaseGroups(config, state, journal) {
     .filter((group) => !receipted.has(cycleReceiptKey(group.scope_id, group.lease_id)));
 }
 
-function validateActiveLeaseIsolation(jobs, unreceiptedGroups, { doctorWhoAllowed }) {
+function validateActiveLeaseIsolation(jobs, unreceiptedGroups, { doctorWhoAllowed, doctorWhoTerminalReceiptPending = false }) {
   const active = (jobs || []).filter((job) => ACTIVE_JOB_STATUSES.has(job.status));
+  const jobById = new Map((jobs || []).map((job) => [job.id, job]));
   const leaseGroups = new Map();
   const addGroup = (scope, leaseId, members, source) => {
     assert(String(scope || "").trim() && String(leaseId || "").trim(), `${source} lease group lacks scope or lease identity`);
-    if (!doctorWhoAllowed) assert(scope !== "doctor-who", `Doctor Who acquired ${source} work before milestone completion: ${leaseId}`);
+    if (!doctorWhoAllowed && scope === "doctor-who") {
+      const terminalReceiptPending = doctorWhoTerminalReceiptPending
+        && source === "unreceipted journal"
+        && active.length === 0
+        && members.length === 1
+        && members.every((member) => {
+          const taskId = String(member).replace(/^journal:/, "");
+          const job = jobById.get(taskId);
+          return job?.scope === "doctor-who" && job.status === "resolved";
+        });
+      assert(terminalReceiptPending, `Doctor Who acquired ${source} work before milestone completion: ${leaseId}`);
+    }
     const key = `${scope}|${leaseId}`;
     if (!leaseGroups.has(key)) leaseGroups.set(key, []);
     leaseGroups.get(key).push(...members);
@@ -925,8 +937,17 @@ assert(correctionBaseline.boundary?.production_ledger_mutated_by_exercise === fa
 assert(waterline.operations?.one_cycle_at_a_time === true, "global one-cycle policy is disabled");
 const roadmapCompletion = validateRoadmapCompletion(roadmap, roadmapState);
 const unreceiptedLeaseGroups = unreceiptedJournalLeaseGroups(waterline, waterlineState, autopilotJournal);
+const reviewedDoctorWhoCycles = (waterlineState.cycles || []).filter((cycle) =>
+  cycle.scope_id === "doctor-who" && cycle.outcome === "completed" && cycle.closed_at && cycle.reviewed_at
+).length;
+const doctorWhoTerminalReceiptPending = !roadmapCompletion.completed
+  && reviewedDoctorWhoCycles >= 1
+  && unreceiptedLeaseGroups.length === 1
+  && unreceiptedLeaseGroups[0].scope_id === "doctor-who"
+  && (unreceiptedLeaseGroups[0].task_ids || []).length === 1;
 const activeLeaseState = validateActiveLeaseIsolation(autopilot.jobs || [], unreceiptedLeaseGroups, {
   doctorWhoAllowed: roadmapCompletion.completed,
+  doctorWhoTerminalReceiptPending,
 });
 validateOpenCycles(waterlineState.cycles || [], activeLeaseState, {
   doctorWhoAllowed: roadmapCompletion.completed,
@@ -937,6 +958,22 @@ validateActiveLeaseIsolation([
   { id: "fixture-star", scope: "star-trek", status: "leased", lease: { id: "lease_fixture" } },
   { id: "fixture-doctor-queued", scope: "doctor-who", status: "queued" },
 ], [], { doctorWhoAllowed: false });
+validateActiveLeaseIsolation([
+  { id: "fixture-doctor-resolved", scope: "doctor-who", status: "resolved" },
+], [{ scope_id: "doctor-who", lease_id: "lease_terminal_receipt_pending", task_ids: ["fixture-doctor-resolved"] }], {
+  doctorWhoAllowed: false,
+  doctorWhoTerminalReceiptPending: true,
+});
+expectFailure(
+  () => validateActiveLeaseIsolation([
+    { id: "fixture-doctor-queued", scope: "doctor-who", status: "queued" },
+  ], [{ scope_id: "doctor-who", lease_id: "lease_nonterminal", task_ids: ["fixture-doctor-queued"] }], {
+    doctorWhoAllowed: false,
+    doctorWhoTerminalReceiptPending: true,
+  }),
+  /before milestone completion/,
+  "nonterminal Doctor Who unreceipted group",
+);
 expectFailure(
   () => validateActiveLeaseIsolation([
     { id: "fixture-star-a", scope: "star-trek", status: "leased", lease: { id: "lease_a" } },
@@ -1205,5 +1242,5 @@ expectFailure(
 );
 
 console.log(
-  "doctor-who-correction-drill: PASS — exact base:path Git-object custody, reconstructed drill-time evidence, Commander/Slite separation, scope-bound pilot proof, one unrelated active lease group, future certified refreshes and corrections, and separately reviewed roadmap completion",
+  "doctor-who-correction-drill: PASS — exact base:path Git-object custody, reconstructed drill-time evidence, Commander/Slite separation, scope-bound pilot proof, one globally bounded active or resolved receipt-pending lease group, future certified refreshes and corrections, and separately reviewed roadmap completion",
 );

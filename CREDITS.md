@@ -269,6 +269,7 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **Peter Weller** (UC-132) — Florida Supercon, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Peter_Weller_2016.jpg)
 - **Karl Urban** (UC-133) — Kevin Paul, CC BY 4.0 — [source](https://commons.wikimedia.org/wiki/File:Karl_Urban_at_53rd_Saturn_Awards_2026.jpg)
 - **Dan Starkey** (UC-1347) — steve cranston, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Dan_Starkey_(16135605890).jpg)
+- **Dan Starkey** (UC-1348) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Dan_Starkey_by_Gage_Skidmore.jpg)
 - **Vaughn Armstrong** (UC-140) — AFroese, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Vaughn_Armstrong.JPG)
 - **Suzie Plakson** (UC-141) — Eva Rinaldi, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Suzie_Plakson_in_2012.jpg)
 - **Carel Struycken** (UC-142) — Miguel Discart, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Carel_Struycken_March_2016.jpg)
@@ -753,7 +754,7 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **723**
+- Free-licensed portraits (attributed above): **724**
 - Character stills (studio-copyright, shown under fan-use; see ledger): **981**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
