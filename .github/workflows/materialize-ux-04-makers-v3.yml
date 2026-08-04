@@ -1,0 +1,275 @@
+name: materialize-ux-04-makers-v3
+
+on:
+  push:
+    branches:
+      - agent/ux-04-makers-discovery
+    paths:
+      - ".github/workflows/materialize-ux-04-makers-v3.yml"
+      - "tmp/materialize-ux-04-makers-v2.py"
+      - "tmp/materialize-ux-04-makers-v3-fixes.py"
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: materialize-ux-04-makers
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: agent/ux-04-makers-discovery
+      PR_NUMBER: "273"
+      EVIDENCE: ${{ runner.temp }}/ux-04-makers-evidence
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/ux-04-makers-discovery
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Materialize exact-current, corpus-disjoint UX-04 product
+        id: materialize
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          STAGE=bootstrap
+          report_failure() {
+            status=$?
+            trap - ERR
+            printf 'status=failure\nstage=%s\nexit=%s\n' "$STAGE" "$status" > "$EVIDENCE/status.txt"
+            gh pr comment "$PR_NUMBER" --body "UX-04 materializer run ${GITHUB_RUN_ID} failed at bounded stage \`${STAGE}\` with exit ${status}. No product was published." || true
+            exit "$status"
+          }
+          trap report_failure ERR
+
+          STAGE=bind-source
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          test -z "$(git status --porcelain)"
+          cp tmp/materialize-ux-04-makers-v2.py /tmp/materialize-ux-04-makers-v2.py
+          cp tmp/materialize-ux-04-makers-v3-fixes.py /tmp/materialize-ux-04-makers-v3-fixes.py
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/$TARGET_BRANCH:refs/remotes/origin/$TARGET_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/$TARGET_BRANCH)" = "$SOURCE_SHA"
+          BASE_SHA="$(git rev-parse refs/remotes/origin/main)"
+          printf '%s\n' "$SOURCE_SHA" > "$EVIDENCE/source-sha.txt"
+          printf '%s\n' "$BASE_SHA" > "$EVIDENCE/base-sha.txt"
+          gh pr comment "$PR_NUMBER" --body "UX-04 exact-credit materializer run ${GITHUB_RUN_ID} started on transport ${SOURCE_SHA} and live main ${BASE_SHA}. Filed wording remains distinct from verified maker identity." || true
+
+          STAGE=reset-exact-main
+          git checkout --detach "$BASE_SHA"
+          test -z "$(git status --porcelain)"
+
+          STAGE=compose-makers
+          python /tmp/materialize-ux-04-makers-v2.py
+          python /tmp/materialize-ux-04-makers-v3-fixes.py
+          git diff --check
+          node --check assets/makers.js
+          node --check tests/rendered/makers.spec.mjs
+
+          STAGE=install-node
+          npm ci 2>&1 | tee "$EVIDENCE/npm-ci.log"
+
+          STAGE=regenerate-projections
+          node scripts/shard.mjs 2>&1 | tee "$EVIDENCE/shard.log"
+          node scripts/build-record-pages.mjs 2>&1 | tee "$EVIDENCE/record-build.log"
+
+          STAGE=static-contracts
+          node scripts/site-seams.mjs 2>&1 | tee "$EVIDENCE/site-seams.log"
+          node scripts/site-sweep-fixtures.mjs 2>&1 | tee "$EVIDENCE/site-sweep-fixtures.log"
+          node scripts/site-sweep.mjs 2>&1 | tee "$EVIDENCE/site-sweep.log"
+          node scripts/corpus-audit.mjs 2>&1 | tee "$EVIDENCE/corpus-audit.log"
+
+          STAGE=exact-denominator
+          { git diff --name-only; git ls-files --others --exclude-standard; } | LC_ALL=C sort -u > "$EVIDENCE/product-paths.txt"
+          test -s "$EVIDENCE/product-paths.txt"
+          for required in \
+            makers.html \
+            assets/makers.css \
+            assets/makers.js \
+            tests/rendered/makers.spec.mjs \
+            docs/DECISIONS.md \
+            docs/UX-READINESS.md \
+            scripts/site-seams.mjs \
+            scripts/site-sweep.mjs; do
+            grep -Fxq "$required" "$EVIDENCE/product-paths.txt"
+          done
+          grep -Fq '## DEC-0017 — Makers exposes filed credit wording, not inferred identity' docs/DECISIONS.md
+          grep -Fq 'non-authoritative presentation groups' assets/makers.js
+          while IFS= read -r path; do
+            case "$path" in
+              data/archive.json|assets/*|docs/*|scripts/*|tests/*|*.html) ;;
+              *) echo "unauthorized UX-04 product path: $path" >&2; exit 1 ;;
+            esac
+            case "$path" in
+              data/specimens.json|data/SOURCES.json|data/CENSUS-*|data/AUTOPILOT*|data/MEDIA-AUDIT*|data/WATERLINE*|data/ROADMAP*|data/journal/*|images/*|preservation/*|schema/*|records/*|.github/*|tmp/*|.ci/*)
+                echo "protected authority or transport path entered UX-04: $path" >&2
+                exit 1
+                ;;
+            esac
+          done < "$EVIDENCE/product-paths.txt"
+
+          STAGE=collection-policy-preflight
+          cat > /tmp/ux04-pr-event.json <<'JSON'
+          {
+            "pull_request": {
+              "labels": [{"name":"owner-approved-product-change"}],
+              "body":"Implements DEC-0017 as an exact-credit presentation surface. Parser output is not identity authority."
+            }
+          }
+          JSON
+          node scripts/corpus-ops.mjs check-pr --base "$BASE_SHA" --event /tmp/ux04-pr-event.json --json 2>&1 | tee "$EVIDENCE/collection-policy.log"
+
+          STAGE=create-one-commit-product
+          mapfile -t PRODUCT_PATHS < "$EVIDENCE/product-paths.txt"
+          git config user.name undercast-transaction-bot
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- "${PRODUCT_PATHS[@]}"
+          git commit -m 'UX: build first-class Makers discovery'
+          PRODUCT_SHA="$(git rev-parse HEAD)"
+          printf '%s\n' "$PRODUCT_SHA" > "$EVIDENCE/product-sha.txt"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = 1
+          test -z "$(git status --porcelain)"
+          git diff --name-only "$BASE_SHA"..HEAD | LC_ALL=C sort > "$EVIDENCE/committed-paths.txt"
+          diff -u "$EVIDENCE/product-paths.txt" "$EVIDENCE/committed-paths.txt"
+          node scripts/shard.mjs > "$EVIDENCE/post-commit-shard.log"
+          test -z "$(git status --porcelain)"
+          printf 'status=qualified-local\nbase=%s\nsource=%s\nproduct=%s\n' "$BASE_SHA" "$SOURCE_SHA" "$PRODUCT_SHA" > "$EVIDENCE/status.txt"
+          trap - ERR
+
+      - name: Install supported browser engines
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 900s npx playwright install --with-deps chromium firefox webkit 2>&1 | tee "$EVIDENCE/playwright-install.log"
+
+      - name: Prove Makers and complete UX compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 900s npx playwright test tests/rendered/makers.spec.mjs \
+            --project=ux-chromium-desktop \
+            --project=ux-firefox-desktop \
+            --project=ux-webkit-desktop \
+            --project=ux-chromium-mobile \
+            --project=ux-webkit-mobile 2>&1 | tee "$EVIDENCE/makers-five-engine.log"
+          timeout 900s npm run test:ux 2>&1 | tee "$EVIDENCE/complete-ux.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Run complete repository gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 1500s npm run gate 2>&1 | tee "$EVIDENCE/complete-gate.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Publish exact workflow-free product and prepare PR
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="$(cat "$EVIDENCE/source-sha.txt")"
+          BASE_SHA="$(cat "$EVIDENCE/base-sha.txt")"
+          PRODUCT_SHA="$(cat "$EVIDENCE/product-sha.txt")"
+          test "$(git rev-parse HEAD)" = "$PRODUCT_SHA"
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/$TARGET_BRANCH:refs/remotes/origin/$TARGET_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$BASE_SHA"
+          test "$(git rev-parse refs/remotes/origin/$TARGET_BRANCH)" = "$SOURCE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = 1
+          test -z "$(git status --porcelain)"
+          git push --force-with-lease="refs/heads/$TARGET_BRANCH:$SOURCE_SHA" origin "HEAD:refs/heads/$TARGET_BRANCH"
+
+          PATH_COUNT="$(wc -l < "$EVIDENCE/committed-paths.txt" | tr -d ' ')"
+          cat > /tmp/ux04-pr-body.md <<EOF
+          ## Completed UX-04 exact-credit Makers product
+
+          This one-commit product promotes Makers into a first-class, linkable discovery surface while preserving the corpus boundary: the public unit is an **exact filed credit label**, not an inferred person, shop, company, or department identity.
+
+          \`\`\`text
+          exact main:             $BASE_SHA
+          workflow-free product: $PRODUCT_SHA
+          changed paths:         $PATH_COUNT
+          owner decision:        DEC-0017
+          corpus-authority paths: 0
+          workflow paths:         0
+          transport paths:        0
+          \`\`\`
+
+          Delivered:
+
+          - exact filed wording with non-authoritative individual-style, organization-style, team/department, and unresolved presentation groups;
+          - search across wording and safely exposed work, production, performer, method, and record context;
+          - exact links back to existing permanent record IDs;
+          - ambiguous and unmatched wording retained instead of silently discarded;
+          - explicit projection refusal, repository-owned retry, and no-JavaScript recovery;
+          - root and generated-record navigation handoff to the first-class Makers route;
+          - five-engine focused Makers tests, complete UX compatibility, site seams, site sweep, corpus audit, and the canonical complete repository gate.
+
+          No maker entity, identity merge, parser authority, source ruling, media ruling, specimen field, queue, lease, waterline, journal, image, route identity, or schema concept is introduced.
+          EOF
+          gh pr edit "$PR_NUMBER" --body-file /tmp/ux04-pr-body.md
+          gh pr ready "$PR_NUMBER"
+          gh pr comment "$PR_NUMBER" --body "UX-04 materializer run ${GITHUB_RUN_ID} passed the exact denominator, collection-policy preflight, five-engine Makers suite, complete UX matrix, and canonical repository gate; published workflow-free product ${PRODUCT_SHA} on ${BASE_SHA}."
+          {
+            echo "base_sha=$BASE_SHA"
+            echo "product_sha=$PRODUCT_SHA"
+            echo "path_count=$PATH_COUNT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Wait for ordinary PR checks and merge exact product
+        shell: bash
+        env:
+          PRODUCT_SHA: ${{ steps.publish.outputs.product_sha }}
+        run: |
+          set -euo pipefail
+          ready=0
+          for _ in $(seq 1 80); do
+            head="$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)"
+            test "$head" = "$PRODUCT_SHA"
+            checks="$(gh pr checks "$PR_NUMBER" --json name,bucket,state 2>/dev/null || printf '[]')"
+            printf '%s\n' "$checks" > "$EVIDENCE/pr-checks-latest.json"
+            bad="$(jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length' <<<"$checks")"
+            pending="$(jq '[.[] | select(.bucket == "pending")] | length' <<<"$checks")"
+            archive="$(jq '[.[] | select(.name == "archive-contract" or .name == "validate")] | length' <<<"$checks")"
+            policy="$(jq '[.[] | select(.name == "collection-policy" or .name == "collection-mode")] | length' <<<"$checks")"
+            test "$bad" = 0
+            if test "$pending" = 0 && test "$archive" -ge 1 && test "$policy" -ge 1; then ready=1; break; fi
+            sleep 15
+          done
+          test "$ready" = 1
+
+          threads="$(gh api graphql -f owner=BigBirdReturns -f name=undercast -F number="$PR_NUMBER" -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}} reviews(first:100){nodes{state}}}}}')"
+          test "$(jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' <<<"$threads")" = 0
+          test "$(jq '[.data.repository.pullRequest.reviews.nodes[] | select(.state == "CHANGES_REQUESTED")] | length' <<<"$threads")" = 0
+          gh pr merge "$PR_NUMBER" --merge --match-head-commit "$PRODUCT_SHA" --subject 'UX: build first-class Makers discovery (#273)'
+          MERGE_SHA="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid)"
+          printf '%s\n' "$MERGE_SHA" > "$EVIDENCE/merge-sha.txt"
+          gh issue comment 242 --body "## UX-04 merged — exact-credit Makers discovery
+
+PR #273 merged as \`${MERGE_SHA}\` with workflow-free product \`${PRODUCT_SHA}\`. The first-class Makers route exposes exact filed credit wording, non-authoritative presentation groups, safely attributable record context, exact permanent-record links, ambiguity retention, fail-closed projection recovery, and no-JavaScript fallback. Corpus-authority mutations: 0. Decision: DEC-0017."
+
+      - name: Upload UX-04 qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ux-04-makers-${{ github.run_id }}
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/ux-04-makers-evidence
+            test-results
+            playwright-report
