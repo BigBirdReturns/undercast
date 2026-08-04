@@ -229,3 +229,32 @@ The screenshots, browser fixtures and derived archive projection are regression
 evidence, not a second corpus authority. This decision adds no public destination,
 reveal mechanic, specimen field, schema concept, account layer or service. It does
 not reopen general product development or relax collection-only corpus custody.
+
+---
+
+## DEC-0015 — Dense mobile evidence uses disclosure, not omission
+
+**Status:** Active · Ratified by owner direction in issue #242, implemented by #262, 2026-08-04
+
+DEC-0012 remains the default operating rule. This decision authorizes one bounded,
+corpus-disjoint responsive correction under the UX finishing program in issue #242:
+
+- Coverage retains its canonical accessible table and exact performer-role rows, but
+  may project each row as a labelled card on narrow screens. Every field remains
+  present; horizontal scrolling is not the primary mobile reading mode.
+- The wall may collapse shelf, decade and sourced-species facets behind a native
+  disclosure on narrow screens. An active deep-linked facet opens the disclosure and
+  remains named; search, sort, counts and URL state are unchanged.
+- Recognition may expose a mobile in-record section map. It must scroll within the
+  current record without replacing the catalog-ID URL fragment or changing record
+  identity.
+- Constellation performer rows may collapse their Star Trek and elsewhere role stacks
+  independently on narrow screens. A selected deep-linked edge opens its containing
+  stack automatically, and the complete sourced edge ledger remains visible.
+- Primary navigation and interactive controls on these mobile surfaces meet the
+  established touch-target floor without changing desktop page ownership.
+
+Disclosure changes presentation only. It may never discard a filed row, connection,
+absence, credit, source, or uncertainty state, and it adds no destination, reveal
+mechanic, specimen field, schema concept, account layer, or service. Desktop visual
+baselines and collection-only corpus custody remain binding.
