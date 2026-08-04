@@ -9,8 +9,21 @@ repo="$(pwd)"
 mkdir -p "$evidence"
 
 [[ "${GITHUB_REF_NAME:-}" == main ]]
-[[ "$(git show -s --format=%P HEAD)" == "$base" ]]
 git cat-file -e "$base^{commit}"
+git merge-base --is-ancestor "$base" HEAD
+expected_transport_paths=(
+  ".github/workflows/rd-wave03-main-push.yml"
+  "tmp/rd-wave03-package.part-01"
+  "tmp/rd-wave03-package.part-02"
+  "tmp/rd-wave03-package.part-03"
+  "tmp/rd-wave03-package.part-04"
+  "tmp/rd-wave03-package.part-05"
+  "tmp/rd-wave03-materialize.sh"
+  "tmp/rd-wave03.trigger"
+)
+mapfile -t transport_delta < <(git diff --name-only "$base" HEAD | LC_ALL=C sort)
+mapfile -t expected_transport_paths < <(printf '%s\n' "${expected_transport_paths[@]}" | LC_ALL=C sort)
+[[ "$(printf '%s\n' "${transport_delta[@]}")" == "$(printf '%s\n' "${expected_transport_paths[@]}")" ]]
 
 cat tmp/rd-wave03-package.part-* | base64 --decode > "$evidence/package.tar.gz"
 [[ "$(sha256sum "$evidence/package.tar.gz" | awk '{print $1}')" == "$archive_sha" ]]
