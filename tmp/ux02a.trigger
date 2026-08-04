@@ -1,4 +1,5 @@
-DEC-0016 registered-writer synchronization
-main=c16c50ebc0f42be66f0f3b70fcb30ad00b7f4508
+DEC-0016 scheduled-policy synchronization
+main=3dd6a7500773bb93ce4345cdf53e764dd3ee1848
 target=634f0a69b95b65c22c6bc680941570f543143e9f
 qualified=4fe485057180d3b3947bc5c70c5241ae21e5a106
+event=synchronize-after-policy-install
