@@ -100,7 +100,11 @@ A reopen does not acquire authority merely by being appended. Before a latest `t
 
 Release authority is computed by replaying every per-task lifecycle transition, not by inspecting only the latest edge. Each lifecycle timestamp must increase in append order. Every reopen is structurally and identity validated; the first reopen after an active retirement must use a retirement-release reason before that retirement state is cleared. A later reopen therefore cannot conceal an earlier malformed, non-monotonic, or wrong-reason transition. The final live job must also have shed `not-in-latest-coverage` and `retired_at` outcome custody.
 
-Current correction-drill receipt SHA-256: `5045a6111a5a4b4affa5004502a5a4fea7420fd858125265602167a83e8e90fd`.
+Lifecycle membership is now selected from the durable canonical Doctor Who task set, not from the scope claimed by a journal row. A lifecycle row for a durable Doctor Who task is replayed even when it carries a forged foreign scope, and the row then fails the exact scope-and-identity check. A compound wrong-scope reopen followed by a valid-looking retry fails in both permanent checker mirrors.
+
+This composition also preserves the bounded terminal interval established by Doctor Who cycle 003: after at least one reviewed Doctor Who cycle, exactly one globally isolated unreceipted Doctor Who journal group may exist only when its sole task is already resolved, no active job remains, and the group lease exactly matches that resolved task's terminal `outcome.media_review.lease_id` provenance. A fabricated or mismatched lease, queued work, active work, multiple tasks, concurrent groups, and first-cycle work without prior review remain refused.
+
+Current correction-drill receipt SHA-256: `38ad71c17f8399ae74b73cd26b8a594e773df24ebe30762795a640e7094cedf2`.
 
 Exact historical object recovery is also safe in the repository’s shallow PR checkout. Activation, pilot, and correction fetches disable automatic maintenance, retry only recognized Git lock/shallow-file races with bounded backoff, and recheck object visibility after a failed fetch before retrying. Missing commits, authentication failures, and other substantive fetch errors remain terminal.
 
