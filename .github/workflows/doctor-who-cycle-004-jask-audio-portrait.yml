@@ -1,0 +1,194 @@
+name: doctor-who-cycle-004-jask-audio-portrait
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-004-jask-audio-portrait.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-004-jask-audio-portrait-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-004-jask-audio-portrait.yml
+  EXACT_MAIN: b8d935167ab896580a136488e4615f399fae66aa
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  COMMONS_TITLE: File:Dan Starkey 2015.jpg
+
+jobs:
+  prepare:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 64
+
+      - name: Bind exact main and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --depth=64 origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${HEAD_BRANCH})" = "$HEAD_SHA"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+
+      - name: Install deterministic image tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          identify -version
+
+      - name: Fetch licensed Commons source and derive exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=/tmp/doctor-who-cycle-004-jask-audio-portrait
+          mkdir -p "$out"
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+
+          const out = '/tmp/doctor-who-cycle-004-jask-audio-portrait';
+          const title = process.env.COMMONS_TITLE;
+          const endpoint = new URL('https://commons.wikimedia.org/w/api.php');
+          endpoint.search = new URLSearchParams({
+            action: 'query',
+            prop: 'imageinfo',
+            titles: title,
+            iiprop: 'url|size|sha1|mime|extmetadata',
+            format: 'json',
+            formatversion: '2',
+            origin: '*',
+          }).toString();
+          const response = await fetch(endpoint, {
+            headers: { 'user-agent': 'Undercast licensed portrait preparation/1.0' },
+          });
+          if (!response.ok) throw new Error(`Commons metadata fetch failed: ${response.status}`);
+          const doc = await response.json();
+          const page = doc?.query?.pages?.[0];
+          const info = page?.imageinfo?.[0];
+          if (!page || page.missing || page.title !== title) throw new Error('Commons title missing or redirected');
+          if (!info?.url || !info?.descriptionurl) throw new Error('Commons image URLs missing');
+          if (info.mime !== 'image/jpeg') throw new Error(`unexpected Commons MIME ${info.mime}`);
+
+          const clean = (value) => String(value ?? '')
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&#39;/g, "'")
+            .replace(/&quot;/g, '"')
+            .replace(/\s+/g, ' ')
+            .trim();
+          const metadata = info.extmetadata || {};
+          const author = clean(metadata.Artist?.value || metadata.Credit?.value);
+          const license = clean(metadata.LicenseShortName?.value || metadata.UsageTerms?.value);
+          const licenseUrl = clean(metadata.LicenseUrl?.value);
+          if (!author) throw new Error('Commons author missing');
+          if (!/^CC BY(?:-SA)?(?: |$)/.test(license)) throw new Error(`Commons license is not an accepted attribution license: ${license}`);
+          if (!licenseUrl.startsWith('https://creativecommons.org/licenses/')) throw new Error('Commons license URL missing or non-CC');
+
+          const sourceResponse = await fetch(info.url, {
+            headers: { 'user-agent': 'Undercast licensed portrait preparation/1.0' },
+          });
+          if (!sourceResponse.ok) throw new Error(`Commons image fetch failed: ${sourceResponse.status}`);
+          const source = Buffer.from(await sourceResponse.arrayBuffer());
+          const sha256 = crypto.createHash('sha256').update(source).digest('hex');
+          fs.writeFileSync(`${out}/source.jpg`, source);
+          fs.writeFileSync(`${out}/commons-metadata.json`, `${JSON.stringify({
+            version: 1,
+            exact_main: process.env.EXACT_MAIN,
+            pageid: page.pageid,
+            title: page.title,
+            description_url: info.descriptionurl,
+            original_url: info.url,
+            source_sha1: info.sha1,
+            source_sha256: sha256,
+            source_bytes: source.length,
+            source_width: info.width,
+            source_height: info.height,
+            author,
+            license,
+            license_url: licenseUrl,
+            boundary: {
+              performer_identity_only: true,
+              character_evidence: false,
+              jask_or_generic_sontaran_depiction: false,
+            },
+          }, null, 2)}\n`);
+          NODE
+
+          convert "$out/source.jpg" \
+            -auto-orient \
+            -strip \
+            -resize '420x600^' \
+            -gravity center \
+            -extent 420x600 \
+            -sampling-factor 4:2:0 \
+            -quality 88 \
+            "$out/portrait.jpg"
+
+          identify -format '%w %h\n' "$out/portrait.jpg" > "$out/portrait-dimensions.txt"
+          test "$(cat "$out/portrait-dimensions.txt")" = "420 600"
+
+          source_sha="$(sha256sum "$out/source.jpg" | awk '{print $1}')"
+          portrait_sha="$(sha256sum "$out/portrait.jpg" | awk '{print $1}')"
+          test "$source_sha" != "$portrait_sha"
+          find images -type f -print0 | sort -z | xargs -0 sha256sum > "$out/existing-image-sha256.txt"
+          ! grep -Fq "$portrait_sha" "$out/existing-image-sha256.txt"
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const out = '/tmp/doctor-who-cycle-004-jask-audio-portrait';
+          const metadataPath = `${out}/commons-metadata.json`;
+          const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+          const portrait = fs.readFileSync(`${out}/portrait.jpg`);
+          const portraitSha256 = crypto.createHash('sha256').update(portrait).digest('hex');
+          const manifest = JSON.parse(fs.readFileSync('data/media-manifest.json', 'utf8'));
+          const existing = new Set(Object.values(manifest.assets || {}).map((row) => row.sha256));
+          if (existing.has(portraitSha256)) throw new Error('portrait bytes already exist in media manifest');
+          metadata.portrait_sha256 = portraitSha256;
+          metadata.portrait_bytes = portrait.length;
+          metadata.portrait_width = 420;
+          metadata.portrait_height = 600;
+          metadata.transform = 'auto-orient; strip; resize 420x600^; center extent 420x600; JPEG 4:2:0 quality 88';
+          fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+          NODE
+
+          sha256sum \
+            "$out/source.jpg" \
+            "$out/portrait.jpg" \
+            "$out/commons-metadata.json" \
+            "$out/existing-image-sha256.txt" \
+            > "$out/portrait-preparation.sha256"
+          cp /tmp/expected-paths.txt "$out/"
+          cp /tmp/actual-paths.txt "$out/"
+          printf '%s\n' "$EXACT_MAIN" > "$out/exact-main.txt"
+          printf '%s\n' "$HEAD_SHA" > "$out/carrier-head.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact portrait preparation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-004-jask-audio-portrait-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: /tmp/doctor-who-cycle-004-jask-audio-portrait
