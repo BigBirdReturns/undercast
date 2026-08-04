@@ -1,0 +1,290 @@
+name: doctor-who-cycle-006-kayste-media-preflight
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-006-kayste-media-preflight.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-006-kayste-media-preflight-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-006-kayste-media-preflight.yml
+  EXACT_MAIN: 2b3562191104ba90ecb9b56c5a83598d339a6271
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  OUT: /tmp/doctor-who-cycle-006-kayste-media-preflight
+  SELECTION_RUN: "30950611825"
+  SELECTION_ARTIFACT: doctor-who-cycle-006-preflight-30950611825
+
+jobs:
+  preflight:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          filter: blob:none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact main and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${HEAD_BRANCH})" = "$HEAD_SHA"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+          test -z "$(git status --porcelain)"
+
+      - name: Install exact repository and image tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y imagemagick >/dev/null
+          identify -version | head -1
+
+      - name: Recover exact cycle-006 selection packet
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.SELECTION_ARTIFACT }}
+          path: ${{ env.OUT }}/selection
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: ${{ env.SELECTION_RUN }}
+
+      - name: Validate Kayste selection and inspect current media estate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import crypto from 'node:crypto';
+
+          const out = process.env.OUT;
+          const selection = JSON.parse(fs.readFileSync(`${out}/selection/selected-task.json`, 'utf8'));
+          const task = selection.task;
+          const expected = {
+            id: 'ap_c8e74653ac0877837814db21',
+            performer: 'Dan Starkey',
+            character: 'Kayste',
+            source_fingerprint: '5a28fd22ffbd22398bd63338896f32f83edc5b88dc9248e3045fb5e5e85f82e2',
+            source_content_sha256: '3ff314fbae95a13aead70ca7934692859d27e1ab57d7289b608692dd44bf06e2',
+          };
+          if (selection.exact_main !== process.env.EXACT_MAIN) throw new Error('selection exact-main drifted');
+          if (selection.lease_issued !== false || selection.global_active_count !== 0) throw new Error('selection was not read-only and globally quiescent');
+          if (task.id !== expected.id || task.performer !== expected.performer || task.character !== expected.character) throw new Error('Kayste task identity drifted');
+          if (task.status !== 'queued' || !task.performance_modes?.includes('voice')) throw new Error('Kayste task is not a queued voice obligation');
+          if (task.source_fingerprint !== expected.source_fingerprint) throw new Error('Kayste source fingerprint drifted');
+          if (task.source_receipts?.[0]?.content_sha256 !== expected.source_content_sha256) throw new Error('Kayste source content drifted');
+
+          const specimens = JSON.parse(fs.readFileSync('data/specimens.json', 'utf8'));
+          const mediaAudit = JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json', 'utf8'));
+          const mediaManifest = JSON.parse(fs.readFileSync('data/media-manifest.json', 'utf8'));
+          const quality = JSON.parse(fs.readFileSync('data/quality.json', 'utf8'));
+          const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+          const valueSrc = (value) => typeof value === 'string' ? value : value?.src ?? null;
+          const valueOrigin = (value) => typeof value === 'object' && value ? value.origin ?? null : null;
+          const summarizeRecord = (record) => {
+            const portrait = record.portrait ?? record.image ?? null;
+            const still = record.still ?? null;
+            const refs = [];
+            for (const [side, value] of [['portrait', portrait], ['still', still]]) {
+              const src = valueSrc(value);
+              const origin = valueOrigin(value);
+              let file = null;
+              if (src && fs.existsSync(src)) {
+                const bytes = fs.readFileSync(src);
+                file = {src, bytes: bytes.length, sha256: sha256(bytes)};
+              }
+              refs.push({side, src, origin, file});
+            }
+            return {id: record.id, actor: record.actor, character: record.character, universe: record.universe, kind: record.kind, production: record.production, years: record.years, portrait, still, refs};
+          };
+          const starkeyRecords = specimens.filter((record) => record.actor === 'Dan Starkey').map(summarizeRecord);
+          const starkeyAudit = mediaAudit.items.filter((item) => item.actor === 'Dan Starkey');
+          const existingOrigins = new Set();
+          const existingHashes = new Set();
+          for (const record of starkeyRecords) for (const ref of record.refs) {
+            if (ref.origin) existingOrigins.add(ref.origin);
+            if (ref.file?.sha256) existingHashes.add(ref.file.sha256);
+          }
+          for (const item of starkeyAudit) {
+            if (item.asset?.origin) existingOrigins.add(item.asset.origin);
+            if (item.asset?.sha256) existingHashes.add(item.asset.sha256);
+          }
+          for (const entry of Object.values(mediaManifest.assets ?? {})) if (entry?.sha256) existingHashes.add(entry.sha256);
+
+          const hasPortrait = (record) => Boolean(valueSrc(record.portrait ?? record.image ?? null));
+          const hasStill = (record) => Boolean(valueSrc(record.still ?? null));
+          const missingBoth = specimens.filter((record) => !hasPortrait(record) && !hasStill(record)).length;
+          const projection = {
+            current: {records: specimens.length, missing_both: missingBoth, ratio: missingBoth / specimens.length},
+            kayste_both_absent: {records: specimens.length + 1, missing_both: missingBoth + 1, ratio: (missingBoth + 1) / (specimens.length + 1)},
+            kayste_portrait_only: {records: specimens.length + 1, missing_both: missingBoth, ratio: missingBoth / (specimens.length + 1)},
+            kayste_still_only: {records: specimens.length + 1, missing_both: missingBoth, ratio: missingBoth / (specimens.length + 1)},
+            raw_quality_contract: quality,
+          };
+
+          fs.writeFileSync(`${out}/selection.json`, `${JSON.stringify(selection, null, 2)}\n`);
+          fs.writeFileSync(`${out}/dan-starkey-records.json`, `${JSON.stringify(starkeyRecords, null, 2)}\n`);
+          fs.writeFileSync(`${out}/dan-starkey-media-audit.json`, `${JSON.stringify(starkeyAudit, null, 2)}\n`);
+          fs.writeFileSync(`${out}/existing-origins.json`, `${JSON.stringify([...existingOrigins].sort(), null, 2)}\n`);
+          fs.writeFileSync(`${out}/existing-media-sha256.json`, `${JSON.stringify([...existingHashes].sort(), null, 2)}\n`);
+          fs.writeFileSync(`${out}/quality-projection.json`, `${JSON.stringify(projection, null, 2)}\n`);
+          fs.copyFileSync(`${out}/selection/source-01.wikitext`, `${out}/kayste-source.wikitext`);
+          NODE
+          test -z "$(git status --porcelain)"
+
+      - name: Enumerate licensed Commons portraits and prepare one unused candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          import {spawnSync} from 'node:child_process';
+
+          const out = process.env.OUT;
+          const existingOrigins = new Set(JSON.parse(fs.readFileSync(`${out}/existing-origins.json`, 'utf8')));
+          const existingHashes = new Set(JSON.parse(fs.readFileSync(`${out}/existing-media-sha256.json`, 'utf8')));
+          const api = new URL('https://commons.wikimedia.org/w/api.php');
+          api.search = new URLSearchParams({
+            action: 'query', generator: 'categorymembers', gcmtitle: 'Category:Dan Starkey',
+            gcmnamespace: '6', gcmlimit: '50', prop: 'imageinfo',
+            iiprop: 'url|size|sha1|mime|timestamp|extmetadata', format: 'json', formatversion: '2', origin: '*',
+          }).toString();
+          const response = await fetch(api, {headers: {'user-agent': 'Undercast Kayste media preflight/1.0'}});
+          if (!response.ok) throw new Error(`Commons category fetch failed ${response.status}`);
+          const doc = await response.json();
+          const pages = (doc?.query?.pages ?? []).map((page) => {
+            const info = page.imageinfo?.[0] ?? {};
+            const meta = info.extmetadata ?? {};
+            return {
+              pageid: page.pageid,
+              title: page.title,
+              url: info.url,
+              description_url: info.descriptionurl,
+              width: info.width,
+              height: info.height,
+              size: info.size,
+              mime: info.mime,
+              timestamp: info.timestamp,
+              sha1: info.sha1,
+              license: meta.LicenseShortName?.value ?? null,
+              license_url: meta.LicenseUrl?.value ?? null,
+              artist: meta.Artist?.value ?? null,
+              credit: meta.Credit?.value ?? null,
+              description: meta.ImageDescription?.value ?? null,
+              date_time_original: meta.DateTimeOriginal?.value ?? null,
+            };
+          }).sort((a, b) => a.title.localeCompare(b.title));
+          const preferences = [
+            'File:Dan Starkey 2015.jpg',
+            'File:Dan Starkey (16135605890).jpg',
+            'File:Dan Starkey (27229445610).jpg',
+            'File:Dan Starkey (27229441940).jpg',
+            'File:Dan Starkey (27473127666).jpg',
+            'File:Dan Starkey (27473124276).jpg',
+          ];
+          const licensed = pages.filter((page) => page.url && page.mime === 'image/jpeg' && /CC BY|CC-BY|Public domain/i.test(page.license ?? '') && page.width >= 350 && page.height >= 450);
+          const unused = licensed.filter((page) => !existingOrigins.has(page.description_url) && !existingOrigins.has(page.url));
+          unused.sort((a, b) => {
+            const ai = preferences.indexOf(a.title); const bi = preferences.indexOf(b.title);
+            const ar = ai < 0 ? 999 : ai; const br = bi < 0 ? 999 : bi;
+            return ar - br || a.size - b.size;
+          });
+          const selected = unused[0];
+          if (!selected) throw new Error('no unused licensed Dan Starkey Commons portrait candidate');
+          const imageResponse = await fetch(selected.url, {headers: {'user-agent': 'Undercast Kayste media preflight/1.0'}});
+          if (!imageResponse.ok) throw new Error(`candidate download failed ${imageResponse.status}`);
+          const original = Buffer.from(await imageResponse.arrayBuffer());
+          fs.writeFileSync(`${out}/dan-starkey-candidate-original.jpg`, original);
+          const originalSha = crypto.createHash('sha256').update(original).digest('hex');
+          if (existingHashes.has(originalSha)) throw new Error('selected original already exists in repository media hashes');
+          const converted = spawnSync('convert', [
+            `${out}/dan-starkey-candidate-original.jpg`, '-auto-orient', '-resize', '420x600^',
+            '-gravity', 'center', '-extent', '420x600', '-strip', '-quality', '88',
+            `${out}/dan-starkey-candidate-420x600.jpg`,
+          ], {encoding: 'utf8'});
+          if (converted.status !== 0) throw new Error(`ImageMagick conversion failed: ${converted.stderr}`);
+          const candidate = fs.readFileSync(`${out}/dan-starkey-candidate-420x600.jpg`);
+          const candidateSha = crypto.createHash('sha256').update(candidate).digest('hex');
+          if (existingHashes.has(candidateSha)) throw new Error('prepared candidate duplicates an existing repository media hash');
+          const identify = spawnSync('identify', ['-format', '%wx%h', `${out}/dan-starkey-candidate-420x600.jpg`], {encoding: 'utf8'});
+          if (identify.status !== 0 || identify.stdout.trim() !== '420x600') throw new Error(`candidate dimensions drifted: ${identify.stdout} ${identify.stderr}`);
+          const receipt = {
+            selected,
+            original: {bytes: original.length, sha256: originalSha},
+            candidate: {path: 'dan-starkey-candidate-420x600.jpg', bytes: candidate.length, sha256: candidateSha, dimensions: '420x600'},
+            existing_origin_count: existingOrigins.size,
+            existing_hash_count: existingHashes.size,
+            adopted: false,
+            lease_issued: false,
+            visual_review_required: true,
+            subject_boundary: 'performer portrait only; never Kayste character evidence',
+          };
+          fs.writeFileSync(`${out}/commons-category.json`, `${JSON.stringify(pages, null, 2)}\n`);
+          fs.writeFileSync(`${out}/portrait-candidate-receipt.json`, `${JSON.stringify(receipt, null, 2)}\n`);
+          NODE
+          sha256sum "$OUT/dan-starkey-candidate-original.jpg" "$OUT/dan-starkey-candidate-420x600.jpg" > "$OUT/candidate-files.sha256"
+          identify "$OUT/dan-starkey-candidate-original.jpg" "$OUT/dan-starkey-candidate-420x600.jpg" > "$OUT/candidate-identify.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Record exact read-only boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$EXACT_MAIN" > "$OUT/exact-main.txt"
+          printf '%s\n' "$HEAD_SHA" > "$OUT/carrier-head.txt"
+          cp /tmp/expected-paths.txt "$OUT/"
+          cp /tmp/actual-paths.txt "$OUT/"
+          git ls-tree -r --full-tree "$EXACT_MAIN" > "$OUT/exact-tree.txt"
+          cat > "$OUT/terminal-boundary.json" <<JSON
+          {
+            "exact_main": "$EXACT_MAIN",
+            "task_id": "ap_c8e74653ac0877837814db21",
+            "performer": "Dan Starkey",
+            "role": "Kayste",
+            "lease_issued": false,
+            "queue_mutated": false,
+            "canonical_record_created": false,
+            "media_adopted": false,
+            "cycle_receipt_written": false,
+            "merge_authorized": false
+          }
+          JSON
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact Kayste media preflight
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-006-kayste-media-preflight-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: warn
+          path: ${{ env.OUT }}
