@@ -1,5 +1,6 @@
-DEC-0016 scheduled-policy synchronization
-main=3dd6a7500773bb93ce4345cdf53e764dd3ee1848
+DEC-0016 reviewed-current-location synchronization
+main=c8f9b4e676e0d5336c77e92940a85109fbd8026c
 target=634f0a69b95b65c22c6bc680941570f543143e9f
 qualified=4fe485057180d3b3947bc5c70c5241ae21e5a106
-event=synchronize-after-policy-install
+fix=18c838abd554449a0457a0f51e7bb5bdad03a1dc6e9f4c022601ebb6be8e6398
+event=synchronize-after-receipt-install
