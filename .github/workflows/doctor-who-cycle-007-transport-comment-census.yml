@@ -1,0 +1,111 @@
+name: doctor-who-cycle-007-transport-comment-census
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-007-transport-comment-census.yml"
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: doctor-who-cycle-007-transport-comment-census-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-007-transport-comment-census.yml
+  EXACT_MAIN: 014dbd3a4d9d4e82c0832d4c14f08cfff5138a58
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  OUT: /tmp/doctor-who-cycle-007-transport-comment-census
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  census:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-007-transport-comment-census'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 2
+          sparse-checkout: ${{ env.SELF }}
+          sparse-checkout-cone-mode: false
+
+      - name: Bind exact one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          printf '%s\n' "$SELF" > "$OUT/expected.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual.txt"
+          diff -u "$OUT/expected.txt" "$OUT/actual.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Recover all cycle-007 transport comments and classify exact payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/419/comments?per_page=100" > "$OUT/pr-419-comments.json"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/433/comments?per_page=100" > "$OUT/pr-433-comments.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+
+          const out = process.env.OUT;
+          const sha = (value) => crypto.createHash('sha256').update(value).digest('hex');
+          const rows = [];
+          for (const issue of [419, 433]) {
+            const comments = JSON.parse(fs.readFileSync(`${out}/pr-${issue}-comments.json`, 'utf8'));
+            for (const comment of comments) {
+              const body = String(comment?.body ?? '');
+              fs.writeFileSync(`${out}/issue-${issue}-comment-${comment.id}.txt`, body);
+              for (const version of [5, 6]) {
+                const match = body.match(new RegExp(`^CYCLE007_TRANSPORT_V${version}_PART (\\d{2})\\/(\\d{2})\\n([A-Za-z0-9+/=\\r\\n]+)$`));
+                if (!match) continue;
+                const payload = match[3].replace(/\s/g, '');
+                const path = `${out}/v${version}-issue-${issue}-part-${match[1]}.b64`;
+                fs.writeFileSync(path, `${payload}\n`);
+                rows.push({issue, comment_id: comment.id, version, part: Number(match[1]), total: Number(match[2]), chars: payload.length, modulo4: payload.length % 4, padding: [...payload].filter((character) => character === '=').length, payload_sha256: sha(payload)});
+              }
+              const v3 = body.match(/^CYCLE007_TRANSPORT_V3_PART_(\d{2})_BEGIN\n([A-Za-z0-9+/=\r\n]+)\nCYCLE007_TRANSPORT_V3_PART_\1_END$/);
+              if (v3) {
+                const payload = v3[2].replace(/\s/g, '');
+                fs.writeFileSync(`${out}/v3-issue-${issue}-part-${v3[1]}.b64`, `${payload}\n`);
+                rows.push({issue, comment_id: comment.id, version: 3, part: Number(v3[1]), total: null, chars: payload.length, modulo4: payload.length % 4, padding: [...payload].filter((character) => character === '=').length, payload_sha256: sha(payload)});
+              }
+            }
+          }
+          rows.sort((a, b) => a.version - b.version || a.issue - b.issue || a.part - b.part || a.comment_id - b.comment_id);
+          fs.writeFileSync(`${out}/transport-comment-census.json`, `${JSON.stringify(rows, null, 2)}\n`);
+
+          for (const version of [3, 5, 6]) {
+            const preferredIssue = version === 6 ? 419 : 419;
+            const selected = rows.filter((row) => row.version === version && row.issue === preferredIssue).sort((a, b) => a.part - b.part);
+            if (!selected.length) continue;
+            const payload = selected.map((row) => fs.readFileSync(`${out}/v${version}-issue-${preferredIssue}-part-${String(row.part).padStart(2, '0')}.b64`, 'utf8').trim()).join('');
+            fs.writeFileSync(`${out}/v${version}-joined.b64`, `${payload}\n`);
+            const dataOnly = payload.replace(/=+$/, '');
+            const complete = dataOnly.slice(0, dataOnly.length - (dataOnly.length % 4));
+            fs.writeFileSync(`${out}/v${version}-joined-complete-quads.b64`, `${complete}\n`);
+            const bytes = Buffer.from(complete, 'base64');
+            fs.writeFileSync(`${out}/v${version}-joined-complete-quads.bin`, bytes);
+            fs.writeFileSync(`${out}/v${version}-joined-summary.json`, `${JSON.stringify({parts: selected.map((row) => row.part), chars: payload.length, modulo4: payload.length % 4, padding: [...payload].filter((character) => character === '=').length, complete_quad_chars: complete.length, decoded_bytes: bytes.length, decoded_sha256: sha(bytes)}, null, 2)}\n`);
+          }
+          NODE
+
+      - name: Upload exact comment census
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-transport-comment-census-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
