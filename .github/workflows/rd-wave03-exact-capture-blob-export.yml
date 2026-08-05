@@ -1,0 +1,75 @@
+name: RD-W03 exact-capture source blob export
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/rd-wave03-exact-capture-blob-export.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUT: /tmp/rd-wave03-exact-capture-blob-export
+      SOURCE_BLOB: 517a5e31870e3c4aa4b1266f029d58c62cbf3c81
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Recover exact Git object bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT/unpacked"
+          gh api "repos/BigBirdReturns/undercast/git/blobs/$SOURCE_BLOB" > "$OUT/blob.json"
+          python3 - "$OUT/blob.json" "$OUT/source.bin" <<'PY'
+          import base64, json, pathlib, sys
+          doc=json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert doc['sha']=="517a5e31870e3c4aa4b1266f029d58c62cbf3c81"
+          assert doc['encoding']=='base64'
+          data=base64.b64decode(doc['content'])
+          assert len(data)==doc['size']
+          pathlib.Path(sys.argv[2]).write_bytes(data)
+          PY
+          sha256sum "$OUT/source.bin" | tee "$OUT/source.sha256"
+          file "$OUT/source.bin" | tee "$OUT/source.file"
+          python3 - "$OUT/source.bin" "$OUT/unpacked" <<'PY'
+          import gzip, pathlib, shutil, sys, tarfile, zipfile
+          src=pathlib.Path(sys.argv[1]); out=pathlib.Path(sys.argv[2]); data=src.read_bytes()
+          if data.startswith(b'\x1f\x8b'):
+              raw=gzip.decompress(data)
+              (out/'decompressed.bin').write_bytes(raw)
+              if tarfile.is_tarfile(out/'decompressed.bin'):
+                  with tarfile.open(out/'decompressed.bin') as tf:
+                      for member in tf.getmembers():
+                          target=(out/member.name).resolve()
+                          if out.resolve() not in target.parents and target != out.resolve():
+                              raise SystemExit(f'unsafe tar member {member.name}')
+                      tf.extractall(out/'tar')
+          elif zipfile.is_zipfile(src):
+              with zipfile.ZipFile(src) as zf:
+                  for name in zf.namelist():
+                      target=(out/name).resolve()
+                      if out.resolve() not in target.parents and target != out.resolve():
+                          raise SystemExit(f'unsafe zip member {name}')
+                  zf.extractall(out/'zip')
+          PY
+          find "$OUT" -type f -printf '%P\t%s bytes\n' | LC_ALL=C sort | tee "$OUT/file-list.txt"
+          find "$OUT" -type f -not -path '*/blob.json' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/SHA256SUMS"
+
+      - name: Upload exact recovered bytes
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-source-blob-${{ github.run_id }}
+          path: /tmp/rd-wave03-exact-capture-blob-export
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
