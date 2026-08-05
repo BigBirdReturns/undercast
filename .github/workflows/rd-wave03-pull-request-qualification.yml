@@ -1,0 +1,143 @@
+name: RD-W03 pull-request exact-head qualification
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/rd-wave03-pull-request-qualification.yml
+      - tmp/rd-wave03-pull-request-integration.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rd-wave03-pull-request-qualification-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  lane:
+    name: RD-${{ matrix.lane }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: "01"
+            head: 6899a2d09c8ddd62a62ce22fc59557ea6fddf84b
+            count: 8
+          - lane: "02"
+            head: 134e7811419d20443134fe565bf4cf69af70fa45
+            count: 7
+          - lane: "03"
+            head: b0700020c4c84e0ec355a76861c9a788b04a89eb
+            count: 7
+          - lane: "04"
+            head: 1db75a178f4da96d22109902e3d5a9ff79a6080f
+            count: 7
+          - lane: "05"
+            head: 6f1e9f6ea6b14753d30161d55c3facc3a466bc66
+            count: 8
+          - lane: "06"
+            head: 9acd031d7bfc3d0f343525e65b17a5140ee46f43
+            count: 8
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      BASE_SHA: 318e7fd2826511c283e2d81622459fe0bb74e0d2
+      HEAD_SHA: ${{ matrix.head }}
+      LANE: ${{ matrix.lane }}
+      PATH_COUNT: ${{ matrix.count }}
+      PROTOCOL: data/research/residual-denominator/wave-03/rd-${{ matrix.lane }}/protocol.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.head }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Verify and execute immutable lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/rd-wave03-rd${LANE}-intake"
+          export OUT
+          mkdir -p "$OUT"
+          exec > >(tee "$OUT/lane.log") 2>&1
+          unset GH_TOKEN GITHUB_TOKEN
+          git config --local --unset-all http.https://github.com/.extraheader >/dev/null 2>&1 || true
+          git remote set-url origin https://github.com/BigBirdReturns/undercast.git
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P "$HEAD_SHA")" = "$BASE_SHA"
+          git diff-tree --no-commit-id --name-only -r "$HEAD_SHA" | LC_ALL=C sort > "$OUT/actual-paths.txt"
+          node -e '
+            const fs = require("node:fs");
+            const protocol = JSON.parse(fs.readFileSync(process.env.PROTOCOL, "utf8"));
+            process.stdout.write([...protocol.permanent_paths].sort().join("\n") + "\n");
+          ' > "$OUT/expected-paths.txt"
+          test "$(wc -l < "$OUT/actual-paths.txt")" -eq "$PATH_COUNT"
+          diff -u "$OUT/expected-paths.txt" "$OUT/actual-paths.txt"
+          ! grep -Eiq '(^|/)(tmp|transport|carrier|materializer|controller|trigger)(/|\.|-|$)' "$OUT/actual-paths.txt"
+          node --check "scripts/rd-wave03-rd${LANE}-build.mjs"
+          node --check "scripts/rd-wave03-rd${LANE}-validate.mjs"
+          node --check "test/rd-wave03-rd${LANE}-adversarial.mjs"
+          node "scripts/rd-wave03-rd${LANE}-validate.mjs"
+          node "scripts/rd-wave03-rd${LANE}-build.mjs" --check
+          node "test/rd-wave03-rd${LANE}-adversarial.mjs"
+          GITHUB_SHA="$HEAD_SHA" node "scripts/rd-wave03-rd${LANE}-build.mjs" --execute --out "$OUT"
+          node "scripts/rd-wave03-rd${LANE}-build.mjs" --verify-receipt "$OUT/receipt.json"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Upload exact lane receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-rd${{ matrix.lane }}-intake-${{ github.run_id }}
+          path: ${{ runner.temp }}/rd-wave03-rd${{ matrix.lane }}-intake
+          if-no-files-found: error
+          retention-days: 30
+
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    env:
+      QUALIFICATION_HEAD: ${{ github.event.pull_request.head.sha }}
+      QUALIFICATION_PARENT: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Run exact 45-path integration and complete release gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/rd-wave03-integration"
+          export EVIDENCE
+          unset GH_TOKEN GITHUB_TOKEN
+          git config --local --unset-all http.https://github.com/.extraheader >/dev/null 2>&1 || true
+          git remote set-url origin https://github.com/BigBirdReturns/undercast.git
+          bash tmp/rd-wave03-pull-request-integration.sh
+
+      - name: Upload integration receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-integration-${{ github.run_id }}
+          path: ${{ runner.temp }}/rd-wave03-integration
+          if-no-files-found: error
+          retention-days: 30
