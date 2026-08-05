@@ -1,0 +1,198 @@
+name: materialize-doctor-who-cycle-006-chronology-correction
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/materialize-doctor-who-cycle-006-chronology-correction.yml"
+      - "tmp/doctor-who-cycle-006-chronology-checker.mjs"
+      - "tmp/doctor-who-cycle-006-chronology-materialize.mjs"
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: materialize-doctor-who-cycle-006-chronology-correction
+  cancel-in-progress: false
+
+env:
+  EXACT_MAIN: 45fc33aa8de8c01f03f006c5c01765dd1929385f
+  CARRIER_BRANCH: agent/doctor-who-cycle-006-chronology-correction-materializer
+  PRODUCT_BRANCH: agent/doctor-who-cycle-006-chronology-correction
+  SELF: .github/workflows/materialize-doctor-who-cycle-006-chronology-correction.yml
+  CHECKER: tmp/doctor-who-cycle-006-chronology-checker.mjs
+  MATERIALIZER: tmp/doctor-who-cycle-006-chronology-materialize.mjs
+  CHECKER_BLOB: ca00f693f2717d4329cdae75ba33724914fd0f9b
+  CHECKER_SHA256: 6f3001a95a5079cd009a731377eee72c824e1daeadcbe3f8f8d083c06833788c
+  MATERIALIZER_BLOB: 5d6fb93f046ddcace666af461e9bec608cc206ae
+  MATERIALIZER_SHA256: 9ea4046a84f5ef7140394e33adcf6c834b945589ba58e6ab247dace3b0bc4002
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  OUT: /tmp/doctor-who-cycle-006-chronology-correction
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  materialize:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-006-chronology-correction-materializer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact main and three-path carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test -z "$(git status --porcelain)"
+
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${CARRIER_BRANCH}:refs/remotes/origin/${CARRIER_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${CARRIER_BRANCH})" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = "1"
+          test "$(git merge-base "$EXACT_MAIN" HEAD)" = "$EXACT_MAIN"
+
+          printf '%s\n' "$SELF" "$CHECKER" "$MATERIALIZER" | LC_ALL=C sort > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          test "$(git rev-parse "HEAD:$CHECKER")" = "$CHECKER_BLOB"
+          test "$(git rev-parse "HEAD:$MATERIALIZER")" = "$MATERIALIZER_BLOB"
+
+          git show "HEAD:$CHECKER" > /tmp/doctor-who-cycle-006-chronology-checker.mjs
+          git show "HEAD:$MATERIALIZER" > /tmp/doctor-who-cycle-006-chronology-materialize.mjs
+          test "$(sha256sum /tmp/doctor-who-cycle-006-chronology-checker.mjs | cut -d' ' -f1)" = "$CHECKER_SHA256"
+          test "$(sha256sum /tmp/doctor-who-cycle-006-chronology-materialize.mjs | cut -d' ' -f1)" = "$MATERIALIZER_SHA256"
+          node --check /tmp/doctor-who-cycle-006-chronology-checker.mjs
+          node --check /tmp/doctor-who-cycle-006-chronology-materialize.mjs
+          printf 'exact_main=%s\ncarrier_head=%s\nchecker_blob=%s\nmaterializer_blob=%s\n' \
+            "$EXACT_MAIN" "$HEAD_SHA" "$CHECKER_BLOB" "$MATERIALIZER_BLOB" > "$OUT/input-identity.txt"
+
+      - name: Materialize exact four-path correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$EXACT_MAIN"
+          git checkout -B "$PRODUCT_BRANCH"
+          CHECKER_PAYLOAD=/tmp/doctor-who-cycle-006-chronology-checker.mjs \
+            node /tmp/doctor-who-cycle-006-chronology-materialize.mjs
+
+          printf '%s\n' \
+            data/journal/candidates.jsonl \
+            data/review/adapter-sdk/doctor-who-cycle-006-candidate-chronology.json \
+            package.json \
+            scripts/doctor-who-cycle-006-chronology.mjs \
+            | LC_ALL=C sort > "$OUT/expected-product-paths.txt"
+          { git diff --name-only; git ls-files --others --exclude-standard; } | LC_ALL=C sort > "$OUT/actual-product-paths.txt"
+          diff -u "$OUT/expected-product-paths.txt" "$OUT/actual-product-paths.txt"
+          node scripts/doctor-who-cycle-006-chronology.mjs | tee "$OUT/chronology-check.log"
+          node scripts/doctor-who-cycle-006.mjs | tee "$OUT/cycle-006-check.log"
+          sha256sum \
+            data/journal/candidates.jsonl \
+            data/review/adapter-sdk/doctor-who-cycle-006-candidate-chronology.json \
+            package.json \
+            scripts/doctor-who-cycle-006-chronology.mjs \
+            > "$OUT/product-paths.sha256"
+
+          # The canonical gate treats any unstaged tracked change as generated
+          # projection drift. Stage only the exact authorized product so the gate
+          # can distinguish it from any new mutation produced during replay.
+          git add \
+            data/journal/candidates.jsonl \
+            data/review/adapter-sdk/doctor-who-cycle-006-candidate-chronology.json \
+            package.json \
+            scripts/doctor-who-cycle-006-chronology.mjs
+          git diff --cached --name-only | LC_ALL=C sort > "$OUT/pre-gate-staged-product-paths.txt"
+          diff -u "$OUT/expected-product-paths.txt" "$OUT/pre-gate-staged-product-paths.txt"
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+
+      - name: Run complete repository and rendered gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate | tee "$OUT/complete-gate.log"
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          git diff --cached --name-only | LC_ALL=C sort > "$OUT/post-gate-staged-product-paths.txt"
+          diff -u "$OUT/expected-product-paths.txt" "$OUT/post-gate-staged-product-paths.txt"
+
+      - name: Publish one-commit workflow-free product
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          git config user.name "undercast-chronology-materializer"
+          git config user.email "actions@users.noreply.github.com"
+          git diff --cached --name-only | LC_ALL=C sort > "$OUT/staged-product-paths.txt"
+          diff -u "$OUT/expected-product-paths.txt" "$OUT/staged-product-paths.txt"
+          test -z "$(git diff --name-only)"
+          git commit -m "Doctor Who: correct Kayste candidate chronology"
+          product_commit="$(git rev-parse HEAD)"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = "1"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/committed-product-paths.txt"
+          diff -u "$OUT/expected-product-paths.txt" "$OUT/committed-product-paths.txt"
+          test -z "$(git status --porcelain)"
+          printf 'product_commit=%s\nproduct_tree=%s\n' \
+            "$product_commit" "$(git rev-parse 'HEAD^{tree}')" > "$OUT/product-identity.txt"
+          git push --force-with-lease origin "HEAD:refs/heads/${PRODUCT_BRANCH}"
+
+          cat > "$OUT/product-pr.md" <<BODY
+          ## Kayste chronology correction
+
+          This one-commit, four-path product corrects the sole post-merge review defect in Doctor Who cycle 006. The content-addressed Kayste draft.accept event now follows the exact bounded lease claim and precedes the reviewed cycle receipt.
+
+          base main:              $EXACT_MAIN
+          product commit:         $product_commit
+          permanent paths:        4
+          workflow paths:         0
+          task/lease/queue drift: 0 / 0 / 0
+
+          The permanent checker binds the corrected event, the original lease claim, the immutable cycle-006 receipt and checker hashes, the 310 queued / 6 resolved / 0 in-flight queue, and five refusal fixtures. The complete repository and rendered-browser gate passed before publication.
+          BODY
+
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head "$PRODUCT_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if test -n "$existing"; then
+            gh pr edit "$existing" --repo "$GITHUB_REPOSITORY" \
+              --title "Doctor Who: correct Kayste candidate chronology" \
+              --body-file "$OUT/product-pr.md"
+            printf '%s\n' "$existing" > "$OUT/product-pr-number.txt"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" \
+              --base main \
+              --head "$PRODUCT_BRANCH" \
+              --title "Doctor Who: correct Kayste candidate chronology" \
+              --body-file "$OUT/product-pr.md" \
+              | tee "$OUT/product-pr-url.txt"
+          fi
+
+      - name: Upload chronology materialization evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-006-chronology-correction-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
