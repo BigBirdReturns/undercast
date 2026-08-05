@@ -2,36 +2,54 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const workflow = await readFile(
-  new URL("../.github/workflows/operational-reliability-evidence.yml", import.meta.url),
-  "utf8",
-);
+const reliability = await readFile(new URL("../.github/workflows/operational-reliability-evidence.yml", import.meta.url), "utf8");
+const reliabilityPublisher = await readFile(new URL("../.github/workflows/operational-reliability-evidence-publisher.yml", import.meta.url), "utf8");
+const metrics = await readFile(new URL("../.github/workflows/operational-metrics-evidence.yml", import.meta.url), "utf8");
+const metricsPublisher = await readFile(new URL("../.github/workflows/operational-metrics-evidence-publisher.yml", import.meta.url), "utf8");
+const archive = await readFile(new URL("../.github/workflows/validate.yml", import.meta.url), "utf8");
 
-function workflowBlock(startMarker, endMarker) {
-  const start = workflow.indexOf(startMarker);
-  const end = workflow.indexOf(endMarker, start + startMarker.length);
+function workflowBlock(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start + startMarker.length);
   assert.notEqual(start, -1, `missing workflow block ${startMarker.trim()}`);
   assert.notEqual(end, -1, `missing workflow boundary ${endMarker.trim()}`);
-  return workflow.slice(start, end);
+  return source.slice(start, end);
 }
 
-const push = workflowBlock("\n  push:\n", "\n  pull_request:\n");
-const pullRequest = workflowBlock("\n  pull_request:\n", "\n  workflow_dispatch:\n");
-
-for (const [label, block] of [["main push", push], ["pull request", pullRequest]]) {
+const reliabilityPush = workflowBlock(reliability, "\n  push:\n", "\n  pull_request:\n");
+const reliabilityPullRequest = workflowBlock(reliability, "\n  pull_request:\n", "\n  workflow_dispatch:\n");
+for (const [label, block] of [["main push", reliabilityPush], ["pull request", reliabilityPullRequest]]) {
   assert.match(block, /- "package\.json"/, `${label} trigger must track package.json`);
   assert.match(block, /- "package-lock\.json"/, `${label} trigger must track package-lock.json`);
-  assert.match(
-    block,
-    /- "scripts\/operational-workflow-fixtures\.mjs"/,
-    `${label} trigger must track its own path-contract fixture`,
-  );
+  assert.match(block, /- "scripts\/operational-workflow-fixtures\.mjs"/, `${label} trigger must track its own path-contract fixture`);
+  assert.match(block, /operational-reliability-evidence-publisher\.yml/, `${label} trigger must track the trusted publisher`);
+  assert.match(block, /scripts\/publisher-custody\.mjs/, `${label} trigger must track publisher custody`);
+}
+assert.equal((reliability.match(/- "package-lock\.json"/g) || []).length, 2, "package-lock.json must be present in exactly the main-push and pull-request trigger blocks");
+
+for (const [label, source] of [["reliability", reliability], ["metrics", metrics]]) {
+  const permissions = workflowBlock(source, "\npermissions:\n", "\nconcurrency:\n");
+  assert.match(permissions, /contents:\s*read/, `${label} evidence must retain contents read`);
+  assert.doesNotMatch(permissions, /\bwrite\b/, `${label} evidence must not have write authority`);
+  assert.match(source, /publisher-handoff\.json/, `${label} evidence must emit a publisher handoff`);
+  assert.doesNotMatch(source, /gh issue (?:create|edit|reopen)/, `${label} evidence must not mutate issues`);
 }
 
-assert.equal(
-  (workflow.match(/- "package-lock\.json"/g) || []).length,
-  2,
-  "package-lock.json must be present in exactly the main-push and pull-request trigger blocks",
-);
+for (const [label, source] of [["reliability", reliabilityPublisher], ["metrics", metricsPublisher]]) {
+  assert.match(source, /\n  workflow_run:\n/, `${label} publisher must run from trusted workflow_run custody`);
+  assert.doesNotMatch(source, /\n  pull_request:\n/, `${label} publisher must not run from a PR-head definition`);
+  assert.match(source, /issues:\s*write/, `${label} publisher must hold the isolated issue-write authority`);
+  assert.match(source, /actions:\s*read/, `${label} publisher must read exact workflow artifacts`);
+  assert.match(source, /verify-evidence-handoff/, `${label} publisher must verify the immutable handoff`);
+  assert.ok((source.match(/git\/ref\/heads\/main/g) || []).length >= 2, `${label} publisher must check main before recovery and immediately before mutation`);
+  assert.match(source, /workflow_run\.head_sha/, `${label} publisher must bind the exact source head`);
+  assert.match(source, /artifact\.digest/, `${label} publisher must require the registered artifact digest`);
+}
 
-console.log("PASS — operational evidence triggers track manifest, lockfile, and path-contract fixtures on PR and main");
+const archivePermissions = workflowBlock(archive, "\npermissions:\n", "\nconcurrency:\n");
+assert.match(archivePermissions, /contents:\s*read/, "archive contract must be read-only");
+assert.doesNotMatch(archivePermissions, /\bwrite\b/, "archive contract must not retain repository write authority");
+assert.doesNotMatch(archive, /DEC-0016|ux02a|MATERIALIZER/, "archive contract must not contain the retired one-off materializer");
+assert.match(archive, /npm run gate/, "archive contract must execute the canonical gate");
+
+console.log("PASS — operational evidence is read-only and durable publication is isolated in exact-main workflow_run custody");
