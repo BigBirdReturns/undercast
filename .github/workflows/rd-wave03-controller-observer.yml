@@ -1,0 +1,66 @@
+name: RD-W03 controller run observer
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/rd-wave03-controller-observer.yml
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_SHA: 001104b6c76fdd26e6cdbe9f8b62f1ad7fa81ecf
+      TARGET_NAME: RD-W03 hosted exact-head executor v2
+      OBSERVER_PR: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Resolve exact controller run
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/rd-wave03-controller-observer"
+          mkdir -p "$out"
+          api="repos/BigBirdReturns/undercast/actions/runs?head_sha=${TARGET_SHA}&per_page=100"
+          found=false
+          for attempt in $(seq 1 20); do
+            gh api --paginate "$api" --jq '.workflow_runs[]' \
+              | jq -s --arg name "$TARGET_NAME" '[.[] | select(.name == $name)] | sort_by(.created_at) | reverse' \
+              > "$out/runs.json"
+            if test "$(jq 'length' "$out/runs.json")" -gt 0; then
+              found=true
+              break
+            fi
+            sleep 3
+          done
+          if test "$found" = true; then
+            state=observed
+          else
+            state=not_found
+          fi
+          jq -n \
+            --arg target_sha "$TARGET_SHA" \
+            --arg target_name "$TARGET_NAME" \
+            --arg state "$state" \
+            --slurpfile runs "$out/runs.json" \
+            '{target_sha:$target_sha,target_name:$target_name,state:$state,runs:$runs[0]}' \
+            > "$out/receipt.json"
+          compact="$(jq -c '[.[] | {id,status,conclusion,event,head_sha,created_at,updated_at,html_url}]' "$out/runs.json")"
+          body="Wave-03 controller observer reached a terminal observation. target_sha=${TARGET_SHA}; workflow=${TARGET_NAME}; state=${state}; runs=${compact}. This observer has read-only repository and Actions access, changes no product branch, and grants no qualification authority."
+          gh pr comment 343 --repo BigBirdReturns/undercast --body "$body"
+          gh pr comment "$OBSERVER_PR" --repo BigBirdReturns/undercast --body "$body"
+          cat "$out/receipt.json"
+
+      - name: Upload observer receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-controller-observer-${{ github.run_id }}
+          path: ${{ runner.temp }}/rd-wave03-controller-observer
+          if-no-files-found: error
+          retention-days: 30
