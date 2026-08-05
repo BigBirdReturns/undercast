@@ -1,0 +1,68 @@
+name: RD-W03 exact-capture independent finalizer v2
+
+on:
+  push:
+    branches:
+      - agent/ssc-rd-wave03-exact-capture-finalizer-v2-20260805
+    paths:
+      - .github/workflows/rd-wave03-exact-capture-finalizer-v2.yml
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: rd-wave03-exact-capture-independent-finalizer-v2
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      BASE_BRANCH: agent/ssc-rd-wave03-exact-capture-finalizer-v2-base-20260805
+      EVIDENCE: /tmp/rd-wave03-exact-capture-finalizer-v2-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact finalizer-v2 carrier and adjudicate terminal artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          exec > >(tee "$EVIDENCE/carrier.log") 2>&1
+          test "$GITHUB_REF" = refs/heads/agent/ssc-rd-wave03-exact-capture-finalizer-v2-20260805
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
+          base="$(git rev-parse "refs/remotes/origin/$BASE_BRANCH")"
+          mapfile -t commits < <(git rev-list --reverse "$base..$GITHUB_SHA")
+          test "${#commits[@]}" -eq 2
+          test "$(git show -s --format=%P "${commits[0]}")" = "$base"
+          test "$(git show -s --format=%P "${commits[1]}")" = "${commits[0]}"
+          test "${commits[1]}" = "$GITHUB_SHA"
+          test "$(git diff-tree --no-commit-id --name-only -r "${commits[0]}")" = "tmp/rd-wave03-exact-capture-finalize-v2.sh"
+          test "$(git diff-tree --no-commit-id --name-only -r "${commits[1]}")" = ".github/workflows/rd-wave03-exact-capture-finalizer-v2.yml"
+          mapfile -t actual < <(git diff --name-only "$base" "$GITHUB_SHA" | LC_ALL=C sort)
+          printf '%s\n' .github/workflows/rd-wave03-exact-capture-finalizer-v2.yml tmp/rd-wave03-exact-capture-finalize-v2.sh | LC_ALL=C sort > "$EVIDENCE/expected-carrier-paths.txt"
+          printf '%s\n' "${actual[@]}" > "$EVIDENCE/actual-carrier-paths.txt"
+          diff -u "$EVIDENCE/expected-carrier-paths.txt" "$EVIDENCE/actual-carrier-paths.txt"
+          bash -n tmp/rd-wave03-exact-capture-finalize-v2.sh
+          printf 'carrier_base=%s\ncarrier_head=%s\ncommits=2\npaths=2\nmerge_authority=false\n' "$base" "$GITHUB_SHA" > "$EVIDENCE/carrier-custody.txt"
+          bash tmp/rd-wave03-exact-capture-finalize-v2.sh
+
+      - name: Upload independent finalization-v2 receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-finalizer-v2-${{ github.run_id }}
+          path: /tmp/rd-wave03-exact-capture-finalizer-v2-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
