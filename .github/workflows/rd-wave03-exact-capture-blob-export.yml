@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Recover exact Git object bytes
+      - name: Recover exact Git object bytes and attempt bounded salvage
         shell: bash
         run: |
           set -euo pipefail
@@ -38,34 +38,61 @@ jobs:
           data=base64.b64decode(doc['content'])
           assert len(data)==doc['size']
           pathlib.Path(sys.argv[2]).write_bytes(data)
+          pathlib.Path(sys.argv[1]).with_name('blob-metadata.json').write_text(json.dumps({
+              'sha': doc['sha'], 'size': doc['size'], 'encoding': doc['encoding']
+          }, sort_keys=True, indent=2)+'\n')
           PY
+          test "$(git hash-object "$OUT/source.bin")" = "$SOURCE_BLOB"
+          printf '%s\n' "$(git hash-object "$OUT/source.bin")" > "$OUT/source.git-blob"
           sha256sum "$OUT/source.bin" | tee "$OUT/source.sha256"
           file "$OUT/source.bin" | tee "$OUT/source.file"
+
+          set +e
+          gzip -cd "$OUT/source.bin" > "$OUT/unpacked/gzip-partial.bin" 2> "$OUT/gzip.stderr"
+          gzip_status=$?
+          set -e
+          printf '%s\n' "$gzip_status" > "$OUT/gzip.status"
+          test -s "$OUT/unpacked/gzip-partial.bin" || rm -f "$OUT/unpacked/gzip-partial.bin"
+
           python3 - "$OUT/source.bin" "$OUT/unpacked" <<'PY'
-          import gzip, pathlib, shutil, sys, tarfile, zipfile
+          import pathlib, sys, tarfile, zipfile, zlib
           src=pathlib.Path(sys.argv[1]); out=pathlib.Path(sys.argv[2]); data=src.read_bytes()
-          if data.startswith(b'\x1f\x8b'):
-              raw=gzip.decompress(data)
-              (out/'decompressed.bin').write_bytes(raw)
-              if tarfile.is_tarfile(out/'decompressed.bin'):
-                  with tarfile.open(out/'decompressed.bin') as tf:
-                      for member in tf.getmembers():
-                          target=(out/member.name).resolve()
-                          if out.resolve() not in target.parents and target != out.resolve():
-                              raise SystemExit(f'unsafe tar member {member.name}')
-                      tf.extractall(out/'tar')
-          elif zipfile.is_zipfile(src):
+          report={'source_bytes':len(data),'gzip_magic':data.startswith(b'\x1f\x8b')}
+          if report['gzip_magic']:
+              decoder=zlib.decompressobj(31)
+              chunks=[]
+              error=None
+              offset=0
+              for offset in range(0, len(data), 4096):
+                  try:
+                      chunks.append(decoder.decompress(data[offset:offset+4096]))
+                  except Exception as exc:
+                      error=f'{type(exc).__name__}: {exc}'
+                      break
+              partial=b''.join(chunks)
+              if partial:
+                  (out/'zlib-partial.bin').write_bytes(partial)
+              report.update({'zlib_partial_bytes':len(partial),'zlib_error':error,'zlib_error_offset':offset})
+          if zipfile.is_zipfile(src):
               with zipfile.ZipFile(src) as zf:
-                  for name in zf.namelist():
-                      target=(out/name).resolve()
-                      if out.resolve() not in target.parents and target != out.resolve():
-                          raise SystemExit(f'unsafe zip member {name}')
-                  zf.extractall(out/'zip')
+                  report['zip_names']=zf.namelist()
+          import json
+          (out/'salvage-report.json').write_text(json.dumps(report,sort_keys=True,indent=2)+'\n')
+          for candidate in [out/'gzip-partial.bin', out/'zlib-partial.bin']:
+              if candidate.exists() and tarfile.is_tarfile(candidate):
+                  target=out/(candidate.stem+'-tar')
+                  with tarfile.open(candidate) as tf:
+                      for member in tf.getmembers():
+                          resolved=(target/member.name).resolve()
+                          if target.resolve() not in resolved.parents and resolved != target.resolve():
+                              raise SystemExit(f'unsafe tar member {member.name}')
+                      tf.extractall(target)
           PY
           find "$OUT" -type f -printf '%P\t%s bytes\n' | LC_ALL=C sort | tee "$OUT/file-list.txt"
           find "$OUT" -type f -not -path '*/blob.json' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/SHA256SUMS"
 
       - name: Upload exact recovered bytes
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rd-wave03-exact-capture-source-blob-${{ github.run_id }}
