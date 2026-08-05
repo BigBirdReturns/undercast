@@ -1,0 +1,404 @@
+name: RD-W03 exact-capture API-only finalizer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/rd-wave03-exact-capture-api-finalizer.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: rd-wave03-exact-capture-independent-finalizer
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: BigBirdReturns/undercast
+      BASE_SHA: 45fc33aa8de8c01f03f006c5c01765dd1929385f
+      BASE_BRANCH: agent/ssc-rd-wave03-exact-capture-api-finalizer-base-20260805
+      ARTIFACT_ID: "8937114139"
+      ARTIFACT_RUN: "31021882771"
+      ARTIFACT_HEAD: db452902f9eb7257a912905af21b545440d75438
+      ARTIFACT_NAME: rd-wave03-exact-capture-supervisor-v3-31021882771
+      ARTIFACT_SHA256: 862f20b9b168fa70cd7ba3d57f1e84bf43f0738a68155d7b60a571e6720e50a5
+      EVIDENCE: /tmp/rd-wave03-exact-capture-api-finalizer-${{ github.run_id }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Verify immutable one-file carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE/settlement"
+          exec > >(tee "$EVIDENCE/finalizer.log") 2>&1
+          printf 'carrier_preflight\n' > "$EVIDENCE/stage.txt"
+          pr_json="$EVIDENCE/pr.json"
+          commit_json="$EVIDENCE/carrier-commit.json"
+          gh api "repos/$REPO/pulls/${{ github.event.pull_request.number }}" > "$pr_json"
+          test "$(jq -r .base.ref "$pr_json")" = "$BASE_BRANCH"
+          test "$(jq -r .base.sha "$pr_json")" = "$BASE_SHA"
+          test "$(jq -r .head.sha "$pr_json")" = "$GITHUB_SHA"
+          gh api "repos/$REPO/git/commits/$GITHUB_SHA" > "$commit_json"
+          test "$(jq '.parents|length' "$commit_json")" -eq 1
+          test "$(jq -r .parents[0].sha "$commit_json")" = "$BASE_SHA"
+          gh api --paginate "repos/$REPO/pulls/${{ github.event.pull_request.number }}/files" --jq '.[].filename' | LC_ALL=C sort > "$EVIDENCE/carrier-paths.txt"
+          printf '%s\n' .github/workflows/rd-wave03-exact-capture-api-finalizer.yml > "$EVIDENCE/expected-carrier-paths.txt"
+          diff -u "$EVIDENCE/expected-carrier-paths.txt" "$EVIDENCE/carrier-paths.txt"
+
+      - name: Recover exact capture artifact and current-main snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'artifact_recovery\n' > "$EVIDENCE/stage.txt"
+          meta="$EVIDENCE/supervisor-artifact-metadata.json"
+          zip="$EVIDENCE/supervisor-artifact.zip"
+          gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID" > "$meta"
+          test "$(jq -r .id "$meta")" = "$ARTIFACT_ID"
+          test "$(jq -r .name "$meta")" = "$ARTIFACT_NAME"
+          test "$(jq -r .expired "$meta")" = false
+          test "$(jq -r .digest "$meta")" = "sha256:$ARTIFACT_SHA256"
+          test "$(jq -r .workflow_run.id "$meta")" = "$ARTIFACT_RUN"
+          test "$(jq -r .workflow_run.head_sha "$meta")" = "$ARTIFACT_HEAD"
+          gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > "$zip"
+          echo "$ARTIFACT_SHA256  $zip" | sha256sum -c -
+          python3 - "$zip" "$EVIDENCE/supervisor" <<'PY'
+          import pathlib,sys,zipfile
+          src=pathlib.Path(sys.argv[1]); out=pathlib.Path(sys.argv[2]); out.mkdir(parents=True,exist_ok=True)
+          with zipfile.ZipFile(src) as zf:
+              for i in zf.infolist():
+                  p=(out/i.filename).resolve()
+                  if out.resolve() not in p.parents and p!=out.resolve(): raise SystemExit(f'unsafe zip member {i.filename}')
+              zf.extractall(out)
+          PY
+          test "$(cat "$EVIDENCE/supervisor/current-main.txt")" = "$BASE_SHA"
+          test "$(cat "$EVIDENCE/supervisor/stage.txt")" = exact_byte_capture
+          echo '1571616c7ba50f882b96516444eca574ae5b0cb85319ececc1690a634bdf3051  '"$EVIDENCE/supervisor/generator.py" | sha256sum -c -
+          echo '2d434f85999df1452bacaf49a23d5ad6c96dcc09bf155fafa8198fae4c20d860  '"$EVIDENCE/supervisor/generator.py.gz" | sha256sum -c -
+          echo '98b7ab0fc93b9e9a9c021b16c166c6cf00d1f207501e66f57ec3d5944d4ae538  '"$EVIDENCE/supervisor/schema.json" | sha256sum -c -
+          test "$(find "$EVIDENCE/supervisor/artifacts" -name receipt.json -type f | wc -l)" -eq 6
+          test "$(find "$EVIDENCE/supervisor/capture/objects" -type f | wc -l)" -eq 9
+
+          test "$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha)" = "$BASE_SHA"
+          gh api "repos/$REPO/tarball/$BASE_SHA" > "$EVIDENCE/main.tar.gz"
+          mkdir -p "$EVIDENCE/main-extract"
+          python3 - "$EVIDENCE/main.tar.gz" "$EVIDENCE/main-extract" <<'PY'
+          import pathlib,sys,tarfile
+          src=pathlib.Path(sys.argv[1]); out=pathlib.Path(sys.argv[2])
+          with tarfile.open(src,'r:gz') as tf:
+              tf.extractall(out,filter='data')
+          roots=[p for p in out.iterdir() if p.is_dir()]
+          if len(roots)!=1: raise SystemExit(f'expected one archive root, got {len(roots)}')
+          (out/'ROOT').write_text(str(roots[0])+'\n')
+          PY
+          cp "$EVIDENCE/main-extract/ROOT" "$EVIDENCE/main-root.txt"
+
+      - name: Independently verify all nine retained objects
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset GH_TOKEN GITHUB_TOKEN
+          printf 'capture_verification\n' > "$EVIDENCE/stage.txt"
+          python3 - "$EVIDENCE/supervisor" "$EVIDENCE/settlement/capture-ledger.json" <<'PY'
+          import hashlib,json,pathlib,sys,urllib.parse
+          root=pathlib.Path(sys.argv[1]); receipt=json.loads((root/'capture/receipt.json').read_text())
+          assert receipt['schema_version']==1 and receipt['capture_id']=='RD-W03-XCAP-01'
+          assert receipt['workflow_run_id']=='31021882771'
+          assert receipt['exact_product_head']=='db452902f9eb7257a912905af21b545440d75438'
+          assert receipt['authority']=={'adoption_effect':'none','external_contacts':0,'external_reviews':0,'graph_effect':'none','merge_authority':False,'outside_human_dependency':False,'physical_user_action_required':False,'publication_effect':'none'}
+          assert receipt['object_count']==9
+          assert receipt['summary']=={'successful':9,'failed':0,'unchanged':0,'drifted':9,'evidence_admissions':0,'chronology_resolved':0,'classes_closed':0}
+          routes=['RD01-OFF-001','RD02-OFF-004','RD04-OFF-004','RD04-OFF-005','RD05-OFF-001','RD05-OFF-002','RD05-OFF-003','RD05-OFF-005','RD05-OFF-007']
+          assert [x['source_route_id'] for x in receipt['objects']]==routes
+          rows=[]
+          for row in receipt['objects']:
+              data=(root/'capture'/row['relative_path']).read_bytes()
+              assert row['ok'] is True and row['attempt_count']==1 and row['followups_spawned']==0 and row['http_status']==200
+              assert row['body_drift'] is True and row['evidence_admitted'] is False and row['classes_closed']==0
+              assert row['chronology']=={'status':'unresolved','event_date':None,'capture_time_is_event_time':False}
+              assert len(data)==row['bytes'] and hashlib.sha256(data).hexdigest()==row['body_sha256']
+              assert urllib.parse.urlparse(row['final_url']).hostname.removeprefix('www.')==urllib.parse.urlparse(row['requested_url']).hostname.removeprefix('www.')
+              rows.append({k:row[k] for k in ['capture_object_id','source_route_id','lane_id','unit_id','event_class','requested_url','final_url','content_type','bytes','body_sha256','initial_bytes','initial_body_sha256','body_drift','started_at','finished_at']})
+          out={'schema_version':1,'supervisor_run_id':31021882771,'supervisor_artifact_id':8937114139,'object_count':9,'unchanged':0,'drifted':9,'objects':rows,'evidence_admissions':0,'chronology_resolved':0,'classes_closed':0}
+          pathlib.Path(sys.argv[2]).write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          PY
+
+      - name: Regenerate exact package and run complete current-main gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset GH_TOKEN GITHUB_TOKEN
+          printf 'package_regeneration\n' > "$EVIDENCE/stage.txt"
+          python3 -m venv "$EVIDENCE/venv"
+          "$EVIDENCE/venv/bin/pip" install --disable-pip-version-check --no-input 'jsonschema==4.25.1'
+          package="$EVIDENCE/package"
+          "$EVIDENCE/venv/bin/python" "$EVIDENCE/supervisor/generator.py" --artifacts "$EVIDENCE/supervisor/artifacts" --schema "$EVIDENCE/supervisor/schema.json" --out "$package" | tee "$EVIDENCE/generation.json"
+          test "$(find "$package" -type f | wc -l)" -eq 6
+          echo '325375c3613d2a91185e8d8bb00345180528b4b5fb1acf8f9a03685a039b39a3  '"$package/data/research/residual-denominator/wave-03/exact-capture/protocol.json" | sha256sum -c -
+          echo '78a5297c7ae6ef83449baa03604e85365f9cfcf965c20790e1a87403088feb10  '"$package/data/research/residual-denominator/wave-03/exact-capture/manifest.json" | sha256sum -c -
+          echo 'cbe209520d8156380b6fb0567ecff4f7da5dedea97a8c7cef61c02fea4dc96c0  '"$package/docs/research/residual-denominator/wave-03/RD-EXACT-CAPTURE.md" | sha256sum -c -
+          echo '98b7ab0fc93b9e9a9c021b16c166c6cf00d1f207501e66f57ec3d5944d4ae538  '"$package/schema/rd-wave03-exact-capture.schema.json" | sha256sum -c -
+          echo '8e7bc968d2cce0aa85d72c4f8f50347e7aaa41b54d0fad17d625cdc8cca550d5  '"$package/scripts/rd-wave03-exact-capture.mjs" | sha256sum -c -
+          echo '24f91af3bf51e298cbc8ae3e0e904711001b66f23f80936bfd438c90e64d905c  '"$package/test/rd-wave03-exact-capture-adversarial.mjs" | sha256sum -c -
+          node --check "$package/scripts/rd-wave03-exact-capture.mjs"
+          node --check "$package/test/rd-wave03-exact-capture-adversarial.mjs"
+          node "$package/scripts/rd-wave03-exact-capture.mjs" --check
+          node "$package/test/rd-wave03-exact-capture-adversarial.mjs"
+          node "$package/scripts/rd-wave03-exact-capture.mjs" --verify-receipt "$EVIDENCE/supervisor/capture/receipt.json"
+
+          printf 'current_main_gate\n' > "$EVIDENCE/stage.txt"
+          repo_root="$(cat "$EVIDENCE/main-root.txt")"
+          git -C "$repo_root" init
+          git -C "$repo_root" config user.name github-actions[bot]
+          git -C "$repo_root" config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C "$repo_root" add -A
+          git -C "$repo_root" commit --no-verify -m "snapshot $BASE_SHA"
+          python3 - "$package/data/research/residual-denominator/wave-03/exact-capture/protocol.json" > "$EVIDENCE/settlement/product-paths.txt" <<'PY'
+          import json,pathlib,sys
+          print('\n'.join(sorted(json.loads(pathlib.Path(sys.argv[1]).read_text())['permanent_paths'])))
+          PY
+          test "$(wc -l < "$EVIDENCE/settlement/product-paths.txt")" -eq 6
+          while IFS= read -r p; do
+            test ! -e "$repo_root/$p"
+            mkdir -p "$repo_root/$(dirname "$p")"
+            cp "$package/$p" "$repo_root/$p"
+          done < "$EVIDENCE/settlement/product-paths.txt"
+          git -C "$repo_root" add --pathspec-from-file="$EVIDENCE/settlement/product-paths.txt"
+          git -C "$repo_root" commit --no-verify -m 'temporary RD-W03 exact-capture integration proof'
+          git -C "$repo_root" diff-tree --no-commit-id --name-only -r HEAD | LC_ALL=C sort > "$EVIDENCE/integration-paths.txt"
+          diff -u "$EVIDENCE/settlement/product-paths.txt" "$EVIDENCE/integration-paths.txt"
+          cd "$repo_root"
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate
+          node scripts/rd-wave03-exact-capture.mjs --check
+          node test/rd-wave03-exact-capture-adversarial.mjs
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Build final settlement receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'settlement_packaging\n' > "$EVIDENCE/stage.txt"
+          settlement="$EVIDENCE/settlement"
+          cp -a "$EVIDENCE/package" "$settlement/package"
+          cp -a "$EVIDENCE/supervisor/capture" "$settlement/capture"
+          cp "$EVIDENCE/supervisor-artifact-metadata.json" "$settlement/supervisor-artifact-metadata.json"
+          python3 - "$settlement" <<'PY'
+          import hashlib,json,os,pathlib,sys
+          r=pathlib.Path(sys.argv[1]); hashes={}
+          for p in sorted((r/'package').rglob('*')):
+              if p.is_file(): hashes[str(p.relative_to(r/'package'))]=hashlib.sha256(p.read_bytes()).hexdigest()
+          out={'schema_version':1,'transaction_id':'RD-W03-EXACT-CAPTURE-FINAL-01','finalizer_run_id':int(os.environ['GITHUB_RUN_ID']),'finalizer_head':os.environ['GITHUB_SHA'],'supervisor_run_id':31021882771,'supervisor_artifact_id':8937114139,'supervisor_artifact_sha256':'862f20b9b168fa70cd7ba3d57f1e84bf43f0738a68155d7b60a571e6720e50a5','supervisor_head':'db452902f9eb7257a912905af21b545440d75438','product_parent':'45fc33aa8de8c01f03f006c5c01765dd1929385f','product_path_count':6,'package_sha256':hashes,'route_observations':710,'selected_capture_objects':9,'refused_observations':701,'successful_captures':9,'failed_captures':0,'unchanged_from_intake':0,'drifted_from_intake':9,'capture_receipt_sha256':hashlib.sha256((r/'capture/receipt.json').read_bytes()).hexdigest(),'complete_current_main_gate':'passed','adversarial_refusals':35,'credential_free_source_capture':True,'source_requests_repeated_by_finalizer':False,'evidence_admissions':0,'chronology_resolved':0,'classes_closed':0,'external_contacts':0,'external_reviews':0,'outside_human_dependency':False,'publication_effect':'none','adoption_effect':'none','graph_effect':'none','merge_authority':False}
+          (r/'finalizer-receipt.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          PY
+          (cd "$settlement" && find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS)
+          printf 'complete\n' > "$EVIDENCE/stage.txt"
+
+      - name: Upload final settlement evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-final-${{ github.run_id }}
+          path: ${{ env.EVIDENCE }}/settlement
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-api-finalizer-failure-${{ github.run_id }}
+          path: ${{ env.EVIDENCE }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 30
+
+  publish:
+    needs: verify
+    if: needs.verify.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: BigBirdReturns/undercast
+      BASE_SHA: 45fc33aa8de8c01f03f006c5c01765dd1929385f
+      TARGET_BRANCH: agent/ssc-rd-wave03-exact-capture-product-20260805
+      OUT: /tmp/rd-wave03-exact-capture-api-publication-${{ github.run_id }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-final-${{ github.run_id }}
+          path: ${{ env.OUT }}/settlement
+
+      - name: Verify settlement and create exact Git objects
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT/publication"
+          cd "$OUT/settlement"
+          sha256sum -c SHA256SUMS
+          python3 - finalizer-receipt.json <<'PY'
+          import json,sys
+          r=json.load(open(sys.argv[1]))
+          assert r['transaction_id']=='RD-W03-EXACT-CAPTURE-FINAL-01' and r['product_parent']=='45fc33aa8de8c01f03f006c5c01765dd1929385f'
+          assert r['product_path_count']==6 and r['route_observations']==710 and r['selected_capture_objects']==9 and r['refused_observations']==701
+          assert r['successful_captures']==9 and r['failed_captures']==0 and r['unchanged_from_intake']==0 and r['drifted_from_intake']==9
+          assert r['complete_current_main_gate']=='passed' and r['adversarial_refusals']==35 and r['source_requests_repeated_by_finalizer'] is False
+          assert r['evidence_admissions']==r['chronology_resolved']==r['classes_closed']==0
+          assert r['outside_human_dependency'] is False and r['publication_effect']==r['adoption_effect']==r['graph_effect']=='none' and r['merge_authority'] is False
+          PY
+          test "$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha)" = "$BASE_SHA"
+          base_tree="$(gh api "repos/$REPO/git/commits/$BASE_SHA" --jq .tree.sha)"
+          : > "$OUT/publication/blobs.tsv"
+          while IFS= read -r p; do
+            python3 - "$p" > "$OUT/blob-request.json" <<'PY'
+          import base64,json,pathlib,sys
+          b=pathlib.Path('package',sys.argv[1]).read_bytes()
+          print(json.dumps({'content':base64.b64encode(b).decode(),'encoding':'base64'}))
+          PY
+            sha="$(gh api --method POST "repos/$REPO/git/blobs" --input "$OUT/blob-request.json" --jq .sha)"
+            printf '%s\t%s\n' "$p" "$sha" >> "$OUT/publication/blobs.tsv"
+          done < product-paths.txt
+          python3 - "$base_tree" "$OUT/publication/blobs.tsv" > "$OUT/tree-request.json" <<'PY'
+          import csv,json,sys
+          rows=[]
+          with open(sys.argv[2]) as f:
+              for path,sha in csv.reader(f,delimiter='\t'): rows.append({'path':path,'mode':'100644','type':'blob','sha':sha})
+          print(json.dumps({'base_tree':sys.argv[1],'tree':rows}))
+          PY
+          tree_sha="$(gh api --method POST "repos/$REPO/git/trees" --input "$OUT/tree-request.json" --jq .sha)"
+          python3 - "$tree_sha" "$BASE_SHA" > "$OUT/commit-request.json" <<'PY'
+          import json,sys
+          print(json.dumps({'message':'research: RD-W03 exact-capture nine current official objects','tree':sys.argv[1],'parents':[sys.argv[2]]}))
+          PY
+          product_head="$(gh api --method POST "repos/$REPO/git/commits" --input "$OUT/commit-request.json" --jq .sha)"
+          printf '%s\n' "$product_head" > "$OUT/publication/product-head.txt"
+          printf '%s\n' "$tree_sha" > "$OUT/publication/product-tree.txt"
+          existing="$(gh api "repos/$REPO/git/ref/heads/$TARGET_BRANCH" --jq .object.sha 2>/dev/null || true)"
+          test -z "$existing" || test "$existing" = "$product_head"
+          if test -z "$existing"; then
+            jq -n --arg ref "refs/heads/$TARGET_BRANCH" --arg sha "$product_head" '{ref:$ref,sha:$sha}' > "$OUT/ref-request.json"
+            gh api --method POST "repos/$REPO/git/refs" --input "$OUT/ref-request.json" > /dev/null
+          fi
+          test "$(gh api "repos/$REPO/git/ref/heads/$TARGET_BRANCH" --jq .object.sha)" = "$product_head"
+          compare="$OUT/publication/compare.json"
+          gh api "repos/$REPO/compare/$BASE_SHA...$product_head" > "$compare"
+          test "$(jq -r .ahead_by "$compare")" -eq 1
+          test "$(jq -r .behind_by "$compare")" -eq 0
+          jq -r '.files[].filename' "$compare" | LC_ALL=C sort > "$OUT/publication/actual-product-paths.txt"
+          diff -u product-paths.txt "$OUT/publication/actual-product-paths.txt"
+
+      - name: Open definitive draft product
+        shell: bash
+        run: |
+          set -euo pipefail
+          receipt="$OUT/settlement/finalizer-receipt.json"
+          product_head="$(cat "$OUT/publication/product-head.txt")"
+          capture_sha="$(jq -r .capture_receipt_sha256 "$receipt")"
+          product_pr="$(gh pr list --repo "$REPO" --head "$TARGET_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if test -z "$product_pr"; then
+            gh pr create --repo "$REPO" --base main --head "$TARGET_BRANCH" --draft --title 'research: RD-W03 exact-capture nine current official objects' --body "$(cat <<BODY
+          ## Exact capture product — custody only
+
+          \`\`\`text
+          exact parent:                $BASE_SHA
+          exact head:                  $product_head
+          commits:                     1
+          permanent paths:             6
+          terminal route observations: 710
+          selected captures:            9
+          refused observations:       701
+          current-byte captures:        9 / 9
+          changed since intake:         9 / 9
+          evidence admissions:          0
+          chronology resolutions:       0
+          classes closed:               0
+          \`\`\`
+
+          Independent API-only finalizer run ${GITHUB_RUN_ID} recomputed supervisor artifact 8937114139, independently verified every retained body byte count and SHA-256, regenerated the exact closed-schema package, reran all 35 refusal fixtures and the complete current-main gate from an exact GitHub source archive, and issued no source request.
+
+          All nine current bodies differ from their intake fingerprints. That drift is retained as a custody fact and is not interpreted as substantive evidence.
+
+          Capture receipt SHA-256: \`${capture_sha}\`. External contacts/reviews remain 0/0; outside-human dependency is false; publication, adoption, and graph effects are none; merge authority is false. This PR remains draft and unmerged. Any admission requires a separate authorized transaction.
+          BODY
+          )"
+            product_pr="$(gh pr list --repo "$REPO" --head "$TARGET_BRANCH" --state open --json number --jq '.[0].number')"
+          fi
+          test "$(gh pr view "$product_pr" --repo "$REPO" --json isDraft,headRefOid,state --jq '[.isDraft,.headRefOid,.state]|@tsv')" = $'true\t'"$product_head"$'\tOPEN'
+          printf '%s\n' "$product_pr" > "$OUT/publication/product-pr.txt"
+          python3 - "$OUT/publication" "$GITHUB_RUN_ID" <<'PY'
+          import json,pathlib,sys
+          r=pathlib.Path(sys.argv[1]); out={'schema_version':1,'finalizer_run_id':int(sys.argv[2]),'product_pr':int((r/'product-pr.txt').read_text()),'product_parent':'45fc33aa8de8c01f03f006c5c01765dd1929385f','product_head':(r/'product-head.txt').read_text().strip(),'product_tree':(r/'product-tree.txt').read_text().strip(),'product_path_count':6,'draft':True,'merged':False,'evidence_admissions':0,'chronology_resolved':0,'classes_closed':0,'publication_effect':'none','adoption_effect':'none','graph_effect':'none','merge_authority':False}
+          (r/'publication-receipt.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          PY
+
+      - name: Upload exact publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-publication-${{ github.run_id }}
+          path: ${{ env.OUT }}/publication
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Settle issue and product custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          product_pr="$(cat "$OUT/publication/product-pr.txt")"
+          product_head="$(cat "$OUT/publication/product-head.txt")"
+          capture_sha="$(jq -r .capture_receipt_sha256 "$OUT/settlement/finalizer-receipt.json")"
+          artifacts="$(gh api "repos/$REPO/actions/runs/${GITHUB_RUN_ID}/artifacts")"
+          final_id="$(jq -r --arg n "rd-wave03-exact-capture-final-${GITHUB_RUN_ID}" '.artifacts[]|select(.name==$n)|.id' <<< "$artifacts")"
+          final_digest="$(jq -r --arg n "rd-wave03-exact-capture-final-${GITHUB_RUN_ID}" '.artifacts[]|select(.name==$n)|.digest' <<< "$artifacts")"
+          pub_id="$(jq -r --arg n "rd-wave03-exact-capture-publication-${GITHUB_RUN_ID}" '.artifacts[]|select(.name==$n)|.id' <<< "$artifacts")"
+          pub_digest="$(jq -r --arg n "rd-wave03-exact-capture-publication-${GITHUB_RUN_ID}" '.artifacts[]|select(.name==$n)|.digest' <<< "$artifacts")"
+          test -n "$final_id"; test -n "$pub_id"; test "$final_digest" != null; test "$pub_digest" != null
+          body="$(cat <<BODY
+          RD-W03 exact-capture custody is complete.
+
+          \`\`\`text
+          supervisor run:               31021882771
+          supervisor artifact:          8937114139
+          supervisor artifact SHA-256:  862f20b9b168fa70cd7ba3d57f1e84bf43f0738a68155d7b60a571e6720e50a5
+          independent finalizer run:    ${GITHUB_RUN_ID}
+          final verification artifact:  ${final_id}
+          final verification digest:    ${final_digest}
+          publication receipt artifact: ${pub_id}
+          publication receipt digest:   ${pub_digest}
+          workflow-free product PR:     #${product_pr}
+          product parent:               $BASE_SHA
+          product head:                 ${product_head}
+          permanent paths:              6
+          retained current objects:     9 / 9
+          objects changed since intake: 9 / 9
+          source requests repeated:     0
+          evidence admissions:          0
+          chronology resolutions:       0
+          classes closed:               0
+          \`\`\`
+
+          Every current body was retained by the original one-attempt credential-free capture and independently rehashed from its immutable artifact. The API-only finalizer regenerated the exact 710-observation package, passed its closed validator, deterministic replay, all 35 refusal fixtures, and the complete current-main repository gate without contacting any source.
+
+          The changed fingerprints are a custody fact, not substantive evidence. This completion establishes no unit identity, event chronology, recommendation, disposition, authority, remedy, publication, adoption, graph, or merge authority. External contacts/reviews remain 0/0 and outside-human dependency remains false. Any admission or closure requires a separate authorized transaction.
+          BODY
+          )"
+          gh issue comment 387 --repo "$REPO" --body "$body"
+          gh issue close 387 --repo "$REPO" --reason completed
+          gh pr comment "$product_pr" --repo "$REPO" --body "Independent finalizer run ${GITHUB_RUN_ID} completed. Verification artifact ${final_id} (${final_digest}); publication artifact ${pub_id} (${pub_digest}); capture receipt SHA-256 ${capture_sha}. This draft remains unmerged with zero admission, chronology, closure, publication, adoption, graph, or merge authority."
