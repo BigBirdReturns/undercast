@@ -1,0 +1,287 @@
+name: RD-W03 exact-capture drift resolver
+
+on:
+  push:
+    branches:
+      - agent/ssc-rd-wave03-exact-capture-drift-resolver-20260805
+    paths:
+      - .github/workflows/rd-wave03-exact-capture-drift-resolver.yml
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: rd-wave03-exact-capture-drift-resolver
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EVIDENCE: /tmp/rd-wave03-exact-capture-drift-resolver-${{ github.run_id }}
+      SETTLEMENT_BRANCH: agent/ssc-rd-wave03-exact-capture-settlement-v2-20260805
+      SETTLEMENT_WORKFLOW: RD-W03 exact-capture settlement v2
+      PRODUCT_BRANCH: agent/ssc-rd-wave03-exact-capture-product-v3-20260805
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Adjudicate terminal artifact or preserve current drift bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          exec > >(tee "$EVIDENCE/resolver.log") 2>&1
+          printf 'locate_settlement\n' > "$EVIDENCE/stage.txt"
+          test "$GITHUB_REF" = refs/heads/agent/ssc-rd-wave03-exact-capture-drift-resolver-20260805
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git show -s --format=%P "$GITHUB_SHA" | wc -w)" -eq 1
+          test "$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA")" = ".github/workflows/rd-wave03-exact-capture-drift-resolver.yml"
+
+          encoded_settlement="$(python3 -c 'from urllib.parse import quote; import os; print(quote(os.environ["SETTLEMENT_BRANCH"],safe=""))')"
+          settlement_head="$(gh api "/repos/BigBirdReturns/undercast/branches/$encoded_settlement" --jq .commit.sha)"
+          run_id=''
+          for _ in $(seq 1 120); do
+            gh api --method GET /repos/BigBirdReturns/undercast/actions/runs \
+              -f branch="$SETTLEMENT_BRANCH" -f event=push -f per_page=100 > "$EVIDENCE/runs.json"
+            run_id="$(python3 - "$EVIDENCE/runs.json" "$SETTLEMENT_WORKFLOW" "$settlement_head" <<'PY'
+          import json, sys
+          rows=json.load(open(sys.argv[1])).get('workflow_runs',[])
+          rows=[r for r in rows if r.get('name')==sys.argv[2] and r.get('head_sha')==sys.argv[3] and r.get('event')=='push']
+          print(max((r['id'] for r in rows), default=''))
+          PY
+          )"
+            test -n "$run_id" && break
+            sleep 15
+          done
+          test -n "$run_id"
+          printf '%s\n' "$run_id" > "$EVIDENCE/settlement-run-id.txt"
+
+          printf 'wait_settlement\n' > "$EVIDENCE/stage.txt"
+          status=''
+          conclusion=''
+          for _ in $(seq 1 600); do
+            gh api "/repos/BigBirdReturns/undercast/actions/runs/$run_id" > "$EVIDENCE/run.json"
+            read -r status conclusion < <(python3 - "$EVIDENCE/run.json" <<'PY'
+          import json, sys
+          r=json.load(open(sys.argv[1]))
+          print(r.get('status') or '', r.get('conclusion') or '')
+          PY
+          )
+            test "$status" = completed && break
+            sleep 20
+          done
+          test "$status" = completed
+          printf 'run_id=%s\nstatus=%s\nconclusion=%s\n' "$run_id" "$status" "$conclusion" > "$EVIDENCE/run-status.txt"
+
+          printf 'download_settlement_artifact\n' > "$EVIDENCE/stage.txt"
+          artifact_name="rd-wave03-exact-capture-settlement-v2-$run_id"
+          rm -rf "$EVIDENCE/settlement-artifact"
+          mkdir -p "$EVIDENCE/settlement-artifact"
+          downloaded=false
+          for _ in $(seq 1 30); do
+            if gh run download "$run_id" --repo BigBirdReturns/undercast --name "$artifact_name" --dir "$EVIDENCE/settlement-artifact"; then downloaded=true; break; fi
+            sleep 10
+          done
+          test "$downloaded" = true
+          terminal="$(find "$EVIDENCE/settlement-artifact" -type f -name terminal-summary.json -print -quit)"
+          if test -n "$terminal"; then
+            printf 'already_terminal\n' > "$EVIDENCE/stage.txt"
+            cp "$terminal" "$EVIDENCE/already-terminal-summary.json"
+            exit 0
+          fi
+
+          artifact_root="$EVIDENCE/settlement-artifact"
+          settlement_stage="$(find "$artifact_root" -type f -name stage.txt -exec cat {} \; | tail -1)"
+          printf '%s\n' "$settlement_stage" > "$EVIDENCE/settlement-stage.txt"
+          case "$settlement_stage" in
+            exact_capture|terminal_receipt) ;;
+            *)
+              printf 'settlement_not_capture_recoverable\n' > "$EVIDENCE/stage.txt"
+              printf 'Settlement v2 failed before a bounded capture-recovery stage: %s\n' "$settlement_stage" > "$EVIDENCE/not-recoverable.txt"
+              exit 1
+              ;;
+          esac
+
+          printf 'prepare_product\n' > "$EVIDENCE/stage.txt"
+          encoded_product="$(python3 -c 'from urllib.parse import quote; import os; print(quote(os.environ["PRODUCT_BRANCH"],safe=""))')"
+          product_head="$(gh api "/repos/BigBirdReturns/undercast/branches/$encoded_product" --jq .commit.sha)"
+          test -n "$product_head"
+          git fetch --no-tags https://github.com/BigBirdReturns/undercast.git "+refs/heads/$PRODUCT_BRANCH:refs/remotes/origin/capture-product"
+          test "$(git rev-parse refs/remotes/origin/capture-product)" = "$product_head"
+          product_parent="$(git show -s --format=%P "$product_head")"
+          test "$(printf '%s\n' "$product_parent" | wc -w)" -eq 1
+          product_worktree="$RUNNER_TEMP/rd-wave03-exact-capture-drift-product"
+          rm -rf "$product_worktree"
+          git worktree add --detach "$product_worktree" "$product_head"
+          protocol=data/research/residual-denominator/wave-03/exact-capture/protocol.json
+          git show "$product_head:$protocol" | node -e '
+            let s=""; process.stdin.setEncoding("utf8"); process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>process.stdout.write([...JSON.parse(s).permanent_paths].sort().join("\n")+"\n"));
+          ' > "$EVIDENCE/expected-product-paths.txt"
+          git diff-tree --no-commit-id --name-only -r "$product_head" | LC_ALL=C sort > "$EVIDENCE/actual-product-paths.txt"
+          test "$(wc -l < "$EVIDENCE/actual-product-paths.txt")" -eq 6
+          diff -u "$EVIDENCE/expected-product-paths.txt" "$EVIDENCE/actual-product-paths.txt"
+          node --check "$product_worktree/scripts/rd-wave03-exact-capture.mjs"
+          node "$product_worktree/scripts/rd-wave03-exact-capture.mjs" --check
+
+          printf 'capture_current_bytes\n' > "$EVIDENCE/stage.txt"
+          cat > "$EVIDENCE/capture-current.mjs" <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import crypto from 'node:crypto';
+          import { pathToFileURL } from 'node:url';
+          const [rootArg, outArg] = process.argv.slice(2);
+          const root=path.resolve(rootArg), out=path.resolve(outArg);
+          const modulePath=path.join(root,'scripts/rd-wave03-exact-capture.mjs');
+          const {derivePlan, stableJson}=await import(pathToFileURL(modulePath).href);
+          const plan=derivePlan(root);
+          const sha256=value=>crypto.createHash('sha256').update(value).digest('hex');
+          const host=value=>{const h=new URL(value).hostname.toLowerCase().replace(/\.$/,''); return h.startsWith('www.')?h.slice(4):h;};
+          async function body(response, maximum){
+            if(!response.body) throw new Error('response body missing');
+            const reader=response.body.getReader(), chunks=[]; let bytes=0;
+            while(true){const {value,done}=await reader.read(); if(done)break; bytes+=value.byteLength; if(bytes>maximum){await reader.cancel('limit'); throw new Error(`body limit exceeded at ${bytes}`);} chunks.push(Buffer.from(value));}
+            return Buffer.concat(chunks);
+          }
+          async function one(object){
+            const started_at=new Date().toISOString();
+            const controller=new AbortController();
+            const timer=setTimeout(()=>controller.abort(new Error('timeout')),plan.request_policy.timeout_ms);
+            try{
+              const response=await fetch(object.requested_url,{method:'GET',redirect:'follow',signal:controller.signal,headers:{accept:'text/html,application/json,application/pdf;q=0.9,*/*;q=0.1','user-agent':'UnderCast-RD-W03-drift-capture'}});
+              if(response.status!==200) throw new Error(`HTTP ${response.status}`);
+              if(host(response.url||object.requested_url)!==object.allowed_final_host) throw new Error(`unexpected final host ${host(response.url||object.requested_url)}`);
+              const bytes=await body(response,plan.request_policy.maximum_body_bytes), digest=sha256(bytes);
+              const relative_path=`objects/${object.route_id}.bin`;
+              fs.mkdirSync(path.dirname(path.join(out,relative_path)),{recursive:true});
+              fs.writeFileSync(path.join(out,relative_path),bytes);
+              return {ok:true,object_id:object.object_id,route_id:object.route_id,lane_id:object.lane_id,unit_id:object.unit_id,event_class:object.event_class,cell_id:object.cell_id,requested_url:object.requested_url,final_url:response.url||object.requested_url,http_status:response.status,content_type:response.headers.get('content-type'),initial_bytes:object.initial_bytes,initial_body_sha256:object.initial_body_sha256,current_bytes:bytes.length,current_body_sha256:digest,body_drift:bytes.length!==object.initial_bytes||digest!==object.initial_body_sha256,relative_path,started_at,finished_at:new Date().toISOString(),attempt_count:1,chronology_status:'unresolved',evidence_admitted:false,classes_closed:0};
+            }catch(error){return {ok:false,object_id:object.object_id,route_id:object.route_id,requested_url:object.requested_url,error_class:error?.name||'Error',error_message:String(error?.message||error),started_at,finished_at:new Date().toISOString(),attempt_count:1,chronology_status:'unresolved',evidence_admitted:false,classes_closed:0};}
+            finally{clearTimeout(timer);}
+          }
+          const results=new Array(plan.objects.length); let cursor=0;
+          async function worker(){while(true){const i=cursor++; if(i>=plan.objects.length)return; results[i]=await one(plan.objects[i]);}}
+          await Promise.all(Array.from({length:plan.request_policy.concurrency},()=>worker()));
+          const receipt={schema_version:1,transaction_id:'RD-W03-EXACT-CAPTURE-DRIFT-01',source_product_head:process.env.PRODUCT_HEAD||null,source_settlement_run:process.env.SETTLEMENT_RUN||null,started_at:results[0]?.started_at||new Date().toISOString(),finished_at:new Date().toISOString(),route_count:results.length,objects:results,summary:{successful:results.filter(r=>r.ok).length,failed:results.filter(r=>!r.ok).length,unchanged:results.filter(r=>r.ok&&!r.body_drift).length,drifted:results.filter(r=>r.ok&&r.body_drift).length,evidence_admissions:0,chronology_resolved:0,classes_closed:0},authority:{external_contacts:0,external_reviews:0,outside_human_dependency:false,publication_effect:'none',adoption_effect:'none',graph_effect:'none',merge_authority:false}};
+          fs.mkdirSync(out,{recursive:true}); fs.writeFileSync(path.join(out,'drift-receipt.json'),stableJson(receipt));
+          if(receipt.summary.failed) throw new Error(`${receipt.summary.failed} exact-capture transport failures`);
+          NODE
+          env -u GITHUB_TOKEN PRODUCT_HEAD="$product_head" SETTLEMENT_RUN="$run_id" \
+            node "$EVIDENCE/capture-current.mjs" "$product_worktree" "$EVIDENCE/current-capture"
+          python3 - "$EVIDENCE/current-capture" "$EVIDENCE/drift-summary.json" "$product_head" "$product_parent" "$run_id" <<'PY'
+          import hashlib, json, pathlib, sys
+          root=pathlib.Path(sys.argv[1])
+          receipt=json.loads((root/'drift-receipt.json').read_text())
+          assert receipt['route_count']==9 and receipt['summary']['successful']==9 and receipt['summary']['failed']==0
+          rows=[]
+          for row in receipt['objects']:
+              data=(root/row['relative_path']).read_bytes()
+              assert len(data)==row['current_bytes']
+              assert hashlib.sha256(data).hexdigest()==row['current_body_sha256']
+              assert row['chronology_status']=='unresolved' and row['evidence_admitted'] is False and row['classes_closed']==0
+              rows.append({k:row[k] for k in ['route_id','requested_url','final_url','initial_bytes','initial_body_sha256','current_bytes','current_body_sha256','body_drift']})
+          summary={'schema_version':1,'status':'current_bytes_preserved','product_head':sys.argv[3],'product_parent':sys.argv[4],'settlement_run_id':sys.argv[5],'captured_objects':9,'unchanged_objects':receipt['summary']['unchanged'],'drifted_objects':receipt['summary']['drifted'],'objects':rows,'receipt_sha256':hashlib.sha256((root/'drift-receipt.json').read_bytes()).hexdigest(),'credential_free_capture':True,'evidence_admissions':0,'chronology_resolved':0,'classes_closed':0,'external_contacts':0,'external_reviews':0,'outside_human_dependency':False,'publication_effect':'none','adoption_effect':'none','graph_effect':'none','merge_authority':False}
+          pathlib.Path(sys.argv[2]).write_text(json.dumps(summary,sort_keys=True,indent=2)+'\n')
+          PY
+          cat "$EVIDENCE/drift-summary.json"
+
+          printf 'publish_drift_ruling\n' > "$EVIDENCE/stage.txt"
+          product_pr="$(gh pr list --repo BigBirdReturns/undercast --head "$PRODUCT_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          drifted="$(python3 -c 'import json,os; print(json.load(open(os.environ["EVIDENCE"]+"/drift-summary.json"))["drifted_objects"])')"
+          unchanged="$(python3 -c 'import json,os; print(json.load(open(os.environ["EVIDENCE"]+"/drift-summary.json"))["unchanged_objects"])')"
+          receipt_sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["EVIDENCE"]+"/drift-summary.json"))["receipt_sha256"])')"
+          delta_lines="$(python3 - "$EVIDENCE/drift-summary.json" <<'PY'
+          import json, sys
+          for row in json.load(open(sys.argv[1]))['objects']:
+              status='DRIFT' if row['body_drift'] else 'UNCHANGED'
+              print(f"{row['route_id']}  {status}  {row['initial_bytes']}->{row['current_bytes']} bytes  {row['initial_body_sha256']}->{row['current_body_sha256']}")
+          PY
+          )"
+          if test "$drifted" -eq 0; then
+            cat > "$EVIDENCE/ruling.md" <<EOF
+          RD-W03 drift resolver recovered a terminal byte-identical capture after settlement v2 reporting failure.
+
+          \`\`\`text
+          settlement run:        $run_id
+          product head:          $product_head
+          objects captured:      9 / 9
+          unchanged objects:     $unchanged
+          drifted objects:       0
+          drift receipt SHA-256: $receipt_sha
+          \`\`\`
+
+          \`\`\`text
+          $delta_lines
+          \`\`\`
+
+          Current bytes independently match every immutable initial fingerprint. Chronology remains unresolved; evidence admissions and classes closed remain zero. The capture was credential-free and grants no publication, adoption, graph, outside-human, or merge authority.
+          EOF
+            gh issue comment 387 --repo BigBirdReturns/undercast --body-file "$EVIDENCE/ruling.md"
+            test -z "$product_pr" || gh pr comment "$product_pr" --repo BigBirdReturns/undercast --body-file "$EVIDENCE/ruling.md"
+            state="$(gh issue view 387 --repo BigBirdReturns/undercast --json state --jq .state)"
+            if test "$state" = OPEN; then gh issue close 387 --repo BigBirdReturns/undercast --reason completed; fi
+          else
+            cat > "$EVIDENCE/ruling.md" <<EOF
+          RD-W03 current exact bytes were preserved, but $drifted of 9 bodies differ from their immutable initial fingerprints.
+
+          \`\`\`text
+          settlement run:        $run_id
+          product head:          $product_head
+          objects captured:      9 / 9
+          unchanged objects:     $unchanged
+          drifted objects:       $drifted
+          drift receipt SHA-256: $receipt_sha
+          \`\`\`
+
+          \`\`\`text
+          $delta_lines
+          \`\`\`
+
+          This is a bounded body-drift census, not evidence admission. Status and allowed host remained valid for every captured object; chronology remains unresolved and classes closed remain zero. Issue #387 stays open pending a repository-native recensus decision, with no external contact or review dependency.
+          EOF
+            gh issue comment 387 --repo BigBirdReturns/undercast --body-file "$EVIDENCE/ruling.md"
+            test -z "$product_pr" || gh pr comment "$product_pr" --repo BigBirdReturns/undercast --body-file "$EVIDENCE/ruling.md"
+            existing_issue="$(gh issue list --repo BigBirdReturns/undercast --state open --search 'RD-W03 exact-capture body drift in:title' --json number --jq '.[0].number // empty')"
+            if test -z "$existing_issue"; then
+              gh issue create --repo BigBirdReturns/undercast \
+                --title 'RD-W03 exact-capture body drift recensus' \
+                --body-file "$EVIDENCE/ruling.md" > "$EVIDENCE/drift-issue-url.txt"
+            fi
+          fi
+          printf 'complete\n' > "$EVIDENCE/stage.txt"
+
+      - name: Record resolver failure
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$(cat "$EVIDENCE/stage.txt" 2>/dev/null || echo unknown)"
+          tail -n 180 "$EVIDENCE/resolver.log" > "$EVIDENCE/failure-tail.txt" 2>/dev/null || true
+          {
+            printf 'RD-W03 drift resolver failed closed at stage `%s`.\n\n' "$stage"
+            printf 'No evidence, chronology, closure, publication, adoption, graph, outside-human, or merge authority is accepted.\n\n```text\n'
+            cat "$EVIDENCE/failure-tail.txt" 2>/dev/null || true
+            printf '\n```\n'
+          } > "$EVIDENCE/failure-comment.md"
+          gh issue comment 387 --repo BigBirdReturns/undercast --body-file "$EVIDENCE/failure-comment.md" || true
+
+      - name: Upload drift resolver evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-drift-resolver-${{ github.run_id }}
+          path: /tmp/rd-wave03-exact-capture-drift-resolver-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
