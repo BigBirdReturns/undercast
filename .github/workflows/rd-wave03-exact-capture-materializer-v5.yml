@@ -1,0 +1,163 @@
+name: RD-W03 exact-capture materializer v5
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/rd-wave03-exact-capture-materializer-v5.yml
+      - tmp/rd-wave03-exact-capture-bootstrap.sh
+
+permissions:
+  contents: write
+  actions: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: rd-wave03-exact-capture-materializer-v5
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_BRANCH: agent/ssc-rd-wave03-exact-capture-base-20260805
+      TARGET_BRANCH: agent/ssc-rd-wave03-exact-capture-product-20260805
+      WORKTREE: /tmp/rd-wave03-exact-capture-product-${{ github.run_id }}
+      EVIDENCE: /tmp/rd-wave03-exact-capture-materializer-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Verify exact two-commit carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE/artifacts"
+          exec > >(tee "$EVIDENCE/carrier.log") 2>&1
+          test "${{ github.event.pull_request.base.ref }}" = "$BASE_BRANCH"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          mapfile -t commits < <(git rev-list --reverse "$BASE_SHA..$HEAD_SHA")
+          test "${#commits[@]}" -eq 2
+          bootstrap_commit="${commits[0]}"
+          workflow_commit="${commits[1]}"
+          test "$(git show -s --format=%P "$bootstrap_commit")" = "$BASE_SHA"
+          test "$(git show -s --format=%P "$workflow_commit")" = "$bootstrap_commit"
+          test "$workflow_commit" = "$HEAD_SHA"
+          test "$(git diff-tree --no-commit-id --name-only -r "$bootstrap_commit")" = "tmp/rd-wave03-exact-capture-bootstrap.sh"
+          test "$(git diff-tree --no-commit-id --name-only -r "$workflow_commit")" = ".github/workflows/rd-wave03-exact-capture-materializer-v5.yml"
+          mapfile -t actual < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA" | LC_ALL=C sort)
+          expected=(.github/workflows/rd-wave03-exact-capture-materializer-v5.yml tmp/rd-wave03-exact-capture-bootstrap.sh)
+          mapfile -t expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
+          test "$(printf '%s\n' "${actual[@]}")" = "$(printf '%s\n' "${expected[@]}")"
+          bash -n tmp/rd-wave03-exact-capture-bootstrap.sh
+
+      - name: Download six immutable terminal receipts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          exec >> >(tee -a "$EVIDENCE/carrier.log") 2>&1
+          gh run download 30984441377 --repo BigBirdReturns/undercast --name rd-wave03-rd01-intake-30984441377 --dir "$EVIDENCE/artifacts/rd01"
+          gh run download 30984459798 --repo BigBirdReturns/undercast --name rd-wave03-rd02-intake-30984459798 --dir "$EVIDENCE/artifacts/rd02"
+          gh run download 30984486686 --repo BigBirdReturns/undercast --name rd-wave03-rd03-intake-30984486686 --dir "$EVIDENCE/artifacts/rd03"
+          gh run download 30984497436 --repo BigBirdReturns/undercast --name rd-wave03-rd04-intake-30984497436 --dir "$EVIDENCE/artifacts/rd04"
+          gh run download 30984516496 --repo BigBirdReturns/undercast --name rd-wave03-rd05-intake-30984516496 --dir "$EVIDENCE/artifacts/rd05"
+          gh run download 30984537874 --repo BigBirdReturns/undercast --name rd-wave03-rd06-intake-30984537874 --dir "$EVIDENCE/artifacts/rd06"
+          test "$(find "$EVIDENCE/artifacts" -name receipt.json -type f | wc -l)" -eq 6
+
+      - name: Materialize and locally qualify exact six-path product
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec >> >(tee -a "$EVIDENCE/carrier.log") 2>&1
+          unset GH_TOKEN GITHUB_TOKEN
+          git config --local --unset-all http.https://github.com/.extraheader >/dev/null 2>&1 || true
+          git remote set-url origin https://github.com/BigBirdReturns/undercast.git
+          bash tmp/rd-wave03-exact-capture-bootstrap.sh \
+            --repo "$GITHUB_WORKSPACE" \
+            --artifacts "$EVIDENCE/artifacts" \
+            --base "$BASE_SHA" \
+            --worktree "$WORKTREE" \
+            --evidence "$EVIDENCE"
+          cd "$WORKTREE"
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate
+          node scripts/rd-wave03-exact-capture.mjs --check
+          node test/rd-wave03-exact-capture-adversarial.mjs
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Publish exact product branch and draft PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          exec >> >(tee -a "$EVIDENCE/carrier.log") 2>&1
+          product_head="$(python3 -c 'import json,os; print(json.load(open(os.environ["EVIDENCE"]+"/materialization.json"))["head"])')"
+          test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$product_head"
+          base_remote="$(git ls-remote --heads https://github.com/BigBirdReturns/undercast.git "refs/heads/$BASE_BRANCH" | awk '{print $1}')"
+          test "$base_remote" = "$BASE_SHA"
+          existing="$(git ls-remote --heads https://github.com/BigBirdReturns/undercast.git "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          test -z "$existing" || test "$existing" = "$product_head"
+          gh auth setup-git
+          if test -z "$existing"; then
+            git -C "$WORKTREE" push origin "$product_head:refs/heads/$TARGET_BRANCH"
+          fi
+          remote="$(git ls-remote --heads origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          test "$remote" = "$product_head"
+
+          pr="$(gh pr list --repo BigBirdReturns/undercast --head "$TARGET_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if test -z "$pr"; then
+            gh pr create --repo BigBirdReturns/undercast --base main --head "$TARGET_BRANCH" --draft \
+              --title 'research: RD-W03 exact-capture nine official objects' \
+              --body "$(cat <<EOF
+          ## Capture-only product
+
+          Materialized from the six immutable terminal receipt artifacts under issue #387.
+
+          \`\`\`text
+          parent:               $BASE_SHA
+          head:                 $product_head
+          commits:              1
+          permanent paths:      6
+          route observations:   710
+          selected objects:       9
+          refused observations: 701
+          adversarial refusals:  35
+          \`\`\`
+
+          The package preserves the complete terminal route ledger, deterministically derives the closed nine-object plan, and provides a one-attempt exact-byte capture executor. It passed its validator, deterministic replay, 35 adversarial mutations, and the complete repository gate before publication.
+
+          No source object was fetched by this materialization transaction. Capture success remains candidate custody only: evidence admissions 0, chronology resolved 0, classes closed 0, external contacts/reviews 0/0, outside-human dependency false, publication/adoption/graph effects none, and merge authority false.
+
+          This PR remains draft pending an independent read-only hosted capture receipt.
+          EOF
+          )"
+            pr="$(gh pr list --repo BigBirdReturns/undercast --head "$TARGET_BRANCH" --state open --json number --jq '.[0].number')"
+          fi
+          printf '%s\n' "$pr" > "$EVIDENCE/product-pr.txt"
+          gh issue comment 387 --repo BigBirdReturns/undercast --body "Exact-capture materialization run ${GITHUB_RUN_ID} published one six-path product commit ${product_head} over immutable parent ${BASE_SHA}; draft product PR #${pr}. Validation, 35 refusal fixtures, and the complete gate passed. No source route was executed and no evidence, chronology, closure, publication, adoption, graph, contact, review, outside-human, or merge authority was created."
+          gh pr comment "${{ github.event.pull_request.number }}" --repo BigBirdReturns/undercast --body "Materialization run ${GITHUB_RUN_ID} published exact product ${product_head} as draft PR #${pr}. This carrier remains never-merge transport."
+
+      - name: Upload materialization receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-materializer-${{ github.run_id }}
+          path: /tmp/rd-wave03-exact-capture-materializer-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
