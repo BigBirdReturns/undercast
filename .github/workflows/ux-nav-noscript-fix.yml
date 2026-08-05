@@ -1,0 +1,122 @@
+name: ux-nav-noscript-fix
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/ux-nav-noscript-fix.yml"
+      - "tmp/ux-nav-noscript-fix.py"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ux-nav-noscript-fix
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: agent/ux-02-navigation-parity
+  TARGET_OLD_HEAD: 2fd459676900f7a37591cd12b0f1731f205227be
+  TARGET_PARENT: 66cf3de636558edd79bbf471c336a2c1c93a76a1
+  PATCHER: tmp/ux-nav-noscript-fix.py
+  PATCHER_BLOB: 4c78b16a84e0be122f1bae1d354c43fc6a1b680f
+  EVIDENCE: ${{ runner.temp }}/ux-nav-noscript-fix
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  repair:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/ux-nav-noscript-fix-carrier'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact two-path carrier and target lease
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          git fetch --no-tags origin main "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})" = "$TARGET_OLD_HEAD"
+          test "$(git show -s --format=%P "$TARGET_OLD_HEAD")" = "$TARGET_PARENT"
+          test "$(git rev-parse "HEAD:${PATCHER}")" = "$PATCHER_BLOB"
+          mapfile -t carrier_paths < <(git diff --name-only refs/remotes/origin/main...HEAD | LC_ALL=C sort)
+          expected_carrier=(.github/workflows/ux-nav-noscript-fix.yml tmp/ux-nav-noscript-fix.py)
+          mapfile -t expected_carrier < <(printf '%s\n' "${expected_carrier[@]}" | LC_ALL=C sort)
+          test "$(printf '%s\n' "${carrier_paths[@]}")" = "$(printf '%s\n' "${expected_carrier[@]}")"
+          cp "$PATCHER" /tmp/ux-nav-noscript-fix.py
+          printf 'carrier=%s\ntarget=%s\nparent=%s\npatcher_blob=%s\n' \
+            "$(git rev-parse HEAD)" "$TARGET_OLD_HEAD" "$TARGET_PARENT" "$PATCHER_BLOB" \
+            > "$EVIDENCE/input.txt"
+
+      - name: Pay no-JavaScript defect and qualify exact amended product
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$TARGET_OLD_HEAD"
+          python3 /tmp/ux-nav-noscript-fix.py
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run build:contract
+          node --check tests/rendered/ux-journeys.spec.mjs
+          mapfile -t repair_paths < <(git diff --name-only | LC_ALL=C sort)
+          expected_repair=(data/archive.json recognition.html tests/rendered/ux-journeys.spec.mjs)
+          mapfile -t expected_repair < <(printf '%s\n' "${expected_repair[@]}" | LC_ALL=C sort)
+          test "$(printf '%s\n' "${repair_paths[@]}")" = "$(printf '%s\n' "${expected_repair[@]}")"
+          npm run gate | tee "$EVIDENCE/complete-gate.log"
+          mapfile -t post_gate_paths < <(git diff --name-only | LC_ALL=C sort)
+          test "$(printf '%s\n' "${post_gate_paths[@]}")" = "$(printf '%s\n' "${expected_repair[@]}")"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- "${expected_repair[@]}"
+          git commit --amend --no-edit --no-verify
+          new_head="$(git rev-parse HEAD)"
+          test "$(git show -s --format=%P "$new_head")" = "$TARGET_PARENT"
+          expected_product=(
+            404.html
+            assets/site-navigation.js
+            assets/site-shell.css
+            constellation.html
+            coverage.html
+            data/archive.json
+            docs/DECISIONS.md
+            docs/UX-READINESS.md
+            index.html
+            recognition.html
+            scripts/build-record-pages.mjs
+            scripts/site-seams.mjs
+            tests/rendered/mobile-density.spec.mjs
+            tests/rendered/site.spec.mjs
+            tests/rendered/ux-journeys.spec.mjs
+          )
+          mapfile -t expected_product < <(printf '%s\n' "${expected_product[@]}" | LC_ALL=C sort)
+          mapfile -t actual_product < <(git diff-tree --no-commit-id --name-only -r "$new_head" | LC_ALL=C sort)
+          test "$(printf '%s\n' "${actual_product[@]}")" = "$(printf '%s\n' "${expected_product[@]}")"
+          test -z "$(printf '%s\n' "${actual_product[@]}" | grep -E '(^|/)(\.github|\.ci|tmp)(/|$)' || true)"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${TARGET_OLD_HEAD}" origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          remote="$(git ls-remote --heads origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
+          test "$remote" = "$new_head"
+          printf 'status=published\nold_head=%s\nnew_head=%s\nparent=%s\npaths=%s\n' \
+            "$TARGET_OLD_HEAD" "$new_head" "$TARGET_PARENT" "${#actual_product[@]}" \
+            > "$EVIDENCE/receipt.txt"
+          gh pr comment 346 --repo BigBirdReturns/undercast --body "The no-JavaScript Recognition review defect is paid in exact amended head ${new_head}. The static archive map now exposes Recognition records as aria-current=location without JavaScript; a rendered no-JavaScript regression covers it; build:contract regenerated the archive hash; and the complete repository gate passed. Product remains one parent, 15 permanent paths, workflow-free, transport-free, and corpus-disjoint."
+
+      - name: Upload repair and qualification receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ux-nav-noscript-fix-${{ github.run_id }}
+          path: ${{ runner.temp }}/ux-nav-noscript-fix
+          if-no-files-found: warn
+          retention-days: 30
