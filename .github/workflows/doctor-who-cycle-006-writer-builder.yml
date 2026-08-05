@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  EXACT_MAIN: c340dc710e423a86b2ad3afa3fcf38a2751e8eb7
+  EXACT_MAIN: 318e7fd2826511c283e2d81622459fe0bb74e0d2
   TARGET_BRANCH: agent/doctor-who-cycle-006-kayste-completion
   AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
   BUILDER_BRANCH: agent/doctor-who-cycle-006-writer-builder
@@ -59,13 +59,12 @@ jobs:
           printf '%s\n' "$DERIVER" "$WORKFLOW" | sort > /tmp/expected-builder-paths.txt
           diff -u /tmp/expected-builder-paths.txt /tmp/actual-builder-paths.txt
           test -z "$(git status --porcelain)"
-          python3 -m py_compile "$DERIVER"
 
       - name: Recover exact successful cycle-005 transaction source
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf "$SOURCE_DIR" "$OUTPUT_DIR" "$CARRIER_DIR" "$EVIDENCE_DIR"
+          rm -rf "$SOURCE_DIR" "$OUTPUT_DIR" "$CARRIER_DIR" "$EVIDENCE_DIR" /tmp/source-carrier
           mkdir -p "$SOURCE_DIR" "$OUTPUT_DIR" "$CARRIER_DIR" "$EVIDENCE_DIR" /tmp/source-carrier/.ci/doctor-who-cycle-005
           for path in \
             .ci/doctor-who-cycle-005/scripts.tgz.b64 \
@@ -87,11 +86,40 @@ jobs:
           node --check "$SOURCE_DIR/apply-doctor-who-cycle-finalize-005.mjs"
           find "$SOURCE_DIR" -type f -print0 | sort -z | xargs -0 sha256sum > "$EVIDENCE_DIR/source-files.sha256"
 
+      - name: Bind deriver to authoritative Kayste evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('.ci/doctor-who-cycle-006-builder/derive.py').read_text()
+          replacements = {
+              'EXACT_MAIN = "c340dc710e423a86b2ad3afa3fcf38a2751e8eb7"': 'EXACT_MAIN = "318e7fd2826511c283e2d81622459fe0bb74e0d2"',
+              'PORTRAIT_SHA = "0c08fa4fa7f597ee55589e884e8a9d60f3e4e79500a714ff69891ad7f13d9368"': 'PORTRAIT_SHA = "fb8b502322d70d59c670095d45e05f6daa6f7b546bb806d86eb2eac673b58c3e"',
+              'PORTRAIT_BYTES = "63017"': 'PORTRAIT_BYTES = "48063"',
+              'PORTRAIT_ORIGINAL_SHA = "c0dc68b5fa879e894f8b4c675a9390c05a28d9ba225fba4b52736827caf1c569"': 'PORTRAIT_ORIGINAL_SHA = "efba431abf95c92d66b91d01b29dc34e2237f7211fb1118e27dd92f48eea4d21"',
+              'PORTRAIT_PAGE_ID = "48874293"': 'PORTRAIT_PAGE_ID = "76686103"',
+              'PORTRAIT_AUTHOR = "Supercon Convention"': 'PORTRAIT_AUTHOR = "Gage Skidmore"',
+              'MEDIA_ARTIFACT_SHA = "13483de0b34a3fbff3be6c6f494dba11b62ca212b7d267b932e92dd9ae0fc7a1"': 'MEDIA_ARTIFACT_SHA = "63438fedf66432d459f0f8fa4343244ee650230de95218ff5648f7da4c8f2ed2"',
+              'REBIND_RUN = "30953767874"': 'REBIND_RUN = "30966834929"',
+              'REBIND_ARTIFACT = "doctor-who-cycle-006-current-main-rebind-30953767874"': 'REBIND_ARTIFACT = "doctor-who-cycle-006-current-main-rebind-30966834929"',
+              'REBIND_ARTIFACT_SHA = "388325bbd09c7846850cf7152e3fa539c58293504de32fc89131473c1832d174"': 'REBIND_ARTIFACT_SHA = "4dabfa6d3dd435d82bcf9c1246e73492f983adcb5b11f07356321f4c495b871a"',
+              'REBIND_RECEIPT_SHA = "ff94801281b28df3dd4f6ccbf1872228bb057f897fd1b978ad009032977e3447"': 'REBIND_RECEIPT_SHA = "5067c805ba14026b8cf65fc183b5f4958c4bcc4e8ea97c16daec2b20552673d9"',
+          }
+          for old, new in replacements.items():
+              if source.count(old) != 1:
+                  raise SystemExit(f'expected one deriver token: {old}')
+              source = source.replace(old, new)
+          Path('/tmp/derive-cycle-006.py').write_text(source)
+          PY
+          python3 -m py_compile /tmp/derive-cycle-006.py
+          sha256sum /tmp/derive-cycle-006.py > "$EVIDENCE_DIR/patched-deriver.sha256"
+
       - name: Derive and statically qualify exact cycle-006 carrier
         shell: bash
         run: |
           set -euo pipefail
-          python3 "$DERIVER" "$SOURCE_DIR" "$OUTPUT_DIR" "$CARRIER_DIR" | tee "$EVIDENCE_DIR/build-receipt.log"
+          python3 /tmp/derive-cycle-006.py "$SOURCE_DIR" "$OUTPUT_DIR" "$CARRIER_DIR" | tee "$EVIDENCE_DIR/build-receipt.log"
           cp "$CARRIER_DIR/BUILD-RECEIPT.json" "$EVIDENCE_DIR/BUILD-RECEIPT.json"
           node --check "$OUTPUT_DIR/apply-doctor-who-cycle-006.mjs"
           node --check "$OUTPUT_DIR/apply-doctor-who-cycle-finalize-006.mjs"
@@ -102,11 +130,11 @@ jobs:
           test "${#shards[@]}" -eq "$parts"
           cat "${shards[@]}" | tr -d '\n\r\t ' | base64 --decode > /tmp/reconstructed-cycle-006.tgz
           test "$(sha256sum /tmp/reconstructed-cycle-006.tgz | awk '{print $1}')" = "$(jq -r '.transport_sha256' "$CARRIER_DIR/BUILD-RECEIPT.json")"
-          rm -rf /tmp/reconstructed-cycle-006
           grep -R -n -E 'ap_ed7221a03fdd4679379e23f8|Kaarsh|UC-1350|ccf68328d7cbb9a84844b4693c0e3029fb1200d5869513b0ecf68d7228af0cad' "$OUTPUT_DIR" && exit 1 || true
           grep -R -q 'ap_c8e74653ac0877837814db21' "$OUTPUT_DIR"
           grep -R -q 'UC-1351' "$OUTPUT_DIR"
-          grep -R -q '0c08fa4fa7f597ee55589e884e8a9d60f3e4e79500a714ff69891ad7f13d9368' "$OUTPUT_DIR"
+          grep -R -q 'fb8b502322d70d59c670095d45e05f6daa6f7b546bb806d86eb2eac673b58c3e' "$OUTPUT_DIR"
+          grep -R -q '5067c805ba14026b8cf65fc183b5f4958c4bcc4e8ea97c16daec2b20552673d9' "$OUTPUT_DIR"
           find "$OUTPUT_DIR" -type f -print0 | sort -z | xargs -0 sha256sum > "$EVIDENCE_DIR/output-files.sha256"
           find "$CARRIER_DIR" -type f -print0 | sort -z | xargs -0 sha256sum > "$EVIDENCE_DIR/carrier-files.sha256"
 
