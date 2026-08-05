@@ -1,0 +1,95 @@
+name: doctor-who-cycle-005-carrier-source-export-v4
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-005-carrier-source-export-v4.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-005-carrier-source-export-v4-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-005-carrier-source-export-v4.yml
+  EXACT_MAIN: 013bf301cde81e04621b8190e5424a396013b760
+  CARRIER_COMMIT: 87894051e3c0c3b177579f5c59c5fa122e1c4d8a
+  CARRIER_PATH: .ci/doctor-who-cycle-005/scripts.tgz.b64
+  FIRST_CARRIER_BLOB: 792b881083653b7c0eb716fa7e56cf74282b8a78
+  TRANSPORT_PARTS: "8"
+  TRANSPORT_SHA256: b0d0ca739415ff4224f88b98422ed7891bca3e4c1b48f41cee77dcbd3ba240a1
+  OUT: /tmp/doctor-who-cycle-005-carrier-source-export-v4
+
+jobs:
+  export:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-005-carrier-source-export-v4'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          sparse-checkout: |
+            .github/workflows/doctor-who-cycle-005-carrier-source-export-v4.yml
+          sparse-checkout-cone-mode: false
+
+      - name: Bind exact main and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT/source"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          printf '%s\n' "$SELF" > "$OUT/expected-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-paths.txt"
+          diff -u "$OUT/expected-paths.txt" "$OUT/actual-paths.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Recover exact eight-shard cycle-005 transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --filter=blob:none origin "$CARRIER_COMMIT"
+          test "$(git rev-parse "$CARRIER_COMMIT:$CARRIER_PATH")" = "$FIRST_CARRIER_BLOB"
+          parts=(
+            "$CARRIER_PATH"
+            "$CARRIER_PATH.part-002"
+            "$CARRIER_PATH.part-003"
+            "$CARRIER_PATH.part-004"
+            "$CARRIER_PATH.part-005"
+            "$CARRIER_PATH.part-006"
+            "$CARRIER_PATH.part-007"
+            "$CARRIER_PATH.part-008"
+          )
+          test "${#parts[@]}" -eq "$TRANSPORT_PARTS"
+          : > "$OUT/scripts.tgz.b64"
+          : > "$OUT/transport-parts.txt"
+          for part in "${parts[@]}"; do
+            blob="$(git rev-parse "$CARRIER_COMMIT:$part")"
+            printf '%s %s\n' "$blob" "$part" >> "$OUT/transport-parts.txt"
+            git show "$CARRIER_COMMIT:$part" >> "$OUT/scripts.tgz.b64"
+          done
+          tr -d '\n\r\t ' < "$OUT/scripts.tgz.b64" | base64 --decode > "$OUT/scripts.tgz"
+          test "$(sha256sum "$OUT/scripts.tgz" | awk '{print $1}')" = "$TRANSPORT_SHA256"
+          tar -tzf "$OUT/scripts.tgz" | LC_ALL=C sort > "$OUT/scripts.paths.txt"
+          tar -xzf "$OUT/scripts.tgz" -C "$OUT/source"
+          sha256sum "$OUT/scripts.tgz" > "$OUT/scripts.tgz.sha256"
+          find "$OUT/source" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/source.files.sha256"
+          node --check "$OUT/source/apply-doctor-who-cycle-005.mjs"
+          node --check "$OUT/source/apply-doctor-who-cycle-finalize-005.mjs"
+          for script in "$OUT/source"/*.sh; do bash -n "$script"; done
+          printf 'exact_main=%s\ncarrier_commit=%s\ncarrier_path=%s\nfirst_carrier_blob=%s\ntransport_parts=%s\ntransport_sha256=%s\n' \
+            "$EXACT_MAIN" "$CARRIER_COMMIT" "$CARRIER_PATH" "$FIRST_CARRIER_BLOB" "$TRANSPORT_PARTS" "$TRANSPORT_SHA256" > "$OUT/custody.txt"
+
+      - name: Upload exact cycle-005 writer source
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-005-carrier-source-export-v4-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
