@@ -1,0 +1,184 @@
+name: RD-W03 exact-capture independent finalizer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/rd-wave03-exact-capture-finalizer.yml
+      - tmp/rd-wave03-exact-capture-finalize.sh
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: rd-wave03-exact-capture-independent-finalizer
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EVIDENCE: /tmp/rd-wave03-exact-capture-finalizer-${{ github.run_id }}
+      PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+      PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Independently verify capture, package, and current-main gate
+        shell: bash
+        run: bash tmp/rd-wave03-exact-capture-finalize.sh verify
+
+      - name: Upload final settlement evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-final-${{ github.run_id }}
+          path: ${{ env.EVIDENCE }}/settlement
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-finalizer-failure-${{ github.run_id }}
+          path: ${{ env.EVIDENCE }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 30
+
+  publish:
+    needs: verify
+    if: needs.verify.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EVIDENCE: /tmp/rd-wave03-exact-capture-finalizer-publish-${{ github.run_id }}
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      TARGET_BRANCH: agent/ssc-rd-wave03-exact-capture-product-20260805
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-final-${{ github.run_id }}
+          path: ${{ env.EVIDENCE }}/settlement
+
+      - name: Publish exact workflow-free product commit
+        shell: bash
+        run: bash tmp/rd-wave03-exact-capture-finalize.sh publish
+
+      - name: Open draft product and settle issue authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          receipt="$EVIDENCE/settlement/finalizer-receipt.json"
+          product_head="$(jq -r .product_head "$receipt")"
+          product_parent="$(jq -r .product_parent "$receipt")"
+          capture_sha="$(jq -r .capture_receipt_sha256 "$receipt")"
+          product_pr="$(gh pr list --repo BigBirdReturns/undercast --head "$TARGET_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if test -z "$product_pr"; then
+            gh pr create --repo BigBirdReturns/undercast --base main --head "$TARGET_BRANCH" --draft \
+              --title 'research: RD-W03 exact-capture nine current official objects' \
+              --body "$(cat <<BODY
+          ## Exact capture product — custody only
+
+          \`\`\`text
+          exact parent:                $product_parent
+          exact head:                  $product_head
+          commits:                     1
+          permanent paths:             6
+          terminal route observations: 710
+          selected captures:            9
+          refused observations:       701
+          current-byte captures:        9 / 9
+          changed since intake:         9 / 9
+          evidence admissions:          0
+          chronology resolutions:       0
+          classes closed:               0
+          \`\`\`
+
+          Independent finalizer run ${GITHUB_RUN_ID} recovered supervisor artifact 8937114139 from run 31021882771, recomputed the artifact ZIP digest, independently verified every retained body byte count and SHA-256, regenerated the closed-schema six-path package, reran deterministic replay and all 35 adversarial refusals, overlaid the package on exact current \`main\`, and passed the complete repository and rendered-browser gate without issuing another source request.
+
+          All nine current bodies differ from the earlier intake-response fingerprints. That drift is recorded, not interpreted. Capture success establishes custody of current bytes only; it does not establish unit identity, event chronology, recommendation, disposition, authority, remedy, or any residual-class conclusion.
+
+          \`\`\`text
+          capture receipt SHA-256: $capture_sha
+          external contacts/reviews: 0 / 0
+          outside-human dependency:  false
+          publication effect:         none
+          adoption effect:            none
+          graph effect:               none
+          merge authority:            false
+          \`\`\`
+
+          This PR remains draft and unmerged. Any substantive admission requires a separately authorized exact-byte admission transaction.
+          BODY
+          )"
+            product_pr="$(gh pr list --repo BigBirdReturns/undercast --head "$TARGET_BRANCH" --state open --json number --jq '.[0].number')"
+          fi
+          test -n "$product_pr"
+          test "$(gh pr view "$product_pr" --repo BigBirdReturns/undercast --json isDraft,headRefOid,state --jq '[.isDraft,.headRefOid,.state]|@tsv')" = $'true\t'"$product_head"$'\tOPEN'
+
+          artifact_json="$(gh api "repos/BigBirdReturns/undercast/actions/runs/${GITHUB_RUN_ID}/artifacts")"
+          final_artifact_id="$(jq -r --arg name "rd-wave03-exact-capture-final-${GITHUB_RUN_ID}" '.artifacts[] | select(.name==$name) | .id' <<< "$artifact_json")"
+          final_artifact_digest="$(jq -r --arg name "rd-wave03-exact-capture-final-${GITHUB_RUN_ID}" '.artifacts[] | select(.name==$name) | .digest' <<< "$artifact_json")"
+          test -n "$final_artifact_id"
+          test "$final_artifact_digest" != null
+
+          terminal="$(cat <<BODY
+          RD-W03 exact-capture custody is complete.
+
+          \`\`\`text
+          supervisor run:              31021882771
+          supervisor artifact:         8937114139
+          supervisor artifact SHA-256: 862f20b9b168fa70cd7ba3d57f1e84bf43f0738a68155d7b60a571e6720e50a5
+          independent finalizer run:   ${GITHUB_RUN_ID}
+          finalizer artifact:          ${final_artifact_id}
+          finalizer artifact digest:   ${final_artifact_digest}
+          workflow-free product PR:    #${product_pr}
+          product parent:              ${product_parent}
+          product head:                ${product_head}
+          permanent paths:             6
+          retained current objects:    9 / 9
+          objects changed since intake:9 / 9
+          source requests repeated:    0
+          evidence admissions:         0
+          chronology resolutions:      0
+          classes closed:              0
+          \`\`\`
+
+          Every current response body was retained by the original one-attempt credential-free capture and independently rehashed from the immutable artifact. The finalizer regenerated the exact 710-observation package, passed its closed validator, deterministic replay, all 35 refusal fixtures, and the complete current-main repository gate without contacting any source again.
+
+          The nine changed fingerprints are a custody fact, not substantive evidence. This completion does not establish unit identity, event chronology, recommendation, disposition, authority, remedy, publication, adoption, graph, or merge authority. External contacts/reviews remain 0/0 and outside-human dependency remains false. Any admission or closure requires a separate authorized transaction.
+          BODY
+          )"
+          gh issue comment 387 --repo BigBirdReturns/undercast --body "$terminal"
+          gh issue close 387 --repo BigBirdReturns/undercast --reason completed
+          gh pr comment "$product_pr" --repo BigBirdReturns/undercast --body "Independent finalizer run ${GITHUB_RUN_ID} completed. Exact final artifact ${final_artifact_id} (${final_artifact_digest}); capture receipt SHA-256 ${capture_sha}. This PR remains draft and unmerged with zero admission, chronology, closure, publication, adoption, graph, or merge authority."
