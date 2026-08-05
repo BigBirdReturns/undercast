@@ -98,8 +98,30 @@ jobs:
           test "$(sha256sum "$CYCLE_ASSET_DIR/apply-doctor-who-cycle-006.mjs" | awk '{print $1}')" = "$MATERIALIZER_SHA256"
           test "$(sha256sum "$CYCLE_ASSET_DIR/apply-doctor-who-cycle-finalize-006.mjs" | awk '{print $1}')" = "$FINALIZER_SHA256"
           test "$(sha256sum "$CYCLE_ASSET_DIR/transport-manifest.json" | awk '{print $1}')" = "$TRANSPORT_MANIFEST_SHA256"
+          binder="$CYCLE_ASSET_DIR/01-bind-decode.sh"
+          binder_before="$(sha256sum "$binder" | awk '{print $1}')"
+          python3 - "$binder" <<'PYBINDER'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+          old = "if (sha(Buffer.from(JSON.stringify(rebind))) !== declaredRebind) throw new Error('Kayste rebind canonical hash drifted');"
+          new = "if (sha(Buffer.from(JSON.stringify(rebind) + '\\n')) !== declaredRebind) throw new Error('Kayste rebind canonical hash drifted');"
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one unnormalized rebind-hash assertion, found {text.count(old)}")
+          if text.count(new) != 0:
+              raise SystemExit("normalized rebind-hash assertion already present before repair")
+          path.write_text(text.replace(old, new, 1))
+          PYBINDER
+          binder_after="$(sha256sum "$binder" | awk '{print $1}')"
+          test "$binder_before" != "$binder_after"
+          test "$(grep -F "JSON.stringify(rebind) + '\\n'" "$binder" | wc -l)" -eq 1
+          ! grep -F "sha(Buffer.from(JSON.stringify(rebind)))" "$binder"
+          bash -n "$binder"
+          printf 'binder_sha_before=%s\nbinder_sha_after=%s\n' "$binder_before" "$binder_after"
           chmod +x "$CYCLE_ASSET_DIR"/*.sh
-          bash "$CYCLE_ASSET_DIR/01-bind-decode.sh"
+          bash "$binder"
 
       - name: Claim, materialize, review, and resolve exactly one Kayste task
         shell: bash
