@@ -1,0 +1,163 @@
+name: qualify-ux02a-current-main
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/qualify-ux02a-current-main.yml"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: qualify-ux02a-current-main
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUT: /tmp/qualify-ux02a-current-main
+      SELF: .github/workflows/qualify-ux02a-current-main.yml
+      EXPECTED_MAIN: 3b4cca5765032ede455803255b3292f43d99fe10
+      EXPECTED_HEAD: 6db943bdfcf897f909350b308b85412e63bb9a2f
+      PRODUCT_BRANCH: agent/ux-02-navigation-parity
+      PRODUCT_PR: "346"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind one-file qualifier and exact product lease
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          printf '%s\n' "$SELF" > /tmp/expected-carrier-paths
+          git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | LC_ALL=C sort > /tmp/actual-carrier-paths
+          diff -u /tmp/expected-carrier-paths /tmp/actual-carrier-paths
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${PRODUCT_BRANCH}:refs/remotes/origin/${PRODUCT_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${PRODUCT_BRANCH})" = "$EXPECTED_HEAD"
+          test "$(git show -s --format=%P "$EXPECTED_HEAD")" = "$EXPECTED_MAIN"
+          mapfile -t expected < <(cat <<'PATHS'
+          404.html
+          assets/site-navigation.js
+          assets/site-shell.css
+          constellation.html
+          coverage.html
+          data/archive.json
+          docs/DECISIONS.md
+          docs/UX-READINESS.md
+          index.html
+          recognition.html
+          scripts/build-record-pages.mjs
+          scripts/site-seams.mjs
+          tests/rendered/mobile-density.spec.mjs
+          tests/rendered/site.spec.mjs
+          tests/rendered/ux-journeys.spec.mjs
+          PATHS
+          )
+          mapfile -t expected < <(printf '%s\n' "${expected[@]}" | sed 's/^[[:space:]]*//' | LC_ALL=C sort)
+          mapfile -t actual < <(git diff-tree --no-commit-id --name-only -r "$EXPECTED_HEAD" | LC_ALL=C sort)
+          test "${#actual[@]}" -eq 15
+          test "$(printf '%s\n' "${actual[@]}")" = "$(printf '%s\n' "${expected[@]}")"
+          test -z "$(printf '%s\n' "${actual[@]}" | grep -E '(^|/)(\.github|\.ci|tmp|images|records)(/|$)' || true)"
+          test -z "$(printf '%s\n' "${actual[@]}" | grep -E '^data/(specimens|SOURCES|CENSUS|AUTOPILOT|MEDIA-AUDIT|WATERLINE|ROADMAP)|^data/journal/' || true)"
+          printf 'qualifier=%s\nmain=%s\nproduct=%s\npaths=%s\n' \
+            "$(git rev-parse HEAD)" "$EXPECTED_MAIN" "$EXPECTED_HEAD" "${#actual[@]}" > "$OUT/input.txt"
+          printf '%s\n' "${actual[@]}" > "$OUT/product-paths.txt"
+          git checkout --detach "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install deterministic and all supported browser runtimes
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium firefox webkit
+
+      - name: Prove deterministic archive and permanent-record replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build:contract | tee "$OUT/build-contract.log"
+          git diff --exit-code
+          test "$(git ls-files records | wc -l)" -eq 0
+          rm -rf records
+          node scripts/build-record-pages.mjs | tee "$OUT/records-pass-1.log"
+          find records -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/records-pass-1.sha256"
+          test "$(wc -l < "$OUT/records-pass-1.sha256")" -eq 1321
+          rm -rf records
+          node scripts/build-record-pages.mjs | tee "$OUT/records-pass-2.log"
+          find records -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/records-pass-2.sha256"
+          test "$(wc -l < "$OUT/records-pass-2.sha256")" -eq 1321
+          diff -u "$OUT/records-pass-1.sha256" "$OUT/records-pass-2.sha256"
+          sha256sum "$OUT/records-pass-1.sha256" > "$OUT/records-manifest.sha256"
+          rm -rf records
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Run focused five-engine UX contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run test:ux | tee "$OUT/five-engine-ux.log"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Run complete repository gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run gate | tee "$OUT/complete-gate.log"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Recheck exact current-main and product leases
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${PRODUCT_BRANCH}:refs/remotes/origin/${PRODUCT_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${PRODUCT_BRANCH})" = "$EXPECTED_HEAD"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PRODUCT_PR}" --jq '.head.sha')" = "$EXPECTED_HEAD"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PRODUCT_PR}" --jq '.base.sha')" = "$EXPECTED_MAIN"
+          cat > "$OUT/terminal.json" <<EOF
+          {
+            "status": "qualified",
+            "main": "$EXPECTED_MAIN",
+            "product": "$EXPECTED_HEAD",
+            "paths": 15,
+            "generated_routes": 1321,
+            "five_engine_ux": "pass",
+            "complete_gate": "pass",
+            "stable_main": true,
+            "stable_product_head": true,
+            "corpus_mutation": false,
+            "workflow_or_transport_in_product": false
+          }
+          EOF
+          cat "$OUT/terminal.json"
+
+      - name: Upload exact qualification receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qualify-ux02a-current-main-${{ github.run_id }}
+          path: /tmp/qualify-ux02a-current-main
+          if-no-files-found: error
+          retention-days: 30
