@@ -83,17 +83,39 @@ try {
     manifestPath: historyManifestPath,
     outputGitDir: historyStore,
     receiptPath: historyReceiptPath,
+    expectedRepository: "fixture/repository",
   });
   validateGitObjectSetReceipt(historyReceipt, { repository: "fixture/repository" });
   assert.equal(historyReceipt.commit_count, 1);
   assert.equal(historyReceipt.path_count, 2);
   assert.equal(historyReceipt.boundary.parent_history_copied, false);
   assert.equal(historyReceipt.boundary.full_history_restored, false);
+  assert.equal(historyReceipt.boundary.source_partial_clone, false);
   assert.equal(runGit(root, [`--git-dir=${historyStore}`, "show", `${requestedHistoryCommit}:a.txt`]).stdout, "two");
   assert.equal(runGit(root, [`--git-dir=${historyStore}`, "show", `${requestedHistoryCommit}:dir/b.txt`]).stdout, "bee");
   assert.notEqual(runGit(root, [`--git-dir=${historyStore}`, "cat-file", "-e", `${firstHistoryCommit}^{commit}`], { allowFail: true }).status, 0);
   assert.notEqual(runGit(root, [`--git-dir=${historyStore}`, "cat-file", "-e", `${futureHistoryCommit}^{commit}`], { allowFail: true }).status, 0);
   assert.deepEqual(JSON.parse(await readFile(historyReceiptPath, "utf8")), historyReceipt);
+  assert.throws(() => validateGitObjectSetReceipt({
+    ...historyReceipt,
+    object_count: historyReceipt.object_count + 1,
+  }, { repository: "fixture/repository" }), /self-hash drifted/);
+  await assert.rejects(() => buildBoundedGitObjectSet({
+    sourceRoot: historyRoot,
+    manifestPath: historyManifestPath,
+    outputGitDir: path.join(root, "wrong-repository.git"),
+    receiptPath: path.join(root, "wrong-repository-receipt.json"),
+    expectedRepository: "wrong/repository",
+  }), /repository drifted/);
+  runGit(historyRoot, ["config", "extensions.partialClone", "origin"]);
+  await assert.rejects(() => buildBoundedGitObjectSet({
+    sourceRoot: historyRoot,
+    manifestPath: historyManifestPath,
+    outputGitDir: path.join(root, "partial-history.git"),
+    receiptPath: path.join(root, "partial-history-receipt.json"),
+    expectedRepository: "fixture/repository",
+  }), /partial clone/);
+  runGit(historyRoot, ["config", "--unset", "extensions.partialClone"]);
 
   const publicationRoot = path.join(root, "publication-surface");
   for (const directory of ["data", "records/UC-001", "records/UC-002", "images"]) await mkdir(path.join(publicationRoot, directory), { recursive: true });
