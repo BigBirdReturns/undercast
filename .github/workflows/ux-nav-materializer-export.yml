@@ -1,0 +1,76 @@
+name: ux-nav-materializer-export
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/ux-nav-materializer-export.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 4ef5e968b11e411807fc73284157e685cf34c5a3
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Extract and verify normalized review materializer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$RUNNER_TEMP/ux-nav-materializer"
+          mkdir -p "$out"
+          test "$(git rev-parse HEAD)" = 4ef5e968b11e411807fc73284157e685cf34c5a3
+          test "$(sha256sum tmp/ux02a-materialize.sh | awk '{print $1}')" = 93a30c071a6ff4418219aa86cad902c415dc0a7440710ca48e5bd5a6a7038f2c
+          git show d5e13a7db6b0ab394f9caabdefe0059e54415f3f:tmp/ux02a-materialize.sh > "$out/sealed-wrapper.sh"
+          test "$(sha256sum "$out/sealed-wrapper.sh" | awk '{print $1}')" = f4d970126c7de42ba35e2e3a5b3e43cba7739ddbdcd082ad5b4d36a67fb9c4b5
+          cp tmp/ux02a-materialize.sh "$out/normalized-wrapper.sh"
+          python3 - "$out/sealed-wrapper.sh" "$out/materializer.sh" <<'PY'
+          from pathlib import Path
+          import base64, hashlib, lzma, re, sys
+          wrapper = Path(sys.argv[1]).read_text(encoding="utf-8")
+          match = re.search(r"base64 -d <<'PAYLOAD' \| xz -dc > \"\$payload\"\n(.*?)\nPAYLOAD\n", wrapper, flags=re.DOTALL)
+          if not match:
+              raise SystemExit("sealed materializer payload is missing")
+          script = lzma.decompress(base64.b64decode("".join(match.group(1).split()))).decode("utf-8")
+          actual = hashlib.sha256(script.encode()).hexdigest()
+          expected = "a2350b88fc260ff60df5f48f00906a8a994cd09a3d6301cb077f2b48932dccce"
+          if actual != expected:
+              raise SystemExit(f"sealed payload drift: {actual} != {expected}")
+          old = """grep -Fq '## DEC-0016 — Compact archive navigation is progressive enhancement, not a new destination' docs/DECISIONS.md
+grep -Fq 'DEC-0015 remains the authority for dense mobile evidence' docs/DECISIONS.md
+grep -Fq 'Connections and Constellations remain contextual or secondary under DEC-0009' docs/DECISIONS.md
+"""
+          new = """python3 - <<'PYDECISIONS'
+from pathlib import Path
+text = \" \".join(Path(\"docs/DECISIONS.md\").read_text(encoding=\"utf-8\").split())
+required = [
+    \"## DEC-0016 — Compact archive navigation is progressive enhancement, not a new destination\",
+    \"DEC-0015 remains the authority for dense mobile evidence\",
+    \"Connections and Constellations remain contextual or secondary under DEC-0009\",
+]
+for phrase in required:
+    if phrase not in text:
+        raise SystemExit(f\"decision-log authority phrase is missing: {phrase}\")
+PYDECISIONS
+"""
+          if script.count(old) != 1:
+              raise SystemExit(f"decision block count {script.count(old)} != 1")
+          Path(sys.argv[2]).write_text(script.replace(old, new, 1), encoding="utf-8")
+          PY
+          bash -n "$out/materializer.sh"
+          sha256sum "$out"/*.sh > "$out/SHA256SUMS"
+
+      - name: Upload exact materializer sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: ux-nav-materializer-${{ github.run_id }}
+          path: ${{ runner.temp }}/ux-nav-materializer
+          if-no-files-found: error
+          retention-days: 7
