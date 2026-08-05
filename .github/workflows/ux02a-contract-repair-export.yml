@@ -1,0 +1,98 @@
+name: ux02a-contract-repair-export
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/ux02a-contract-repair-export.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ux02a-contract-repair-export
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      OUT: /tmp/ux02a-contract-repair-export
+      EXPECTED_HEAD: 6db943bdfcf897f909350b308b85412e63bb9a2f
+      EXPECTED_MAIN: 3b4cca5765032ede455803255b3292f43d99fe10
+      SELF: .github/workflows/ux02a-contract-repair-export.yml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind one-file exporter and exact product
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          printf '%s\n' "$SELF" > /tmp/expected-carrier
+          git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | LC_ALL=C sort > /tmp/actual-carrier
+          diff -u /tmp/expected-carrier /tmp/actual-carrier
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%P "$EXPECTED_HEAD")" = "$EXPECTED_MAIN"
+          git checkout --detach "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Add shared navigation controller to the archive contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("scripts/build-contract.mjs")
+          text = path.read_text(encoding="utf-8")
+          old = '"assets/site-shell.css","assets/record-page.css"'
+          new = '"assets/site-shell.css","assets/site-navigation.js","assets/record-page.css"'
+          if text.count(old) != 1:
+              raise SystemExit(f"site asset anchor count {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          node --check scripts/build-contract.mjs
+          npm run build:contract | tee "$OUT/build-contract.log"
+          mapfile -t changed < <(git diff --name-only | LC_ALL=C sort)
+          expected=(data/archive.json scripts/build-contract.mjs)
+          mapfile -t expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
+          test "$(printf '%s\n' "${changed[@]}")" = "$(printf '%s\n' "${expected[@]}")"
+          node scripts/site-seams.mjs | tee "$OUT/site-seams.log"
+          grep -Fq '"path": "assets/site-navigation.js"' data/archive.json
+          mkdir -p "$OUT/data" "$OUT/scripts"
+          cp data/archive.json "$OUT/data/archive.json"
+          cp scripts/build-contract.mjs "$OUT/scripts/build-contract.mjs"
+          sha256sum "$OUT/data/archive.json" "$OUT/scripts/build-contract.mjs" > "$OUT/SHA256SUMS"
+          git diff --check
+
+      - name: Recheck exact current-main and product leases
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse agent/ux-02-navigation-parity)" = "$EXPECTED_HEAD" || \
+            test "$(git ls-remote --heads origin refs/heads/agent/ux-02-navigation-parity | awk '{print $1}')" = "$EXPECTED_HEAD"
+          printf 'status=built\nmain=%s\nsource_product=%s\nchanged_paths=2\n' "$EXPECTED_MAIN" "$EXPECTED_HEAD" > "$OUT/receipt.txt"
+
+      - name: Upload exact contract-repair bytes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ux02a-contract-repair-export-${{ github.run_id }}
+          path: /tmp/ux02a-contract-repair-export
+          if-no-files-found: error
+          retention-days: 30
