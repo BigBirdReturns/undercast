@@ -1,0 +1,334 @@
+name: RD-W03 hosted exact-head executor v2
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/rd-wave03-hosted-executor.yml
+      - tmp/rd-wave03-integration.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rd-wave03-hosted-executor-v2
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REJECTED_EXECUTOR_SHA: 7c881d39f50f87e0df88cffa10a490fa1182fd14
+    steps:
+      - name: Refuse and cancel any predecessor execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/rd-wave03-preflight"
+          mkdir -p "$evidence"
+          runs_url="repos/BigBirdReturns/undercast/actions/runs?head_sha=${REJECTED_EXECUTOR_SHA}&per_page=100"
+          active_filter='[.workflow_runs[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | .id]'
+          gh api --method GET "$runs_url" > "$evidence/predecessor-runs-initial.json"
+          jq "$active_filter" "$evidence/predecessor-runs-initial.json" > "$evidence/active-runs-initial.json"
+          while IFS= read -r run_id; do
+            [[ -n "$run_id" ]] || continue
+            gh api --method POST "repos/BigBirdReturns/undercast/actions/runs/${run_id}/cancel" || true
+          done < <(jq -r '.[]' "$evidence/active-runs-initial.json")
+          cp "$evidence/predecessor-runs-initial.json" "$evidence/predecessor-runs-final.json"
+          jq "$active_filter" "$evidence/predecessor-runs-final.json" > "$evidence/active-runs-final.json"
+          for attempt in $(seq 1 20); do
+            [[ "$(jq 'length' "$evidence/active-runs-final.json")" -eq 0 ]] && break
+            sleep 3
+            gh api --method GET "$runs_url" > "$evidence/predecessor-runs-final.json"
+            jq "$active_filter" "$evidence/predecessor-runs-final.json" > "$evidence/active-runs-final.json"
+          done
+          test "$(jq 'length' "$evidence/active-runs-final.json")" -eq 0
+          jq --slurpfile initially_active "$evidence/active-runs-initial.json" --slurpfile finally_active "$evidence/active-runs-final.json" '{
+            rejected_controller: "7c881d39f50f87e0df88cffa10a490fa1182fd14",
+            observed_runs_initial: [.workflow_runs[] | {id, name, status, conclusion, event, head_sha}],
+            initially_active_runs: $initially_active[0],
+            finally_active_runs: $finally_active[0],
+            predecessor_quiescent_before_lane_release: (($finally_active[0] | length) == 0)
+          }' "$evidence/predecessor-runs-initial.json" > "$evidence/preflight.json"
+          printf -v body '%s\n\n%s' \
+            "Wave-03 executor v2 run ${GITHUB_RUN_ID} started at ${GITHUB_SHA}." \
+            "The predecessor controller ${REJECTED_EXECUTOR_SHA} is rejected and cannot supply authority. Preflight verified that no predecessor run remained queued or active before the six read-only exact-head jobs were released. The v2 lane and integration jobs receive no write permission and persist no checkout credential."
+          for pr in 328 332; do
+            gh pr comment "$pr" --repo BigBirdReturns/undercast --body "$body"
+          done
+          cat "$evidence/preflight.json"
+
+      - name: Upload predecessor refusal receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-preflight-${{ github.run_id }}
+          path: ${{ runner.temp }}/rd-wave03-preflight
+          if-no-files-found: error
+          retention-days: 30
+
+  lane:
+    name: RD-${{ matrix.lane }}
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: "01"
+            head: 6899a2d09c8ddd62a62ce22fc59557ea6fddf84b
+            count: 8
+          - lane: "02"
+            head: 134e7811419d20443134fe565bf4cf69af70fa45
+            count: 7
+          - lane: "03"
+            head: b0700020c4c84e0ec355a76861c9a788b04a89eb
+            count: 7
+          - lane: "04"
+            head: 1db75a178f4da96d22109902e3d5a9ff79a6080f
+            count: 7
+          - lane: "05"
+            head: 6f1e9f6ea6b14753d30161d55c3facc3a466bc66
+            count: 8
+          - lane: "06"
+            head: 9acd031d7bfc3d0f343525e65b17a5140ee46f43
+            count: 8
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      BASE_SHA: 318e7fd2826511c283e2d81622459fe0bb74e0d2
+      EXPECTED_HEAD: ${{ matrix.head }}
+      LANE: ${{ matrix.lane }}
+      PATH_COUNT: ${{ matrix.count }}
+      OUT: ${{ runner.temp }}/rd-wave03-rd${{ matrix.lane }}-intake
+      PROTOCOL: data/research/residual-denominator/wave-03/rd-${{ matrix.lane }}/protocol.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.head }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Verify immutable one-parent head and exact path denominator
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git show -s --format=%P "$EXPECTED_HEAD")" = "$BASE_SHA"
+          git diff-tree --no-commit-id --name-only -r "$EXPECTED_HEAD" | LC_ALL=C sort > "$RUNNER_TEMP/actual-paths.txt"
+          node -e '
+            const fs = require("node:fs");
+            const protocol = JSON.parse(fs.readFileSync(process.env.PROTOCOL, "utf8"));
+            process.stdout.write([...protocol.permanent_paths].sort().join("\n") + "\n");
+          ' > "$RUNNER_TEMP/expected-paths.txt"
+          test "$(wc -l < "$RUNNER_TEMP/actual-paths.txt")" -eq "$PATH_COUNT"
+          diff -u "$RUNNER_TEMP/expected-paths.txt" "$RUNNER_TEMP/actual-paths.txt"
+          ! grep -Eiq '(^|/)(tmp|transport|carrier|materializer|controller|trigger)(/|\.|-|$)' "$RUNNER_TEMP/actual-paths.txt"
+
+      - name: Parse-check deterministic machinery
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check "scripts/rd-wave03-rd${LANE}-build.mjs"
+          node --check "scripts/rd-wave03-rd${LANE}-validate.mjs"
+          node --check "test/rd-wave03-rd${LANE}-adversarial.mjs"
+
+      - name: Run closed-schema and no-magic-human validation
+        run: node "scripts/rd-wave03-rd${LANE}-validate.mjs"
+
+      - name: Run deterministic clean replay
+        run: node "scripts/rd-wave03-rd${LANE}-build.mjs" --check
+
+      - name: Run adversarial refusal suite
+        run: node "test/rd-wave03-rd${LANE}-adversarial.mjs"
+
+      - name: Execute bounded public-source protocol
+        run: GITHUB_SHA="$EXPECTED_HEAD" node "scripts/rd-wave03-rd${LANE}-build.mjs" --execute --out "$OUT"
+
+      - name: Verify terminal cell classification receipt and clean tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "scripts/rd-wave03-rd${LANE}-build.mjs" --verify-receipt "$OUT/receipt.json"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Upload read-only intake receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-rd${{ matrix.lane }}-intake-${{ github.run_id }}
+          path: ${{ runner.temp }}/rd-wave03-rd${{ matrix.lane }}-intake
+          if-no-files-found: error
+          retention-days: 30
+
+  integration:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      EVIDENCE: ${{ runner.temp }}/rd-wave03-integration
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Run six-lane no-magic-human and complete release gate
+        shell: bash
+        run: bash tmp/rd-wave03-integration.sh
+
+      - name: Upload six-lane integration receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-integration-${{ github.run_id }}
+          path: ${{ runner.temp }}/rd-wave03-integration
+          if-no-files-found: error
+          retention-days: 30
+
+  finalize:
+    if: always()
+    needs:
+      - preflight
+      - lane
+      - integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EVIDENCE: ${{ runner.temp }}/rd-wave03-final
+      PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+      LANE_MATRIX_RESULT: ${{ needs.lane.result }}
+      INTEGRATION_RESULT: ${{ needs.integration.result }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve and publish exact hosted result
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          gh api --method GET "repos/BigBirdReturns/undercast/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" > "$EVIDENCE/jobs.json"
+          for lane in 01 02 03 04 05 06; do
+            result="$(jq -r --arg name "RD-${lane}" '[.jobs[] | select(.name == $name)][-1].conclusion // "not_found"' "$EVIDENCE/jobs.json")"
+            printf -v "RD${lane}_RESULT" '%s' "$result"
+          done
+          overall=success
+          for result in "$PREFLIGHT_RESULT" "$RD01_RESULT" "$RD02_RESULT" "$RD03_RESULT" "$RD04_RESULT" "$RD05_RESULT" "$RD06_RESULT" "$INTEGRATION_RESULT"; do
+            [[ "$result" == success ]] || overall=failure
+          done
+          cat > "$EVIDENCE/hosted-summary.json" <<EOF
+          {
+            "run_id": "${GITHUB_RUN_ID}",
+            "controller_sha": "${GITHUB_SHA}",
+            "base": "318e7fd2826511c283e2d81622459fe0bb74e0d2",
+            "preflight": "${PREFLIGHT_RESULT}",
+            "lane_matrix": "${LANE_MATRIX_RESULT}",
+            "RD-01": "${RD01_RESULT}",
+            "RD-02": "${RD02_RESULT}",
+            "RD-03": "${RD03_RESULT}",
+            "RD-04": "${RD04_RESULT}",
+            "RD-05": "${RD05_RESULT}",
+            "RD-06": "${RD06_RESULT}",
+            "integration": "${INTEGRATION_RESULT}",
+            "overall": "${overall}",
+            "rejected_predecessor": "7c881d39f50f87e0df88cffa10a490fa1182fd14",
+            "external_contacts": 0,
+            "external_reviews": 0,
+            "outside_human_dependency": false,
+            "classes_closed": 0,
+            "evidence_admissions": 0,
+            "publication_effect": "none",
+            "adoption_effect": "none",
+            "graph_effect": "none"
+          }
+          EOF
+          body="$(cat <<EOF
+          Wave-03 hosted exact-head executor v2 run ${GITHUB_RUN_ID} reached a terminal result.
+
+              controller:  ${GITHUB_SHA}
+              base:        318e7fd2826511c283e2d81622459fe0bb74e0d2
+              preflight:   ${PREFLIGHT_RESULT}
+              RD-01:       ${RD01_RESULT}
+              RD-02:       ${RD02_RESULT}
+              RD-03:       ${RD03_RESULT}
+              RD-04:       ${RD04_RESULT}
+              RD-05:       ${RD05_RESULT}
+              RD-06:       ${RD06_RESULT}
+              integration: ${INTEGRATION_RESULT}
+              overall:     ${overall}
+
+          The rejected v1 controller 7c881d39f50f87e0df88cffa10a490fa1182fd14 supplied no accepted result. Each v2 lane job checked out its immutable final head with read-only permission and no persisted credential. The integration job independently reconstructed all 45 product paths, reran every validator, deterministic replay, adversarial suite, static workflow check, and the complete repository gate. External contacts/reviews remain 0/0; no outside-human dependency, evidence admission, class closure, publication, adoption, or graph authority was created.
+          EOF
+          )"
+          for pr in 322 323 324 325 326 327 328 332; do
+            gh pr comment "$pr" --repo BigBirdReturns/undercast --body "$body"
+          done
+          cat "$EVIDENCE/hosted-summary.json"
+
+      - name: Upload hosted terminal summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-hosted-summary-${{ github.run_id }}
+          path: ${{ runner.temp }}/rd-wave03-final
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retire temporary executor from live main
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          temporary_paths=(
+            ".github/workflows/rd-wave03-hosted-executor.yml"
+            "tmp/rd-wave03-integration.sh"
+          )
+          for attempt in 1 2 3; do
+            git fetch --no-tags origin main
+            live="$(git rev-parse refs/remotes/origin/main)"
+            git merge-base --is-ancestor "$GITHUB_SHA" "$live"
+            for path in "${temporary_paths[@]}"; do
+              test "$(git rev-parse "$GITHUB_SHA:$path")" = "$(git rev-parse "$live:$path")"
+            done
+            git checkout -B rd-wave03-executor-v2-cleanup "$live"
+            git rm -- "${temporary_paths[@]}"
+            git commit --no-verify -m "CI: retire completed Wave-03 hosted executor v2"
+            cleanup="$(git rev-parse HEAD)"
+            if git push --force-with-lease="refs/heads/main:$live" origin HEAD:refs/heads/main; then
+              for pr in 322 323 324 325 326 327 328 332; do
+                gh pr comment "$pr" --repo BigBirdReturns/undercast --body "Wave-03 executor v2 transport was removed from live main by cleanup commit $cleanup. No controller or integration helper survives."
+              done
+              exit 0
+            fi
+          done
+          exit 1
