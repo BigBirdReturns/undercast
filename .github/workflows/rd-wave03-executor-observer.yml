@@ -1,0 +1,78 @@
+name: RD-W03 executor observer
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/rd-wave03-executor-observer.yml
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXECUTOR_SHA: 7c881d39f50f87e0df88cffa10a490fa1182fd14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve executor run from the Actions API
+        id: observe
+        shell: bash
+        run: |
+          set -euo pipefail
+          row=''
+          for attempt in $(seq 1 20); do
+            row="$(gh api --method GET "repos/BigBirdReturns/undercast/actions/runs?head_sha=${EXECUTOR_SHA}&per_page=100" --jq '.workflow_runs[] | select(.name == "RD-W03 hosted exact-head executor") | [.id, .status, (.conclusion // ""), .html_url] | @tsv' | head -n 1)"
+            [[ -n "$row" ]] && break
+            sleep 3
+          done
+          if [[ -z "$row" ]]; then
+            printf 'run_id=\nstatus=not_found\nconclusion=\nurl=\n' >> "$GITHUB_OUTPUT"
+          else
+            IFS=$'\t' read -r run_id status conclusion url <<< "$row"
+            printf 'run_id=%s\nstatus=%s\nconclusion=%s\nurl=%s\n' "$run_id" "$status" "$conclusion" "$url" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish observer receipt
+        shell: bash
+        env:
+          RUN_ID: ${{ steps.observe.outputs.run_id }}
+          STATUS: ${{ steps.observe.outputs.status }}
+          CONCLUSION: ${{ steps.observe.outputs.conclusion }}
+          RUN_URL: ${{ steps.observe.outputs.url }}
+        run: |
+          set -euo pipefail
+          body="Wave-03 executor observer reached GitHub Actions.\n\n\`\`\`text\nexecutor_sha: ${EXECUTOR_SHA}\nrun_id:       ${RUN_ID:-not-found}\nstatus:       ${STATUS:-unknown}\nconclusion:   ${CONCLUSION:-pending}\n\`\`\`\n\nThe observer is read-only with respect to all six product branches and grants no product, evidence, closure, publication, adoption, graph, review, contact, or outside-human authority."
+          gh pr comment 328 --repo BigBirdReturns/undercast --body "$body"
+
+      - name: Remove observer from live main
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          path=.github/workflows/rd-wave03-executor-observer.yml
+          for attempt in 1 2 3; do
+            git fetch --no-tags origin main
+            live="$(git rev-parse refs/remotes/origin/main)"
+            git merge-base --is-ancestor "$GITHUB_SHA" "$live"
+            test "$(git rev-parse "$GITHUB_SHA:$path")" = "$(git rev-parse "$live:$path")"
+            git checkout -B rd-wave03-observer-cleanup "$live"
+            git rm -- "$path"
+            git commit --no-verify -m 'CI: retire Wave-03 executor observer'
+            if git push --force-with-lease="refs/heads/main:$live" origin HEAD:refs/heads/main; then
+              exit 0
+            fi
+          done
+          exit 1
