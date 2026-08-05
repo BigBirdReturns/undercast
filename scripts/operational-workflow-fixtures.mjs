@@ -35,6 +35,14 @@ for (const [label, source] of [["reliability", reliability], ["metrics", metrics
   assert.doesNotMatch(source, /gh issue (?:create|edit|reopen)/, `${label} evidence must not mutate issues`);
 }
 
+assert.match(reliability, /GIT_CONFIG_GLOBAL="\$git_config"/, "restore drill must isolate its temporary Git configuration");
+assert.match(
+  reliability,
+  /url\."https:\/\/github\.com\/\$\{GITHUB_REPOSITORY\}\.git"\.insteadOf origin/,
+  "restore drill must provide the disposable index a same-repository read-only origin alias",
+);
+assert.doesNotMatch(reliability, /SKIP_IMMUTABLE_GIT_CHECK/, "restore drill must not bypass immutable Git custody checks");
+
 for (const [label, source] of [["reliability", reliabilityPublisher], ["metrics", metricsPublisher]]) {
   assert.match(source, /\n  workflow_run:\n/, `${label} publisher must run from trusted workflow_run custody`);
   assert.doesNotMatch(source, /\n  pull_request:\n/, `${label} publisher must not run from a PR-head definition`);
