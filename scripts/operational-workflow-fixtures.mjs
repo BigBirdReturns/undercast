@@ -16,6 +16,22 @@ function workflowBlock(source, startMarker, endMarker) {
   return source.slice(start, end);
 }
 
+function publisherMutationBlock(source, label) {
+  const start = source.indexOf("      - name: Lease exact main through durable");
+  assert.notEqual(start, -1, `${label} publisher lacks the terminal main-lease step`);
+  return source.slice(start);
+}
+
+function assertMutationLeases(source, label) {
+  const block = publisherMutationBlock(source, label);
+  const search = block.indexOf("gh api --method GET /search/issues");
+  const branch = block.indexOf('if [ -n "$match" ]');
+  assert.ok(search >= 0 && branch > search, `${label} publisher must finish issue discovery before selecting a mutation branch`);
+  const mutationBlock = block.slice(branch);
+  assert.match(mutationBlock, /issue_state="\$\{match#\*\$'\\t'\}"[\s\S]*?assert_exact_main[\s\S]*?if \[ "\$issue_state" = "closed" \]; then[\s\S]*?gh issue reopen[\s\S]*?assert_exact_main[\s\S]*?fi[\s\S]*?gh issue edit[\s\S]*?assert_exact_main/, `${label} existing-issue branch must lease main before reopen/edit, between reopen and edit, and after edit`);
+  assert.match(mutationBlock, /else[\s\S]*?assert_exact_main[\s\S]*?gh issue create[\s\S]*?assert_exact_main[\s\S]*?fi/, `${label} issue-create branch must lease main immediately before and after creation`);
+}
+
 const reliabilityPush = workflowBlock(reliability, "\n  push:\n", "\n  pull_request:\n");
 const reliabilityPullRequest = workflowBlock(reliability, "\n  pull_request:\n", "\n  workflow_dispatch:\n");
 for (const [label, block] of [["main push", reliabilityPush], ["pull request", reliabilityPullRequest]]) {
@@ -52,9 +68,10 @@ for (const [label, source] of [["reliability", reliabilityPublisher], ["metrics"
   assert.match(source, /actions:\s*read/, `${label} publisher must read exact workflow artifacts`);
   assert.match(source, /verify-evidence-handoff/, `${label} publisher must verify the immutable handoff`);
   assert.match(source, /publisher-handoff-files\.mjs verify/, `${label} publisher must require the exact consumed handoff file set`);
-  assert.ok((source.match(/git\/ref\/heads\/main/g) || []).length >= 2, `${label} publisher must check main before recovery and immediately before mutation`);
+  assert.ok((source.match(/git\/ref\/heads\/main/g) || []).length >= 2, `${label} publisher must check main before recovery and at mutation time`);
   assert.match(source, /workflow_run\.head_sha/, `${label} publisher must bind the exact source head`);
   assert.match(source, /artifact\.digest/, `${label} publisher must require the registered artifact digest`);
+  assertMutationLeases(source, label);
 }
 
 const archivePermissions = workflowBlock(archive, "\npermissions:\n", "\nconcurrency:\n");
@@ -63,4 +80,4 @@ assert.doesNotMatch(archivePermissions, /\bwrite\b/, "archive contract must not 
 assert.doesNotMatch(archive, /DEC-0016|ux02a|MATERIALIZER/, "archive contract must not contain the retired one-off materializer");
 assert.match(archive, /npm run gate/, "archive contract must execute the canonical gate");
 
-console.log("PASS — operational evidence is read-only, restored Git history is exact-object bounded, and durable publication is isolated in exact-main workflow_run custody");
+console.log("PASS — operational evidence is read-only, restored Git history is exact-object bounded, mutation-time main leases are enforced, and durable publication is isolated in exact-main workflow_run custody");
