@@ -62,6 +62,13 @@ try {
   const checkoutDepth = Number(archiveWorkflow.match(/uses:\s*actions\/checkout@v4[\s\S]{0,160}?fetch-depth:\s*(\d+)/)?.[1]);
   expect("canonical workflow fetches full immutable receipt history", checkoutDepth, 0);
 
+  const autopilotWorkflow = await readFile(new URL("../.github/workflows/autopilot.yml", import.meta.url), "utf8");
+  const autopilotCheckoutBlock = autopilotWorkflow.match(/uses:\s*actions\/checkout@v4([\s\S]*?)(?=\n\s*-\s+(?:uses|name):)/)?.[1] || "";
+  const autopilotCheckoutDepth = Number(autopilotCheckoutBlock.match(/fetch-depth:\s*(\d+)/)?.[1]);
+  const autopilotCheckoutFilter = autopilotCheckoutBlock.match(/filter:\s*([^\s]+)/)?.[1];
+  expect("Autopilot workflow fetches full immutable receipt history", autopilotCheckoutDepth, 0);
+  expect("Autopilot workflow keeps full history blob-lazy", autopilotCheckoutFilter, "blob:none");
+
   runCommand("Publisher custody fixtures", process.execPath, ["test/publisher-custody-fixtures.mjs"], { stdio: "pipe" });
   pass("publisher custody fixtures run inside canonical gate fixtures");
   runCommand("Publisher custody workflow scan", process.execPath, ["scripts/publisher-custody.mjs", "check-workflows"], { stdio: "pipe" });
