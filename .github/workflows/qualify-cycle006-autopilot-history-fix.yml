@@ -1,0 +1,128 @@
+name: qualify-cycle006-autopilot-history-fix
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/qualify-cycle006-autopilot-history-fix.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qualify-cycle006-autopilot-history-fix
+  cancel-in-progress: true
+
+env:
+  EXACT_MAIN: afca2076e2124ae31a714b853e38f9183813e15d
+  PRODUCT_BRANCH: agent/doctor-who-cycle-006-autopilot-history-fix
+  PRODUCT_HEAD: c6fedc346df39ed845f2bd31906cb908e174bd7e
+  AUTOPILOT_BLOB: d5aa550568de0464a424e8fa165b024eb1d3716c
+  GATE_FIXTURE_BLOB: 8de649ebc8886f2b2b1286600f10a30636a8c4eb
+  SELF: .github/workflows/qualify-cycle006-autopilot-history-fix.yml
+  OUT: /tmp/cycle006-autopilot-history-fix
+
+jobs:
+  qualify:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-006-autopilot-history-qualification'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact read-only qualifier and two-path repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          carrier_head="${{ github.event.pull_request.head.sha }}"
+          test "$(git rev-parse HEAD)" = "$carrier_head"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = "1"
+          test "$(git merge-base "$EXACT_MAIN" HEAD)" = "$EXACT_MAIN"
+          test -z "$(git status --porcelain)"
+
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${PRODUCT_BRANCH}:refs/remotes/origin/${PRODUCT_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${PRODUCT_BRANCH})" = "$PRODUCT_HEAD"
+          test "$(git show -s --format=%P "$PRODUCT_HEAD")" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN".."$PRODUCT_HEAD")" = "1"
+          test "$(git merge-base "$EXACT_MAIN" "$PRODUCT_HEAD")" = "$EXACT_MAIN"
+
+          printf '%s\n' \
+            .github/workflows/autopilot.yml \
+            scripts/gate-fixtures.mjs \
+            | LC_ALL=C sort > "$OUT/expected-product-paths.txt"
+          git diff --name-only "$EXACT_MAIN"..."$PRODUCT_HEAD" | LC_ALL=C sort > "$OUT/actual-product-paths.txt"
+          diff -u "$OUT/expected-product-paths.txt" "$OUT/actual-product-paths.txt"
+          test "$(git rev-parse "$PRODUCT_HEAD:.github/workflows/autopilot.yml")" = "$AUTOPILOT_BLOB"
+          test "$(git rev-parse "$PRODUCT_HEAD:scripts/gate-fixtures.mjs")" = "$GATE_FIXTURE_BLOB"
+          printf 'exact_main=%s\ncarrier_head=%s\nproduct_head=%s\nproduct_tree=%s\n' \
+            "$EXACT_MAIN" "$carrier_head" "$PRODUCT_HEAD" "$(git rev-parse "$PRODUCT_HEAD^{tree}")" \
+            > "$OUT/input-identity.txt"
+
+      - name: Check out exact repair head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$PRODUCT_HEAD"
+          test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
+          test -z "$(git status --porcelain)"
+
+      - name: Install exact dependencies and rendered runtime
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Exercise repaired scheduled-workflow custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/gate-fixtures.mjs | tee "$OUT/gate-fixtures.log"
+          npm run autopilot -- validate | tee "$OUT/autopilot-validate.log"
+          npm run autopilot:fixtures | tee "$OUT/autopilot-fixtures.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Run complete repository and rendered gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run gate | tee "$OUT/complete-gate.log"
+          test -z "$(git status --porcelain)"
+          sha256sum \
+            .github/workflows/autopilot.yml \
+            scripts/gate-fixtures.mjs \
+            > "$OUT/product-paths.sha256"
+          printf 'product_head=%s\nproduct_tree=%s\n' \
+            "$PRODUCT_HEAD" "$(git rev-parse 'HEAD^{tree}')" > "$OUT/product-identity.txt"
+
+      - name: Upload exact read-only qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cycle006-autopilot-history-fix-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
