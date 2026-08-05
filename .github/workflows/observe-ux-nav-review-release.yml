@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  actions: read
   pull-requests: read
 
 jobs:
@@ -18,8 +17,9 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       OUT: /tmp/observe-ux-nav-review-release
-      CONTROLLER_SHA: 0489191acf9d8e436254ed91c3a22a191d685eb3
-      CONTROLLER_NAME: .github/workflows/apply-collection-mode.yml
+      QUALIFIED: e6cdd7266464758756591d2d2aedd0c643f5c1ee
+      LIVE_HEAD: 936aca32ed6821d1c944743f0edcd0ea019b9e5a
+      PRODUCT_ROOT: be5db794b9aca7bd74e2a9e6a3d64cb6b3072a17
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,46 +27,44 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Bind exact one-file observer
+      - name: Bind one-file observer and compare exact product trees
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$OUT"
-          printf 'observer_head=%s\nbase=%s\n' "$(git rev-parse HEAD)" "${{ github.event.pull_request.base.sha }}" > "$OUT/start.txt"
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           printf '%s\n' .github/workflows/observe-ux-nav-review-release.yml > /tmp/expected
           git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | LC_ALL=C sort > /tmp/actual
           diff -u /tmp/expected /tmp/actual
-
-      - name: Recover exact push run, jobs, artifacts, and product head
-        shell: bash
-        run: |
-          set -euo pipefail
-          api="repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${CONTROLLER_SHA}&per_page=100"
-          gh api --paginate "$api" --jq '.workflow_runs[]' | jq -s '{workflow_runs:.}' > "$OUT/all-runs.json"
-          jq --arg name "$CONTROLLER_NAME" '[.workflow_runs[] | select(.name == $name and .event == "push")]' "$OUT/all-runs.json" > "$OUT/controller-runs.json"
-          test "$(jq 'length' "$OUT/controller-runs.json")" -ge 1
-          run_id="$(jq -r 'sort_by(.created_at) | last | .id' "$OUT/controller-runs.json")"
-          test -n "$run_id" -a "$run_id" != null
-          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/run.json"
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}' > "$OUT/jobs.json"
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" --jq '.artifacts[]' | jq -s '{artifacts:.}' > "$OUT/artifacts.json"
+          qualified_parent="$(git show -s --format=%P "$QUALIFIED")"
+          live_parent="$(git show -s --format=%P "$LIVE_HEAD")"
+          qualified_tree="$(git rev-parse "$QUALIFIED^{tree}")"
+          live_tree="$(git rev-parse "$LIVE_HEAD^{tree}")"
+          test "$qualified_parent" = "$PRODUCT_ROOT"
+          test "$live_parent" = "$PRODUCT_ROOT"
+          git diff --exit-code "$QUALIFIED" "$LIVE_HEAD" > "$OUT/tree-diff.txt"
+          test "$qualified_tree" = "$live_tree"
+          mapfile -t paths < <(git diff-tree --no-commit-id --name-only -r "$QUALIFIED" | LC_ALL=C sort)
+          test "${#paths[@]}" -eq 15
+          printf '%s\n' "${paths[@]}" > "$OUT/product-paths.txt"
+          jq -n \
+            --arg qualified "$QUALIFIED" \
+            --arg live "$LIVE_HEAD" \
+            --arg parent "$PRODUCT_ROOT" \
+            --arg qualified_tree "$qualified_tree" \
+            --arg live_tree "$live_tree" \
+            --argjson paths "${#paths[@]}" \
+            '{qualified:$qualified,live_head:$live,parent:$parent,qualified_tree:$qualified_tree,live_tree:$live_tree,trees_identical:($qualified_tree==$live_tree),changed_paths:$paths}' \
+            > "$OUT/summary.json"
           gh api "repos/${GITHUB_REPOSITORY}/pulls/346" > "$OUT/pr-346.json"
           gh api "repos/${GITHUB_REPOSITORY}/commits/main" > "$OUT/main.json"
-          jq -n \
-            --slurpfile run "$OUT/run.json" \
-            --slurpfile jobs "$OUT/jobs.json" \
-            --slurpfile artifacts "$OUT/artifacts.json" \
-            --slurpfile pr "$OUT/pr-346.json" \
-            --slurpfile main "$OUT/main.json" \
-            '{run:($run[0]|{id,name,event,status,conclusion,head_sha,run_number,created_at,updated_at}),jobs:[$jobs[0].jobs[]|{id,name,status,conclusion,steps:[.steps[]?|{name,status,conclusion,number}]}],artifacts:[$artifacts[0].artifacts[]|{id,name,size_in_bytes,digest,expired}],pr346:{head_sha:$pr[0].head.sha,base_sha:$pr[0].base.sha,state:$pr[0].state,mergeable:$pr[0].mergeable},main_sha:$main[0].sha}' > "$OUT/summary.json"
           cat "$OUT/summary.json"
 
-      - name: Upload exact observation receipt
+      - name: Upload exact tree-equivalence receipt
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: observe-ux-nav-review-release-${{ github.run_id }}
+          name: observe-ux-nav-tree-equivalence-${{ github.run_id }}
           path: /tmp/observe-ux-nav-review-release
           if-no-files-found: error
           retention-days: 30
