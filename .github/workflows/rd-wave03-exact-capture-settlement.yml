@@ -1,0 +1,290 @@
+name: RD-W03 exact-capture settlement
+
+on:
+  push:
+    branches:
+      - agent/ssc-rd-wave03-exact-capture-settlement-20260805
+    paths:
+      - .github/workflows/rd-wave03-exact-capture-settlement.yml
+
+permissions:
+  contents: write
+  actions: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: rd-wave03-exact-capture-settlement
+  cancel-in-progress: false
+
+jobs:
+  settle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      TOKEN: ${{ github.token }}
+      BASE_BRANCH: agent/ssc-rd-wave03-exact-capture-settlement-base-20260805
+      PRODUCT_BRANCH: agent/ssc-rd-wave03-exact-capture-product-v2-20260805
+      PRODUCT_WORKTREE: /tmp/rd-wave03-exact-capture-product-${{ github.run_id }}
+      EVIDENCE: /tmp/rd-wave03-exact-capture-settlement-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Build, gate, and publish exact six-path product
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE/artifacts"
+          exec > >(tee "$EVIDENCE/settlement.log") 2>&1
+          printf 'carrier_preflight\n' > "$EVIDENCE/stage.txt"
+
+          test "$GITHUB_REF" = refs/heads/agent/ssc-rd-wave03-exact-capture-settlement-20260805
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
+          PRODUCT_BASE="$(git rev-parse "refs/remotes/origin/$BASE_BRANCH")"
+          export PRODUCT_BASE
+          mapfile -t commits < <(git rev-list --reverse "$PRODUCT_BASE..$GITHUB_SHA")
+          test "${#commits[@]}" -eq 2
+          test "$(git show -s --format=%P "${commits[0]}")" = "$PRODUCT_BASE"
+          test "$(git show -s --format=%P "${commits[1]}")" = "${commits[0]}"
+          test "${commits[1]}" = "$GITHUB_SHA"
+          test "$(git diff-tree --no-commit-id --name-only -r "${commits[0]}")" = "tmp/rd-wave03-exact-capture-settlement.sh"
+          test "$(git diff-tree --no-commit-id --name-only -r "${commits[1]}")" = ".github/workflows/rd-wave03-exact-capture-settlement.yml"
+          mapfile -t actual < <(git diff --name-only "$PRODUCT_BASE" "$GITHUB_SHA" | LC_ALL=C sort)
+          printf '%s\n' .github/workflows/rd-wave03-exact-capture-settlement.yml tmp/rd-wave03-exact-capture-settlement.sh | LC_ALL=C sort > "$EVIDENCE/expected-carrier-paths.txt"
+          printf '%s\n' "${actual[@]}" > "$EVIDENCE/actual-carrier-paths.txt"
+          diff -u "$EVIDENCE/expected-carrier-paths.txt" "$EVIDENCE/actual-carrier-paths.txt"
+          bash -n tmp/rd-wave03-exact-capture-settlement.sh
+          printf 'carrier_head=%s\nproduct_base=%s\ncarrier_commits=2\ncarrier_paths=2\nmerge_authority=false\n' "$GITHUB_SHA" "$PRODUCT_BASE" > "$EVIDENCE/custody.txt"
+
+          printf 'receipt_download\n' > "$EVIDENCE/stage.txt"
+          export GH_TOKEN="$TOKEN"
+          gh run download 30984441377 --repo BigBirdReturns/undercast --name rd-wave03-rd01-intake-30984441377 --dir "$EVIDENCE/artifacts/rd01"
+          gh run download 30984459798 --repo BigBirdReturns/undercast --name rd-wave03-rd02-intake-30984459798 --dir "$EVIDENCE/artifacts/rd02"
+          gh run download 30984486686 --repo BigBirdReturns/undercast --name rd-wave03-rd03-intake-30984486686 --dir "$EVIDENCE/artifacts/rd03"
+          gh run download 30984497436 --repo BigBirdReturns/undercast --name rd-wave03-rd04-intake-30984497436 --dir "$EVIDENCE/artifacts/rd04"
+          gh run download 30984516496 --repo BigBirdReturns/undercast --name rd-wave03-rd05-intake-30984516496 --dir "$EVIDENCE/artifacts/rd05"
+          gh run download 30984537874 --repo BigBirdReturns/undercast --name rd-wave03-rd06-intake-30984537874 --dir "$EVIDENCE/artifacts/rd06"
+          test "$(find "$EVIDENCE/artifacts" -name receipt.json -type f | wc -l)" -eq 6
+          unset GH_TOKEN
+
+          printf 'product_materialization\n' > "$EVIDENCE/stage.txt"
+          git config --local --unset-all http.https://github.com/.extraheader >/dev/null 2>&1 || true
+          git remote set-url origin https://github.com/BigBirdReturns/undercast.git
+          env -u TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
+            REPO_ROOT="$GITHUB_WORKSPACE" \
+            ARTIFACT_ROOT="$EVIDENCE/artifacts" \
+            PRODUCT_BASE="$PRODUCT_BASE" \
+            PRODUCT_WORKTREE="$PRODUCT_WORKTREE" \
+            EVIDENCE="$EVIDENCE" \
+            bash tmp/rd-wave03-exact-capture-settlement.sh
+          PRODUCT_HEAD="$(python3 -c 'import json,os; print(json.load(open(os.environ["EVIDENCE"]+"/materialization.json"))["head"])')"
+          export PRODUCT_HEAD
+          test "$(git -C "$PRODUCT_WORKTREE" rev-parse HEAD)" = "$PRODUCT_HEAD"
+          test "$(git -C "$PRODUCT_WORKTREE" show -s --format=%P "$PRODUCT_HEAD")" = "$PRODUCT_BASE"
+          printf '%s\n' "$PRODUCT_HEAD" > "$EVIDENCE/product-head.txt"
+
+          printf 'complete_product_gate\n' > "$EVIDENCE/stage.txt"
+          env -u TOKEN -u GH_TOKEN -u GITHUB_TOKEN bash -c '
+            set -euo pipefail
+            cd "$1"
+            npm ci
+            npx playwright install --with-deps chromium
+            npm run gate
+            node scripts/rd-wave03-exact-capture.mjs --check
+            node test/rd-wave03-exact-capture-adversarial.mjs
+            test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          ' _ "$PRODUCT_WORKTREE"
+
+          printf 'product_publication\n' > "$EVIDENCE/stage.txt"
+          existing="$(git ls-remote --heads origin "refs/heads/$PRODUCT_BRANCH" | awk '{print $1}')"
+          test -z "$existing" || test "$existing" = "$PRODUCT_HEAD"
+          export GH_TOKEN="$TOKEN"
+          gh auth setup-git
+          if test -z "$existing"; then
+            git -C "$PRODUCT_WORKTREE" push origin "$PRODUCT_HEAD:refs/heads/$PRODUCT_BRANCH"
+          fi
+          test "$(git ls-remote --heads origin "refs/heads/$PRODUCT_BRANCH" | awk '{print $1}')" = "$PRODUCT_HEAD"
+          PRODUCT_PR="$(gh pr list --repo BigBirdReturns/undercast --head "$PRODUCT_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if test -z "$PRODUCT_PR"; then
+            gh pr create --repo BigBirdReturns/undercast --base main --head "$PRODUCT_BRANCH" --draft \
+              --title 'research: RD-W03 exact-capture nine official objects — definitive' \
+              --body "$(cat <<EOF
+          ## Capture-only product
+
+          \`\`\`text
+          immutable parent:      $PRODUCT_BASE
+          exact product head:    $PRODUCT_HEAD
+          commits:               1
+          permanent paths:       6
+          terminal observations: 710
+          selected objects:      9
+          refused observations:  701
+          adversarial refusals:  35
+          \`\`\`
+
+          This definitive draft was deterministically materialized from the six immutable terminal receipt artifacts under issue #387. It preserves the complete terminal route ledger and closed nine-object plan, and passed deterministic validation, all 35 refusal fixtures, and the complete repository gate before publication.
+
+          No source object was fetched during materialization. Authority remains capture-only: evidence admissions 0, chronology resolved 0, classes closed 0, external contacts/reviews 0/0, outside-human dependency false, publication/adoption/graph effects none, and merge authority false. The PR remains draft pending the credential-free terminal capture receipt from this settlement run.
+          EOF
+          )"
+            PRODUCT_PR="$(gh pr list --repo BigBirdReturns/undercast --head "$PRODUCT_BRANCH" --state open --json number --jq '.[0].number')"
+          fi
+          printf '%s\n' "$PRODUCT_PR" > "$EVIDENCE/product-pr.txt"
+          gh issue comment 387 --repo BigBirdReturns/undercast --body "Settlement run ${GITHUB_RUN_ID} published definitive six-path product ${PRODUCT_HEAD} over immutable parent ${PRODUCT_BASE} as draft PR #${PRODUCT_PR}. The 710-row ledger, nine-object plan, 701 refusals, 35 adversarial fixtures, and complete gate passed. No source object has yet been admitted as evidence; terminal capture now runs credential-free."
+          unset GH_TOKEN
+          printf 'product_published\n' > "$EVIDENCE/stage.txt"
+
+      - name: Execute and verify nine exact byte captures without repository credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec >> >(tee -a "$EVIDENCE/settlement.log") 2>&1
+          printf 'exact_capture\n' > "$EVIDENCE/stage.txt"
+          PRODUCT_HEAD="$(cat "$EVIDENCE/product-head.txt")"
+          env -u TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
+            GITHUB_SHA="$PRODUCT_HEAD" \
+            node "$PRODUCT_WORKTREE/scripts/rd-wave03-exact-capture.mjs" --execute --out "$EVIDENCE/capture"
+          env -u TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
+            node "$PRODUCT_WORKTREE/scripts/rd-wave03-exact-capture.mjs" --verify-receipt "$EVIDENCE/capture/receipt.json"
+          test "$(find "$EVIDENCE/capture/objects" -type f -name '*.bin' | wc -l)" -eq 9
+          test -z "$(git -C "$PRODUCT_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+
+          printf 'terminal_receipt\n' > "$EVIDENCE/stage.txt"
+          python3 - "$EVIDENCE" <<'PY'
+          import hashlib, json, os, pathlib, sys
+          root=pathlib.Path(sys.argv[1])
+          materialization=json.loads((root/'materialization.json').read_text())
+          receipt=json.loads((root/'capture/receipt.json').read_text())
+          objects=[]
+          for row in receipt['objects']:
+              path=root/'capture'/row['relative_path']
+              data=path.read_bytes()
+              assert len(data)==row['bytes']
+              assert hashlib.sha256(data).hexdigest()==row['body_sha256']
+              objects.append({
+                  'route_id':row['route_id'],
+                  'object_id':row['object_id'],
+                  'final_url':row['final_url'],
+                  'content_type':row['content_type'],
+                  'bytes':row['bytes'],
+                  'sha256':row['body_sha256'],
+                  'chronology_status':row['chronology_status'],
+                  'evidence_admitted':row['evidence_admitted'],
+                  'classes_closed':row['classes_closed'],
+              })
+          terminal={
+              'schema_version':1,
+              'transaction_id':'RD-W03-EXACT-CAPTURE-01',
+              'settlement_run_id':os.environ['GITHUB_RUN_ID'],
+              'carrier_head':os.environ['GITHUB_SHA'],
+              'product_base':materialization['base'],
+              'product_head':materialization['head'],
+              'product_tree':materialization['tree'],
+              'product_pr':int((root/'product-pr.txt').read_text().strip()),
+              'product_path_count':6,
+              'route_observation_denominator':710,
+              'selected_object_denominator':9,
+              'refused_observation_denominator':701,
+              'adversarial_refusals':35,
+              'complete_gate':'passed',
+              'captured_objects':9,
+              'objects':objects,
+              'receipt_sha256':hashlib.sha256((root/'capture/receipt.json').read_bytes()).hexdigest(),
+              'credential_free_capture':True,
+              'evidence_admissions':0,
+              'chronology_resolved':0,
+              'classes_closed':0,
+              'external_contacts':0,
+              'external_reviews':0,
+              'outside_human_dependency':False,
+              'publication_effect':'none',
+              'adoption_effect':'none',
+              'graph_effect':'none',
+              'merge_authority':False,
+          }
+          assert all(row['chronology_status']=='unresolved' and row['evidence_admitted'] is False and row['classes_closed']==0 for row in objects)
+          (root/'terminal-summary.json').write_text(json.dumps(terminal,sort_keys=True,indent=2)+'\n')
+          PY
+          cat "$EVIDENCE/terminal-summary.json"
+          printf 'complete\n' > "$EVIDENCE/stage.txt"
+
+      - name: Record terminal success and close capture issue
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PRODUCT_HEAD="$(cat "$EVIDENCE/product-head.txt")"
+          PRODUCT_PR="$(cat "$EVIDENCE/product-pr.txt")"
+          receipt_sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["EVIDENCE"]+"/terminal-summary.json"))["receipt_sha256"])')"
+          object_lines="$(python3 -c 'import json,os; d=json.load(open(os.environ["EVIDENCE"]+"/terminal-summary.json")); print("\n".join(f"{x[chr(96)+chr(114)+chr(111)+chr(117)+chr(116)+chr(101)+chr(95)+chr(105)+chr(100)]}  {x[chr(98)+chr(121)+chr(116)+chr(101)+chr(115)]} bytes  {x[chr(115)+chr(104)+chr(97)+chr(50)+chr(53)+chr(54)]}" for x in d["objects"]))')"
+          body="$(cat <<EOF
+          RD-W03 exact capture completed successfully on settlement run ${GITHUB_RUN_ID}.
+
+          \`\`\`text
+          product PR:             #${PRODUCT_PR}
+          exact product head:     ${PRODUCT_HEAD}
+          permanent product paths: 6
+          observations accounted: 710
+          objects captured:         9 / 9
+          observations refused:   701
+          adversarial refusals:    35 / 35
+          complete gate:           PASS
+          credential-free capture: true
+          receipt SHA-256:         ${receipt_sha}
+          \`\`\`
+
+          \`\`\`text
+          ${object_lines}
+          \`\`\`
+
+          Every retained object matches the initial HTTP-200 byte count and SHA-256 bound by its immutable lane receipt. Chronology remains unresolved for all nine; evidence admissions and classes closed remain zero. External contacts/reviews are 0/0, outside-human dependency is false, and publication/adoption/graph/merge authority remains absent.
+
+          Artifact name: \`rd-wave03-exact-capture-settlement-${GITHUB_RUN_ID}\`.
+          EOF
+          )"
+          gh pr comment "$PRODUCT_PR" --repo BigBirdReturns/undercast --body "$body"
+          gh issue comment 387 --repo BigBirdReturns/undercast --body "$body"
+          gh issue close 387 --repo BigBirdReturns/undercast --reason completed
+
+      - name: Record fail-closed settlement result
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          stage="$(cat "$EVIDENCE/stage.txt" 2>/dev/null || echo unknown)"
+          tail -n 160 "$EVIDENCE/settlement.log" > "$EVIDENCE/failure-tail.txt" 2>/dev/null || true
+          {
+            printf 'RD-W03 exact-capture settlement run %s failed closed at stage `%s`.\n\n' "$GITHUB_RUN_ID" "$stage"
+            printf 'No terminal capture authority is accepted; issue #387 remains open. Any published product draft remains capture-only, draft, and unmerged. Evidence admissions, chronology resolutions, and classes closed remain zero.\n\n'
+            printf '```text\n'
+            cat "$EVIDENCE/failure-tail.txt" 2>/dev/null || true
+            printf '\n```\n'
+          } > "$EVIDENCE/failure-comment.md"
+          gh issue comment 387 --repo BigBirdReturns/undercast --body-file "$EVIDENCE/failure-comment.md" || true
+          if test -s "$EVIDENCE/product-pr.txt"; then
+            gh pr comment "$(cat "$EVIDENCE/product-pr.txt")" --repo BigBirdReturns/undercast --body-file "$EVIDENCE/failure-comment.md" || true
+          fi
+
+      - name: Upload settlement evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-settlement-${{ github.run_id }}
+          path: /tmp/rd-wave03-exact-capture-settlement-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
