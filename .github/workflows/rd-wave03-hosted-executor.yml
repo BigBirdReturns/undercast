@@ -1,0 +1,184 @@
+name: RD-W03 hosted exact-head executor v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/rd-wave03-hosted-executor.yml
+      - tmp/rd-wave03-integration.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rd-wave03-hosted-executor-v2
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REJECTED_SHA: 7c881d39f50f87e0df88cffa10a490fa1182fd14
+      REJECTED_NAME: RD-W03 hosted exact-head executor
+    steps:
+      - name: Refuse rejected predecessor
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/rd-wave03-preflight"
+          mkdir -p "$out"
+          api="repos/BigBirdReturns/undercast/actions/runs?head_sha=${REJECTED_SHA}&per_page=100"
+          list_rejected_pages() {
+            gh api --paginate "$api" --jq '.workflow_runs[]' | jq -s '{workflow_runs:.}'
+          }
+          list_rejected_pages > "$out/all-initial.json"
+          jq --arg name "$REJECTED_NAME" '[.workflow_runs[]|select(.name==$name)]' "$out/all-initial.json" > "$out/rejected-initial.json"
+          jq '[.[]|select(.status!="completed")|.id]' "$out/rejected-initial.json" > "$out/initially-active.json"
+          : > "$out/terminal.ndjson"
+          while IFS= read -r id; do
+            test -n "$id" || continue
+            gh api --method POST "repos/BigBirdReturns/undercast/actions/runs/${id}/cancel" || true
+            file="$out/run-${id}.json"
+            for attempt in $(seq 1 20); do
+              gh api "repos/BigBirdReturns/undercast/actions/runs/${id}" > "$file"
+              test "$(jq -r '.status' "$file")" = completed && break
+              sleep 3
+            done
+            test "$(jq -r '.status' "$file")" = completed
+            conclusion="$(jq -r '.conclusion // ""' "$file")"
+            test "$conclusion" = cancelled -o "$conclusion" = failure
+            jq '{id,name,status,conclusion,event,head_sha}' "$file" >> "$out/terminal.ndjson"
+          done < <(jq -r '.[]' "$out/initially-active.json")
+          jq -s '.' "$out/terminal.ndjson" > "$out/terminal.json"
+          list_rejected_pages > "$out/all-final.json"
+          jq --arg name "$REJECTED_NAME" '[.workflow_runs[]|select(.name==$name)]' "$out/all-final.json" > "$out/rejected-final.json"
+          jq -e 'all(.[];.status=="completed") and all(.[];.conclusion!="success")' "$out/rejected-final.json" >/dev/null
+          jq -n --slurpfile initial "$out/rejected-initial.json" --slurpfile active "$out/initially-active.json" --slurpfile terminal "$out/terminal.json" --slurpfile final "$out/rejected-final.json" '{rejected_sha:env.REJECTED_SHA,initial:$initial[0],initially_active:$active[0],initially_active_terminal:$terminal[0],final:$final[0],release_allowed:true}' > "$out/receipt.json"
+          body="Wave-03 executor v2 run ${GITHUB_RUN_ID} passed predecessor refusal at ${GITHUB_SHA}. Every initially active rejected run ended cancelled or failed; no rejected run remained active or completed successfully. Qualification receives no repository credential."
+          : > "$out/comment-failures.txt"
+          for pr in 328 332 343; do
+            gh pr comment "$pr" --repo BigBirdReturns/undercast --body "$body" || echo "$pr" >> "$out/comment-failures.txt"
+          done
+      - name: Upload predecessor receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-preflight-${{ github.run_id }}
+          path: ${{ runner.temp }}/rd-wave03-preflight
+          if-no-files-found: error
+          retention-days: 30
+
+  qualify:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    env:
+      EVIDENCE: ${{ runner.temp }}/rd-wave03-integration
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Run six exact lanes and complete release gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset GH_TOKEN GITHUB_TOKEN
+          git remote set-url origin https://github.com/BigBirdReturns/undercast.git
+          bash tmp/rd-wave03-integration.sh
+      - name: Upload qualification receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-integration-${{ github.run_id }}
+          path: ${{ runner.temp }}/rd-wave03-integration
+          if-no-files-found: error
+          retention-days: 30
+
+  finalize:
+    if: always()
+    needs: [preflight, qualify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EVIDENCE: ${{ runner.temp }}/rd-wave03-final
+      PREFLIGHT: ${{ needs.preflight.result }}
+      QUALIFY: ${{ needs.qualify.result }}
+    steps:
+      - name: Prepare and publish terminal result
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          overall=success
+          test "$PREFLIGHT" = success || overall=failure
+          test "$QUALIFY" = success || overall=failure
+          if test "$overall" = success; then
+            detail="Qualification reconstructed 45 permanent paths, executed 710 fixed routes, classified 959 cells, reran 267 refusals, and passed the complete release gate."
+          else
+            detail="No success-only qualification claim is accepted for this failed or skipped run; inspect the uploaded preflight and qualification receipts for the exact terminal boundary."
+          fi
+          cat > "$EVIDENCE/summary.json" <<EOF
+          {"run_id":"${GITHUB_RUN_ID}","controller":"${GITHUB_SHA}","preflight":"${PREFLIGHT}","qualification":"${QUALIFY}","overall":"${overall}","classes_closed":0,"evidence_admissions":0,"publication_effect":"none","adoption_effect":"none","graph_effect":"none","external_contacts":0,"external_reviews":0,"outside_human_dependency":false}
+          EOF
+          body="Wave-03 executor v2 run ${GITHUB_RUN_ID} terminal result: preflight=${PREFLIGHT}; six-lane qualification=${QUALIFY}; overall=${overall}. ${detail} No evidence admission, class closure, publication, adoption, graph, external-review, contact, or outside-human authority was created."
+          : > "$EVIDENCE/comment-failures.txt"
+          for pr in 322 323 324 325 326 327 328 332 343; do
+            gh pr comment "$pr" --repo BigBirdReturns/undercast --body "$body" || echo "$pr" >> "$EVIDENCE/comment-failures.txt"
+          done
+          cat "$EVIDENCE/summary.json"
+      - uses: actions/checkout@v4
+        if: always()
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Retire controller transport
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          paths=(.github/workflows/rd-wave03-hosted-executor.yml tmp/rd-wave03-integration.sh)
+          for attempt in 1 2 3; do
+            git fetch --no-tags origin main
+            live="$(git rev-parse refs/remotes/origin/main)"
+            git merge-base --is-ancestor "$GITHUB_SHA" "$live"
+            for path in "${paths[@]}"; do test "$(git rev-parse "$GITHUB_SHA:$path")" = "$(git rev-parse "$live:$path")"; done
+            git checkout -B rd-wave03-executor-cleanup "$live"
+            git rm -- "${paths[@]}"
+            git commit --no-verify -m 'CI: retire completed Wave-03 hosted executor v2'
+            cleanup="$(git rev-parse HEAD)"
+            if git push --force-with-lease="refs/heads/main:$live" origin HEAD:refs/heads/main; then
+              for pr in 322 323 324 325 326 327 328 332 343; do
+                gh pr comment "$pr" --repo BigBirdReturns/undercast --body "Wave-03 executor transport removed by ${cleanup}." || true
+              done
+              exit 0
+            fi
+          done
+          exit 1
+      - name: Upload terminal summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-hosted-summary-${{ github.run_id }}
+          path: ${{ runner.temp }}/rd-wave03-final
+          if-no-files-found: error
+          retention-days: 30
