@@ -78,6 +78,13 @@ function outputGitBytes(gitDir, args, options = {}) {
   return Buffer.from(runGit([`--git-dir=${gitDir}`, ...args], { ...options, encoding: null }).stdout || Buffer.alloc(0));
 }
 
+function assertCompleteSourceObjectDatabase(sourceRoot) {
+  const partial = runGit(["config", "--get", "extensions.partialClone"], { cwd: sourceRoot, allowFail: true });
+  assert.notEqual(partial.status, 0, "source checkout is a partial clone and may lazy-fetch undeclared objects");
+  const promisors = runGit(["config", "--get-regexp", "^remote\\..*\\.promisor$"], { cwd: sourceRoot, allowFail: true });
+  assert.notEqual(promisors.status, 0, "source checkout has a promisor remote and may lazy-fetch undeclared objects");
+}
+
 export function validateGitObjectManifest(document) {
   assert.equal(document?.schema_version, 1, "Git-object manifest schema drifted");
   assert.equal(document?.kind, MANIFEST_KIND, "Git-object manifest kind drifted");
@@ -162,20 +169,27 @@ export function validateGitObjectSetReceipt(receipt, expected = {}) {
   assert.equal(receipt?.boundary?.parent_history_copied, false, "Git-object-set copied parent history");
   assert.equal(receipt?.boundary?.full_history_restored, false, "Git-object-set restored full history");
   assert.equal(receipt?.boundary?.network_fetch_performed, false, "Git-object-set performed a network fetch");
+  assert.equal(receipt?.boundary?.source_partial_clone, false, "Git-object-set used a partial source checkout");
   assert.equal(receipt?.boundary?.source_checkout_mutated, false, "Git-object-set mutated the source checkout");
+  assert.match(receipt?.receipt_sha256, /^[0-9a-f]{64}$/, "Git-object-set receipt SHA-256 is invalid");
+  const receiptBody = structuredClone(receipt);
+  delete receiptBody.receipt_sha256;
+  assert.equal(receipt.receipt_sha256, sha256(stableJson(receiptBody)), "Git-object-set receipt self-hash drifted");
   if (expected.repository) assert.equal(receipt.repository, expected.repository, "Git-object-set repository drifted");
   if (expected.manifest_sha256) assert.equal(receipt.manifest_sha256, expected.manifest_sha256, "Git-object-set manifest digest drifted");
   return true;
 }
 
-export async function buildBoundedGitObjectSet({ sourceRoot, manifestPath, outputGitDir, receiptPath }) {
+export async function buildBoundedGitObjectSet({ sourceRoot, manifestPath, outputGitDir, receiptPath, expectedRepository = null }) {
   sourceRoot = path.resolve(sourceRoot);
   manifestPath = path.resolve(manifestPath);
   outputGitDir = path.resolve(outputGitDir);
   receiptPath = path.resolve(receiptPath);
   const sourceStatusBefore = gitText(sourceRoot, ["status", "--porcelain=v1", "--untracked-files=all"], { label: "read source checkout status before Git-object copy" });
   const sourceHead = requireCommit(gitText(sourceRoot, ["rev-parse", "HEAD"], { label: "read source checkout head" }), "source checkout head");
+  assertCompleteSourceObjectDatabase(sourceRoot);
   const { bytes: manifestBytes, document, denominator } = await readManifest(manifestPath);
+  if (expectedRepository) assert.equal(document.repository, expectedRepository, "Git-object manifest repository drifted");
   const manifestSha256 = sha256(manifestBytes);
 
   await rm(outputGitDir, { recursive: true, force: true });
@@ -234,6 +248,7 @@ export async function buildBoundedGitObjectSet({ sourceRoot, manifestPath, outpu
       parent_history_copied: false,
       full_history_restored: false,
       network_fetch_performed: false,
+      source_partial_clone: false,
       source_checkout_mutated: false,
     },
     receipt_sha256: null,
@@ -264,6 +279,7 @@ async function main() {
     manifestPath: requireString(option(argv, "--manifest"), "--manifest"),
     outputGitDir: requireString(option(argv, "--output"), "--output"),
     receiptPath: requireString(option(argv, "--receipt"), "--receipt"),
+    expectedRepository: requireString(option(argv, "--repository"), "--repository"),
   });
   console.log(JSON.stringify(receipt, null, 2));
 }
