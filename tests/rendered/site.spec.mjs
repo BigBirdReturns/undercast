@@ -116,6 +116,13 @@ test("archive navigation stays complete, consistent, and inside every viewport",
       await open(page,surface.path);
       await expect(page.locator(surface.ready).first()).toBeVisible();
       const nav=page.getByRole("navigation",{name:"Archive navigation",exact:true});
+      if(viewport.width<=700){
+        const menu=page.locator(".site-nav-toggle");
+        await expect(menu).toBeVisible();
+        await expect(menu).toHaveAttribute("aria-expanded","false");
+        await menu.click();
+        await expect(menu).toHaveAttribute("aria-expanded","true");
+      }
       await expect(nav).toBeVisible();
       for(const label of core) await expect(nav.getByRole("link",{name:label,exact:true})).toBeVisible();
       await expect(nav.getByRole("link",{name:"Constellations",exact:true})).toHaveCount(0);
@@ -537,22 +544,16 @@ test("Constellation mobile rows keep visual, reading, heading, and focus order a
   expect(mobileOrder.every(row=>row.personFirst&&row.headings[0]==="H2"&&row.headings.slice(1).every(tag=>tag==="H3")&&row.visualFirst)).toBeTruthy();
 
   const firstRow=rows.first();
-  const firstGroup=firstRow.locator("details.role-group").first();
-  const firstSummary=firstGroup.locator(":scope > summary");
   await firstRow.locator(".person-node").focus();
-  await page.keyboard.press("Tab");
-  await expect(firstSummary).toBeFocused();
-  await page.keyboard.press("Enter");
-  await expect(firstGroup).toHaveAttribute("open","");
   await page.keyboard.press("Tab");
   await expect(firstRow.locator(".role-stack .node").first()).toBeFocused();
 
   await page.setViewportSize({width:1280,height:900});
   await expect(firstRow).toBeVisible();
   const desktopOrder=await firstRow.evaluate(row=>{
-    const trek=row.querySelector(".role-group-trek").getBoundingClientRect();
+    const trek=row.querySelector(".role-stack-trek").getBoundingClientRect();
     const person=row.querySelector(".person-node").getBoundingClientRect();
-    const elsewhere=row.querySelector(".role-group-elsewhere").getBoundingClientRect();
+    const elsewhere=row.querySelector(".role-stack-elsewhere").getBoundingClientRect();
     return trek.right<person.left&&person.right<elsewhere.left;
   });
   expect(desktopOrder).toBeTruthy();

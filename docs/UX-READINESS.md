@@ -78,37 +78,10 @@ npm run gate
 
 Snapshot updates are product changes: they require an explicit diff, the exact fixture-state contract, and the complete gate. They are never regenerated as an unreviewed side effect.
 
-## UX-03 — mobile and dense-data usability
+## UX-02A — navigation continuity without promoting Connections
 
-UX-03 keeps the same evidence and page ownership while replacing narrow-screen
-compression with deliberate traversal:
+UX-02A normalizes the existing archive navigation while preserving DEC-0009. Browse, Recognition Loop, Coverage, Makers, and About remain the permanent primary destinations. Connections stays contextual: Recognition retains its record-local control, and the secondary archive map retains Evidence paths without promoting it into top navigation.
 
-- Coverage preserves the accessible table and explicit table roles, while its mobile
-  presentation turns every row into a five-field labelled card. Filters become one
-  column and evidence links retain full-size targets.
-- The wall keeps search and sort immediately available in a compact sticky control
-  block. Shelf, decade and sourced-species facets move into a native mobile
-  disclosure; active URL facets open it and remain named in the summary.
-- Recognition adds a mobile-only, hash-safe section map for images, hands, work,
-  reveal, prior familiarity, the memory pass, and recognition paths. Its controls
-  scroll within the record without replacing the `#UC-…` identity fragment.
-- Constellation keeps its desktop three-axis map. On mobile, each performer exposes
-  separate native disclosures for Star Trek roles and roles known elsewhere; an exact
-  selected edge opens its own group automatically.
-- Shared mobile navigation targets meet the 44-pixel interaction floor.
+Every root page and generated live or retired permanent record loads one shared navigation controller. At narrow widths JavaScript progressively enhances the complete link set into an explicit disclosure with `aria-expanded`, 44-pixel-plus targets, link-close behavior, and Escape-key focus recovery. With JavaScript disabled the full existing navigation remains visible. Static `aria-current` values identify the current primary page or containing archive section without depending on script execution.
 
-The dedicated mobile-density fixtures run only in the two mobile compatibility
-projects. Desktop Chromium, Firefox and WebKit retain the existing continuity and
-recovery matrix; mobile Chromium and mobile WebKit add the four dense-data journeys.
-The deterministic desktop screenshots are replayed unchanged.
-
-```text
-npx playwright test tests/rendered/mobile-density.spec.mjs \
-  --project=ux-chromium-mobile --project=ux-webkit-mobile
-npm run test:ux
-npm run test:visual
-npm run gate
-```
-
-The mobile projections are interfaces over current canonical data. They do not write
-coverage, graph, specimen, source, media, queue, lease, or waterline authority.
+Generated permanent-record pages remain disposable outputs. Qualification counts them from canonical live and tombstone records, validates every generated page, records a byte manifest, regenerates, and requires exact manifest replay; they are not misrepresented as committed product paths.
