@@ -1,0 +1,83 @@
+name: doctor-who-cycle-006-carrier-source-export-v3
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-006-carrier-source-export-v3.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-006-carrier-source-export-v3-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-006-carrier-source-export-v3.yml
+  SOURCE_COMMIT: 83b1021dba72d0873af7caafd1c2a15e9549001d
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  EXACT_MAIN: 66cf3de636558edd79bbf471c336a2c1c93a76a1
+  OUT: /tmp/doctor-who-cycle-006-carrier-source-export-v3
+
+jobs:
+  export:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind one-file read-only exporter and exact source commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "${SOURCE_COMMIT}:refs/doctor-who-cycle-006/source"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/doctor-who-cycle-006/source)" = "$SOURCE_COMMIT"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+
+      - name: Decode and inspect the reviewed carrier package
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$OUT/scripts.tgz"
+          for path in \
+            .ci/doctor-who-cycle-006/scripts.tgz.b64 \
+            .ci/doctor-who-cycle-006/scripts.tgz.b64.part-002 \
+            .ci/doctor-who-cycle-006/scripts.tgz.b64.part-003 \
+            .ci/doctor-who-cycle-006/scripts.tgz.b64.part-004 \
+            .ci/doctor-who-cycle-006/scripts.tgz.b64.part-005; do
+            git show "$SOURCE_COMMIT:$path"
+          done | base64 --decode > "$package"
+          sha256sum "$package" > "$OUT/scripts.tgz.sha256"
+          tar -tzf "$package" | sort > "$OUT/scripts.paths.txt"
+          mkdir -p "$OUT/scripts"
+          tar -xzf "$package" -C "$OUT/scripts"
+          find "$OUT/scripts" -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          find "$OUT/scripts" -type f -name '*.mjs' -print0 | xargs -0 -n1 node --check
+          find "$OUT/scripts" -type f -print0 | sort -z | xargs -0 sha256sum > "$OUT/scripts.files.sha256"
+          git show "$SOURCE_COMMIT:.github/workflows/ux-02a-script-runner.yml" > "$OUT/source-workflow.yml"
+          printf '%s\n' "$SOURCE_COMMIT" > "$OUT/source-commit.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload reviewed carrier sources
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-006-carrier-source-export-v3-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
