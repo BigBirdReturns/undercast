@@ -1,0 +1,92 @@
+name: doctor-who-cycle-007-source-snapshot
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-007-source-snapshot.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-007-source-snapshot
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-007-source-snapshot.yml
+  EXACT_MAIN: 45fc33aa8de8c01f03f006c5c01765dd1929385f
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  OUT: /tmp/doctor-who-cycle-007-source-snapshot
+
+jobs:
+  snapshot:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-007-source-snapshot'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 2
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind one-file carrier and detach to exact canonical main
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --filter=blob:none origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${HEAD_BRANCH})" = "$HEAD_SHA"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = "1"
+          test "$(git merge-base "$EXACT_MAIN" HEAD)" = "$EXACT_MAIN"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          git checkout --detach "$EXACT_MAIN"
+          test "$(git rev-parse HEAD)" = "$EXACT_MAIN"
+          test -z "$(git status --porcelain)"
+          printf 'exact_main=%s\nmain_tree=%s\ncarrier_head=%s\n' \
+            "$EXACT_MAIN" "$(git rev-parse "$EXACT_MAIN^{tree}")" "$HEAD_SHA" \
+            > "$OUT/main-identity.txt"
+
+      - name: Package exact source tree without repository internals
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar \
+            --exclude='./.git' \
+            --exclude='./node_modules' \
+            --sort=name \
+            --mtime='UTC 2026-08-05' \
+            --owner=0 --group=0 --numeric-owner \
+            -czf "$OUT/undercast-45fc33aa-source.tgz" .
+          sha256sum "$OUT/undercast-45fc33aa-source.tgz" > "$OUT/undercast-45fc33aa-source.tgz.sha256"
+          find . -path './.git' -prune -o -path './node_modules' -prune -o -type f -print \
+            | LC_ALL=C sort > "$OUT/source-paths.txt"
+          printf 'source_files=%s\narchive_bytes=%s\n' \
+            "$(wc -l < "$OUT/source-paths.txt")" \
+            "$(wc -c < "$OUT/undercast-45fc33aa-source.tgz")" \
+            > "$OUT/source-summary.txt"
+
+      - name: Upload exact canonical source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-source-snapshot-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
