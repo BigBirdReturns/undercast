@@ -206,18 +206,23 @@ assert.throws(() => buildOperationalEvidenceIssue({
 }), /review boundary/);
 
 const workflowPath = fileURLToPath(new URL("../.github/workflows/operational-reliability-evidence.yml", import.meta.url));
+const publisherPath = fileURLToPath(new URL("../.github/workflows/operational-reliability-evidence-publisher.yml", import.meta.url));
 const workflow = await readFile(workflowPath, "utf8");
-assert.match(workflow, /permissions:\n  contents: read\n  issues: write/);
+const publisher = await readFile(publisherPath, "utf8");
+assert.match(workflow, /permissions:\n  contents: read/);
+assert.doesNotMatch(workflow, /issues:\s*write/);
 assert.match(workflow, /id: evidence_artifact/);
-assert.match(workflow, /steps\.evidence_artifact\.outputs\.artifact-id/);
-assert.match(workflow, /steps\.evidence_artifact\.outputs\.artifact-url/);
-assert.match(workflow, /steps\.evidence_artifact\.outputs\.artifact-digest/);
-assert.match(workflow, /github\.event_name == 'push'/);
-assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
-assert.match(workflow, /operational-reliability-ledger\.mjs issue-payload/);
-assert.match(workflow, /multiple exact evidence issues found/);
-assert.ok(workflow.indexOf("id: evidence_artifact") < workflow.indexOf("Publish the exact-main evidence discovery issue"));
+assert.match(workflow, /publisher-handoff\.json/);
+assert.doesNotMatch(workflow, /operational-reliability-ledger\.mjs issue-payload/);
 assert.doesNotMatch(workflow, /waterline\.mjs record-drill/);
 assert.doesNotMatch(workflow, /ROADMAP-STATE\.json/);
 
-console.log("PASS — exact-main evidence issue payload, artifact binding, durable publication, idempotent title, and unreviewed boundary");
+assert.match(publisher, /\n  workflow_run:\n/);
+assert.match(publisher, /permissions:\n  contents: read\n  actions: read\n  issues: write/);
+assert.match(publisher, /workflow_run\.head_sha/);
+assert.match(publisher, /artifact\.digest/);
+assert.match(publisher, /operational-reliability-ledger\.mjs issue-payload/);
+assert.match(publisher, /multiple exact evidence issues found/);
+assert.ok((publisher.match(/git\/ref\/heads\/main/g) || []).length >= 2);
+
+console.log("PASS — exact-main evidence issue payload, hash-bound artifact handoff, trusted publication, idempotent title, and unreviewed boundary");
