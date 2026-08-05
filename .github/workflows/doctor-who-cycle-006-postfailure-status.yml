@@ -1,0 +1,119 @@
+name: doctor-who-cycle-006-postfailure-status
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-006-postfailure-status.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-006-postfailure-status-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-006-postfailure-status.yml
+  EXACT_MAIN: 66cf3de636558edd79bbf471c336a2c1c93a76a1
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  OUT: /tmp/doctor-who-cycle-006-postfailure-status
+  TASK_ID: ap_c8e74653ac0877837814db21
+  FAILED_RUN: "30977461852"
+  FAILED_LEASE: lease_ee9bc20a16cd513975f7ccdb
+
+jobs:
+  status:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact live main and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          git fetch --no-tags origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${HEAD_BRANCH})" = "$HEAD_SHA"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+          test -z "$(git status --porcelain)"
+
+      - name: Install exact runtime
+        run: npm ci
+
+      - name: Prove failed runner left no durable lease or product state
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/autopilot.mjs validate | tee "$OUT/autopilot-validate.log"
+          node scripts/autopilot.mjs status --json > "$OUT/global-status.json"
+          node scripts/autopilot.mjs status --scope doctor-who --json > "$OUT/doctor-who-status.json"
+          node scripts/autopilot.mjs readiness --scope doctor-who --require-active --json > "$OUT/readiness.json"
+          node scripts/autopilot.mjs candidates \
+            --scope doctor-who \
+            --capability-profile text-vision \
+            --limit 200 \
+            --json > "$OUT/candidates.json"
+          node scripts/waterline.mjs validate --scope doctor-who | tee "$OUT/waterline.log"
+          node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/media-gate.log"
+          jq -e '
+            .in_flight == 0 and
+            .statuses.queued == 311 and
+            .statuses.resolved == 5
+          ' "$OUT/doctor-who-status.json" >/dev/null
+          jq -e --arg task "$TASK_ID" '
+            .compatible[0].task_id == $task
+          ' "$OUT/candidates.json" >/dev/null
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const ap = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const task = ap.jobs.find(row => row.id === process.env.TASK_ID);
+          if (!task) throw new Error('Kayste task missing');
+          if (task.status !== 'queued') throw new Error(`Kayste status is ${task.status}, expected queued`);
+          const durableFailedLease = ap.leases?.find?.(row => row.id === process.env.FAILED_LEASE || row.lease_id === process.env.FAILED_LEASE);
+          if (durableFailedLease) throw new Error('failed runner lease entered durable AUTOPILOT state');
+          const activeJobs = ap.jobs.filter(row => !['queued','resolved','retired','cancelled'].includes(row.status));
+          if (activeJobs.length) throw new Error(`durable active jobs remain: ${activeJobs.map(row => `${row.id}:${row.status}`).join(', ')}`);
+          const receipt = {
+            version: 1,
+            exact_main: process.env.EXACT_MAIN,
+            failed_run: Number(process.env.FAILED_RUN),
+            failed_lease: process.env.FAILED_LEASE,
+            task: { id: task.id, status: task.status, performer: task.performer, character: task.character },
+            durable_failed_lease_present: false,
+            durable_active_jobs: 0,
+            retry_authorized: true,
+          };
+          fs.writeFileSync(`${process.env.OUT}/postfailure-status.json`, `${JSON.stringify(receipt, null, 2)}\n`);
+          NODE
+          sha256sum "$OUT/postfailure-status.json" | awk '{print $1}' > "$OUT/postfailure-status.sha256"
+          printf '%s\n' "$EXACT_MAIN" > "$OUT/exact-main.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact post-failure status evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-006-postfailure-status-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
