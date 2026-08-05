@@ -1,0 +1,159 @@
+name: doctor-who-cycle-007-selection
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-007-selection.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-007-selection-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-007-selection.yml
+  EXACT_MAIN: 45fc33aa8de8c01f03f006c5c01765dd1929385f
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  OUT: /tmp/doctor-who-cycle-007-selection
+
+jobs:
+  select:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-007-selection'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            .github/workflows/doctor-who-cycle-007-selection.yml
+            data
+            scripts
+
+      - name: Bind exact main and one-file read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          git fetch --no-tags --filter=blob:none origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${HEAD_BRANCH})" = "$HEAD_SHA"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          printf '%s\n' "$EXACT_MAIN" > "$OUT/exact-main.txt"
+          printf '%s\n' "$HEAD_SHA" > "$OUT/carrier-head.txt"
+
+      - name: Select deterministic next compatible task without claiming
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/autopilot.mjs validate | tee "$OUT/autopilot-validate.log"
+          node scripts/autopilot.mjs readiness --scope doctor-who --require-active --json > "$OUT/readiness.json"
+          node scripts/autopilot.mjs status --scope doctor-who --json > "$OUT/status.json"
+          node scripts/autopilot.mjs candidates \
+            --scope doctor-who \
+            --capability-profile text-vision \
+            --limit 310 \
+            --json > "$OUT/candidates.json"
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+
+          const out = process.env.OUT;
+          const report = JSON.parse(fs.readFileSync(`${out}/candidates.json`, 'utf8'));
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const readiness = JSON.parse(fs.readFileSync(`${out}/readiness.json`, 'utf8'));
+          const status = JSON.parse(fs.readFileSync(`${out}/status.json`, 'utf8'));
+          const activeStatuses = new Set(['leased', 'drafted', 'merged']);
+          const active = state.jobs.filter((job) => activeStatuses.has(job.status));
+          const doctor = state.jobs.filter((job) => job.scope === 'doctor-who');
+
+          if (active.length !== 0) throw new Error(`global active jobs: ${active.length}`);
+          if (status.in_flight !== 0 || status.statuses?.queued !== 310 || status.statuses?.resolved !== 6) throw new Error('Doctor Who denominator drifted');
+          if (!Array.isArray(readiness) || readiness.length !== 1 || readiness[0].scope_id !== 'doctor-who' || readiness[0].effective_status !== 'active' || readiness[0].lease_status !== 'ready') throw new Error('Doctor Who readiness drifted');
+          if (report.scope_id !== 'doctor-who' || report.profile?.id !== 'text-vision' || !Array.isArray(report.compatible) || report.compatible.length !== 310) throw new Error('candidate report drifted');
+
+          const selected = report.compatible[0];
+          const task = doctor.find((job) => job.id === selected.task_id);
+          if (!task || task.status !== 'queued') throw new Error('selected task is not queued');
+          if (task.source_fingerprint !== selected.source_fingerprint) throw new Error('source fingerprint drifted');
+          if (!Array.isArray(task.source_receipts) || task.source_receipts.length < 1) throw new Error('source receipt missing');
+
+          const packet = {
+            version: 1,
+            exact_main: process.env.EXACT_MAIN,
+            lease_issued: false,
+            queue_mutated: false,
+            global_active_count: active.length,
+            queue: {total: doctor.length, queued: status.statuses.queued, resolved: status.statuses.resolved, in_flight: status.in_flight},
+            selection_strategy: 'deterministic-first-compatible-read-only',
+            profile: report.profile,
+            policy_sha256: report.policy_sha256,
+            counts: report.counts,
+            selected,
+            task,
+            readiness: readiness[0],
+          };
+          const canonical = JSON.stringify(packet);
+          fs.writeFileSync(`${out}/global-active-jobs.json`, `${JSON.stringify(active, null, 2)}\n`);
+          fs.writeFileSync(`${out}/selected-task.json`, `${JSON.stringify(packet, null, 2)}\n`);
+          fs.writeFileSync(`${out}/selected-task-id.txt`, `${task.id}\n`);
+          fs.writeFileSync(`${out}/selected-source-fingerprint.txt`, `${task.source_fingerprint}\n`);
+          fs.writeFileSync(`${out}/selection-sha256.txt`, `${crypto.createHash('sha256').update(canonical).digest('hex')}\n`);
+          NODE
+
+      - name: Recover and hash every revision-bound source body
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+
+          const out = process.env.OUT;
+          const packet = JSON.parse(fs.readFileSync(`${out}/selected-task.json`, 'utf8'));
+          const recovered = [];
+          for (const [index, receipt] of packet.task.source_receipts.entries()) {
+            const source = new URL(receipt.source);
+            const endpoint = new URL('/api.php', source.origin);
+            endpoint.search = new URLSearchParams({action:'query', prop:'revisions', revids:String(receipt.revision), rvprop:'ids|timestamp|content', rvslots:'main', format:'json', formatversion:'2', origin:'*'}).toString();
+            const response = await fetch(endpoint, {headers: {'user-agent': 'Undercast exact-source recovery/1.0'}});
+            if (!response.ok) throw new Error(`source fetch failed ${response.status}: ${receipt.source}`);
+            const doc = await response.json();
+            const page = doc?.query?.pages?.[0];
+            const revision = page?.revisions?.[0];
+            const content = revision?.slots?.main?.content ?? revision?.slots?.main?.['*'] ?? revision?.['*'];
+            if (page?.pageid !== receipt.pageid || revision?.revid !== receipt.revision || revision?.timestamp !== receipt.timestamp) throw new Error(`source identity drifted: ${receipt.source}`);
+            if (typeof content !== 'string') throw new Error(`source body missing: ${receipt.source}`);
+            const bytes = Buffer.from(content);
+            const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+            if (digest !== receipt.content_sha256) throw new Error(`source content SHA drifted: ${receipt.source}`);
+            const bodyPath = `${out}/source-${String(index + 1).padStart(2, '0')}.wikitext`;
+            fs.writeFileSync(bodyPath, bytes);
+            recovered.push({...receipt, recovered_path: bodyPath, recovered_bytes: bytes.length, recovered_sha256: digest});
+          }
+          fs.writeFileSync(`${out}/recovered-sources.json`, `${JSON.stringify(recovered, null, 2)}\n`);
+          fs.writeFileSync(`${out}/boundary.json`, `${JSON.stringify({exact_main: process.env.EXACT_MAIN, lease_issued:false, queue_mutated:false, canonical_record_created:false, media_adopted:false, cycle_receipt_written:false, product_published:false}, null, 2)}\n`);
+          NODE
+
+      - name: Upload exact read-only selection evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-selection-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
