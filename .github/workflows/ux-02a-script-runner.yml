@@ -98,6 +98,7 @@ jobs:
           test "$(sha256sum "$CYCLE_ASSET_DIR/apply-doctor-who-cycle-006.mjs" | awk '{print $1}')" = "$MATERIALIZER_SHA256"
           test "$(sha256sum "$CYCLE_ASSET_DIR/apply-doctor-who-cycle-finalize-006.mjs" | awk '{print $1}')" = "$FINALIZER_SHA256"
           test "$(sha256sum "$CYCLE_ASSET_DIR/transport-manifest.json" | awk '{print $1}')" = "$TRANSPORT_MANIFEST_SHA256"
+
           binder="$CYCLE_ASSET_DIR/01-bind-decode.sh"
           binder_before="$(sha256sum "$binder" | awk '{print $1}')"
           python3 - "$binder" <<'PYBINDER'
@@ -124,37 +125,78 @@ jobs:
           bash "$binder"
 
           materializer="$CYCLE_ASSET_DIR/apply-doctor-who-cycle-006.mjs"
+          finalizer="$CYCLE_ASSET_DIR/apply-doctor-who-cycle-finalize-006.mjs"
           materializer_before="$(sha256sum "$materializer" | awk '{print $1}')"
+          finalizer_before="$(sha256sum "$finalizer" | awk '{print $1}')"
           test "$materializer_before" = "$MATERIALIZER_SHA256"
-          python3 - "$materializer" <<'PYMATERIALIZER'
+          test "$finalizer_before" = "$FINALIZER_SHA256"
+          python3 - "$materializer" "$finalizer" <<'PYMEDIA'
           from pathlib import Path
           import sys
 
-          path = Path(sys.argv[1])
-          text = path.read_text()
-          old = '''card.portrait = {
+          materializer = Path(sys.argv[1])
+          finalizer = Path(sys.argv[2])
+
+          materializer_text = materializer.read_text()
+          portrait_old = '''card.portrait = {
             src: portraitPath,
             kind: "portrait",
             origin: PORTRAIT_ORIGIN,
           '''
-          new = '''card.portrait = {
+          portrait_new = '''card.portrait = {
             src: portraitPath,
             kind: "free",
             origin: PORTRAIT_ORIGIN,
           '''
-          if text.count(old) != 1:
-              raise SystemExit(f"expected one invalid Kayste portrait provenance block, found {text.count(old)}")
-          if text.count(new) != 0:
+          presentation_old = '      value: "performer-portrait",\n'
+          presentation_new = '      value: "neutral-human",\n'
+          if materializer_text.count(portrait_old) != 1:
+              raise SystemExit(f"expected one invalid Kayste portrait provenance block, found {materializer_text.count(portrait_old)}")
+          if materializer_text.count(portrait_new) != 0:
               raise SystemExit("corrected Kayste portrait provenance block already present before repair")
-          path.write_text(text.replace(old, new, 1))
-          PYMATERIALIZER
+          if materializer_text.count(presentation_old) != 1:
+              raise SystemExit(f"expected one unsupported portrait presentation vote, found {materializer_text.count(presentation_old)}")
+          if materializer_text.count(presentation_new) != 0:
+              raise SystemExit("supported portrait presentation vote already present before repair")
+          materializer_text = materializer_text.replace(portrait_old, portrait_new, 1)
+          materializer_text = materializer_text.replace(presentation_old, presentation_new, 1)
+          materializer.write_text(materializer_text)
+
+          finalizer_text = finalizer.read_text()
+          kind_old = 'wall.portrait.kind !== "portrait"'
+          kind_new = 'wall.portrait.kind !== "free"'
+          vote_old = 'row.value === "performer-portrait"'
+          vote_new = 'row.value === "neutral-human"'
+          if finalizer_text.count(kind_old) != 1:
+              raise SystemExit(f"expected one schema-invalid portrait checker, found {finalizer_text.count(kind_old)}")
+          if finalizer_text.count(kind_new) != 0:
+              raise SystemExit("schema-valid portrait checker already present before repair")
+          if finalizer_text.count(vote_old) != 1:
+              raise SystemExit(f"expected one unsupported presentation checker, found {finalizer_text.count(vote_old)}")
+          if finalizer_text.count(vote_new) != 0:
+              raise SystemExit("supported presentation checker already present before repair")
+          finalizer_text = finalizer_text.replace(kind_old, kind_new, 1)
+          finalizer_text = finalizer_text.replace(vote_old, vote_new, 1)
+          finalizer.write_text(finalizer_text)
+          PYMEDIA
           materializer_after="$(sha256sum "$materializer" | awk '{print $1}')"
+          finalizer_after="$(sha256sum "$finalizer" | awk '{print $1}')"
           test "$materializer_before" != "$materializer_after"
+          test "$finalizer_before" != "$finalizer_after"
           test "$(grep -F 'kind: "free"' "$materializer" | wc -l)" -eq 1
           ! grep -F 'kind: "portrait"' "$materializer"
+          test "$(grep -F 'value: "neutral-human"' "$materializer" | wc -l)" -eq 1
+          ! grep -F 'value: "performer-portrait"' "$materializer"
+          test "$(grep -F 'wall.portrait.kind !== "free"' "$finalizer" | wc -l)" -eq 1
+          ! grep -F 'wall.portrait.kind !== "portrait"' "$finalizer"
+          test "$(grep -F 'row.value === "neutral-human"' "$finalizer" | wc -l)" -eq 1
+          ! grep -F 'row.value === "performer-portrait"' "$finalizer"
           node --check "$materializer"
-          printf 'materializer_sha_before=%s\nmaterializer_sha_after=%s\n' "$materializer_before" "$materializer_after"
+          node --check "$finalizer"
+          printf 'materializer_sha_before=%s\nmaterializer_sha_after=%s\nfinalizer_sha_before=%s\nfinalizer_sha_after=%s\n' \
+            "$materializer_before" "$materializer_after" "$finalizer_before" "$finalizer_after"
           printf '%s\n' "$materializer_after" > /tmp/doctor-who-cycle-006-effective-materializer.sha256
+          printf '%s\n' "$finalizer_after" > /tmp/doctor-who-cycle-006-effective-finalizer.sha256
 
       - name: Claim, materialize, review, and resolve exactly one Kayste task
         shell: bash
@@ -185,7 +227,9 @@ jobs:
             /tmp/doctor-who-cycle-006-normalized-verification.json
             /tmp/doctor-who-cycle-006-kayste-portrait.jpg
             /tmp/doctor-who-cycle-006-effective-materializer.sha256
+            /tmp/doctor-who-cycle-006-effective-finalizer.sha256
             /tmp/apply-doctor-who-cycle-006.mjs
+            /tmp/apply-doctor-who-cycle-finalize-006.mjs
 
       - name: Bind candidate artifact and workflow job custody
         shell: bash
@@ -235,6 +279,7 @@ jobs:
             /tmp/doctor-who-cycle-006-normalized-verification.json
             /tmp/doctor-who-cycle-006-kayste-portrait.jpg
             /tmp/doctor-who-cycle-006-effective-materializer.sha256
+            /tmp/doctor-who-cycle-006-effective-finalizer.sha256
             /tmp/apply-doctor-who-cycle-006.mjs
             /tmp/apply-doctor-who-cycle-finalize-006.mjs
             data/review/adapter-sdk/doctor-who-cycle-006-kayste.json
