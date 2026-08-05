@@ -61,6 +61,11 @@ test("Coverage keeps table semantics while presenting mobile-readable row cards"
   expect(first.width).toBeGreaterThan(300);
   expect(second.y).toBeGreaterThan(first.y + first.height);
   await expectMinimumHeight(selects.first(), 44, "Coverage filter");
+  const navigationToggle = page.locator(".site-nav-toggle");
+  await expect(navigationToggle).toBeVisible();
+  await expectMinimumHeight(navigationToggle, 44, "Coverage navigation disclosure");
+  await navigationToggle.click();
+  await expect(page.getByRole("navigation", { name: "Archive navigation", exact: true })).toBeVisible();
   await expectMinimumHeight(page.locator(".site-nav a").first(), 44, "Coverage primary navigation target");
   await expectNoDocumentOverflow(page, "Coverage");
 });
