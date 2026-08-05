@@ -164,6 +164,22 @@ export function gitBlobSha(bytes) {
   return createHash("sha1").update(Buffer.from(`blob ${body.length}\0`)).update(body).digest("hex");
 }
 
+export function sha256Hex(bytes) {
+  return createHash("sha256").update(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)).digest("hex");
+}
+
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
+  }
+  return value;
+}
+
+export function recordDigest(payload) {
+  return sha256Hex(`${JSON.stringify(stableValue(payload))}\n`);
+}
+
 function loadBaseline(file) {
   const document = JSON.parse(readFileSync(file, "utf8"));
   assert.equal(document.schema_version, 1, "publisher-custody baseline schema drifted");
@@ -232,11 +248,126 @@ export function validateProductPullRequest(pr, expected) {
   return true;
 }
 
+function assertSafeRelativePath(file) {
+  assert.equal(typeof file, "string", "handoff file path must be a string");
+  assert.ok(file.length > 0, "handoff file path must not be empty");
+  assert.equal(path.isAbsolute(file), false, `handoff file path must be relative: ${file}`);
+  assert.equal(file.includes("\\"), false, `handoff file path must use POSIX separators: ${file}`);
+  const normalized = path.posix.normalize(file);
+  assert.equal(normalized, file, `handoff file path is not normalized: ${file}`);
+  assert.equal(normalized.startsWith("../") || normalized === "..", false, `handoff file escapes root: ${file}`);
+}
+
+export function validateArtifactMetadata(artifact, expected) {
+  assert.equal(Number(artifact.id), Number(expected.artifact_id), "artifact id drifted");
+  assert.equal(artifact.name, expected.artifact_name, "artifact name drifted");
+  assert.equal(artifact.expired, false, "artifact is expired");
+  assert.equal(artifact.digest, expected.artifact_digest, "artifact digest drifted");
+  assert.equal(Number(artifact.workflow_run?.id), Number(expected.run_id), "artifact workflow run drifted");
+  assert.equal(artifact.workflow_run?.head_sha, expected.head_sha, "artifact workflow head drifted");
+  return true;
+}
+
+export function validateEvidenceHandoff(handoff, expected, root) {
+  assert.deepEqual(Object.keys(handoff).sort(), [
+    "artifact_name",
+    "event_name",
+    "files",
+    "head_branch",
+    "head_sha",
+    "kind",
+    "repository",
+    "run_attempt",
+    "run_id",
+    "schema_version",
+  ], "publisher handoff shape drifted");
+  assert.equal(handoff.schema_version, 1, "publisher handoff schema drifted");
+  assert.equal(handoff.kind, expected.kind, "publisher handoff kind drifted");
+  assert.equal(handoff.repository, expected.repository, "publisher handoff repository drifted");
+  assert.equal(Number(handoff.run_id), Number(expected.run_id), "publisher handoff run drifted");
+  assert.equal(Number(handoff.run_attempt), Number(expected.run_attempt), "publisher handoff attempt drifted");
+  assert.equal(handoff.event_name, expected.event_name, "publisher handoff event drifted");
+  assert.equal(handoff.head_branch, expected.head_branch, "publisher handoff branch drifted");
+  assert.equal(handoff.head_sha, expected.head_sha, "publisher handoff head drifted");
+  assert.equal(handoff.artifact_name, expected.artifact_name, "publisher handoff artifact name drifted");
+  assert.ok(handoff.files && typeof handoff.files === "object" && !Array.isArray(handoff.files), "publisher handoff files must be an object");
+  const entries = Object.entries(handoff.files).sort(([a], [b]) => a.localeCompare(b));
+  assert.ok(entries.length > 0, "publisher handoff has no files");
+  for (const [file, digest] of entries) {
+    assertSafeRelativePath(file);
+    assert.match(digest, /^[0-9a-f]{64}$/, `invalid handoff SHA-256 for ${file}`);
+    const bytes = readFileSync(path.resolve(root, file));
+    assert.equal(sha256Hex(bytes), digest, `publisher handoff file digest drifted: ${file}`);
+  }
+  return true;
+}
+
+export function validatePublicationSettlement(settlement, expected) {
+  assert.equal(settlement.schema_version, 1, "publication settlement schema drifted");
+  assert.equal(settlement.verifier.run_id, expected.verifier_run_id, "verifier run drifted");
+  assert.equal(settlement.verifier.carrier_head, expected.carrier_head, "carrier head drifted");
+  assert.equal(settlement.artifact.id, expected.artifact_id, "settlement artifact id drifted");
+  assert.equal(settlement.artifact.digest, expected.artifact_digest, "settlement artifact digest drifted");
+  assert.equal(settlement.product.base_ref, expected.base_ref, "settlement base ref drifted");
+  assert.equal(settlement.product.base_sha, expected.base_sha, "settlement base SHA drifted");
+  assert.equal(settlement.product.parent_sha, expected.base_sha, "product parent drifted");
+  assert.equal(settlement.product.commit_sha, expected.head_sha, "settlement product commit drifted");
+  assert.equal(settlement.product.tree_sha, expected.tree_sha, "settlement product tree drifted");
+  assert.equal(settlement.product.pr_number, expected.pr_number, "settlement product PR drifted");
+  assert.deepEqual([...settlement.product.changed_paths].sort(), [...expected.changed_paths].sort(), "settlement path manifest drifted");
+
+  const checkpointNames = [
+    "product_commit_constructed",
+    "product_pr_created",
+    "publication_receipt_created",
+    "terminal_closure",
+  ];
+  assert.deepEqual(Object.keys(settlement.checkpoints).sort(), [...checkpointNames].sort(), "publication checkpoints drifted");
+  for (const checkpoint of checkpointNames) {
+    assert.equal(settlement.checkpoints[checkpoint], expected.base_sha, `main advanced at checkpoint ${checkpoint}`);
+  }
+
+  const expectedPayload = {
+    artifact_digest: expected.artifact_digest,
+    artifact_id: expected.artifact_id,
+    base_ref: expected.base_ref,
+    base_sha: expected.base_sha,
+    carrier_head: expected.carrier_head,
+    changed_paths: [...expected.changed_paths].sort(),
+    product_commit: expected.head_sha,
+    product_pr_number: expected.pr_number,
+    product_tree: expected.tree_sha,
+    verifier_run_id: expected.verifier_run_id,
+  };
+  assert.deepEqual(stableValue(settlement.publication_receipt.payload), stableValue(expectedPayload), "publication receipt payload drifted");
+  assert.equal(settlement.publication_receipt.sha256, recordDigest(settlement.publication_receipt.payload), "publication receipt digest drifted");
+  return true;
+}
+
+export function validateTerminalPublication({ settlement, pr, current_main_sha: currentMainSha }, expected) {
+  validatePublicationSettlement(settlement, expected);
+  assert.equal(currentMainSha, expected.base_sha, "main advanced before terminal closure");
+  validateProductPullRequest(pr, {
+    base_ref: expected.base_ref,
+    base_sha: expected.base_sha,
+    head_sha: expected.head_sha,
+    changed_paths: expected.changed_paths,
+  });
+  assert.equal(pr.number, expected.pr_number, "actual product PR number drifted");
+  return true;
+}
+
 function option(argv, name, fallback = null) {
   const index = argv.indexOf(name);
   if (index < 0) return fallback;
   const value = argv[index + 1];
   if (!value || value.startsWith("--")) throw new Error(`${name} requires a value`);
+  return value;
+}
+
+function requiredOption(argv, name) {
+  const value = option(argv, name);
+  if (value === null) throw new Error(`${name} is required`);
   return value;
 }
 
@@ -252,15 +383,59 @@ async function main() {
     return;
   }
   if (command === "verify-product-pr") {
-    const pr = JSON.parse(readFileSync(option(argv, "--pr-json"), "utf8"));
-    const paths = JSON.parse(readFileSync(option(argv, "--paths-json"), "utf8"));
+    const pr = JSON.parse(readFileSync(requiredOption(argv, "--pr-json"), "utf8"));
+    const paths = JSON.parse(readFileSync(requiredOption(argv, "--paths-json"), "utf8"));
     validateProductPullRequest(pr, {
       base_ref: option(argv, "--base-ref", "main"),
-      base_sha: option(argv, "--base-sha"),
-      head_sha: option(argv, "--head-sha"),
+      base_sha: requiredOption(argv, "--base-sha"),
+      head_sha: requiredOption(argv, "--head-sha"),
       changed_paths: paths,
     });
     console.log("publisher custody: product PR exact");
+    return;
+  }
+  if (command === "verify-evidence-handoff") {
+    const handoff = JSON.parse(readFileSync(requiredOption(argv, "--handoff-json"), "utf8"));
+    const artifact = JSON.parse(readFileSync(requiredOption(argv, "--artifact-json"), "utf8"));
+    const expected = {
+      kind: requiredOption(argv, "--kind"),
+      repository: requiredOption(argv, "--repository"),
+      run_id: Number(requiredOption(argv, "--run-id")),
+      run_attempt: Number(requiredOption(argv, "--run-attempt")),
+      event_name: requiredOption(argv, "--event-name"),
+      head_branch: requiredOption(argv, "--head-branch"),
+      head_sha: requiredOption(argv, "--head-sha"),
+      artifact_id: Number(requiredOption(argv, "--artifact-id")),
+      artifact_name: requiredOption(argv, "--artifact-name"),
+      artifact_digest: requiredOption(argv, "--artifact-digest"),
+    };
+    validateArtifactMetadata(artifact, expected);
+    validateEvidenceHandoff(handoff, expected, path.resolve(requiredOption(argv, "--root")));
+    console.log("publisher custody: evidence handoff exact");
+    return;
+  }
+  if (command === "verify-terminal-publication") {
+    const settlement = JSON.parse(readFileSync(requiredOption(argv, "--settlement-json"), "utf8"));
+    const pr = JSON.parse(readFileSync(requiredOption(argv, "--pr-json"), "utf8"));
+    const paths = JSON.parse(readFileSync(requiredOption(argv, "--paths-json"), "utf8"));
+    const expected = {
+      verifier_run_id: Number(requiredOption(argv, "--verifier-run-id")),
+      carrier_head: requiredOption(argv, "--carrier-head"),
+      artifact_id: Number(requiredOption(argv, "--artifact-id")),
+      artifact_digest: requiredOption(argv, "--artifact-digest"),
+      base_ref: option(argv, "--base-ref", "main"),
+      base_sha: requiredOption(argv, "--base-sha"),
+      head_sha: requiredOption(argv, "--head-sha"),
+      tree_sha: requiredOption(argv, "--tree-sha"),
+      pr_number: Number(requiredOption(argv, "--pr-number")),
+      changed_paths: paths,
+    };
+    validateTerminalPublication({
+      settlement,
+      pr,
+      current_main_sha: requiredOption(argv, "--current-main-sha"),
+    }, expected);
+    console.log("publisher custody: terminal publication exact");
     return;
   }
   throw new Error(`unknown publisher-custody command ${command}`);
