@@ -2,7 +2,7 @@ name: apply-collection-only-operations
 
 on:
   workflow_run:
-    workflows: [ux-nav-noscript-source-export]
+    workflows: [archive-contract]
     types: [completed]
 
 permissions:
@@ -21,14 +21,13 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       EVIDENCE: ${{ runner.temp }}/ux-nav-noscript-review-release
-      EXPECTED_TRIGGER_PR: "355"
-      EXPECTED_TRIGGER_HEAD: fd5865c3884d009edaa77623d558d86c2138fd46
+      EXPECTED_TRIGGER_PR: "359"
       EXPECTED_CARRIER_SHA: d5e13a7db6b0ab394f9caabdefe0059e54415f3f
       EXPECTED_CARRIER_SHA256: f4d970126c7de42ba35e2e3a5b3e43cba7739ddbdcd082ad5b4d36a67fb9c4b5
-      EXPECTED_MAIN_PARENT: be5db794b9aca7bd74e2a9e6a3d64cb6b3072a17
+      EXPECTED_MAIN_ROOT: be5db794b9aca7bd74e2a9e6a3d64cb6b3072a17
       SELF: .github/workflows/apply-collection-mode.yml
     steps:
-      - name: Select exact read-only trigger
+      - name: Select exact archive qualification
         id: guard
         shell: bash
         env:
@@ -38,8 +37,7 @@ jobs:
           eligible=false
           if jq -e \
             --arg pr "$EXPECTED_TRIGGER_PR" \
-            --arg head "$EXPECTED_TRIGGER_HEAD" \
-            '.event == "pull_request" and .conclusion == "success" and .head_sha == $head and any(.pull_requests[]?; (.number|tostring) == $pr)' \
+            '.event == "pull_request" and .conclusion == "success" and any(.pull_requests[]?; (.number|tostring) == $pr)' \
             <<<"$RUN_JSON" >/dev/null; then
             eligible=true
           fi
@@ -51,10 +49,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$EVIDENCE"
-          printf 'status=started\nrun=%s\ntrigger_run=%s\ntrigger_head=%s\ncarrier=%s\n' \
-            "$GITHUB_RUN_ID" "${{ github.event.workflow_run.id }}" "$EXPECTED_TRIGGER_HEAD" "$EXPECTED_CARRIER_SHA" \
+          printf 'status=started\nrun=%s\ntrigger_run=%s\ncarrier=%s\npr=%s\n' \
+            "$GITHUB_RUN_ID" "${{ github.event.workflow_run.id }}" "$EXPECTED_CARRIER_SHA" "$EXPECTED_TRIGGER_PR" \
             > "$EVIDENCE/start.txt"
-          gh pr comment 346 --repo BigBirdReturns/undercast --body "Exact no-JavaScript review-release run ${GITHUB_RUN_ID} selected read-only trigger run ${{ github.event.workflow_run.id }} and immutable carrier ${EXPECTED_CARRIER_SHA}."
+          gh pr comment 346 --repo BigBirdReturns/undercast --body "Exact no-JavaScript review-release run ${GITHUB_RUN_ID} selected archive-contract run ${{ github.event.workflow_run.id }} for carrier PR #${EXPECTED_TRIGGER_PR} and immutable carrier ${EXPECTED_CARRIER_SHA}."
 
       - uses: actions/checkout@v4
         if: steps.guard.outputs.eligible == 'true'
@@ -73,12 +71,12 @@ jobs:
           chmod +x /tmp/ux02a-materialize.sh
           git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
           live="$(git rev-parse refs/remotes/origin/main)"
-          test "$(git show -s --format='%P' "$live")" = "$EXPECTED_MAIN_PARENT"
-          git diff --name-only "$EXPECTED_MAIN_PARENT" "$live" | LC_ALL=C sort > /tmp/controller-paths
+          git merge-base --is-ancestor "$EXPECTED_MAIN_ROOT" "$live"
+          git diff --name-only "$EXPECTED_MAIN_ROOT" "$live" | LC_ALL=C sort > /tmp/controller-paths
           printf '%s\n' "$SELF" > /tmp/expected-controller-paths
           diff -u /tmp/expected-controller-paths /tmp/controller-paths
-          git push --force-with-lease="refs/heads/main:${live}" origin "${EXPECTED_MAIN_PARENT}:refs/heads/main"
-          printf 'controller=%s\nretired_to=%s\n' "$live" "$EXPECTED_MAIN_PARENT" > "$EVIDENCE/controller-retirement.txt"
+          git push --force-with-lease="refs/heads/main:${live}" origin "${EXPECTED_MAIN_ROOT}:refs/heads/main"
+          printf 'controller=%s\nretired_to=%s\n' "$live" "$EXPECTED_MAIN_ROOT" > "$EVIDENCE/controller-retirement.txt"
 
       - uses: actions/setup-node@v4
         if: steps.guard.outputs.eligible == 'true'
