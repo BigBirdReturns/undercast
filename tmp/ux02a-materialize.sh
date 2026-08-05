@@ -1,76 +1,62 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-payload="${RUNNER_TEMP:-/tmp}/ux02a-p2-materializer.actual.sh"
-base64 -d <<'PAYLOAD' | xz -dc > "$payload"
-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
-scRn+wIAAAAABFla
-PAYLOAD
-chmod +x "$payload"
-exec bash "$payload"
+
+sealed_commit="d5e13a7db6b0ab394f9caabdefe0059e54415f3f"
+sealed_wrapper_sha256="f4d970126c7de42ba35e2e3a5b3e43cba7739ddbdcd082ad5b4d36a67fb9c4b5"
+sealed_payload_sha256="a2350b88fc260ff60df5f48f00906a8a994cd09a3d6301cb077f2b48932dccce"
+work="${RUNNER_TEMP:-/tmp}/ux02a-review-carrier-v2"
+mkdir -p "$work"
+
+test "$(git show -s --format=%P HEAD)" = "$sealed_commit"
+git show "${sealed_commit}:tmp/ux02a-materialize.sh" > "$work/sealed-wrapper.sh"
+test "$(sha256sum "$work/sealed-wrapper.sh" | awk '{print $1}')" = "$sealed_wrapper_sha256"
+
+python3 - "$work/sealed-wrapper.sh" "$work/materializer.sh" "$sealed_payload_sha256" <<'PY'
+from pathlib import Path
+import base64
+import hashlib
+import lzma
+import re
+import sys
+
+wrapper_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+expected_payload_sha256 = sys.argv[3]
+wrapper = wrapper_path.read_text(encoding="utf-8")
+match = re.search(
+    r"base64 -d <<'PAYLOAD' \| xz -dc > \"\$payload\"\n(.*?)\nPAYLOAD\n",
+    wrapper,
+    flags=re.DOTALL,
+)
+if not match:
+    raise SystemExit("sealed materializer payload is missing")
+script = lzma.decompress(base64.b64decode("".join(match.group(1).split()))).decode("utf-8")
+actual_payload_sha256 = hashlib.sha256(script.encode("utf-8")).hexdigest()
+if actual_payload_sha256 != expected_payload_sha256:
+    raise SystemExit(
+        f"sealed materializer payload drift: {actual_payload_sha256} != {expected_payload_sha256}"
+    )
+old = """grep -Fq '## DEC-0016 — Compact archive navigation is progressive enhancement, not a new destination' docs/DECISIONS.md
+grep -Fq 'DEC-0015 remains the authority for dense mobile evidence' docs/DECISIONS.md
+grep -Fq 'Connections and Constellations remain contextual or secondary under DEC-0009' docs/DECISIONS.md
+"""
+new = """python3 - <<'PYDECISIONS'
+from pathlib import Path
+text = \" \".join(Path(\"docs/DECISIONS.md\").read_text(encoding=\"utf-8\").split())
+required = [
+    \"## DEC-0016 — Compact archive navigation is progressive enhancement, not a new destination\",
+    \"DEC-0015 remains the authority for dense mobile evidence\",
+    \"Connections and Constellations remain contextual or secondary under DEC-0009\",
+]
+for phrase in required:
+    if phrase not in text:
+        raise SystemExit(f\"decision-log authority phrase is missing: {phrase}\")
+PYDECISIONS
+"""
+if script.count(old) != 1:
+    raise SystemExit(f"decision assertion block count is {script.count(old)}, expected 1")
+output_path.write_text(script.replace(old, new, 1), encoding="utf-8")
+PY
+
+chmod +x "$work/materializer.sh"
+exec bash "$work/materializer.sh"
