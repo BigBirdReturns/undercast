@@ -1,0 +1,405 @@
+name: RD-W03 verified-settlement API publisher
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/rd-wave03-exact-capture-api-publisher.yml
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: rd-wave03-exact-capture-api-publisher
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      API_VERSION: "2022-11-28"
+      BASE_SHA: 45fc33aa8de8c01f03f006c5c01765dd1929385f
+      CARRIER_BASE_BRANCH: agent/ssc-rd-wave03-exact-capture-api-finalizer-base-20260805
+      CARRIER_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      CARRIER_PR: ${{ github.event.pull_request.number }}
+      GH_TOKEN: ${{ github.token }}
+      OUT: /tmp/rd-wave03-exact-capture-api-publisher-${{ github.run_id }}
+      REPO: BigBirdReturns/undercast
+      TARGET_BRANCH: agent/ssc-rd-wave03-exact-capture-product-20260805
+      VERIFY_ARTIFACT_CREATED_AT: "2026-08-05T17:20:23Z"
+      VERIFY_ARTIFACT_DIGEST: sha256:b0fb0b27259349775b0d48b4eeab3024a5831139c05ebe58a3955aaf50d3e079
+      VERIFY_ARTIFACT_ID: "8940053176"
+      VERIFY_ARTIFACT_NAME: rd-wave03-exact-capture-final-31029020122
+      VERIFY_HEAD: 7e9ace84816a137d0e1df952cdafccd95ac4b1ce
+      VERIFY_RUN_ID: "31029020122"
+    steps:
+      - name: Verify immutable carrier and verification artifact custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT/publication"
+          printf 'carrier_and_artifact_preflight\n' > "$OUT/stage.txt"
+          python3 - "$OUT" <<'PY'
+          import json, os, pathlib, sys, urllib.error, urllib.parse, urllib.request
+
+          out = pathlib.Path(sys.argv[1])
+          repo = os.environ['REPO']
+          token = os.environ['GH_TOKEN']
+          root = f"https://api.github.com/repos/{repo}"
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'User-Agent': 'rd-wave03-exact-capture-api-publisher',
+              'X-GitHub-Api-Version': os.environ['API_VERSION'],
+          }
+
+          def api(method, path, payload=None, query=None, allowed=(200, 201)):
+              url = f"{root}/{path.lstrip('/')}"
+              if query:
+                  url += '?' + urllib.parse.urlencode(query)
+              data = None if payload is None else json.dumps(payload, separators=(',', ':')).encode()
+              req = urllib.request.Request(url, data=data, method=method, headers=headers)
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as response:
+                      body = response.read()
+                      status = response.status
+              except urllib.error.HTTPError as error:
+                  body = error.read()
+                  status = error.code
+              if status not in allowed:
+                  text = body.decode('utf-8', 'replace')[:2000]
+                  raise SystemExit(f'{method} {path} failed with HTTP {status}: {text}')
+              return status, json.loads(body or b'{}')
+
+          _, pr = api('GET', f"pulls/{os.environ['CARRIER_PR']}")
+          assert pr['base']['ref'] == os.environ['CARRIER_BASE_BRANCH']
+          assert pr['base']['sha'] == os.environ['BASE_SHA']
+          assert pr['head']['sha'] == os.environ['CARRIER_HEAD_SHA']
+          _, commit = api('GET', f"git/commits/{os.environ['CARRIER_HEAD_SHA']}")
+          assert [row['sha'] for row in commit['parents']] == [os.environ['BASE_SHA']]
+          _, files = api('GET', f"pulls/{os.environ['CARRIER_PR']}/files", query={'per_page': 100})
+          assert sorted(row['filename'] for row in files) == ['.github/workflows/rd-wave03-exact-capture-api-publisher.yml']
+
+          _, artifact = api('GET', f"actions/artifacts/{os.environ['VERIFY_ARTIFACT_ID']}")
+          assert str(artifact['id']) == os.environ['VERIFY_ARTIFACT_ID']
+          assert artifact['name'] == os.environ['VERIFY_ARTIFACT_NAME']
+          assert artifact['expired'] is False
+          assert artifact['digest'] == os.environ['VERIFY_ARTIFACT_DIGEST']
+          assert artifact['created_at'] == os.environ['VERIFY_ARTIFACT_CREATED_AT']
+          assert str(artifact['workflow_run']['id']) == os.environ['VERIFY_RUN_ID']
+          assert artifact['workflow_run']['head_sha'] == os.environ['VERIFY_HEAD']
+          (out / 'verification-artifact.json').write_text(json.dumps(artifact, sort_keys=True, indent=2) + '\n')
+          print('carrier and verification artifact custody: PASS')
+          PY
+
+      - name: Download independently verified settlement
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.VERIFY_ARTIFACT_NAME }}
+          path: ${{ env.OUT }}/settlement
+          github-token: ${{ github.token }}
+          repository: ${{ env.REPO }}
+          run-id: ${{ env.VERIFY_RUN_ID }}
+
+      - name: Verify settlement and publish exact workflow-free product
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'settlement_and_git_publication\n' > "$OUT/stage.txt"
+          cd "$OUT/settlement"
+          sha256sum -c SHA256SUMS
+          python3 - "$OUT" <<'PY'
+          import base64, hashlib, json, os, pathlib, sys, urllib.error, urllib.parse, urllib.request
+
+          out = pathlib.Path(sys.argv[1])
+          settlement = out / 'settlement'
+          publication = out / 'publication'
+          publication.mkdir(parents=True, exist_ok=True)
+          repo = os.environ['REPO']
+          owner = repo.split('/', 1)[0]
+          token = os.environ['GH_TOKEN']
+          root = f"https://api.github.com/repos/{repo}"
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'User-Agent': 'rd-wave03-exact-capture-api-publisher',
+              'X-GitHub-Api-Version': os.environ['API_VERSION'],
+          }
+
+          def api(method, path, payload=None, query=None, allowed=(200, 201)):
+              url = f"{root}/{path.lstrip('/')}"
+              if query:
+                  url += '?' + urllib.parse.urlencode(query)
+              data = None if payload is None else json.dumps(payload, separators=(',', ':')).encode()
+              req = urllib.request.Request(url, data=data, method=method, headers=headers)
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as response:
+                      body = response.read()
+                      status = response.status
+              except urllib.error.HTTPError as error:
+                  body = error.read()
+                  status = error.code
+              if status not in allowed:
+                  text = body.decode('utf-8', 'replace')[:2000]
+                  raise SystemExit(f'{method} {path} failed with HTTP {status}: {text}')
+              return status, json.loads(body or b'{}')
+
+          def git_blob_sha(data):
+              return hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
+
+          receipt = json.loads((settlement / 'finalizer-receipt.json').read_text())
+          assert receipt['transaction_id'] == 'RD-W03-EXACT-CAPTURE-FINAL-01'
+          assert receipt['finalizer_run_id'] == int(os.environ['VERIFY_RUN_ID'])
+          assert receipt['finalizer_head'] == os.environ['VERIFY_HEAD']
+          assert receipt['product_parent'] == os.environ['BASE_SHA']
+          assert receipt['product_path_count'] == 6
+          assert receipt['route_observations'] == 710
+          assert receipt['selected_capture_objects'] == 9
+          assert receipt['refused_observations'] == 701
+          assert receipt['successful_captures'] == 9 and receipt['failed_captures'] == 0
+          assert receipt['unchanged_from_intake'] == 0 and receipt['drifted_from_intake'] == 9
+          assert receipt['complete_current_main_gate'] == 'passed'
+          assert receipt['adversarial_refusals'] == 35
+          assert receipt['source_requests_repeated_by_finalizer'] is False
+          assert receipt['evidence_admissions'] == receipt['chronology_resolved'] == receipt['classes_closed'] == 0
+          assert receipt['outside_human_dependency'] is False
+          assert receipt['publication_effect'] == receipt['adoption_effect'] == receipt['graph_effect'] == 'none'
+          assert receipt['merge_authority'] is False
+
+          _, main_ref = api('GET', 'git/ref/heads/main')
+          assert main_ref['object']['sha'] == os.environ['BASE_SHA'], 'main moved after verification'
+          _, base_commit = api('GET', f"git/commits/{os.environ['BASE_SHA']}")
+          base_tree = base_commit['tree']['sha']
+
+          paths = [line for line in (settlement / 'product-paths.txt').read_text().splitlines() if line]
+          assert paths == sorted(paths) and len(paths) == 6 and len(set(paths)) == 6
+          entries = []
+          blob_rows = []
+          for path in paths:
+              data = (settlement / 'package' / path).read_bytes()
+              expected_sha = git_blob_sha(data)
+              _, blob = api('POST', 'git/blobs', {'content': base64.b64encode(data).decode(), 'encoding': 'base64'})
+              assert blob['sha'] == expected_sha
+              entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': blob['sha']})
+              blob_rows.append(f"{path}\t{blob['sha']}")
+          (publication / 'blobs.tsv').write_text('\n'.join(blob_rows) + '\n')
+
+          _, tree = api('POST', 'git/trees', {'base_tree': base_tree, 'tree': entries})
+          tree_sha = tree['sha']
+          identity = {
+              'name': 'github-actions[bot]',
+              'email': '41898282+github-actions[bot]@users.noreply.github.com',
+              'date': os.environ['VERIFY_ARTIFACT_CREATED_AT'],
+          }
+          commit_payload = {
+              'message': 'research: RD-W03 exact-capture nine current official objects',
+              'tree': tree_sha,
+              'parents': [os.environ['BASE_SHA']],
+              'author': identity,
+              'committer': identity,
+          }
+          _, product_commit = api('POST', 'git/commits', commit_payload)
+          product_head = product_commit['sha']
+
+          branch_path = 'branches/' + urllib.parse.quote(os.environ['TARGET_BRANCH'], safe='')
+          status, branch = api('GET', branch_path, allowed=(200, 404))
+          if status == 404:
+              api('POST', 'git/refs', {'ref': 'refs/heads/' + os.environ['TARGET_BRANCH'], 'sha': product_head})
+          else:
+              assert branch['commit']['sha'] == product_head, 'target branch exists at a different commit'
+          _, branch = api('GET', branch_path)
+          assert branch['commit']['sha'] == product_head
+
+          _, comparison = api('GET', f"compare/{os.environ['BASE_SHA']}...{product_head}")
+          assert comparison['ahead_by'] == 1 and comparison['behind_by'] == 0
+          actual_paths = sorted(row['filename'] for row in comparison['files'])
+          assert actual_paths == paths
+          (publication / 'compare.json').write_text(json.dumps(comparison, sort_keys=True, indent=2) + '\n')
+          (publication / 'actual-product-paths.txt').write_text('\n'.join(actual_paths) + '\n')
+
+          query = {'state': 'open', 'head': f"{owner}:{os.environ['TARGET_BRANCH']}", 'base': 'main', 'per_page': 100}
+          _, prs = api('GET', 'pulls', query=query)
+          capture_sha = receipt['capture_receipt_sha256']
+          body = f"""## Exact capture product — custody only
+          
+          ```text
+          exact parent:                {os.environ['BASE_SHA']}
+          exact head:                  {product_head}
+          commits:                     1
+          permanent paths:             6
+          terminal route observations: 710
+          selected captures:            9
+          refused observations:       701
+          current-byte captures:        9 / 9
+          changed since intake:         9 / 9
+          evidence admissions:          0
+          chronology resolutions:       0
+          classes closed:               0
+          ```
+          
+          Independent verifier run {os.environ['VERIFY_RUN_ID']} recomputed supervisor artifact 8937114139, independently verified every retained body byte count and SHA-256, regenerated the exact closed-schema package, reran all 35 refusal fixtures and the complete current-main gate from an exact full-history GitHub snapshot, and issued no source request. Publisher recovery run {os.environ['GITHUB_RUN_ID']} consumed only that immutable verified settlement.
+          
+          All nine current bodies differ from their intake fingerprints. That drift is retained as a custody fact and is not interpreted as substantive evidence.
+          
+          Capture receipt SHA-256: `{capture_sha}`. External contacts/reviews remain 0/0; outside-human dependency is false; publication, adoption, and graph effects are none; merge authority is false. This PR remains draft and unmerged. Any admission requires a separate authorized transaction.
+          """
+          if prs:
+              product_pr = prs[0]
+              assert len(prs) == 1
+          else:
+              _, product_pr = api('POST', 'pulls', {
+                  'title': 'research: RD-W03 exact-capture nine current official objects',
+                  'head': os.environ['TARGET_BRANCH'],
+                  'base': 'main',
+                  'body': body,
+                  'draft': True,
+                  'maintainer_can_modify': False,
+              })
+          assert product_pr['draft'] is True
+          assert product_pr['state'] == 'open'
+          assert product_pr['head']['sha'] == product_head
+          product_pr_number = int(product_pr['number'])
+
+          result = {
+              'schema_version': 1,
+              'transaction_id': 'RD-W03-EXACT-CAPTURE-PUBLICATION-RECOVERY-01',
+              'verification_run_id': int(os.environ['VERIFY_RUN_ID']),
+              'verification_head': os.environ['VERIFY_HEAD'],
+              'verification_artifact_id': int(os.environ['VERIFY_ARTIFACT_ID']),
+              'verification_artifact_digest': os.environ['VERIFY_ARTIFACT_DIGEST'],
+              'publisher_run_id': int(os.environ['GITHUB_RUN_ID']),
+              'publisher_head': os.environ['CARRIER_HEAD_SHA'],
+              'product_pr': product_pr_number,
+              'product_parent': os.environ['BASE_SHA'],
+              'product_head': product_head,
+              'product_tree': tree_sha,
+              'product_path_count': 6,
+              'draft': True,
+              'merged': False,
+              'evidence_admissions': 0,
+              'chronology_resolved': 0,
+              'classes_closed': 0,
+              'publication_effect': 'none',
+              'adoption_effect': 'none',
+              'graph_effect': 'none',
+              'merge_authority': False,
+          }
+          (publication / 'product-head.txt').write_text(product_head + '\n')
+          (publication / 'product-tree.txt').write_text(tree_sha + '\n')
+          (publication / 'product-pr.txt').write_text(str(product_pr_number) + '\n')
+          (publication / 'publication-receipt.json').write_text(json.dumps(result, sort_keys=True, indent=2) + '\n')
+          print(json.dumps({'product_pr': product_pr_number, 'product_head': product_head, 'product_tree': tree_sha}, sort_keys=True))
+          PY
+
+      - name: Upload exact publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-publication-${{ github.run_id }}
+          path: ${{ env.OUT }}/publication
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Settle issue and product custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'issue_settlement\n' > "$OUT/stage.txt"
+          python3 - "$OUT" <<'PY'
+          import json, os, pathlib, sys, time, urllib.error, urllib.parse, urllib.request
+
+          out = pathlib.Path(sys.argv[1])
+          publication = out / 'publication'
+          repo = os.environ['REPO']
+          token = os.environ['GH_TOKEN']
+          root = f"https://api.github.com/repos/{repo}"
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'User-Agent': 'rd-wave03-exact-capture-api-publisher',
+              'X-GitHub-Api-Version': os.environ['API_VERSION'],
+          }
+
+          def api(method, path, payload=None, query=None, allowed=(200, 201)):
+              url = f"{root}/{path.lstrip('/')}"
+              if query:
+                  url += '?' + urllib.parse.urlencode(query)
+              data = None if payload is None else json.dumps(payload, separators=(',', ':')).encode()
+              req = urllib.request.Request(url, data=data, method=method, headers=headers)
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as response:
+                      body = response.read()
+                      status = response.status
+              except urllib.error.HTTPError as error:
+                  body = error.read()
+                  status = error.code
+              if status not in allowed:
+                  text = body.decode('utf-8', 'replace')[:2000]
+                  raise SystemExit(f'{method} {path} failed with HTTP {status}: {text}')
+              return status, json.loads(body or b'{}')
+
+          receipt = json.loads((publication / 'publication-receipt.json').read_text())
+          product_pr = receipt['product_pr']
+          product_head = receipt['product_head']
+          capture_sha = json.loads((out / 'settlement' / 'finalizer-receipt.json').read_text())['capture_receipt_sha256']
+          _, verification_artifact = api('GET', f"actions/artifacts/{os.environ['VERIFY_ARTIFACT_ID']}")
+          assert verification_artifact['digest'] == os.environ['VERIFY_ARTIFACT_DIGEST']
+          pub = None
+          for _ in range(10):
+              _, artifacts = api('GET', f"actions/runs/{os.environ['GITHUB_RUN_ID']}/artifacts", query={'per_page': 100})
+              matches = [row for row in artifacts['artifacts'] if row['name'] == f"rd-wave03-exact-capture-publication-{os.environ['GITHUB_RUN_ID']}"]
+              if len(matches) == 1 and matches[0]['digest'] not in (None, ''):
+                  pub = matches[0]
+                  break
+              time.sleep(2)
+          assert pub is not None, 'publication artifact did not become visible with a digest'
+
+          body = f"""RD-W03 exact-capture custody is complete.
+          
+          ```text
+          supervisor run:               31021882771
+          supervisor artifact:          8937114139
+          supervisor artifact SHA-256:  862f20b9b168fa70cd7ba3d57f1e84bf43f0738a68155d7b60a571e6720e50a5
+          independent verification run: {os.environ['VERIFY_RUN_ID']}
+          final verification artifact:  {os.environ['VERIFY_ARTIFACT_ID']}
+          final verification digest:    {os.environ['VERIFY_ARTIFACT_DIGEST']}
+          publisher recovery run:       {os.environ['GITHUB_RUN_ID']}
+          publication receipt artifact: {pub['id']}
+          publication receipt digest:   {pub['digest']}
+          workflow-free product PR:     #{product_pr}
+          product parent:               {os.environ['BASE_SHA']}
+          product head:                 {product_head}
+          permanent paths:              6
+          retained current objects:     9 / 9
+          objects changed since intake: 9 / 9
+          source requests repeated:     0
+          evidence admissions:          0
+          chronology resolutions:       0
+          classes closed:               0
+          ```
+          
+          Every current body was retained by the original one-attempt credential-free capture and independently rehashed from its immutable artifact. Verification run {os.environ['VERIFY_RUN_ID']} regenerated the exact 710-observation package, passed its closed validator, deterministic replay, all 35 refusal fixtures, and the complete current-main full-history repository gate without contacting any source. Publisher recovery run {os.environ['GITHUB_RUN_ID']} consumed only that verified settlement after the original `gh api` transport failed before creating a product ref.
+          
+          The changed fingerprints are a custody fact, not substantive evidence. This completion establishes no unit identity, event chronology, recommendation, disposition, authority, remedy, publication, adoption, graph, or merge authority. External contacts/reviews remain 0/0 and outside-human dependency remains false. Any admission or closure requires a separate authorized transaction.
+          """
+          api('POST', 'issues/387/comments', {'body': body})
+          api('PATCH', 'issues/387', {'state': 'closed', 'state_reason': 'completed'})
+          api('POST', f"issues/{product_pr}/comments", {'body': f"Independent verification run {os.environ['VERIFY_RUN_ID']} completed with artifact {os.environ['VERIFY_ARTIFACT_ID']} ({os.environ['VERIFY_ARTIFACT_DIGEST']}). Publisher recovery run {os.environ['GITHUB_RUN_ID']} produced publication artifact {pub['id']} ({pub['digest']}); capture receipt SHA-256 {capture_sha}. This draft remains unmerged with zero admission, chronology, closure, publication, adoption, graph, or merge authority."})
+          (publication / 'settlement.json').write_text(json.dumps({'issue': 387, 'issue_state': 'closed', 'product_pr': product_pr, 'publication_artifact_id': pub['id'], 'publication_artifact_digest': pub['digest']}, sort_keys=True, indent=2) + '\n')
+          print('issue and product custody settlement: PASS')
+          PY
+
+      - name: Upload bounded failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-api-publisher-failure-${{ github.run_id }}
+          path: |
+            ${{ env.OUT }}/stage.txt
+            ${{ env.OUT }}/verification-artifact.json
+            ${{ env.OUT }}/publication
+          if-no-files-found: warn
+          retention-days: 30
