@@ -1,0 +1,160 @@
+name: RD-W03 exact-capture push recovery
+
+on:
+  push:
+    branches:
+      - agent/ssc-rd-wave03-exact-capture-materializer-v6-20260805
+    paths:
+      - .github/workflows/rd-wave03-exact-capture-push-recovery.yml
+
+permissions:
+  contents: write
+  actions: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: rd-wave03-exact-capture-push-recovery
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      BASE_BRANCH: agent/ssc-rd-wave03-exact-capture-base-20260805
+      TARGET_BRANCH: agent/ssc-rd-wave03-exact-capture-product-20260805
+      WORKTREE: /tmp/rd-wave03-exact-capture-product-${{ github.run_id }}
+      EVIDENCE: /tmp/rd-wave03-exact-capture-push-recovery-${{ github.run_id }}
+      TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Recover exact six-path product from closed transport history
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE/artifacts"
+          exec > >(tee "$EVIDENCE/recovery.log") 2>&1
+          test "$GITHUB_REF" = refs/heads/agent/ssc-rd-wave03-exact-capture-materializer-v6-20260805
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
+          BASE_SHA="$(git rev-parse "refs/remotes/origin/$BASE_BRANCH")"
+          export BASE_SHA
+          mapfile -t commits < <(git rev-list --reverse "$BASE_SHA..$GITHUB_SHA")
+          test "${#commits[@]}" -eq 9
+          previous="$BASE_SHA"
+          expected_commit_paths=(
+            tmp/rd-wave03-exact-capture-bootstrap.sh
+            .github/workflows/rd-wave03-exact-capture-materializer-v6.yml
+            tmp/INVALID
+            .github/workflows/rd-wave03-exact-capture-materializer-recovery.yml
+            tmp/ONE_MORE_INVALID
+            tmp/THIS_SHOULD_NOT_EXIST
+            tmp/ROUTING_FAILURE-4
+            tmp/ROUTING_FAILURE-5
+            .github/workflows/rd-wave03-exact-capture-push-recovery.yml
+          )
+          for i in "${!commits[@]}"; do
+            commit="${commits[$i]}"
+            test "$(git show -s --format=%P "$commit")" = "$previous"
+            test "$(git diff-tree --no-commit-id --name-only -r "$commit")" = "${expected_commit_paths[$i]}"
+            previous="$commit"
+          done
+          test "$previous" = "$GITHUB_SHA"
+          mapfile -t actual < <(git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | LC_ALL=C sort)
+          printf '%s\n' "${expected_commit_paths[@]}" | LC_ALL=C sort > "$EVIDENCE/expected-carrier-paths.txt"
+          printf '%s\n' "${actual[@]}" > "$EVIDENCE/actual-carrier-paths.txt"
+          diff -u "$EVIDENCE/expected-carrier-paths.txt" "$EVIDENCE/actual-carrier-paths.txt"
+          test "$(cat tmp/INVALID)" = "invalid"
+          grep -Fxq 'invalid again' tmp/ONE_MORE_INVALID
+          grep -Fq 'intended to call create_pull_request' tmp/THIS_SHOULD_NOT_EXIST
+          grep -Fq 'create_pull_request was intended' tmp/ROUTING_FAILURE-4
+          grep -Fq 'should have been GitHub.create_pull_request' tmp/ROUTING_FAILURE-5
+          bash -n tmp/rd-wave03-exact-capture-bootstrap.sh
+          printf 'accepted_job=push_recovery\nquarantined_paths=7\ntransport_merge_authority=false\n' > "$EVIDENCE/authority.txt"
+
+          export GH_TOKEN="$TOKEN"
+          gh run download 30984441377 --repo BigBirdReturns/undercast --name rd-wave03-rd01-intake-30984441377 --dir "$EVIDENCE/artifacts/rd01"
+          gh run download 30984459798 --repo BigBirdReturns/undercast --name rd-wave03-rd02-intake-30984459798 --dir "$EVIDENCE/artifacts/rd02"
+          gh run download 30984486686 --repo BigBirdReturns/undercast --name rd-wave03-rd03-intake-30984486686 --dir "$EVIDENCE/artifacts/rd03"
+          gh run download 30984497436 --repo BigBirdReturns/undercast --name rd-wave03-rd04-intake-30984497436 --dir "$EVIDENCE/artifacts/rd04"
+          gh run download 30984516496 --repo BigBirdReturns/undercast --name rd-wave03-rd05-intake-30984516496 --dir "$EVIDENCE/artifacts/rd05"
+          gh run download 30984537874 --repo BigBirdReturns/undercast --name rd-wave03-rd06-intake-30984537874 --dir "$EVIDENCE/artifacts/rd06"
+          test "$(find "$EVIDENCE/artifacts" -name receipt.json -type f | wc -l)" -eq 6
+          unset GH_TOKEN
+
+          git config --local --unset-all http.https://github.com/.extraheader >/dev/null 2>&1 || true
+          git remote set-url origin https://github.com/BigBirdReturns/undercast.git
+          env -u TOKEN -u GH_TOKEN -u GITHUB_TOKEN bash tmp/rd-wave03-exact-capture-bootstrap.sh \
+            --repo "$GITHUB_WORKSPACE" \
+            --artifacts "$EVIDENCE/artifacts" \
+            --base "$BASE_SHA" \
+            --worktree "$WORKTREE" \
+            --evidence "$EVIDENCE"
+          env -u TOKEN -u GH_TOKEN -u GITHUB_TOKEN bash -c '
+            set -euo pipefail
+            cd "$1"
+            npm ci
+            npx playwright install --with-deps chromium
+            npm run gate
+            node scripts/rd-wave03-exact-capture.mjs --check
+            node test/rd-wave03-exact-capture-adversarial.mjs
+            test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          ' _ "$WORKTREE"
+
+          product_head="$(python3 -c 'import json,os; print(json.load(open(os.environ["EVIDENCE"]+"/materialization.json"))["head"])')"
+          test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$product_head"
+          test "$(git ls-remote --heads origin "refs/heads/$BASE_BRANCH" | awk '{print $1}')" = "$BASE_SHA"
+          existing="$(git ls-remote --heads origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          test -z "$existing" || test "$existing" = "$product_head"
+
+          export GH_TOKEN="$TOKEN"
+          gh auth setup-git
+          if test -z "$existing"; then git -C "$WORKTREE" push origin "$product_head:refs/heads/$TARGET_BRANCH"; fi
+          test "$(git ls-remote --heads origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')" = "$product_head"
+          pr="$(gh pr list --repo BigBirdReturns/undercast --head "$TARGET_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if test -z "$pr"; then
+            gh pr create --repo BigBirdReturns/undercast --base main --head "$TARGET_BRANCH" --draft \
+              --title 'research: RD-W03 exact-capture nine official objects' \
+              --body "$(cat <<EOF
+          ## Capture-only product
+
+          \`\`\`text
+          immutable parent:      $BASE_SHA
+          exact product head:    $product_head
+          commits:               1
+          permanent paths:       6
+          terminal observations: 710
+          selected objects:      9
+          refused observations:  701
+          adversarial refusals:  35
+          \`\`\`
+
+          Deterministically materialized from the six immutable terminal receipt artifacts under issue #387. The accepted push-recovery job quarantined all accidental carrier paths, then the product passed validation, all 35 refusal fixtures, and the complete repository gate. No source object was fetched in materialization.
+
+          Authority remains capture-only: evidence admissions 0, chronology resolved 0, classes closed 0, external contacts/reviews 0/0, outside-human dependency false, publication/adoption/graph effects none, and merge authority false. This PR remains draft pending an independent read-only hosted capture receipt.
+          EOF
+          )"
+            pr="$(gh pr list --repo BigBirdReturns/undercast --head "$TARGET_BRANCH" --state open --json number --jq '.[0].number')"
+          fi
+          printf '%s\n' "$pr" > "$EVIDENCE/product-pr.txt"
+          gh issue comment 387 --repo BigBirdReturns/undercast --body "Push-recovery run ${GITHUB_RUN_ID} published exact six-path product ${product_head} over immutable parent ${BASE_SHA} as draft PR #${pr}. The 710-row ledger, nine-object plan, 701 refusals, 35 adversarial fixtures, and complete gate passed. All accidental carrier paths are quarantined and unmerged; no source fetch or evidence/chronology/closure/publication/adoption/graph/contact/review/outside-human/merge authority occurred."
+
+      - name: Upload push-recovery receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-push-recovery-${{ github.run_id }}
+          path: /tmp/rd-wave03-exact-capture-push-recovery-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
