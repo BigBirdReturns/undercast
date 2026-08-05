@@ -1,0 +1,194 @@
+name: doctor-who-cycle-006-clean-main-rebind-v6
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-006-clean-main-rebind-v6.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-006-clean-main-rebind-v6-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-006-clean-main-rebind-v6.yml
+  EXACT_MAIN: 30b7bd2628c7228c9abfd350eb776eb0d6eb8090
+  PRIOR_MAIN: 3b4cca5765032ede455803255b3292f43d99fe10
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  OUT: /tmp/doctor-who-cycle-006-clean-main-rebind-v6
+  PRIOR_REBIND_RUN: "30986764157"
+  PRIOR_REBIND_ARTIFACT: doctor-who-cycle-006-clean-main-rebind-v5-30986764157
+  PRIOR_REBIND_RECEIPT_SHA256: 9662703f857f6200fb50c3997630a8a5b4a702a06995775f03cf614040322548
+
+jobs:
+  rebind:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-006-clean-main-rebind-v6'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact current main and UX-only drift
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${HEAD_BRANCH})" = "$HEAD_SHA"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          cat > "$OUT/expected-main-drift.txt" <<'EOF'
+          404.html
+          assets/site-navigation.js
+          assets/site-shell.css
+          constellation.html
+          coverage.html
+          data/archive.json
+          docs/DECISIONS.md
+          docs/UX-READINESS.md
+          index.html
+          recognition.html
+          scripts/build-contract.mjs
+          scripts/build-record-pages.mjs
+          scripts/site-seams.mjs
+          tests/rendered/mobile-density.spec.mjs
+          tests/rendered/site.spec.mjs
+          tests/rendered/ux-journeys.spec.mjs
+          EOF
+          sed -i 's/^[[:space:]]*//' "$OUT/expected-main-drift.txt"
+          LC_ALL=C sort -o "$OUT/expected-main-drift.txt" "$OUT/expected-main-drift.txt"
+          git diff --name-only "$PRIOR_MAIN" "$EXACT_MAIN" | LC_ALL=C sort > "$OUT/actual-main-drift.txt"
+          diff -u "$OUT/expected-main-drift.txt" "$OUT/actual-main-drift.txt"
+          git diff --check "$PRIOR_MAIN" "$EXACT_MAIN"
+          ! grep -E '(^|/)(specimens|SOURCES|CENSUS|AUTOPILOT|MEDIA-AUDIT|WATERLINE|ROADMAP|journal|images)(/|\.|-|$)' "$OUT/actual-main-drift.txt"
+          for path in \
+            .ci/doctor-who-cycle-006-v4 \
+            .ci/doctor-who-cycle-006-v5 \
+            .ci/doctor-who-cycle-006-v6 \
+            tmp/doctor-who-cycle-006; do
+            test ! -e "$path"
+          done
+          printf 'exact_main=%s\nprior_main=%s\nexact_tree=%s\n' \
+            "$EXACT_MAIN" "$PRIOR_MAIN" "$(git rev-parse "${EXACT_MAIN}^{tree}")" \
+            > "$OUT/main-identity.txt"
+
+      - name: Install exact dependencies and rendered runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Download prior exact Kayste rebind packet
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PRIOR_REBIND_ARTIFACT }}
+          path: ${{ env.OUT }}/prior
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: ${{ env.PRIOR_REBIND_RUN }}
+
+      - name: Rebind prior packet to exact navigation main
+        shell: bash
+        run: |
+          set -euxo pipefail
+          prior="$OUT/prior"
+          test -f "$prior/exact-main.txt"
+          test -f "$prior/current-main-rebind.json"
+          test -f "$prior/current-main-rebind.sha256"
+          test "$(cat "$prior/exact-main.txt")" = "$PRIOR_MAIN"
+          test "$(cat "$prior/current-main-rebind.sha256")" = "$PRIOR_REBIND_RECEIPT_SHA256"
+          test "$(jq -cS . "$prior/current-main-rebind.json" | sha256sum | awk '{print $1}')" = "$PRIOR_REBIND_RECEIPT_SHA256"
+          jq -e --arg prior "$PRIOR_MAIN" '
+            .exact_main == $prior and
+            .lease_issued == false and
+            .global_active_count == 0 and
+            .task.id == "ap_c8e74653ac0877837814db21" and
+            .task.performer == "Dan Starkey" and
+            .task.role == "Kayste" and
+            .queue.queued == 311 and
+            .queue.resolved == 5 and
+            .boundary.claim_authorized == true and
+            .boundary.queue_mutated == false and
+            .boundary.canonical_record_created == false and
+            .boundary.media_adopted == false and
+            .boundary.cycle_receipt_written == false
+          ' "$prior/current-main-rebind.json" >/dev/null
+          jq -S \
+            --arg current "$EXACT_MAIN" \
+            --arg prior "$PRIOR_MAIN" \
+            --arg prior_sha "$PRIOR_REBIND_RECEIPT_SHA256" \
+            '.version = 7 |
+             .exact_main = $current |
+             .previous_rebind = {exact_main:$prior, receipt_sha256:$prior_sha} |
+             .main_drift = {
+               allowed_paths:["404.html","assets/site-navigation.js","assets/site-shell.css","constellation.html","coverage.html","data/archive.json","docs/DECISIONS.md","docs/UX-READINESS.md","index.html","recognition.html","scripts/build-contract.mjs","scripts/build-record-pages.mjs","scripts/site-seams.mjs","tests/rendered/mobile-density.spec.mjs","tests/rendered/site.spec.mjs","tests/rendered/ux-journeys.spec.mjs"],
+               doctor_who_semantic_drift:false,
+               ux_navigation_only:true
+             } |
+             .boundary.claim_authorized = true |
+             .boundary.queue_mutated = false |
+             .boundary.canonical_record_created = false |
+             .boundary.media_adopted = false |
+             .boundary.cycle_receipt_written = false' \
+            "$prior/current-main-rebind.json" > "$OUT/current-main-rebind.json"
+          jq -cS . "$OUT/current-main-rebind.json" | sha256sum | awk '{print $1}' > "$OUT/current-main-rebind.sha256"
+          printf '%s\n' "$EXACT_MAIN" > "$OUT/exact-main.txt"
+
+      - name: Prove rolling Doctor Who custody and complete post-merge gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/autopilot.mjs validate | tee "$OUT/autopilot-validate.log"
+          node scripts/autopilot.mjs readiness --scope doctor-who --require-active --json > "$OUT/readiness.json"
+          node scripts/autopilot.mjs status --scope doctor-who --json > "$OUT/status.json"
+          node scripts/waterline.mjs validate --scope doctor-who | tee "$OUT/waterline.log"
+          node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/media-gate.log"
+          node scripts/doctor-who-cycle-004-still-correction.mjs | tee "$OUT/cycle-004.log"
+          node scripts/doctor-who-cycle-005.mjs | tee "$OUT/cycle-005.log"
+          node scripts/autopilot.mjs candidates --scope doctor-who --capability-profile text-vision --limit 200 --json > "$OUT/current-candidates.json"
+          jq -e '.in_flight == 0 and .statuses.queued == 311 and .statuses.resolved == 5' "$OUT/status.json" >/dev/null
+          jq -e '.compatible[0].task_id == "ap_c8e74653ac0877837814db21"' "$OUT/current-candidates.json" >/dev/null
+          npm run gate | tee "$OUT/complete-gate.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Record read-only terminal boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg exact "$EXACT_MAIN" \
+            --arg prior "$PRIOR_MAIN" \
+            '{version:1,exact_main:$exact,prior_main:$prior,ux_navigation_drift:true,lease_issued:false,queue_mutated:false,canonical_record_created:false,media_adopted:false,cycle_receipt_written:false,product_published:false}' \
+            > "$OUT/boundary.json"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact current-main rebind evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-006-clean-main-rebind-v6-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
