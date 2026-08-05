@@ -39,6 +39,7 @@ for (const [label, source] of [["reliability", reliability], ["metrics", metrics
 
 assert.match(reliability, /operational-restore-git-objects\.mjs build/, "restore drill must build the exact historical Git-object set");
 assert.match(reliability, /--manifest data\/review\/operational-restore-git-object-set\.json/, "restore drill must bind the exact Git-object manifest");
+assert.match(reliability, /--repository "\$GITHUB_REPOSITORY"/, "restore drill must bind the object manifest to the exact repository");
 assert.match(reliability, /GIT_ALTERNATE_OBJECT_DIRECTORIES="\$object_store\/objects"/, "restore drill must expose only the bounded alternate object directory");
 assert.match(reliability, /git-object-set\.json/, "restore evidence and publisher handoff must retain the bounded Git-object receipt");
 assert.doesNotMatch(reliability, /url\."https:\/\/github\.com\/.*"\.insteadOf origin/, "restore drill must not grant the disposable repository an open-ended origin alias");
@@ -50,6 +51,7 @@ for (const [label, source] of [["reliability", reliabilityPublisher], ["metrics"
   assert.match(source, /issues:\s*write/, `${label} publisher must hold the isolated issue-write authority`);
   assert.match(source, /actions:\s*read/, `${label} publisher must read exact workflow artifacts`);
   assert.match(source, /verify-evidence-handoff/, `${label} publisher must verify the immutable handoff`);
+  assert.match(source, /publisher-handoff-files\.mjs verify/, `${label} publisher must require the exact consumed handoff file set`);
   assert.ok((source.match(/git\/ref\/heads\/main/g) || []).length >= 2, `${label} publisher must check main before recovery and immediately before mutation`);
   assert.match(source, /workflow_run\.head_sha/, `${label} publisher must bind the exact source head`);
   assert.match(source, /artifact\.digest/, `${label} publisher must require the registered artifact digest`);
