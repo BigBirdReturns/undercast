@@ -123,6 +123,39 @@ jobs:
           chmod +x "$CYCLE_ASSET_DIR"/*.sh
           bash "$binder"
 
+          materializer="$CYCLE_ASSET_DIR/apply-doctor-who-cycle-006.mjs"
+          materializer_before="$(sha256sum "$materializer" | awk '{print $1}')"
+          test "$materializer_before" = "$MATERIALIZER_SHA256"
+          python3 - "$materializer" <<'PYMATERIALIZER'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+          old = '''card.portrait = {
+            src: portraitPath,
+            kind: "portrait",
+            origin: PORTRAIT_ORIGIN,
+          '''
+          new = '''card.portrait = {
+            src: portraitPath,
+            kind: "free",
+            origin: PORTRAIT_ORIGIN,
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one invalid Kayste portrait provenance block, found {text.count(old)}")
+          if text.count(new) != 0:
+              raise SystemExit("corrected Kayste portrait provenance block already present before repair")
+          path.write_text(text.replace(old, new, 1))
+          PYMATERIALIZER
+          materializer_after="$(sha256sum "$materializer" | awk '{print $1}')"
+          test "$materializer_before" != "$materializer_after"
+          test "$(grep -F 'kind: "free"' "$materializer" | wc -l)" -eq 1
+          ! grep -F 'kind: "portrait"' "$materializer"
+          node --check "$materializer"
+          printf 'materializer_sha_before=%s\nmaterializer_sha_after=%s\n' "$materializer_before" "$materializer_after"
+          printf '%s\n' "$materializer_after" > /tmp/doctor-who-cycle-006-effective-materializer.sha256
+
       - name: Claim, materialize, review, and resolve exactly one Kayste task
         shell: bash
         run: bash "$CYCLE_ASSET_DIR/02-materialize.sh"
@@ -151,6 +184,8 @@ jobs:
             /tmp/doctor-who-cycle-006-candidate-gate.sha256
             /tmp/doctor-who-cycle-006-normalized-verification.json
             /tmp/doctor-who-cycle-006-kayste-portrait.jpg
+            /tmp/doctor-who-cycle-006-effective-materializer.sha256
+            /tmp/apply-doctor-who-cycle-006.mjs
 
       - name: Bind candidate artifact and workflow job custody
         shell: bash
@@ -199,5 +234,8 @@ jobs:
             /tmp/doctor-who-cycle-006-final-gate.log
             /tmp/doctor-who-cycle-006-normalized-verification.json
             /tmp/doctor-who-cycle-006-kayste-portrait.jpg
+            /tmp/doctor-who-cycle-006-effective-materializer.sha256
+            /tmp/apply-doctor-who-cycle-006.mjs
+            /tmp/apply-doctor-who-cycle-finalize-006.mjs
             data/review/adapter-sdk/doctor-who-cycle-006-kayste.json
             scripts/doctor-who-cycle-006.mjs
