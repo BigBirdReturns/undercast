@@ -2,96 +2,151 @@ name: apply-collection-only-operations
 
 on:
   push:
-    branches: [main]
+    branches: [agent/collection-only-operations]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch: {}
 
 permissions:
   contents: write
-  issues: write
-  pull-requests: write
 
 concurrency:
-  group: ux-nav-noscript-review-release-v2
-  cancel-in-progress: false
+  group: apply-collection-only-operations
+  cancel-in-progress: true
 
 jobs:
   apply:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 180
-    env:
-      GH_TOKEN: ${{ github.token }}
-      EVIDENCE: /tmp/ux-nav-noscript-review-release
-      EXPECTED_CARRIER_SHA: 4ef5e968b11e411807fc73284157e685cf34c5a3
-      EXPECTED_CARRIER_SHA256: 93a30c071a6ff4418219aa86cad902c415dc0a7440710ca48e5bd5a6a7038f2c
-      EXPECTED_MAIN_ROOT: be5db794b9aca7bd74e2a9e6a3d64cb6b3072a17
-      CARRIER_BRANCH: agent/collection-only-operations-p2
-      SELF: .github/workflows/apply-collection-mode.yml
+    if: github.event_name != 'pull_request' || (github.event.pull_request.number == 75 && github.head_ref == 'agent/collection-only-operations')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-
-      - name: Verify exact controller and immutable carrier
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$EVIDENCE"
-          test "$GITHUB_REF" = refs/heads/main
-          git merge-base --is-ancestor "$EXPECTED_MAIN_ROOT" "$GITHUB_SHA"
-          git diff --name-only "$EXPECTED_MAIN_ROOT" "$GITHUB_SHA" | LC_ALL=C sort > /tmp/controller-paths
-          printf '%s\n' "$SELF" > /tmp/expected-controller-paths
-          diff -u /tmp/expected-controller-paths /tmp/controller-paths
-          git fetch --no-tags origin "+refs/heads/${CARRIER_BRANCH}:refs/remotes/origin/${CARRIER_BRANCH}"
-          test "$(git rev-parse "refs/remotes/origin/${CARRIER_BRANCH}")" = "$EXPECTED_CARRIER_SHA"
-          test "$(git show "$EXPECTED_CARRIER_SHA:tmp/ux02a-materialize.sh" | sha256sum | awk '{print $1}')" = "$EXPECTED_CARRIER_SHA256"
-          git show "$EXPECTED_CARRIER_SHA:tmp/ux02a-materialize.sh" > /tmp/ux02a-materialize.sh
-          chmod +x /tmp/ux02a-materialize.sh
-          printf 'status=started\nrun=%s\ncontroller=%s\ncarrier=%s\n' \
-            "$GITHUB_RUN_ID" "$GITHUB_SHA" "$EXPECTED_CARRIER_SHA" > "$EVIDENCE/start.txt"
-          gh pr comment 346 --repo BigBirdReturns/undercast --body "Exact no-JavaScript review-release run ${GITHUB_RUN_ID} started on parser-corrected self-retiring controller ${GITHUB_SHA} with immutable normalized carrier ${EXPECTED_CARRIER_SHA}." || true
-
-      - name: Retire controller before product qualification
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
-          live="$(git rev-parse refs/remotes/origin/main)"
-          test "$live" = "$GITHUB_SHA"
-          git diff --name-only "$EXPECTED_MAIN_ROOT" "$live" | LC_ALL=C sort > /tmp/live-controller-paths
-          printf '%s\n' "$SELF" > /tmp/expected-live-controller-paths
-          diff -u /tmp/expected-live-controller-paths /tmp/live-controller-paths
-          git push --force-with-lease="refs/heads/main:${live}" origin "${EXPECTED_MAIN_ROOT}:refs/heads/main"
-          printf 'controller=%s\nretired_to=%s\n' "$live" "$EXPECTED_MAIN_ROOT" > "$EVIDENCE/controller-retirement.txt"
+          ref: agent/collection-only-operations
+          fetch-depth: 1
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: '24'
           cache: npm
 
-      - name: Qualify and publish exact workflow-free product
-        shell: bash
-        run: |
-          set -euo pipefail
-          git checkout --detach "$EXPECTED_CARRIER_SHA"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_CARRIER_SHA"
-          bash /tmp/ux02a-materialize.sh
+      - name: Install deterministic and rendered-test runtime
+        run: npm ci
 
-      - name: Record terminal failure boundary
+      - name: Apply the collection-only operating contract
+        run: |
+          mkdir -p collection-mode-diagnostics
+          set -o pipefail
+          {
+            set -x
+            base64 -d .github/collection-mode/apply.py.xz.b64 | xz -d > /tmp/apply-collection-mode.py
+            python /tmp/apply-collection-mode.py
+            python - <<'PY'
+          from pathlib import Path
+          cli=Path('scripts/corpus-ops.mjs')
+          text=cli.read_text()
+          old='const decision=spawnSync("git",["diff","--unified=0",`${base}...HEAD","--","docs/DECISIONS.md"],{encoding:"utf8"});'
+          new='const decision=spawnSync("git",["diff","--unified=0",`${base}...HEAD`,"--","docs/DECISIONS.md"],{encoding:"utf8"});'
+          if text.count(old)!=1:
+              raise SystemExit(f'corpus CLI repair count {text.count(old)}')
+          cli.write_text(text.replace(old,new,1))
+
+          lib=Path('scripts/lib/corpus-ops.mjs')
+          text=lib.read_text()
+          replacements=[
+              ('const estate=scopeMap.get(scope.scope_id);','const scopeId=scope.id||scope.scope_id;const estate=scopeMap.get(scopeId);',1),
+              ('`autopilot scope ${scope.scope_id} has no estate registry row`','`autopilot scope ${scopeId} has no estate registry row`',1),
+              ('`${scope.scope_id} is active while estate is ${estate.state}`','`${scopeId} is active while estate is ${estate.state}`',1),
+          ]
+          for old,new,expected in replacements:
+              if text.count(old)!=expected:
+                  raise SystemExit(f'estate scope-ID token count for {old}: {text.count(old)}')
+              text=text.replace(old,new,expected)
+          lib.write_text(text)
+          PY
+            node --check scripts/corpus-ops.mjs
+            node --check scripts/corpus-ops-fixtures.mjs
+            node --check scripts/lib/corpus-ops.mjs
+            node --check scripts/media-search-plan.mjs
+            node --check scripts/media-search-prepare.mjs
+            node --check scripts/media-search-report.mjs
+            node --check scripts/media-search-fixtures.mjs
+            node --check scripts/lib/media-search.mjs
+          } 2>&1 | tee collection-mode-diagnostics/apply.log
+
+      - name: Prove steady-state corpus operations before publication
+        run: |
+          set -o pipefail
+          {
+            set -x
+            node scripts/corpus-ops-fixtures.mjs
+            node scripts/corpus-ops.mjs validate
+            node scripts/corpus-ops.mjs status --json
+            node scripts/corpus-ops.mjs next --json
+            node scripts/media-search-fixtures.mjs
+            node scripts/media-search-plan.mjs --limit 5 --out /tmp/media-search-plan.json
+            node scripts/roadmap.mjs validate
+            node scripts/shard.mjs
+            node scripts/build-record-pages.mjs
+            node scripts/build-contract.mjs
+            git diff --check
+          } 2>&1 | tee collection-mode-diagnostics/proof.log
+
+      - name: Build clean core and workflow-policy commits
+        run: |
+          rm -rf collection-mode-diagnostics
+          git config user.name 'undercast-operations'
+          git config user.email 'undercast-operations@users.noreply.github.com'
+
+          git add -A -- . ':(exclude).github/workflows/**' ':(exclude).github/collection-mode/**'
+          git diff --cached --check
+          git commit -m 'Operations: install collection-only corpus core'
+
+          rm -rf .github/collection-mode
+          rm -f .github/workflows/apply-collection-mode.yml
+          git add -A -- .github/workflows .github/collection-mode
+          git diff --cached --check
+          git commit -m 'Operations: replace legacy writers with governed collection jobs'
+
+      - name: Gate the exact permanent candidate
+        run: |
+          npx playwright install --with-deps chromium
+          npm run gate
+          npm run preserve:status -- --json
+
+      - name: Retain publication transaction
+        run: |
+          mkdir -p collection-mode-publication
+          git format-patch --stdout HEAD~1..HEAD > collection-mode-publication/workflow-policy.patch
+          git rev-parse HEAD~1 > collection-mode-publication/core-commit.txt
+          git rev-parse HEAD > collection-mode-publication/full-candidate.txt
+          git show --stat --oneline HEAD~1 > collection-mode-publication/core-stat.txt
+          git show --stat --oneline HEAD > collection-mode-publication/workflow-stat.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: collection-mode-publication
+          path: collection-mode-publication
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish the gated core from clean main ancestry
+        run: |
+          core=$(git rev-parse HEAD~1)
+          git fetch origin main --depth=1
+          git switch --detach origin/main
+          git cherry-pick "$core"
+          git push --force origin HEAD:agent/collection-only-candidate
+
+      - name: Retain diagnostics on failure
         if: failure()
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$EVIDENCE"
-          stage="$(awk -F= '$1=="stage"{print $2}' "$EVIDENCE/status.txt" 2>/dev/null || true)"
-          stage="${stage:-unknown}"
-          printf 'status=failed\nstage=%s\nrun=%s\ncontroller=%s\ncarrier=%s\n' \
-            "$stage" "$GITHUB_RUN_ID" "$GITHUB_SHA" "$EXPECTED_CARRIER_SHA" > "$EVIDENCE/failure.txt"
-          gh pr comment 346 --repo BigBirdReturns/undercast --body "Exact no-JavaScript review-release run ${GITHUB_RUN_ID} failed at stage ${stage}; no repaired product authority is accepted." || true
-
-      - name: Upload terminal transaction evidence
-        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ux-nav-noscript-review-release-${{ github.run_id }}
-          path: /tmp/ux-nav-noscript-review-release
-          if-no-files-found: warn
-          retention-days: 30
+          name: collection-mode-diagnostics
+          path: |
+            collection-mode-diagnostics
+            test-results
+            playwright-report
+            .ci
+          if-no-files-found: ignore
+          retention-days: 7
