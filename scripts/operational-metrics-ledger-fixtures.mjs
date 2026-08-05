@@ -104,16 +104,24 @@ const measuredCostIssue = buildOperationalMetricsIssue({ ...base, evidence: meas
 assert.equal(measuredCostIssue.facts.metrics.cost_per_verified_record_usd.value, 4);
 
 const workflowPath = fileURLToPath(new URL("../.github/workflows/operational-metrics-evidence.yml", import.meta.url));
+const publisherPath = fileURLToPath(new URL("../.github/workflows/operational-metrics-evidence-publisher.yml", import.meta.url));
 const workflow = await readFile(workflowPath, "utf8");
-assert.match(workflow, /permissions:\n  contents: read\n  issues: write/);
+const publisher = await readFile(publisherPath, "utf8");
+assert.match(workflow, /permissions:\n  contents: read/);
+assert.doesNotMatch(workflow, /issues:\s*write/);
 assert.match(workflow, /id: metric_artifact/);
-assert.match(workflow, /steps\.metric_artifact\.outputs\.artifact-id/);
-assert.match(workflow, /github\.event_name == 'push'/);
-assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
-assert.match(workflow, /operational-metrics-ledger\.mjs issue-payload/);
+assert.match(workflow, /publisher-handoff\.json/);
 assert.match(workflow, /ledgerCounts/);
-assert.match(workflow, /multiple exact metric evidence issues found/);
+assert.doesNotMatch(workflow, /operational-metrics-ledger\.mjs issue-payload/);
 assert.doesNotMatch(workflow, /waterline\.mjs record-metrics/);
 assert.doesNotMatch(workflow, /ROADMAP-STATE\.json/);
 
-console.log("PASS — operational metric exact-main ledger, populated-ledger compatibility, artifact binding, and unreviewed boundary");
+assert.match(publisher, /\n  workflow_run:\n/);
+assert.match(publisher, /permissions:\n  contents: read\n  actions: read\n  issues: write/);
+assert.match(publisher, /workflow_run\.head_sha/);
+assert.match(publisher, /artifact\.digest/);
+assert.match(publisher, /operational-metrics-ledger\.mjs issue-payload/);
+assert.match(publisher, /multiple exact metric evidence issues found/);
+assert.ok((publisher.match(/git\/ref\/heads\/main/g) || []).length >= 2);
+
+console.log("PASS — operational metric exact-main ledger, populated-ledger compatibility, hash-bound artifact handoff, trusted publication, and unreviewed boundary");
