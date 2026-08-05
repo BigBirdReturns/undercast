@@ -59,7 +59,6 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/autopilot.mjs validate | tee "$OUT/autopilot-validate.log"
-          node scripts/autopilot.mjs readiness --scope doctor-who --require-active --json > "$OUT/readiness.json"
           node scripts/autopilot.mjs status --scope doctor-who --json > "$OUT/status.json"
           node scripts/autopilot.mjs candidates \
             --scope doctor-who \
@@ -74,7 +73,6 @@ jobs:
           const out = process.env.OUT;
           const report = JSON.parse(fs.readFileSync(`${out}/candidates.json`, 'utf8'));
           const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
-          const readiness = JSON.parse(fs.readFileSync(`${out}/readiness.json`, 'utf8'));
           const status = JSON.parse(fs.readFileSync(`${out}/status.json`, 'utf8'));
           const activeStatuses = new Set(['leased', 'drafted', 'merged']);
           const active = state.jobs.filter((job) => activeStatuses.has(job.status));
@@ -82,7 +80,6 @@ jobs:
 
           if (active.length !== 0) throw new Error(`global active jobs: ${active.length}`);
           if (status.in_flight !== 0 || status.statuses?.queued !== 310 || status.statuses?.resolved !== 6) throw new Error('Doctor Who denominator drifted');
-          if (!Array.isArray(readiness) || readiness.length !== 1 || readiness[0].scope_id !== 'doctor-who' || readiness[0].effective_status !== 'active' || readiness[0].lease_status !== 'ready') throw new Error('Doctor Who readiness drifted');
           if (report.scope_id !== 'doctor-who' || report.profile?.id !== 'text-vision' || !Array.isArray(report.compatible) || report.compatible.length !== 310) throw new Error('candidate report drifted');
 
           const selected = report.compatible[0];
@@ -92,10 +89,11 @@ jobs:
           if (!Array.isArray(task.source_receipts) || task.source_receipts.length < 1) throw new Error('source receipt missing');
 
           const packet = {
-            version: 1,
+            version: 2,
             exact_main: process.env.EXACT_MAIN,
             lease_issued: false,
             queue_mutated: false,
+            readiness_authority: 'full-preflight-only',
             global_active_count: active.length,
             queue: {total: doctor.length, queued: status.statuses.queued, resolved: status.statuses.resolved, in_flight: status.in_flight},
             selection_strategy: 'deterministic-first-compatible-read-only',
@@ -104,7 +102,6 @@ jobs:
             counts: report.counts,
             selected,
             task,
-            readiness: readiness[0],
           };
           const canonical = JSON.stringify(packet);
           fs.writeFileSync(`${out}/global-active-jobs.json`, `${JSON.stringify(active, null, 2)}\n`);
