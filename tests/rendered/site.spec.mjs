@@ -102,12 +102,12 @@ test("wall controls execute, announce, and survive browser history",async({page}
 
 test("archive navigation stays complete, consistent, and inside every viewport",async({page})=>{
   const surfaces=[
-    {path:"index.html",ready:"#result-status",align:".controls",current:1},
-    {path:"recognition.html#UC-001",ready:"#record-title",align:".uc-record",current:1},
-    {path:"coverage.html",ready:"#rows tr",align:".eyebrow",current:1},
-    {path:"constellation.html",ready:".person-row",align:".hero",current:0},
-    {path:"records/UC-001/",ready:"#record-main",align:".record-meta",current:1},
-    {path:"404.html",ready:"#recovery",align:".kicker",current:0}
+    {path:"index.html",ready:"#result-status",align:".controls",current:1,pageCurrent:1,archiveCurrent:{label:"The wall",value:"location"}},
+    {path:"recognition.html#UC-001",ready:"#record-title",align:".uc-record",current:1,pageCurrent:1,archiveCurrent:{label:"Recognition records",value:"location"}},
+    {path:"coverage.html",ready:"#rows tr",align:".eyebrow",current:1,pageCurrent:1,archiveCurrent:{label:"Coverage & gaps",value:"location"}},
+    {path:"constellation.html",ready:".person-row",align:".hero",current:0,pageCurrent:1,archiveCurrent:{label:"Evidence paths",value:"page"}},
+    {path:"records/UC-001/",ready:"#record-main",align:".record-meta",current:1,pageCurrent:1,archiveCurrent:{label:"Recognition records",value:"location"}},
+    {path:"404.html",ready:"#recovery",align:".kicker",current:0,pageCurrent:0,archiveCurrent:null}
   ];
   const core=["Browse","Coverage","Makers","About"];
   for(const viewport of [{width:1280,height:900},{width:390,height:844}]){
@@ -116,12 +116,29 @@ test("archive navigation stays complete, consistent, and inside every viewport",
       await open(page,surface.path);
       await expect(page.locator(surface.ready).first()).toBeVisible();
       const nav=page.getByRole("navigation",{name:"Archive navigation",exact:true});
+      if(viewport.width<=700){
+        const menu=page.locator(".site-nav-toggle");
+        await expect(menu).toBeVisible();
+        await expect(menu).toHaveAttribute("aria-expanded","false");
+        await menu.click();
+        await expect(menu).toHaveAttribute("aria-expanded","true");
+      }
       await expect(nav).toBeVisible();
       for(const label of core) await expect(nav.getByRole("link",{name:label,exact:true})).toBeVisible();
       await expect(nav.getByRole("link",{name:"Constellations",exact:true})).toHaveCount(0);
       const browseTarget=await nav.getByRole("link",{name:"Browse",exact:true}).evaluate(link=>new URL(link.href).hash);
       expect(browseTarget,`${surface.path} Browse destination`).toBe("#archive");
       await expect(nav.locator('[aria-current="page"]')).toHaveCount(surface.current);
+      await expect(page.locator('[aria-current="page"]')).toHaveCount(surface.pageCurrent);
+      const archiveMap=page.getByRole("navigation",{name:"Archive paths",exact:true});
+      if(surface.archiveCurrent){
+        const archiveCurrent=archiveMap.locator(`[aria-current="${surface.archiveCurrent.value}"]`);
+        await expect(archiveCurrent).toHaveCount(1);
+        await expect(archiveCurrent).toHaveText(surface.archiveCurrent.label);
+        await expect(archiveCurrent).toHaveCSS("text-decoration-line","underline");
+      }else{
+        await expect(archiveMap.locator("[aria-current]")).toHaveCount(0);
+      }
       const targets=await nav.locator("a,button").evaluateAll(nodes=>nodes.filter(node=>{
         const style=getComputedStyle(node),rect=node.getBoundingClientRect();
         return style.display!=="none"&&style.visibility!=="hidden"&&rect.width>0&&rect.height>0;

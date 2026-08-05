@@ -258,3 +258,34 @@ Disclosure changes presentation only. It may never discard a filed row, connecti
 absence, credit, source, or uncertainty state, and it adds no destination, reveal
 mechanic, specimen field, schema concept, account layer, or service. Desktop visual
 baselines and collection-only corpus custody remain binding.
+
+---
+
+## DEC-0016 — Compact archive navigation is progressive enhancement, not a new destination
+
+**Status:** Active · Ratified by owner direction in issue #242, implemented by #255, 2026-08-04
+
+DEC-0012 remains the default operating rule. This decision authorizes one bounded,
+corpus-disjoint wayfinding correction under the UX finishing program in issue #242:
+
+- Every root surface and generated live or retired permanent record may use one
+  shared navigation controller for progressive enhancement only.
+- At compact widths, the complete existing primary navigation may become an
+  explicit disclosure with accurate expanded state, keyboard Escape recovery,
+  focus return, link-close behavior and touch-sized targets.
+- With JavaScript disabled, the complete existing primary navigation remains
+  visible and usable; script failure must not erase an archive destination.
+- Primary navigation and the secondary archive map identify the current page or
+  containing archive section with static semantics that remain truthful without
+  JavaScript.
+- Generated permanent-record pages remain deterministic disposable outputs. They
+  must be rebuilt and verified, but they do not become a second committed corpus
+  or navigation authority.
+
+This decision does **not** add a public destination. Browse, Recognition Loop,
+Coverage, Makers and About remain the permanent primary destinations. Connections
+and Constellations remain contextual or secondary under DEC-0009. DEC-0015 remains
+the authority for dense mobile evidence; this decision neither supersedes it nor
+changes its disclosure contracts. The correction adds no reveal mechanic, specimen
+field, schema concept, account layer, service, corpus interpretation or aesthetic
+system, and it does not reopen general product development under DEC-0012.
