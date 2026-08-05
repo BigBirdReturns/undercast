@@ -25,7 +25,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       EVIDENCE: ${{ runner.temp }}/ux-02a-dec0016-evidence
-      EXPECTED_CARRIER_SHA: 40ef8f4eddc5ba0c65d8bf2c628fa88667cb2d96
+      EXPECTED_CARRIER_SHA: d5e13a7db6b0ab394f9caabdefe0059e54415f3f
+      EXPECTED_MAIN_PARENT_SHA: be5db794b9aca7bd74e2a9e6a3d64cb6b3072a17
       TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
       TRIGGER_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
@@ -67,7 +68,7 @@ jobs:
       - uses: actions/checkout@v4
         if: steps.guard.outputs.eligible == 'true'
         with:
-          ref: 40ef8f4eddc5ba0c65d8bf2c628fa88667cb2d96
+          ref: d5e13a7db6b0ab394f9caabdefe0059e54415f3f
           fetch-depth: 0
 
       - name: Verify exact carrier bytes
@@ -76,8 +77,21 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_CARRIER_SHA"
-          test "$(sha256sum tmp/ux02a-materialize.sh | awk '{print $1}')" = "5a4b741e697ab0b8456cd1917de2da0b556919ba67a8d82b227f8e570bf91d57"
-          test "$(sha256sum tmp/ux02a-current-location-fix.py | awk '{print $1}')" = "18c838abd554449a0457a0f51e7bb5bdad03a1dc6e9f4c022601ebb6be8e6398"
+          test "$(sha256sum tmp/ux02a-materialize.sh | awk '{print $1}')" = "f4d970126c7de42ba35e2e3a5b3e43cba7739ddbdcd082ad5b4d36a67fb9c4b5"
+
+      - name: Retire temporary writer controller before qualification
+        if: steps.guard.outputs.eligible == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          live="$(git rev-parse refs/remotes/origin/main)"
+          test "$(git show -s --format='%P' "$live")" = "$EXPECTED_MAIN_PARENT_SHA"
+          git diff --name-only "$EXPECTED_MAIN_PARENT_SHA" "$live" | LC_ALL=C sort > /tmp/ux02a-controller-paths
+          printf '.github/workflows/apply-collection-mode.yml\n' > /tmp/ux02a-expected-controller-paths
+          diff -u /tmp/ux02a-expected-controller-paths /tmp/ux02a-controller-paths
+          git push --force-with-lease="refs/heads/main:${live}" \
+            origin "${EXPECTED_MAIN_PARENT_SHA}:refs/heads/main"
 
       - uses: actions/setup-node@v4
         if: steps.guard.outputs.eligible == 'true'
