@@ -1,0 +1,401 @@
+name: doctor-who-cycle-007-kragar-media-prepublish
+
+on:
+  push:
+    branches:
+      - agent/doctor-who-cycle-007-kragar-media-prepublish-v2
+    paths:
+      - .github/workflows/doctor-who-cycle-007-kragar-media-prepublish.yml
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/doctor-who-cycle-007-kragar-media-prepublish.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-007-kragar-media-prepublish-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 014dbd3a4d9d4e82c0832d4c14f08cfff5138a58
+  WORKFLOW_PATH: .github/workflows/doctor-who-cycle-007-kragar-media-prepublish.yml
+  SOURCE_PATH: /tmp/doctor-who-cycle-007-kragar-media-prepublish/evidence/source/kragar-still-candidate.jpg
+  SOURCE_RUN: "31027579331"
+  SOURCE_ARTIFACT_ID: "8939289391"
+  SOURCE_ARTIFACT: doctor-who-cycle-007-kragar-media-review-v3-31027579331
+  SOURCE_ARTIFACT_SHA256: 92a881f1524cae077de70cb50c5058e5f549d5ebebbb20db872d156faba64bc2
+  TAG: media-0003
+  ASSET: uc-1352-still-f6f32eb1.jpg
+  ASSET_URL: https://github.com/BigBirdReturns/undercast/releases/download/media-0003/uc-1352-still-f6f32eb1.jpg
+  ASSET_SHA256: f6f32eb1c51445838ba27ae449548d9bb581b04bb2b321a5789f7f285872d409
+  ASSET_BYTES: "15719"
+  ASSET_WIDTH: "502"
+  ASSET_HEIGHT: "302"
+  OUT: /tmp/doctor-who-cycle-007-kragar-media-prepublish
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  publish:
+    if: github.event_name == 'push' && github.repository == 'BigBirdReturns/undercast' && github.ref_name == 'agent/doctor-who-cycle-007-kragar-media-prepublish-v2'
+    permissions:
+      contents: write
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-path carrier and current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_MAIN"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          printf '%s\n' "$WORKFLOW_PATH" > "$OUT/expected-paths.txt"
+          git diff --name-only "$EXPECTED_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-paths.txt"
+          diff -u "$OUT/expected-paths.txt" "$OUT/actual-paths.txt"
+          test -z "$(git status --porcelain)"
+          printf 'main=%s\ncarrier=%s\ntree=%s\n' "$EXPECTED_MAIN" "$GITHUB_SHA" "$(git rev-parse HEAD^{tree})" > "$OUT/carrier-identity.txt"
+
+      - name: Bind exact reviewed-media artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${SOURCE_ARTIFACT_ID}" > "$OUT/source-artifact-api.json"
+          jq -e \
+            --argjson id "$SOURCE_ARTIFACT_ID" \
+            --arg name "$SOURCE_ARTIFACT" \
+            --arg digest "sha256:${SOURCE_ARTIFACT_SHA256}" \
+            --argjson run "$SOURCE_RUN" '
+              .id == $id and
+              .name == $name and
+              .digest == $digest and
+              .workflow_run.id == $run and
+              .expired == false
+            ' "$OUT/source-artifact-api.json" >/dev/null
+
+      - name: Download exact reviewed Kragar media packet
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.SOURCE_ARTIFACT }}
+          path: ${{ env.OUT }}/evidence
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: ${{ env.SOURCE_RUN }}
+
+      - name: Verify exact reviewed Kragar bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(sha256sum "$SOURCE_PATH" | awk '{print $1}')" = "$ASSET_SHA256"
+          test "$(wc -c < "$SOURCE_PATH")" = "$ASSET_BYTES"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          data = Path(os.environ['SOURCE_PATH']).read_bytes()
+          assert data[:2] == b'\xff\xd8'
+          i = 2
+          size = None
+          while i < len(data):
+              assert data[i] == 0xFF
+              while i < len(data) and data[i] == 0xFF:
+                  i += 1
+              marker = data[i]
+              i += 1
+              if marker in (0xD8, 0xD9):
+                  continue
+              length = int.from_bytes(data[i:i+2], 'big')
+              if marker in range(0xC0, 0xC4):
+                  height = int.from_bytes(data[i+3:i+5], 'big')
+                  width = int.from_bytes(data[i+5:i+7], 'big')
+                  size = (width, height)
+                  break
+              i += length
+          assert size == (502, 302), size
+          PY
+          sha256sum "$SOURCE_PATH" > "$OUT/source.sha256"
+          printf 'format=JPEG\nwidth=%s\nheight=%s\nbytes=%s\n' "$ASSET_WIDTH" "$ASSET_HEIGHT" "$ASSET_BYTES" > "$OUT/source-identity.txt"
+
+      - name: Ensure immutable release and publish exact asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > "$OUT/release-before.json" 2> "$OUT/release-before.err"; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
+              -f tag_name="$TAG" \
+              -f name="UNDERCAST media ${TAG}" \
+              -f body='Immutable content-addressed media assets for the UNDERCAST wall. Managed by scripts/media-upload.mjs — do not edit by hand.' \
+              -f make_latest='false' \
+              > "$OUT/release-created.json"
+          fi
+          cp "$SOURCE_PATH" "/tmp/$ASSET"
+          gh release upload "$TAG" "/tmp/$ASSET" --clobber --repo "$GITHUB_REPOSITORY"
+
+          served="$OUT/$ASSET"
+          ok=false
+          for attempt in $(seq 1 20); do
+            if curl --fail --location --silent --show-error "$ASSET_URL" -o "$served"; then
+              got_sha="$(sha256sum "$served" | awk '{print $1}')"
+              got_bytes="$(wc -c < "$served")"
+              if [ "$got_sha" = "$ASSET_SHA256" ] && [ "$got_bytes" = "$ASSET_BYTES" ]; then
+                ok=true
+                break
+              fi
+            fi
+            sleep 3
+          done
+          test "$ok" = true
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > "$OUT/release-after.json"
+          jq -e --arg name "$ASSET" --argjson bytes "$ASSET_BYTES" '
+            .tag_name == "media-0003" and
+            any(.assets[]; .name == $name and .size == $bytes)
+          ' "$OUT/release-after.json" >/dev/null
+          sha256sum "$served" > "$OUT/served.sha256"
+
+      - name: Write no-corpus media publication receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          job_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" --jq '.jobs[] | select(.name=="publish") | .id' | head -1)"
+          asset_id="$(jq -r --arg name "$ASSET" '.assets[] | select(.name == $name) | .id' "$OUT/release-after.json" | head -1)"
+          release_id="$(jq -r '.id' "$OUT/release-after.json")"
+          test -n "$job_id" -a -n "$asset_id" -a -n "$release_id"
+          jq -n \
+            --arg main "$EXPECTED_MAIN" \
+            --arg head "$GITHUB_SHA" \
+            --arg run "$GITHUB_RUN_ID" \
+            --arg job "$job_id" \
+            --arg tag "$TAG" \
+            --arg release_id "$release_id" \
+            --arg asset "$ASSET" \
+            --arg asset_id "$asset_id" \
+            --arg url "$ASSET_URL" \
+            --arg sha "$ASSET_SHA256" \
+            --argjson bytes "$ASSET_BYTES" \
+            --argjson width "$ASSET_WIDTH" \
+            --argjson height "$ASSET_HEIGHT" '
+            {
+              version: 1,
+              transaction: "DOCTOR-WHO-CYCLE-007-KRAGAR-MEDIA-PREPUBLISH",
+              exact_main: $main,
+              carrier_head: $head,
+              workflow_run: ($run | tonumber),
+              workflow_job: ($job | tonumber),
+              release: {tag: $tag, id: ($release_id | tonumber)},
+              asset: {
+                name: $asset,
+                id: ($asset_id | tonumber),
+                url: $url,
+                sha256: $sha,
+                bytes: $bytes,
+                width: $width,
+                height: $height,
+                format: "JPEG",
+                source_review_artifact: 8939289391,
+                source_review_receipt_sha256: "a65573d2cf2c47be7a491965d842f89471aab5309b51772ec96b5514e02fa3ba"
+              },
+              boundary: {
+                queue_mutated: false,
+                lease_issued: false,
+                canonical_record_created: false,
+                manifest_committed: false,
+                corpus_mutated: false,
+                waterline_event_written: false,
+                cycle_receipt_written: false,
+                product_published: false,
+                release_asset_published: true
+              }
+            }' > "$OUT/receipt.json"
+          jq -cS 'del(.receipt_sha256)' "$OUT/receipt.json" | sha256sum | awk '{print $1}' > "$OUT/receipt.sha256"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact release publication evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-kragar-media-prepublish-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  verify:
+    if: github.event_name == 'pull_request' && github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-007-kragar-media-prepublish-v2'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARRIER_HEAD: ${{ github.event.pull_request.head.sha }}
+      VERIFY_OUT: /tmp/doctor-who-cycle-007-kragar-media-prepublish-verify
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-path read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$VERIFY_OUT"
+          test "$(git rev-parse HEAD)" = "$CARRIER_HEAD"
+          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_MAIN"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          printf '%s\n' "$WORKFLOW_PATH" > "$VERIFY_OUT/expected-paths.txt"
+          git diff --name-only "$EXPECTED_MAIN"...HEAD | LC_ALL=C sort > "$VERIFY_OUT/actual-paths.txt"
+          diff -u "$VERIFY_OUT/expected-paths.txt" "$VERIFY_OUT/actual-paths.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Bind terminal push-only publication run
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=''
+          status=''
+          conclusion=''
+          for attempt in $(seq 1 40); do
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${CARRIER_HEAD}&event=push&per_page=100" > "$VERIFY_OUT/push-runs.json"
+            run_id="$(jq -r '
+              [.workflow_runs[]
+                | select(.name == "doctor-who-cycle-007-kragar-media-prepublish")
+                | select(.head_branch == "agent/doctor-who-cycle-007-kragar-media-prepublish-v2")]
+              | sort_by(.created_at)
+              | last
+              | .id // empty
+            ' "$VERIFY_OUT/push-runs.json")"
+            if [ -n "$run_id" ]; then
+              status="$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id == $id) | .status' "$VERIFY_OUT/push-runs.json")"
+              conclusion="$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id == $id) | .conclusion // empty' "$VERIFY_OUT/push-runs.json")"
+              if [ "$status" = completed ]; then
+                test "$conclusion" = success
+                break
+              fi
+            fi
+            sleep 5
+          done
+          test -n "$run_id"
+          test "$status" = completed
+          test "$conclusion" = success
+          printf '%s\n' "$run_id" > "$VERIFY_OUT/push-run-id.txt"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$VERIFY_OUT/push-run.json"
+          jq -e --arg head "$CARRIER_HEAD" '
+            .event == "push" and
+            .head_sha == $head and
+            .head_branch == "agent/doctor-who-cycle-007-kragar-media-prepublish-v2" and
+            .status == "completed" and
+            .conclusion == "success"
+          ' "$VERIFY_OUT/push-run.json" >/dev/null
+
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "$VERIFY_OUT/push-jobs.json"
+          job_id="$(jq -r '.jobs[] | select(.name == "publish" and .status == "completed" and .conclusion == "success") | .id' "$VERIFY_OUT/push-jobs.json" | head -1)"
+          test -n "$job_id"
+          printf '%s\n' "$job_id" > "$VERIFY_OUT/push-job-id.txt"
+
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$VERIFY_OUT/push-artifacts.json"
+          artifact_id="$(jq -r --arg name "doctor-who-cycle-007-kragar-media-prepublish-${run_id}" '
+            [.artifacts[] | select(.name == $name and .expired == false)]
+            | if length == 1 then .[0].id else empty end
+          ' "$VERIFY_OUT/push-artifacts.json")"
+          test -n "$artifact_id"
+          artifact_digest="$(jq -r --argjson id "$artifact_id" '.artifacts[] | select(.id == $id) | .digest' "$VERIFY_OUT/push-artifacts.json")"
+          test -n "$artifact_digest"
+          printf 'run=%s\njob=%s\nartifact=%s\ndigest=%s\n' "$run_id" "$job_id" "$artifact_id" "$artifact_digest" > "$VERIFY_OUT/push-custody.txt"
+
+      - name: Independently verify immutable release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > "$VERIFY_OUT/release.json"
+          jq -e --arg name "$ASSET" --argjson bytes "$ASSET_BYTES" '
+            .tag_name == "media-0003" and
+            any(.assets[]; .name == $name and .size == $bytes)
+          ' "$VERIFY_OUT/release.json" >/dev/null
+          curl --fail --location --silent --show-error "$ASSET_URL" -o "$VERIFY_OUT/$ASSET"
+          test "$(sha256sum "$VERIFY_OUT/$ASSET" | awk '{print $1}')" = "$ASSET_SHA256"
+          test "$(wc -c < "$VERIFY_OUT/$ASSET")" = "$ASSET_BYTES"
+          sha256sum "$VERIFY_OUT/$ASSET" > "$VERIFY_OUT/served.sha256"
+
+      - name: Write independent media-publication verification receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id="$(cat "$VERIFY_OUT/push-run-id.txt")"
+          job_id="$(cat "$VERIFY_OUT/push-job-id.txt")"
+          artifact_id="$(awk -F= '$1=="artifact"{print $2}' "$VERIFY_OUT/push-custody.txt")"
+          artifact_digest="$(awk -F= '$1=="digest"{print $2}' "$VERIFY_OUT/push-custody.txt")"
+          release_id="$(jq -r '.id' "$VERIFY_OUT/release.json")"
+          asset_id="$(jq -r --arg name "$ASSET" '.assets[] | select(.name == $name) | .id' "$VERIFY_OUT/release.json" | head -1)"
+          jq -n \
+            --arg main "$EXPECTED_MAIN" \
+            --arg head "$CARRIER_HEAD" \
+            --arg run "$run_id" \
+            --arg job "$job_id" \
+            --arg artifact "$artifact_id" \
+            --arg artifact_digest "$artifact_digest" \
+            --arg release_id "$release_id" \
+            --arg asset_id "$asset_id" \
+            --arg asset "$ASSET" \
+            --arg url "$ASSET_URL" \
+            --arg sha "$ASSET_SHA256" \
+            --argjson bytes "$ASSET_BYTES" '
+            {
+              version: 1,
+              transaction: "DOCTOR-WHO-CYCLE-007-KRAGAR-MEDIA-PREPUBLISH-VERIFICATION",
+              exact_main: $main,
+              carrier_head: $head,
+              publication: {
+                workflow_run: ($run | tonumber),
+                workflow_job: ($job | tonumber),
+                artifact_id: ($artifact | tonumber),
+                artifact_digest: $artifact_digest
+              },
+              release: {id: ($release_id | tonumber), tag: "media-0003"},
+              asset: {
+                id: ($asset_id | tonumber),
+                name: $asset,
+                url: $url,
+                sha256: $sha,
+                bytes: $bytes,
+                width: 502,
+                height: 302,
+                format: "JPEG"
+              },
+              boundary: {
+                release_asset_published: true,
+                queue_mutated: false,
+                lease_issued: false,
+                canonical_record_created: false,
+                manifest_committed: false,
+                corpus_mutated: false,
+                waterline_event_written: false,
+                cycle_receipt_written: false,
+                product_published: false
+              }
+            }' > "$VERIFY_OUT/verification-receipt.json"
+          jq -cS . "$VERIFY_OUT/verification-receipt.json" | sha256sum | awk '{print $1}' > "$VERIFY_OUT/verification-receipt.sha256"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload independent release verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-kragar-media-prepublish-verification-${{ github.run_id }}
+          path: ${{ env.VERIFY_OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
