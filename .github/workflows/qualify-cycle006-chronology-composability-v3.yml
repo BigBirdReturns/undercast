@@ -1,0 +1,147 @@
+name: qualify-cycle006-chronology-composability-v3
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/qualify-cycle006-chronology-composability-v3.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qualify-cycle006-chronology-composability
+  cancel-in-progress: true
+
+env:
+  EXACT_MAIN: 013bf301cde81e04621b8190e5424a396013b760
+  PRODUCT_BRANCH: agent/doctor-who-cycle-006-chronology-composability-current-main
+  PRODUCT_HEAD: c8145f264c8e6dc580ad97d4b0e739fe6330f0f6
+  RECEIPT_BLOB: 0a5cb1b7b3be6f067173cee619cc9a2cbe9ac1b1
+  PACKAGE_BLOB: 5fd3f0d9ba5eb8ea7ccbfd4e0ca1c0eb622253a6
+  CHECKER_BLOB: 4740644a7401c5a86392745f9b3d8ba86ba98c4a
+  SELF: .github/workflows/qualify-cycle006-chronology-composability-v3.yml
+  OUT: /tmp/cycle006-chronology-composability-v3
+
+jobs:
+  qualify:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-006-chronology-composability-qualification-v3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact read-only carrier, main, and product with explicit receipts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          exec > >(tee "$OUT/binding.log") 2>&1
+
+          expect_eq() {
+            local label="$1" actual="$2" expected="$3"
+            printf '%s\n  actual:   %s\n  expected: %s\n' "$label" "$actual" "$expected"
+            test "$actual" = "$expected"
+          }
+
+          carrier_head="${{ github.event.pull_request.head.sha }}"
+          expect_eq carrier_head "$(git rev-parse HEAD)" "$carrier_head"
+          expect_eq carrier_parent "$(git show -s --format=%P HEAD)" "$EXACT_MAIN"
+          expect_eq carrier_commit_count "$(git rev-list --count "$EXACT_MAIN"..HEAD)" "1"
+          test -z "$(git status --porcelain)"
+
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+
+          git fetch --no-tags --filter=blob:none --unshallow origin \
+            "+refs/heads/main:refs/remotes/origin/main"
+          expect_eq live_main "$(git rev-parse refs/remotes/origin/main)" "$EXACT_MAIN"
+
+          git fetch --no-tags --filter=blob:none origin "$PRODUCT_HEAD"
+          expect_eq fetched_product "$(git rev-parse FETCH_HEAD)" "$PRODUCT_HEAD"
+          git update-ref refs/remotes/origin/pinned-product "$PRODUCT_HEAD"
+
+          live_product_ref="$(git ls-remote origin "refs/heads/${PRODUCT_BRANCH}" | awk '{print $1}')"
+          expect_eq live_product_ref "$live_product_ref" "$PRODUCT_HEAD"
+          expect_eq product_parent "$(git show -s --format=%P "$PRODUCT_HEAD")" "$EXACT_MAIN"
+          expect_eq product_commit_count "$(git rev-list --count "$EXACT_MAIN".."$PRODUCT_HEAD")" "1"
+          expect_eq product_merge_base "$(git merge-base "$EXACT_MAIN" "$PRODUCT_HEAD")" "$EXACT_MAIN"
+
+          printf '%s\n' \
+            data/review/adapter-sdk/doctor-who-cycle-006-candidate-chronology-composability.json \
+            package.json \
+            scripts/doctor-who-cycle-006-chronology-composable.mjs \
+            | LC_ALL=C sort > "$OUT/expected-product-paths.txt"
+          git diff --name-only "$EXACT_MAIN"..."$PRODUCT_HEAD" | LC_ALL=C sort > "$OUT/actual-product-paths.txt"
+          diff -u "$OUT/expected-product-paths.txt" "$OUT/actual-product-paths.txt"
+
+          expect_eq receipt_blob \
+            "$(git rev-parse "$PRODUCT_HEAD:data/review/adapter-sdk/doctor-who-cycle-006-candidate-chronology-composability.json")" \
+            "$RECEIPT_BLOB"
+          expect_eq package_blob \
+            "$(git rev-parse "$PRODUCT_HEAD:package.json")" \
+            "$PACKAGE_BLOB"
+          expect_eq checker_blob \
+            "$(git rev-parse "$PRODUCT_HEAD:scripts/doctor-who-cycle-006-chronology-composable.mjs")" \
+            "$CHECKER_BLOB"
+
+          printf 'exact_main=%s\ncarrier_head=%s\nproduct_head=%s\nproduct_tree=%s\n' \
+            "$EXACT_MAIN" "$carrier_head" "$PRODUCT_HEAD" "$(git rev-parse "$PRODUCT_HEAD^{tree}")" \
+            > "$OUT/input-identity.txt"
+
+      - name: Run exact chronology controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$PRODUCT_HEAD"
+          test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
+          test -z "$(git status --porcelain)"
+          node scripts/doctor-who-cycle-006-chronology-composable.mjs | tee "$OUT/composability-check.log"
+          node scripts/doctor-who-cycle-006.mjs | tee "$OUT/cycle-006-check.log"
+
+      - name: Install exact dependencies and rendered runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run complete repository and rendered gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run gate | tee "$OUT/complete-gate.log"
+          test -z "$(git status --porcelain)"
+          sha256sum \
+            data/review/adapter-sdk/doctor-who-cycle-006-candidate-chronology-composability.json \
+            package.json \
+            scripts/doctor-who-cycle-006-chronology-composable.mjs \
+            > "$OUT/product-paths.sha256"
+          printf 'product_head=%s\nproduct_tree=%s\n' \
+            "$PRODUCT_HEAD" "$(git rev-parse 'HEAD^{tree}')" > "$OUT/product-identity.txt"
+
+      - name: Upload exact read-only qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cycle006-chronology-composability-v3-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
