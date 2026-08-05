@@ -1,0 +1,71 @@
+name: observe-ux-nav-review-release
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/observe-ux-nav-review-release.yml"
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  observe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUT: ${{ runner.temp }}/observe-ux-nav-review-release
+      CONTROLLER_SHA: f25bb181d105132a0aa2a33582f74aaa09940539
+      CONTROLLER_NAME: apply-collection-only-operations
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bind exact one-file observer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          printf '%s\n' .github/workflows/observe-ux-nav-review-release.yml > /tmp/expected
+          git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | LC_ALL=C sort > /tmp/actual
+          diff -u /tmp/expected /tmp/actual
+
+      - name: Recover exact push run, jobs, artifacts, and product head
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${CONTROLLER_SHA}&per_page=100"
+          gh api --paginate "$api" --jq '.workflow_runs[]' | jq -s '{workflow_runs:.}' > "$OUT/all-runs.json"
+          jq --arg name "$CONTROLLER_NAME" '[.workflow_runs[] | select(.name == $name and .event == "push")]' "$OUT/all-runs.json" > "$OUT/controller-runs.json"
+          test "$(jq 'length' "$OUT/controller-runs.json")" -ge 1
+          run_id="$(jq -r 'sort_by(.created_at) | last | .id' "$OUT/controller-runs.json")"
+          test -n "$run_id" -a "$run_id" != null
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/run.json"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}' > "$OUT/jobs.json"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" --jq '.artifacts[]' | jq -s '{artifacts:.}' > "$OUT/artifacts.json"
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/346" > "$OUT/pr-346.json"
+          gh api "repos/${GITHUB_REPOSITORY}/commits/main" > "$OUT/main.json"
+          jq -n \
+            --slurpfile run "$OUT/run.json" \
+            --slurpfile jobs "$OUT/jobs.json" \
+            --slurpfile artifacts "$OUT/artifacts.json" \
+            --slurpfile pr "$OUT/pr-346.json" \
+            --slurpfile main "$OUT/main.json" \
+            '{run:($run[0]|{id,name,event,status,conclusion,head_sha,run_number,created_at,updated_at}),jobs:[$jobs[0].jobs[]|{id,name,status,conclusion,steps:[.steps[]?|{name,status,conclusion,number}]}],artifacts:[$artifacts[0].artifacts[]|{id,name,size_in_bytes,digest,expired}],pr346:{head_sha:$pr[0].head.sha,base_sha:$pr[0].base.sha,state:$pr[0].state,mergeable:$pr[0].mergeable},main_sha:$main[0].sha}' > "$OUT/summary.json"
+          cat "$OUT/summary.json"
+
+      - name: Upload exact observation receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: observe-ux-nav-review-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/observe-ux-nav-review-release
+          if-no-files-found: error
+          retention-days: 30
