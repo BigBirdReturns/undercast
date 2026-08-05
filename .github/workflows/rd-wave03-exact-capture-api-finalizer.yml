@@ -1,0 +1,185 @@
+name: RD-W03 exact-capture API-only finalizer v3
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/rd-wave03-exact-capture-api-finalizer.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: rd-wave03-exact-capture-independent-finalizer
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: BigBirdReturns/undercast
+      BASE_SHA: 45fc33aa8de8c01f03f006c5c01765dd1929385f
+      BASE_BRANCH: agent/ssc-rd-wave03-exact-capture-api-finalizer-base-20260805
+      ARTIFACT_ID: "8937114139"
+      ARTIFACT_RUN: "31021882771"
+      ARTIFACT_HEAD: db452902f9eb7257a912905af21b545440d75438
+      ARTIFACT_NAME: rd-wave03-exact-capture-supervisor-v3-31021882771
+      ARTIFACT_SHA256: 862f20b9b168fa70cd7ba3d57f1e84bf43f0738a68155d7b60a571e6720e50a5
+      EVIDENCE: /tmp/rd-wave03-exact-capture-api-finalizer-${{ github.run_id }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PINNED_BRANCH: agent/ssc-rd-wave03-exact-capture-api-finalizer-20260805
+      PINNED_BLOB: 0cc81d0062048b350acd9caf6e95bdab5b746c51
+      PINNED_SHA256: 8db382fff0195a2713513135173fa3153ee6705ba5ac53b078fc796576c1be41
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Recover pinned verifier and execute exact read-only finalization
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE/pinned/verify"
+          exec > >(tee "$EVIDENCE/wrapper.log") 2>&1
+          meta="$EVIDENCE/pinned/workflow.json"
+          pinned="$EVIDENCE/pinned/finalizer.yml"
+          gh api "repos/$REPO/contents/.github/workflows/rd-wave03-exact-capture-api-finalizer.yml?ref=$PINNED_BRANCH" > "$meta"
+          test "$(jq -r .sha "$meta")" = "$PINNED_BLOB"
+          jq -r .content "$meta" | tr -d '\n' | base64 -d > "$pinned"
+          echo "$PINNED_SHA256  $pinned" | sha256sum -c -
+          ruby -ryaml - "$pinned" "$EVIDENCE/pinned/verify" <<'RUBY'
+          source, out = ARGV
+          doc = YAML.load_file(source)
+          names = [
+            'Verify immutable one-file carrier',
+            'Recover exact capture artifact and current-main snapshot',
+            'Independently verify all nine retained objects',
+            'Regenerate exact package and run complete current-main gate',
+            'Build final settlement receipt'
+          ]
+          steps = doc.fetch('jobs').fetch('verify').fetch('steps')
+          names.each_with_index do |name, index|
+            step = steps.find { |candidate| candidate['name'] == name }
+            abort "missing pinned step #{name}" unless step && step['run']
+            File.write(File.join(out, format('%02d.sh', index + 1)), step['run'])
+          end
+          RUBY
+          python3 - "$EVIDENCE/pinned/verify/01.sh" "$PR_NUMBER" <<'PY'
+          import pathlib, sys
+          path=pathlib.Path(sys.argv[1]); text=path.read_text()
+          needle='$'+'{{ github.event.pull_request.number }}'
+          assert text.count(needle)==2
+          path.write_text(text.replace(needle,sys.argv[2]))
+          PY
+          test "$(gh api "repos/$REPO" --jq .visibility)" = public
+          python3 - "$EVIDENCE/pinned/verify/04.sh" <<'PY'
+          import pathlib, sys
+          path=pathlib.Path(sys.argv[1]); text=path.read_text()
+          needle='git -C "$repo_root" init\n'
+          replacement=needle+'git -C "$repo_root" remote add origin "https://github.com/$REPO.git"\n'
+          assert text.count(needle)==1
+          assert 'remote add origin "https://github.com/$REPO.git"' not in text
+          path.write_text(text.replace(needle,replacement))
+          PY
+          export GITHUB_SHA="$HEAD_SHA"
+          for script in "$EVIDENCE"/pinned/verify/*.sh; do
+            bash -n "$script"
+            bash "$script"
+          done
+
+      - name: Upload final settlement evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-final-${{ github.run_id }}
+          path: ${{ env.EVIDENCE }}/settlement
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-api-finalizer-v3-failure-${{ github.run_id }}
+          path: ${{ env.EVIDENCE }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 30
+
+  publish:
+    needs: verify
+    if: needs.verify.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: BigBirdReturns/undercast
+      BASE_SHA: 45fc33aa8de8c01f03f006c5c01765dd1929385f
+      TARGET_BRANCH: agent/ssc-rd-wave03-exact-capture-product-20260805
+      OUT: /tmp/rd-wave03-exact-capture-api-publication-${{ github.run_id }}
+      PINNED_BRANCH: agent/ssc-rd-wave03-exact-capture-api-finalizer-20260805
+      PINNED_BLOB: 0cc81d0062048b350acd9caf6e95bdab5b746c51
+      PINNED_SHA256: 8db382fff0195a2713513135173fa3153ee6705ba5ac53b078fc796576c1be41
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-final-${{ github.run_id }}
+          path: ${{ env.OUT }}/settlement
+
+      - name: Recover pinned publisher and publish exact workflow-free product
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT/pinned/publish"
+          meta="$OUT/pinned/workflow.json"
+          pinned="$OUT/pinned/finalizer.yml"
+          gh api "repos/$REPO/contents/.github/workflows/rd-wave03-exact-capture-api-finalizer.yml?ref=$PINNED_BRANCH" > "$meta"
+          test "$(jq -r .sha "$meta")" = "$PINNED_BLOB"
+          jq -r .content "$meta" | tr -d '\n' | base64 -d > "$pinned"
+          echo "$PINNED_SHA256  $pinned" | sha256sum -c -
+          ruby -ryaml - "$pinned" "$OUT/pinned/publish" <<'RUBY'
+          source, out = ARGV
+          doc = YAML.load_file(source)
+          names = [
+            'Verify settlement and create exact Git objects',
+            'Open definitive draft product',
+            'Settle issue and product custody'
+          ]
+          steps = doc.fetch('jobs').fetch('publish').fetch('steps')
+          names.each_with_index do |name, index|
+            step = steps.find { |candidate| candidate['name'] == name }
+            abort "missing pinned step #{name}" unless step && step['run']
+            File.write(File.join(out, format('%02d.sh', index + 1)), step['run'])
+          end
+          RUBY
+          bash -n "$OUT/pinned/publish/01.sh"
+          bash -n "$OUT/pinned/publish/02.sh"
+          bash "$OUT/pinned/publish/01.sh"
+          bash "$OUT/pinned/publish/02.sh"
+
+      - name: Upload exact publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-publication-${{ github.run_id }}
+          path: ${{ env.OUT }}/publication
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Settle issue and product custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n "$OUT/pinned/publish/03.sh"
+          bash "$OUT/pinned/publish/03.sh"
