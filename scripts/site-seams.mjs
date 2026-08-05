@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 const read = path => readFileSync(path, "utf8");
 const files = Object.fromEntries([
   "index.html","recognition.html","coverage.html","constellation.html","404.html",
-  "assets/site-shell.css","assets/site-theme.js","assets/constellation.css","assets/record-page.css","scripts/build-record-pages.mjs",
+  "assets/site-shell.css","assets/site-theme.js","assets/site-navigation.js","assets/constellation.css","assets/record-page.css","scripts/build-record-pages.mjs",
   "schema/specimen.schema.json","schema/source.schema.json"
 ].map(path => [path, read(path)]));
 const errors = [];
@@ -24,8 +24,35 @@ for (const path of ["index.html","recognition.html","coverage.html","constellati
     expect(new RegExp(`>${label}<`).test(nav), `${path}: archive navigation is missing ${label}`);
   }
   expect(!/>Constellations</.test(nav), `${path}: Constellations must stay out of permanent navigation`);
+  expect(!/<a[^>]*>Connections<\/a>/.test(nav), `${path}: Connections must remain contextual under DEC-0009`);
 }
 expect(!/>Constellations<\/a>/.test(files["scripts/build-record-pages.mjs"]), "record templates: Constellations must stay out of permanent navigation");
+const navigationScriptPatterns = {
+  "index.html": /<script src="\.\/assets\/site-navigation\.js" defer><\/script>/,
+  "recognition.html": /<script src="\.\/assets\/site-navigation\.js" defer><\/script>/,
+  "coverage.html": /<script src="assets\/site-navigation\.js" defer><\/script>/,
+  "constellation.html": /<script src="assets\/site-navigation\.js" defer><\/script>/,
+  "404.html": /<script src="\/undercast\/assets\/site-navigation\.js" defer><\/script>/
+};
+for (const [path, pattern] of Object.entries(navigationScriptPatterns)) {
+  expect(has(path, pattern), `${path}: shared navigation controller is missing`);
+}
+
+const archiveCurrent = {
+  "index.html": {label:"The wall", value:"location"},
+  "recognition.html": {label:"Recognition records", value:"location"},
+  "coverage.html": {label:"Coverage &amp; gaps", value:"location"},
+  "constellation.html": {label:"Evidence paths", value:"page"},
+  "404.html": null
+};
+const staticDocumentMarkup = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+for (const [path, current] of Object.entries(archiveCurrent)) {
+  const maps = [...staticDocumentMarkup(files[path]).matchAll(/<nav[^>]*class="[^"]*\barchive-map\b[^"]*"[^>]*>[\s\S]*?<\/nav>/g)].map(match => match[0]);
+  expect(maps.length === 1, `${path}: secondary archive map must appear exactly once in static document markup`);
+  const map = maps[0] || "";
+  if (current) expect(map.includes(`aria-current="${current.value}">${current.label}</a>`), `${path}: archive map does not identify ${current.label} as current ${current.value}`);
+  else expect(!/aria-current=/.test(map), `${path}: recovery map invents a current archive section`);
+}
 expect(has("recognition.html", />Open constellation →</), "recognition: contextual constellation link is missing");
 expect(has("coverage.html", /href="constellation\.html\?id=/), "coverage: contextual constellation link is missing");
 expect(has("scripts/build-record-pages.mjs", /constellationAction=.*Open constellation/), "record templates: contextual constellation action is missing");
@@ -59,6 +86,12 @@ expect(has("recognition.html", /connections-nav[\s\S]{0,220}prefers-reduced-moti
 expect(has("recognition.html", /data\/archive\.json",\{cache:"no-store"\}/), "recognition: archive snapshot is not fresh");
 expect(has("recognition.html", /graphMeta\?\.sha256/), "recognition: constellation graph is not snapshot-versioned");
 expect(has("assets/site-theme.js", /storedTheme\(\) \|\| preferredTheme\(\)/), "theme: system color preference is ignored when no explicit choice exists");
+expect(has("assets/site-navigation.js", /aria-expanded/), "navigation: compact disclosure state is missing");
+expect(has("assets/site-navigation.js", /event\.key === "Escape"/), "navigation: Escape recovery is missing");
+expect(has("assets/site-navigation.js", /dataset\.navOpen/), "navigation: shell open-state custody is missing");
+expect(has("assets/site-shell.css", /data-nav-enhanced/), "navigation: progressive-enhancement CSS is missing");
+expect(has("assets/site-shell.css", /min-height:44px/), "navigation: compact targets are below the required size");
+expect(has("assets/site-shell.css", /\.archive-map \[aria-current\][\s\S]{0,260}text-decoration:underline/), "navigation: archive-map current location is not visibly styled");
 expect(has("assets/site-theme.js", /if \(!storedTheme\(\)\) applyTheme/), "theme: system changes do not compose with explicit preference custody");
 expect(has("index.html", /function recognitionHref\(id\)/), "index: recognition links do not carry exact wall context");
 expect(has("index.html", /loop\.href=recognitionHref\(s\.id\)/), "index: card record links bypass wall-context custody");
@@ -88,6 +121,8 @@ expect(has("404.html", /href="\/undercast\/data\/archive\.json"/), "404: machine
 expect(has("scripts/build-record-pages.mjs", /class="skip-link" href="#record-main"/), "records: skip link missing from generator");
 expect(has("scripts/build-record-pages.mjs", /aria-current="page">Permanent record/), "records: current surface missing from generator");
 expect(!has("scripts/build-record-pages.mjs", /interactive view adds comparison/i), "records: retired comparison promise returned");
+expect((files["scripts/build-record-pages.mjs"].match(/site-navigation\.js/g) || []).length === 3, "records: every live and retired template must load the shared navigation controller");
+expect((files["scripts/build-record-pages.mjs"].match(/aria-current="location">Recognition records/g) || []).length === 3, "records: every live and retired template must identify its archive section");
 expect(has("assets/record-page.css", /@media\(max-width:420px\)\{\.record-pair\{grid-template-columns:1fr/), "records: narrow comparison breakpoint missing");
 
 for (const path of ["index.html","recognition.html","coverage.html","constellation.html"]) {

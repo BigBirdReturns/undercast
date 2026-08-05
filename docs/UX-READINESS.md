@@ -112,3 +112,26 @@ npm run gate
 
 The mobile projections are interfaces over current canonical data. They do not write
 coverage, graph, specimen, source, media, queue, lease, or waterline authority.
+
+## UX-02A — navigation continuity without promoting Connections
+
+This bounded product implements DEC-0016 while preserving DEC-0009, DEC-0012 and
+DEC-0015. Browse, Recognition Loop, Coverage, Makers and About remain the permanent
+primary destinations. Connections stays contextual: Recognition retains its
+record-local control, and the secondary archive map retains Evidence paths without
+promoting it into top navigation.
+
+Every root page and generated live or retired permanent record loads one shared
+navigation controller. At narrow widths JavaScript progressively enhances the
+complete link set into an explicit disclosure with `aria-expanded`, 44-pixel-plus
+targets, link-close behavior and Escape-key focus recovery. With JavaScript disabled
+the full existing navigation remains visible. Exactly one `aria-current="page"`
+marker identifies the current page. The secondary archive map uses
+`aria-current="location"` for its containing section when primary navigation already
+owns the page state, and every archive-map current marker is visibly underlined
+without depending on script execution.
+
+Generated permanent-record pages remain disposable outputs. Qualification counts
+them from canonical live and tombstone records, validates every generated page,
+records a byte manifest, regenerates and requires exact manifest replay; they are
+not misrepresented as committed product paths.

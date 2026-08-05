@@ -104,7 +104,7 @@ const speciesMeta=await fileMeta("data/species.json");
 const qualityMeta=await fileMeta("data/quality.json");
 const censusMeta={snapshot:await fileMeta("data/CENSUS.json"),coverage:await fileMeta("data/CENSUS-COVERAGE.json"),gaps:await fileMeta("data/CENSUS-GAPS.json"),summary:await fileMeta("data/CENSUS-SUMMARY.json"),unresolved:await fileMeta("data/CENSUS-UNRESOLVED.json"),exclusions:await fileMeta("data/CENSUS-EXCLUSIONS.json"),ferengi_test:await fileMeta("data/CENSUS-FERENGI-TEST.json")};
 const tombstoneMeta=await fileMeta("data/tombstones.json");
-const siteAssets=await Promise.all(["index.html","recognition.html","coverage.html","constellation.html","404.html","assets/site-shell.css","assets/record-page.css","assets/coverage.css","assets/constellation.css"].map(fileMeta));
+const siteAssets=await Promise.all(["index.html","recognition.html","coverage.html","constellation.html","404.html","assets/site-shell.css","assets/site-navigation.js","assets/record-page.css","assets/coverage.css","assets/constellation.css"].map(fileMeta));
 const schemas=Object.fromEntries(await Promise.all([
   ["archive","schema/archive.schema.json"],["specimen","schema/specimen.schema.json"],["source","schema/source.schema.json"],["entities","schema/entities.schema.json"],["species","schema/species.schema.json"],["species_vocabulary","schema/species-vocabulary.schema.json"],["constellations","schema/constellations.schema.json"],["census_manifest","schema/census-manifest.schema.json"],["census_test","schema/census-test.schema.json"],["tombstones","schema/tombstones.schema.json"]
 ].map(async([key,path])=>[key,{...(await fileMeta(path)),media_type:"application/schema+json"}])));
