@@ -1,0 +1,214 @@
+name: RD-W03 hosted exact-head executor
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/rd-wave03-hosted-executor.yml
+      - tmp/rd-wave03-integration.sh
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: rd-wave03-hosted-executor
+  cancel-in-progress: false
+
+jobs:
+  rd01:
+    uses: BigBirdReturns/undercast/.github/workflows/rd-wave03-rd01-intake.yml@6899a2d09c8ddd62a62ce22fc59557ea6fddf84b
+    with:
+      base_sha: 318e7fd2826511c283e2d81622459fe0bb74e0d2
+      head_sha: 6899a2d09c8ddd62a62ce22fc59557ea6fddf84b
+    permissions:
+      contents: read
+
+  rd02:
+    uses: BigBirdReturns/undercast/.github/workflows/rd-wave03-rd02-intake.yml@134e7811419d20443134fe565bf4cf69af70fa45
+    with:
+      base_sha: 318e7fd2826511c283e2d81622459fe0bb74e0d2
+      head_sha: 134e7811419d20443134fe565bf4cf69af70fa45
+    permissions:
+      contents: read
+
+  rd03:
+    uses: BigBirdReturns/undercast/.github/workflows/rd-wave03-rd03-intake.yml@b0700020c4c84e0ec355a76861c9a788b04a89eb
+    with:
+      base_sha: 318e7fd2826511c283e2d81622459fe0bb74e0d2
+      head_sha: b0700020c4c84e0ec355a76861c9a788b04a89eb
+    permissions:
+      contents: read
+
+  rd04:
+    uses: BigBirdReturns/undercast/.github/workflows/rd-wave03-rd04-intake.yml@1db75a178f4da96d22109902e3d5a9ff79a6080f
+    with:
+      base_sha: 318e7fd2826511c283e2d81622459fe0bb74e0d2
+      head_sha: 1db75a178f4da96d22109902e3d5a9ff79a6080f
+    permissions:
+      contents: read
+
+  rd05:
+    uses: BigBirdReturns/undercast/.github/workflows/rd-wave03-rd05-intake.yml@6f1e9f6ea6b14753d30161d55c3facc3a466bc66
+    with:
+      base_sha: 318e7fd2826511c283e2d81622459fe0bb74e0d2
+      head_sha: 6f1e9f6ea6b14753d30161d55c3facc3a466bc66
+    permissions:
+      contents: read
+
+  rd06:
+    uses: BigBirdReturns/undercast/.github/workflows/rd-wave03-rd06-intake.yml@9acd031d7bfc3d0f343525e65b17a5140ee46f43
+    with:
+      base_sha: 318e7fd2826511c283e2d81622459fe0bb74e0d2
+      head_sha: 9acd031d7bfc3d0f343525e65b17a5140ee46f43
+    permissions:
+      contents: read
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      EVIDENCE: ${{ runner.temp }}/rd-wave03-integration
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Run six-lane no-magic-human and complete release gate
+        shell: bash
+        run: bash tmp/rd-wave03-integration.sh
+
+      - name: Upload six-lane integration receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-integration-${{ github.run_id }}
+          path: ${{ runner.temp }}/rd-wave03-integration
+          if-no-files-found: error
+          retention-days: 30
+
+  finalize:
+    if: always()
+    needs:
+      - rd01
+      - rd02
+      - rd03
+      - rd04
+      - rd05
+      - rd06
+      - integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EVIDENCE: ${{ runner.temp }}/rd-wave03-final
+      RD01_RESULT: ${{ needs.rd01.result }}
+      RD02_RESULT: ${{ needs.rd02.result }}
+      RD03_RESULT: ${{ needs.rd03.result }}
+      RD04_RESULT: ${{ needs.rd04.result }}
+      RD05_RESULT: ${{ needs.rd05.result }}
+      RD06_RESULT: ${{ needs.rd06.result }}
+      INTEGRATION_RESULT: ${{ needs.integration.result }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Publish exact hosted result to all six draft PRs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          overall=success
+          for result in "$RD01_RESULT" "$RD02_RESULT" "$RD03_RESULT" "$RD04_RESULT" "$RD05_RESULT" "$RD06_RESULT" "$INTEGRATION_RESULT"; do
+            [[ "$result" == success ]] || overall=failure
+          done
+          cat > "$EVIDENCE/hosted-summary.json" <<EOF
+          {
+            "run_id": "${GITHUB_RUN_ID}",
+            "controller_sha": "${GITHUB_SHA}",
+            "base": "318e7fd2826511c283e2d81622459fe0bb74e0d2",
+            "RD-01": "${RD01_RESULT}",
+            "RD-02": "${RD02_RESULT}",
+            "RD-03": "${RD03_RESULT}",
+            "RD-04": "${RD04_RESULT}",
+            "RD-05": "${RD05_RESULT}",
+            "RD-06": "${RD06_RESULT}",
+            "integration": "${INTEGRATION_RESULT}",
+            "overall": "${overall}",
+            "external_contacts": 0,
+            "external_reviews": 0,
+            "outside_human_dependency": false
+          }
+          EOF
+          body="$(cat <<EOF
+          Wave-03 hosted exact-head executor run ${GITHUB_RUN_ID} reached a terminal result.
+
+          ```text
+          controller:  ${GITHUB_SHA}
+          base:        318e7fd2826511c283e2d81622459fe0bb74e0d2
+          RD-01:       ${RD01_RESULT}
+          RD-02:       ${RD02_RESULT}
+          RD-03:       ${RD03_RESULT}
+          RD-04:       ${RD04_RESULT}
+          RD-05:       ${RD05_RESULT}
+          RD-06:       ${RD06_RESULT}
+          integration: ${INTEGRATION_RESULT}
+          overall:     ${overall}
+          ```
+
+          The six jobs called the workflow files from their immutable final head SHAs. The integration job independently reconstructed all 45 product paths, reran every validator, deterministic replay, and adversarial suite, then ran the complete repository gate. External contacts/reviews remain 0/0; no outside-human dependency, evidence admission, class closure, publication, adoption, or graph authority was created.
+          EOF
+          )"
+          for pr in 322 323 324 325 326 327; do
+            gh pr comment "$pr" --repo BigBirdReturns/undercast --body "$body"
+          done
+          cat "$EVIDENCE/hosted-summary.json"
+
+      - name: Upload hosted terminal summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-hosted-summary-${{ github.run_id }}
+          path: ${{ runner.temp }}/rd-wave03-final
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retire temporary executor from live main
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          temporary_paths=(
+            ".github/workflows/rd-wave03-hosted-executor.yml"
+            "tmp/rd-wave03-integration.sh"
+          )
+          for attempt in 1 2 3; do
+            git fetch --no-tags origin main
+            live="$(git rev-parse refs/remotes/origin/main)"
+            git merge-base --is-ancestor "$GITHUB_SHA" "$live"
+            for path in "${temporary_paths[@]}"; do
+              test "$(git rev-parse "$GITHUB_SHA:$path")" = "$(git rev-parse "$live:$path")"
+            done
+            git checkout -B rd-wave03-executor-cleanup "$live"
+            git rm -- "${temporary_paths[@]}"
+            git commit --no-verify -m "CI: retire completed Wave-03 hosted executor"
+            cleanup="$(git rev-parse HEAD)"
+            if git push --force-with-lease="refs/heads/main:$live" origin HEAD:refs/heads/main; then
+              for pr in 322 323 324 325 326 327; do
+                gh pr comment "$pr" --repo BigBirdReturns/undercast --body "Wave-03 executor transport was removed from live main by cleanup commit $cleanup. No controller or integration helper survives."
+              done
+              exit 0
+            fi
+          done
+          exit 1
