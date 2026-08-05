@@ -1,0 +1,345 @@
+name: RD-W03 exact-capture terminal supervisor
+
+on:
+  push:
+    branches:
+      - agent/ssc-rd-wave03-exact-capture-terminal-supervisor-20260805
+    paths:
+      - .github/workflows/rd-wave03-exact-capture-terminal-supervisor.yml
+
+permissions:
+  contents: write
+  actions: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: rd-wave03-exact-capture-terminal-supervisor
+  cancel-in-progress: false
+
+jobs:
+  supervise:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      TOKEN: ${{ github.token }}
+      BASE_BRANCH: agent/ssc-rd-wave03-exact-capture-terminal-supervisor-base-20260805
+      PRODUCT_BRANCH: agent/ssc-rd-wave03-exact-capture-product-v4-20260805
+      PRODUCT_WORKTREE: /tmp/rd-wave03-exact-capture-product-v4-${{ github.run_id }}
+      INTEGRATION_WORKTREE: /tmp/rd-wave03-exact-capture-current-main-${{ github.run_id }}
+      EVIDENCE: /tmp/rd-wave03-exact-capture-terminal-supervisor-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Materialize, qualify, publish, and capture current bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE/artifacts"
+          exec > >(tee "$EVIDENCE/supervisor.log") 2>&1
+          printf 'carrier_preflight\n' > "$EVIDENCE/stage.txt"
+
+          test "$GITHUB_REF" = refs/heads/agent/ssc-rd-wave03-exact-capture-terminal-supervisor-20260805
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
+          PRODUCT_BASE="$(git rev-parse "refs/remotes/origin/$BASE_BRANCH")"
+          export PRODUCT_BASE
+          mapfile -t commits < <(git rev-list --reverse "$PRODUCT_BASE..$GITHUB_SHA")
+          test "${#commits[@]}" -eq 2
+          test "$(git show -s --format=%P "${commits[0]}")" = "$PRODUCT_BASE"
+          test "$(git show -s --format=%P "${commits[1]}")" = "${commits[0]}"
+          test "${commits[1]}" = "$GITHUB_SHA"
+          test "$(git diff-tree --no-commit-id --name-only -r "${commits[0]}")" = "tmp/rd-wave03-exact-capture-terminal-supervisor.sh"
+          test "$(git diff-tree --no-commit-id --name-only -r "${commits[1]}")" = ".github/workflows/rd-wave03-exact-capture-terminal-supervisor.yml"
+          mapfile -t actual < <(git diff --name-only "$PRODUCT_BASE" "$GITHUB_SHA" | LC_ALL=C sort)
+          printf '%s\n' .github/workflows/rd-wave03-exact-capture-terminal-supervisor.yml tmp/rd-wave03-exact-capture-terminal-supervisor.sh | LC_ALL=C sort > "$EVIDENCE/expected-carrier-paths.txt"
+          printf '%s\n' "${actual[@]}" > "$EVIDENCE/actual-carrier-paths.txt"
+          diff -u "$EVIDENCE/expected-carrier-paths.txt" "$EVIDENCE/actual-carrier-paths.txt"
+          bash -n tmp/rd-wave03-exact-capture-terminal-supervisor.sh
+          printf 'carrier_head=%s\nproduct_base=%s\ncarrier_commits=2\ncarrier_paths=2\nmerge_authority=false\n' "$GITHUB_SHA" "$PRODUCT_BASE" > "$EVIDENCE/custody.txt"
+
+          printf 'receipt_download\n' > "$EVIDENCE/stage.txt"
+          export GH_TOKEN="$TOKEN"
+          gh run download 30984441377 --repo BigBirdReturns/undercast --name rd-wave03-rd01-intake-30984441377 --dir "$EVIDENCE/artifacts/rd01"
+          gh run download 30984459798 --repo BigBirdReturns/undercast --name rd-wave03-rd02-intake-30984459798 --dir "$EVIDENCE/artifacts/rd02"
+          gh run download 30984486686 --repo BigBirdReturns/undercast --name rd-wave03-rd03-intake-30984486686 --dir "$EVIDENCE/artifacts/rd03"
+          gh run download 30984497436 --repo BigBirdReturns/undercast --name rd-wave03-rd04-intake-30984497436 --dir "$EVIDENCE/artifacts/rd04"
+          gh run download 30984516496 --repo BigBirdReturns/undercast --name rd-wave03-rd05-intake-30984516496 --dir "$EVIDENCE/artifacts/rd05"
+          gh run download 30984537874 --repo BigBirdReturns/undercast --name rd-wave03-rd06-intake-30984537874 --dir "$EVIDENCE/artifacts/rd06"
+          test "$(find "$EVIDENCE/artifacts" -name receipt.json -type f | wc -l)" -eq 6
+          unset GH_TOKEN
+
+          printf 'product_materialization\n' > "$EVIDENCE/stage.txt"
+          git config --local --unset-all http.https://github.com/.extraheader >/dev/null 2>&1 || true
+          git remote set-url origin https://github.com/BigBirdReturns/undercast.git
+          env -u TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
+            REPO_ROOT="$GITHUB_WORKSPACE" \
+            ARTIFACT_ROOT="$EVIDENCE/artifacts" \
+            PRODUCT_BASE="$PRODUCT_BASE" \
+            PRODUCT_WORKTREE="$PRODUCT_WORKTREE" \
+            EVIDENCE="$EVIDENCE" \
+            bash tmp/rd-wave03-exact-capture-terminal-supervisor.sh
+          PRODUCT_HEAD="$(python3 -c 'import json,os; print(json.load(open(os.environ["EVIDENCE"]+"/materialization.json"))["head"])')"
+          export PRODUCT_HEAD
+          test "$(git -C "$PRODUCT_WORKTREE" rev-parse HEAD)" = "$PRODUCT_HEAD"
+          test "$(git -C "$PRODUCT_WORKTREE" show -s --format=%P "$PRODUCT_HEAD")" = "$PRODUCT_BASE"
+          printf '%s\n' "$PRODUCT_HEAD" > "$EVIDENCE/product-head.txt"
+
+          printf 'product_static_validation\n' > "$EVIDENCE/stage.txt"
+          node --check "$PRODUCT_WORKTREE/scripts/rd-wave03-exact-capture.mjs"
+          node --check "$PRODUCT_WORKTREE/test/rd-wave03-exact-capture-adversarial.mjs"
+          node "$PRODUCT_WORKTREE/scripts/rd-wave03-exact-capture.mjs" --check
+          node "$PRODUCT_WORKTREE/test/rd-wave03-exact-capture-adversarial.mjs"
+          test -z "$(git -C "$PRODUCT_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+
+          printf 'current_main_integration\n' > "$EVIDENCE/stage.txt"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          CURRENT_MAIN="$(git rev-parse refs/remotes/origin/main)"
+          export CURRENT_MAIN
+          rm -rf "$INTEGRATION_WORKTREE"
+          git worktree add --detach "$INTEGRATION_WORKTREE" "$CURRENT_MAIN"
+          git -C "$INTEGRATION_WORKTREE" config user.name github-actions[bot]
+          git -C "$INTEGRATION_WORKTREE" config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          mapfile -t product_paths < <(git -C "$PRODUCT_WORKTREE" diff-tree --no-commit-id --name-only -r "$PRODUCT_HEAD" | LC_ALL=C sort)
+          test "${#product_paths[@]}" -eq 6
+          for rel in "${product_paths[@]}"; do
+            test ! -e "$INTEGRATION_WORKTREE/$rel"
+            mkdir -p "$INTEGRATION_WORKTREE/$(dirname "$rel")"
+            git -C "$PRODUCT_WORKTREE" show "$PRODUCT_HEAD:$rel" > "$INTEGRATION_WORKTREE/$rel"
+          done
+          mapfile -t integration_status < <(git -C "$INTEGRATION_WORKTREE" status --porcelain=v1 --untracked-files=all | cut -c4- | LC_ALL=C sort)
+          test "$(printf '%s\n' "${integration_status[@]}")" = "$(printf '%s\n' "${product_paths[@]}")"
+          git -C "$INTEGRATION_WORKTREE" add -- "${product_paths[@]}"
+          git -C "$INTEGRATION_WORKTREE" commit --no-verify -m 'temporary RD-W03 exact-capture current-main integration proof'
+          INTEGRATION_HEAD="$(git -C "$INTEGRATION_WORKTREE" rev-parse HEAD)"
+          test "$(git -C "$INTEGRATION_WORKTREE" show -s --format=%P "$INTEGRATION_HEAD")" = "$CURRENT_MAIN"
+          printf 'current_main=%s\nintegration_head=%s\nproduct_head=%s\n' "$CURRENT_MAIN" "$INTEGRATION_HEAD" "$PRODUCT_HEAD" > "$EVIDENCE/integration-custody.txt"
+          cd "$INTEGRATION_WORKTREE"
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate
+          node scripts/rd-wave03-exact-capture.mjs --check
+          node test/rd-wave03-exact-capture-adversarial.mjs
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          cd "$GITHUB_WORKSPACE"
+
+          printf 'product_publication\n' > "$EVIDENCE/stage.txt"
+          existing="$(git ls-remote --heads origin "refs/heads/$PRODUCT_BRANCH" | awk '{print $1}')"
+          test -z "$existing" || test "$existing" = "$PRODUCT_HEAD"
+          export GH_TOKEN="$TOKEN"
+          gh auth setup-git
+          if test -z "$existing"; then
+            git -C "$PRODUCT_WORKTREE" push origin "$PRODUCT_HEAD:refs/heads/$PRODUCT_BRANCH"
+          fi
+          test "$(git ls-remote --heads origin "refs/heads/$PRODUCT_BRANCH" | awk '{print $1}')" = "$PRODUCT_HEAD"
+          PRODUCT_PR="$(gh pr list --repo BigBirdReturns/undercast --head "$PRODUCT_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if test -z "$PRODUCT_PR"; then
+            gh pr create --repo BigBirdReturns/undercast --base main --head "$PRODUCT_BRANCH" --draft \
+              --title 'research: RD-W03 exact-capture nine official objects — terminal supervisor' \
+              --body "$(cat <<EOF
+          ## Capture-only product
+
+          \`\`\`text
+          immutable product parent: $PRODUCT_BASE
+          exact product head:        $PRODUCT_HEAD
+          current main gated:        $CURRENT_MAIN
+          commits:                   1
+          permanent paths:           6
+          terminal observations:     710
+          selected objects:          9
+          refused observations:      701
+          adversarial refusals:      35
+          \`\`\`
+
+          This workflow-free draft was deterministically materialized from the six immutable terminal receipt artifacts under issue #387. It passed closed validation and all 35 refusal fixtures, then its exact six-path overlay passed the complete repository gate on current main \`$CURRENT_MAIN\`.
+
+          No source object was admitted during materialization or gating. Authority remains capture-only: evidence admissions 0, chronology resolved 0, classes closed 0, external contacts/reviews 0/0, outside-human dependency false, publication/adoption/graph effects none, and merge authority false. Current byte capture and drift adjudication are recorded by the terminal supervisor artifact.
+          EOF
+          )"
+            PRODUCT_PR="$(gh pr list --repo BigBirdReturns/undercast --head "$PRODUCT_BRANCH" --state open --json number --jq '.[0].number')"
+          fi
+          printf '%s\n' "$PRODUCT_PR" > "$EVIDENCE/product-pr.txt"
+          unset GH_TOKEN
+
+          printf 'current_byte_capture\n' > "$EVIDENCE/stage.txt"
+          env -u TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
+            PRODUCT_HEAD="$PRODUCT_HEAD" \
+            node "$EVIDENCE/capture-current.mjs" "$PRODUCT_WORKTREE" "$EVIDENCE/current-capture"
+          test "$(find "$EVIDENCE/current-capture/objects" -type f -name '*.bin' | wc -l)" -eq 9
+          test -z "$(git -C "$PRODUCT_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+
+          printf 'terminal_ruling\n' > "$EVIDENCE/stage.txt"
+          python3 - "$EVIDENCE" <<'PY'
+          import hashlib, json, os, pathlib, sys
+          root=pathlib.Path(sys.argv[1])
+          materialization=json.loads((root/'materialization.json').read_text())
+          receipt=json.loads((root/'current-capture/current-capture-receipt.json').read_text())
+          assert receipt['route_count']==9
+          assert receipt['summary']['successful']==9
+          assert receipt['summary']['failed']==0
+          rows=[]
+          for row in receipt['objects']:
+              data=(root/'current-capture'/row['relative_path']).read_bytes()
+              assert len(data)==row['current_bytes']
+              assert hashlib.sha256(data).hexdigest()==row['current_body_sha256']
+              assert row['http_status']==200 and row['attempt_count']==1
+              assert row['chronology_status']=='unresolved'
+              assert row['evidence_admitted'] is False and row['classes_closed']==0
+              rows.append({key:row[key] for key in ['route_id','object_id','requested_url','final_url','content_type','initial_bytes','initial_body_sha256','current_bytes','current_body_sha256','body_drift']})
+          terminal={
+            'schema_version':1,
+            'transaction_id':'RD-W03-EXACT-CAPTURE-CURRENT-01',
+            'supervisor_run_id':os.environ['GITHUB_RUN_ID'],
+            'carrier_head':os.environ['GITHUB_SHA'],
+            'product_base':materialization['base'],
+            'product_head':materialization['head'],
+            'product_tree':materialization['tree'],
+            'product_pr':int((root/'product-pr.txt').read_text().strip()),
+            'current_main':os.environ['CURRENT_MAIN'],
+            'product_path_count':6,
+            'route_observation_denominator':710,
+            'captured_objects':9,
+            'refused_observations':701,
+            'adversarial_refusals':35,
+            'complete_current_main_gate':'passed',
+            'unchanged_objects':receipt['summary']['unchanged'],
+            'drifted_objects':receipt['summary']['drifted'],
+            'objects':rows,
+            'capture_receipt_sha256':hashlib.sha256((root/'current-capture/current-capture-receipt.json').read_bytes()).hexdigest(),
+            'credential_free_capture':True,
+            'evidence_admissions':0,
+            'chronology_resolved':0,
+            'classes_closed':0,
+            'external_contacts':0,
+            'external_reviews':0,
+            'outside_human_dependency':False,
+            'publication_effect':'none',
+            'adoption_effect':'none',
+            'graph_effect':'none',
+            'merge_authority':False,
+          }
+          (root/'terminal-supervisor-summary.json').write_text(json.dumps(terminal,sort_keys=True,indent=2)+'\n')
+          PY
+          cat "$EVIDENCE/terminal-supervisor-summary.json"
+          printf 'complete\n' > "$EVIDENCE/stage.txt"
+
+      - name: Publish byte-verified terminal or drift ruling
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PRODUCT_HEAD="$(cat "$EVIDENCE/product-head.txt")"
+          PRODUCT_PR="$(cat "$EVIDENCE/product-pr.txt")"
+          drifted="$(python3 -c 'import json,os; print(json.load(open(os.environ["EVIDENCE"]+"/terminal-supervisor-summary.json"))["drifted_objects"])')"
+          unchanged="$(python3 -c 'import json,os; print(json.load(open(os.environ["EVIDENCE"]+"/terminal-supervisor-summary.json"))["unchanged_objects"])')"
+          receipt_sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["EVIDENCE"]+"/terminal-supervisor-summary.json"))["capture_receipt_sha256"])')"
+          delta_lines="$(python3 - "$EVIDENCE/terminal-supervisor-summary.json" <<'PY'
+          import json, sys
+          for row in json.load(open(sys.argv[1]))['objects']:
+              status='DRIFT' if row['body_drift'] else 'UNCHANGED'
+              print(f"{row['route_id']}  {status}  {row['initial_bytes']}->{row['current_bytes']} bytes  {row['initial_body_sha256']}->{row['current_body_sha256']}")
+          PY
+          )"
+          if test "$drifted" -eq 0; then
+            cat > "$EVIDENCE/ruling.md" <<EOF
+          RD-W03 exact capture is terminal and byte-identical on supervisor run ${GITHUB_RUN_ID}.
+
+          \`\`\`text
+          product PR:              #${PRODUCT_PR}
+          exact product head:      ${PRODUCT_HEAD}
+          current main gated:      ${CURRENT_MAIN}
+          permanent product paths: 6
+          observations accounted:  710
+          objects captured:        9 / 9
+          unchanged objects:       ${unchanged}
+          drifted objects:         0
+          observations refused:    701
+          adversarial refusals:    35 / 35
+          complete gate:           PASS
+          credential-free capture: true
+          capture receipt SHA-256: ${receipt_sha}
+          \`\`\`
+
+          \`\`\`text
+          ${delta_lines}
+          \`\`\`
+
+          Every retained object independently matches the initial HTTP-200 byte count and SHA-256 bound by its immutable lane receipt. Chronology remains unresolved; evidence admissions and classes closed remain zero. External contacts/reviews are 0/0, outside-human dependency is false, and publication/adoption/graph/merge authority remains absent. The product PR remains draft and unmerged.
+          EOF
+            gh pr comment "$PRODUCT_PR" --repo BigBirdReturns/undercast --body-file "$EVIDENCE/ruling.md"
+            gh issue comment 387 --repo BigBirdReturns/undercast --body-file "$EVIDENCE/ruling.md"
+            state="$(gh issue view 387 --repo BigBirdReturns/undercast --json state --jq .state)"
+            if test "$state" = OPEN; then gh issue close 387 --repo BigBirdReturns/undercast --reason completed; fi
+          else
+            cat > "$EVIDENCE/ruling.md" <<EOF
+          RD-W03 preserved all nine current exact objects, but ${drifted} bodies differ from their immutable initial fingerprints.
+
+          \`\`\`text
+          product PR:              #${PRODUCT_PR}
+          exact product head:      ${PRODUCT_HEAD}
+          current main gated:      ${CURRENT_MAIN}
+          permanent product paths: 6
+          observations accounted:  710
+          objects captured:        9 / 9
+          unchanged objects:       ${unchanged}
+          drifted objects:         ${drifted}
+          observations refused:    701
+          adversarial refusals:    35 / 35
+          complete gate:           PASS
+          credential-free capture: true
+          capture receipt SHA-256: ${receipt_sha}
+          \`\`\`
+
+          \`\`\`text
+          ${delta_lines}
+          \`\`\`
+
+          This is a bounded body-drift census, not evidence admission. HTTP status and allowed final host were valid for every retained object; chronology remains unresolved and classes closed remain zero. Issue #387 stays open pending repository-native recensus, with no external contact or review dependency. The product PR remains draft and unmerged.
+          EOF
+            gh pr comment "$PRODUCT_PR" --repo BigBirdReturns/undercast --body-file "$EVIDENCE/ruling.md"
+            gh issue comment 387 --repo BigBirdReturns/undercast --body-file "$EVIDENCE/ruling.md"
+            child="$(gh issue list --repo BigBirdReturns/undercast --state open --search 'RD-W03 exact-capture body drift recensus in:title' --json number --jq '.[0].number // empty')"
+            if test -z "$child"; then
+              gh issue create --repo BigBirdReturns/undercast --title 'RD-W03 exact-capture body drift recensus' --body-file "$EVIDENCE/ruling.md" > "$EVIDENCE/drift-issue-url.txt"
+            fi
+          fi
+
+      - name: Record fail-closed supervisor result
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          stage="$(cat "$EVIDENCE/stage.txt" 2>/dev/null || echo unknown)"
+          tail -n 200 "$EVIDENCE/supervisor.log" > "$EVIDENCE/failure-tail.txt" 2>/dev/null || true
+          {
+            printf 'RD-W03 terminal supervisor run %s failed closed at stage `%s`.\n\n' "$GITHUB_RUN_ID" "$stage"
+            printf 'No terminal evidence, chronology, closure, publication, adoption, graph, outside-human, or merge authority is accepted. Issue #387 remains open unless a separate independently byte-verified ruling already closed it. Any product PR remains draft and unmerged.\n\n'
+            printf '```text\n'
+            cat "$EVIDENCE/failure-tail.txt" 2>/dev/null || true
+            printf '\n```\n'
+          } > "$EVIDENCE/failure-comment.md"
+          gh issue comment 387 --repo BigBirdReturns/undercast --body-file "$EVIDENCE/failure-comment.md" || true
+          if test -s "$EVIDENCE/product-pr.txt"; then gh pr comment "$(cat "$EVIDENCE/product-pr.txt")" --repo BigBirdReturns/undercast --body-file "$EVIDENCE/failure-comment.md" || true; fi
+
+      - name: Upload terminal supervisor evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-terminal-supervisor-${{ github.run_id }}
+          path: /tmp/rd-wave03-exact-capture-terminal-supervisor-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
