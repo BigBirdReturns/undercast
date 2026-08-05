@@ -1,0 +1,219 @@
+name: doctor-who-cycle-007-qualifier-v8
+
+on:
+  pull_request:
+    branches: [main]
+    types: [synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-007-qualifier-v8.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-007-qualifier-v8-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-007-qualifier-v8.yml
+  EXACT_MAIN: 014dbd3a4d9d4e82c0832d4c14f08cfff5138a58
+  EXACT_MAIN_TREE: be0aa58db34860018d65a4bae1700c7b0e098a9c
+  ATTESTED_MAIN: 45fc33aa8de8c01f03f006c5c01765dd1929385f
+  CHRONOLOGY_PRODUCT: 47227e26abab0e197f860e00e81679a04c62cbbf
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  PR_NUMBER: ${{ github.event.pull_request.number }}
+  OUT: /tmp/doctor-who-cycle-007-qualifier-v8
+  QUALIFIER_PAYLOAD_DIR: /tmp/doctor-who-cycle-007-qualifier-payload-v8
+  CYCLE_ASSET_DIR: /tmp/doctor-who-cycle-007-v8
+  CYCLE_CONTEXT: /tmp/doctor-who-cycle-007-context.json
+  SELECTION_DIR: /tmp/doctor-who-cycle-007-selection
+  PREFLIGHT_DIR: /tmp/doctor-who-cycle-007-preflight
+  MEDIA_DIR: /tmp/doctor-who-cycle-007-media-review
+  PRODUCT_DIR: /tmp/doctor-who-cycle-007-product
+  CYCLE_AT: 2026-08-05T20:55:00.000Z
+  PAYLOAD_SHA256: 21b544cccfbea67e9826a18723d1da64c6720e9312ab4e247a655e15e102c228
+  PAYLOAD_MANIFEST_SHA256: c2da5bdc79022931e94a07596d57d5a2977017e790ff566a4455e4f5e408eb0c
+  TRANSPORT_SHA256: d674b41cd76c393b62373eac8fe827f5ad4da42cc1793e3f86fbd8696c01e06e
+  TRANSPORT_MANIFEST_SHA256: 9076a0ca6ec9ef8841f813835d13d0a3717e8744bf6d9e58d030a579dd48c006
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  qualify:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-007-qualifier-v8'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Recover checksum-bound qualifier payload from exact PR comments
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT" "$QUALIFIER_PAYLOAD_DIR" "$CYCLE_ASSET_DIR" "$SELECTION_DIR" "$PREFLIGHT_DIR" "$MEDIA_DIR" "$PRODUCT_DIR"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" > "$OUT/pr-comments.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const comments = JSON.parse(fs.readFileSync(`${process.env.OUT}/pr-comments.json`, 'utf8'));
+          const digests = [
+            'f2876f717d1ff77c5650c1000beeeb34bfefe2f1e9232e912d6c9c03bdaf39f0',
+            'cc2ce3077d853cd9872573b2eb42ae4b77f129cbf4d2f735661146d009d69f55',
+            'f0b31f375d2bb254162d430e02f53759edc6561a4baec0723a03f32bd35718df',
+            '3a4eff30ddb1ff93c012c919ef8e81cf1c2b03832ce795fee9f6d53e96a6bb17',
+            '15406846cb426935f03d346ccd48985c5009291ca75a309447c69d3208da1148',
+          ];
+          const parts = [];
+          for (const comment of comments) {
+            const match = String(comment?.body ?? '').match(/^CYCLE007_V8_QUALIFIER_PAYLOAD_PART (\d{2})\/(\d{2})\n([A-Za-z0-9+/=\r\n]+)$/);
+            if (!match) continue;
+            const payload = match[3].replace(/\s/g, '');
+            parts.push({ number: Number(match[1]), total: Number(match[2]), comment_id: comment.id, payload, payload_sha256: crypto.createHash('sha256').update(payload).digest('hex') });
+          }
+          parts.sort((a, b) => a.number - b.number);
+          if (parts.length !== 5 || parts.some((row, index) => row.total !== 5 || row.number !== index + 1 || row.payload.length !== 8732 || row.payload_sha256 !== digests[index] || !/^[A-Za-z0-9+/=]+$/.test(row.payload))) throw new Error('qualifier payload comment set drifted');
+          fs.writeFileSync(`${process.env.OUT}/qualifier-payload.b64`, parts.map((row) => row.payload).join(''));
+          fs.writeFileSync(`${process.env.OUT}/qualifier-payload-comments.json`, `${JSON.stringify(parts.map(({ payload, ...row }) => ({ ...row, payload_bytes: payload.length })), null, 2)}\n`);
+          NODE
+          base64 --decode "$OUT/qualifier-payload.b64" > "$OUT/qualifier-payload.tgz"
+          test "$(sha256sum "$OUT/qualifier-payload.tgz" | awk '{print $1}')" = "$PAYLOAD_SHA256"
+          python - <<'PY'
+          import os,tarfile
+          archive=os.path.join(os.environ['OUT'],'qualifier-payload.tgz')
+          expected=['candidate-phase.sh','cycle007-v8-transport.tgz','expected-candidate-paths.txt','expected-final-paths.txt','final-phase.sh','package-product.mjs','payload-manifest.json']
+          with tarfile.open(archive,'r:gz') as tf:
+              names=tf.getnames()
+              assert names == expected, names
+              assert all(not n.startswith('/') and '..' not in n.split('/') for n in names)
+              tf.extractall(os.environ['QUALIFIER_PAYLOAD_DIR'])
+          PY
+          test "$(sha256sum "$QUALIFIER_PAYLOAD_DIR/payload-manifest.json" | awk '{print $1}')" = "$PAYLOAD_MANIFEST_SHA256"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const root = process.env.QUALIFIER_PAYLOAD_DIR;
+          const manifest = JSON.parse(fs.readFileSync(`${root}/payload-manifest.json`, 'utf8'));
+          if (manifest.version !== 1 || manifest.transaction !== 'DOCTOR-WHO-CYCLE-007-QUALIFIER-PAYLOAD-V8' || manifest.exact_main !== process.env.EXACT_MAIN) throw new Error('qualifier payload identity drifted');
+          for (const row of manifest.files) {
+            const bytes = fs.readFileSync(`${root}/${row.path}`);
+            if (bytes.length !== row.bytes || crypto.createHash('sha256').update(bytes).digest('hex') !== row.sha256) throw new Error(`qualifier payload member drifted: ${row.path}`);
+          }
+          NODE
+          chmod +x "$QUALIFIER_PAYLOAD_DIR"/*.sh "$QUALIFIER_PAYLOAD_DIR"/*.mjs
+          bash -n "$QUALIFIER_PAYLOAD_DIR/candidate-phase.sh"
+          bash -n "$QUALIFIER_PAYLOAD_DIR/final-phase.sh"
+          node --check "$QUALIFIER_PAYLOAD_DIR/package-product.mjs"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies, rendered runtime, and image tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y imagemagick >/dev/null
+          identify -version | head -1 | tee "$OUT/imagemagick-version.txt"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: doctor-who-cycle-007-selection-31023209453
+          path: ${{ env.SELECTION_DIR }}
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: 31023209453
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: doctor-who-cycle-007-preflight-31024339060
+          path: ${{ env.PREFLIGHT_DIR }}
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: 31024339060
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: doctor-who-cycle-007-kragar-media-review-v3-31027579331
+          path: ${{ env.MEDIA_DIR }}
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: 31027579331
+
+      - name: Build and completely gate immutable candidate
+        shell: bash
+        run: bash "$QUALIFIER_PAYLOAD_DIR/candidate-phase.sh"
+
+      - name: Upload exact candidate qualification
+        id: candidate-upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-candidate-v8-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            ${{ env.CYCLE_CONTEXT }}
+            ${{ env.OUT }}/candidate-*
+            ${{ env.OUT }}/materialize.log
+            ${{ env.OUT }}/prepared-inputs.sha256
+            ${{ env.CYCLE_ASSET_DIR }}/kragar-normalized-verification.json
+            ${{ env.CYCLE_ASSET_DIR }}/kragar-still-candidate.jpg
+
+      - name: Build and completely gate immutable final product
+        shell: bash
+        env:
+          CANDIDATE_UPLOAD_ID: ${{ steps.candidate-upload.outputs.artifact-id }}
+          CANDIDATE_UPLOAD_DIGEST: ${{ steps.candidate-upload.outputs.artifact-digest }}
+        run: bash "$QUALIFIER_PAYLOAD_DIR/final-phase.sh"
+
+      - name: Upload complete trusted-publisher qualification
+        id: qualification-upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-trusted-qualification-v8-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            ${{ env.OUT }}
+            ${{ env.CYCLE_CONTEXT }}
+            ${{ env.CYCLE_ASSET_DIR }}/transport-manifest.json
+            ${{ env.CYCLE_ASSET_DIR }}/kragar-normalized-verification.json
+            ${{ env.PRODUCT_DIR }}/product-files.tgz
+            ${{ env.PRODUCT_DIR }}/product-manifest.json
+            ${{ env.PRODUCT_DIR }}/publisher-settlement.json
+            ${{ env.PRODUCT_DIR }}/qualification.sha256
+            ${{ env.PRODUCT_DIR }}/uc-1352-still-f6f32eb1.jpg
+
+      - name: Record uploaded qualification identity
+        shell: bash
+        env:
+          QUALIFICATION_ID: ${{ steps.qualification-upload.outputs.artifact-id }}
+          QUALIFICATION_DIGEST: ${{ steps.qualification-upload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          test -n "$QUALIFICATION_ID" -a -n "$QUALIFICATION_DIGEST"
+          printf 'qualification_artifact_id=%s\nqualification_artifact_sha256=%s\n' "$QUALIFICATION_ID" "${QUALIFICATION_DIGEST#sha256:}"
+
+      - name: Retain bounded failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-qualifier-v8-failure-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.OUT }}
+            ${{ env.CYCLE_CONTEXT }}
+            test-results
+            playwright-report
+            .ci
