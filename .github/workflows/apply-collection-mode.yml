@@ -1,10 +1,8 @@
 name: apply-collection-only-operations
 
 on:
-  workflow_run:
-    workflows: [archive-contract]
-    types: [completed]
-  workflow_dispatch: {}
+  push:
+    branches: [main]
 
 permissions:
   contents: write
@@ -12,110 +10,88 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: dec0016-navigation-workflow-run
-  cancel-in-progress: true
+  group: ux-nav-noscript-review-release-v2
+  cancel-in-progress: false
 
-# Bounded DEC-0016 transaction body. The workflow-run plane is shared by all
-# archive-contract completions, so the first step selects exact never-merge PR
-# #305. Immutable carrier bytes are still enforced after checkout.
 jobs:
   apply:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
       GH_TOKEN: ${{ github.token }}
-      EVIDENCE: ${{ runner.temp }}/ux-02a-dec0016-evidence
-      EXPECTED_CARRIER_SHA: 40ef8f4eddc5ba0c65d8bf2c628fa88667cb2d96
-      TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
-      TRIGGER_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      EVIDENCE: /tmp/ux-nav-noscript-review-release
+      EXPECTED_CARRIER_SHA: 4ef5e968b11e411807fc73284157e685cf34c5a3
+      EXPECTED_CARRIER_SHA256: 93a30c071a6ff4418219aa86cad902c415dc0a7440710ca48e5bd5a6a7038f2c
+      EXPECTED_MAIN_ROOT: be5db794b9aca7bd74e2a9e6a3d64cb6b3072a17
+      CARRIER_BRANCH: agent/collection-only-operations-p2
+      SELF: .github/workflows/apply-collection-mode.yml
     steps:
-      - name: Select exact carrier archive run
-        id: guard
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          WORKFLOW_RUN_JSON: ${{ toJSON(github.event.workflow_run) }}
-        run: |
-          set -euo pipefail
-          eligible=false
-          if [[ "$EVENT_NAME" == "workflow_run" ]] && \
-             jq -e '.event == "pull_request" and .conclusion == "success" and any(.pull_requests[]?; .number == 305)' \
-               <<<"$WORKFLOW_RUN_JSON" >/dev/null; then
-            eligible=true
-          fi
-          printf 'eligible=%s\n' "$eligible" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Record DEC-0016 workflow-run transaction start
-        if: steps.guard.outputs.eligible == 'true'
+      - name: Verify exact controller and immutable carrier
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$EVIDENCE"
-          printf 'status=started\nrun=%s\ntrigger_run=%s\nevent_head=%s\ncarrier=%s\npr=305\n' \
-            "$GITHUB_RUN_ID" "$TRIGGER_RUN_ID" "$TRIGGER_HEAD_SHA" "$EXPECTED_CARRIER_SHA" \
-            > "$EVIDENCE/start.txt"
-          jq -n --arg body "UX-02A DEC-0016 workflow-run ${GITHUB_RUN_ID} selected carrier PR #305 after archive-contract run ${TRIGGER_RUN_ID}; event head ${TRIGGER_HEAD_SHA}, immutable carrier ${EXPECTED_CARRIER_SHA}." '{body:$body}' > /tmp/ux02a-start.json
-          curl --silent --show-error --fail-with-body \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            --data @/tmp/ux02a-start.json \
-            "https://api.github.com/repos/BigBirdReturns/undercast/issues/255/comments" \
-            >/dev/null
+          test "$GITHUB_REF" = refs/heads/main
+          git merge-base --is-ancestor "$EXPECTED_MAIN_ROOT" "$GITHUB_SHA"
+          git diff --name-only "$EXPECTED_MAIN_ROOT" "$GITHUB_SHA" | LC_ALL=C sort > /tmp/controller-paths
+          printf '%s\n' "$SELF" > /tmp/expected-controller-paths
+          diff -u /tmp/expected-controller-paths /tmp/controller-paths
+          git fetch --no-tags origin "+refs/heads/${CARRIER_BRANCH}:refs/remotes/origin/${CARRIER_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${CARRIER_BRANCH}")" = "$EXPECTED_CARRIER_SHA"
+          test "$(git show "$EXPECTED_CARRIER_SHA:tmp/ux02a-materialize.sh" | sha256sum | awk '{print $1}')" = "$EXPECTED_CARRIER_SHA256"
+          git show "$EXPECTED_CARRIER_SHA:tmp/ux02a-materialize.sh" > /tmp/ux02a-materialize.sh
+          chmod +x /tmp/ux02a-materialize.sh
+          printf 'status=started\nrun=%s\ncontroller=%s\ncarrier=%s\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_SHA" "$EXPECTED_CARRIER_SHA" > "$EVIDENCE/start.txt"
+          gh pr comment 346 --repo BigBirdReturns/undercast --body "Exact no-JavaScript review-release run ${GITHUB_RUN_ID} started on parser-corrected self-retiring controller ${GITHUB_SHA} with immutable normalized carrier ${EXPECTED_CARRIER_SHA}." || true
 
-      - uses: actions/checkout@v4
-        if: steps.guard.outputs.eligible == 'true'
-        with:
-          ref: 40ef8f4eddc5ba0c65d8bf2c628fa88667cb2d96
-          fetch-depth: 0
-
-      - name: Verify exact carrier bytes
-        if: steps.guard.outputs.eligible == 'true'
+      - name: Retire controller before product qualification
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_CARRIER_SHA"
-          test "$(sha256sum tmp/ux02a-materialize.sh | awk '{print $1}')" = "5a4b741e697ab0b8456cd1917de2da0b556919ba67a8d82b227f8e570bf91d57"
-          test "$(sha256sum tmp/ux02a-current-location-fix.py | awk '{print $1}')" = "18c838abd554449a0457a0f51e7bb5bdad03a1dc6e9f4c022601ebb6be8e6398"
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          live="$(git rev-parse refs/remotes/origin/main)"
+          test "$live" = "$GITHUB_SHA"
+          git diff --name-only "$EXPECTED_MAIN_ROOT" "$live" | LC_ALL=C sort > /tmp/live-controller-paths
+          printf '%s\n' "$SELF" > /tmp/expected-live-controller-paths
+          diff -u /tmp/expected-live-controller-paths /tmp/live-controller-paths
+          git push --force-with-lease="refs/heads/main:${live}" origin "${EXPECTED_MAIN_ROOT}:refs/heads/main"
+          printf 'controller=%s\nretired_to=%s\n' "$live" "$EXPECTED_MAIN_ROOT" > "$EVIDENCE/controller-retirement.txt"
 
       - uses: actions/setup-node@v4
-        if: steps.guard.outputs.eligible == 'true'
         with:
-          node-version: '24'
+          node-version: "24"
           cache: npm
 
-      - name: Materialize, qualify, and publish DEC-0016
-        if: steps.guard.outputs.eligible == 'true'
+      - name: Qualify and publish exact workflow-free product
         shell: bash
         run: |
-          cp tmp/ux02a-materialize.sh /tmp/ux02a-materialize.sh
-          chmod +x /tmp/ux02a-materialize.sh
+          set -euo pipefail
+          git checkout --detach "$EXPECTED_CARRIER_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CARRIER_SHA"
           bash /tmp/ux02a-materialize.sh
 
-      - name: Record failed DEC-0016 workflow-run transaction
-        if: steps.guard.outputs.eligible == 'true' && failure()
+      - name: Record terminal failure boundary
+        if: failure()
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$EVIDENCE"
           stage="$(awk -F= '$1=="stage"{print $2}' "$EVIDENCE/status.txt" 2>/dev/null || true)"
           stage="${stage:-unknown}"
-          jq -n --arg body "UX-02A DEC-0016 workflow-run ${GITHUB_RUN_ID} failed at stage ${stage}; carrier PR #305, event head ${TRIGGER_HEAD_SHA}, immutable carrier ${EXPECTED_CARRIER_SHA}. No product authority was published." '{body:$body}' > /tmp/ux02a-failure.json
-          curl --silent --show-error --fail-with-body \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            --data @/tmp/ux02a-failure.json \
-            "https://api.github.com/repos/BigBirdReturns/undercast/issues/255/comments" \
-            >/dev/null || true
+          printf 'status=failed\nstage=%s\nrun=%s\ncontroller=%s\ncarrier=%s\n' \
+            "$stage" "$GITHUB_RUN_ID" "$GITHUB_SHA" "$EXPECTED_CARRIER_SHA" > "$EVIDENCE/failure.txt"
+          gh pr comment 346 --repo BigBirdReturns/undercast --body "Exact no-JavaScript review-release run ${GITHUB_RUN_ID} failed at stage ${stage}; no repaired product authority is accepted." || true
 
-      - name: Upload DEC-0016 qualification evidence
-        if: always() && steps.guard.outputs.eligible == 'true'
+      - name: Upload terminal transaction evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ux-02a-dec0016-final-${{ github.run_id }}
-          path: ${{ runner.temp }}/ux-02a-dec0016-evidence
+          name: ux-nav-noscript-review-release-${{ github.run_id }}
+          path: /tmp/ux-nav-noscript-review-release
           if-no-files-found: warn
           retention-days: 30
