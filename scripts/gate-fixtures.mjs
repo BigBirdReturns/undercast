@@ -62,6 +62,11 @@ try {
   const checkoutDepth = Number(archiveWorkflow.match(/uses:\s*actions\/checkout@v4[\s\S]{0,160}?fetch-depth:\s*(\d+)/)?.[1]);
   expect("canonical workflow fetches full immutable receipt history", checkoutDepth, 0);
 
+  runCommand("Publisher custody fixtures", process.execPath, ["test/publisher-custody-fixtures.mjs"], { stdio: "pipe" });
+  pass("publisher custody fixtures run inside canonical gate fixtures");
+  runCommand("Publisher custody workflow scan", process.execPath, ["scripts/publisher-custody.mjs", "check-workflows"], { stdio: "pipe" });
+  pass("publisher custody workflow scan runs inside canonical gate fixtures");
+
   console.log(failures ? `\n${failures} gate fixture(s) FAILED` : "\nall gate fixtures pass");
   if (failures) process.exitCode = 1;
 } finally {
