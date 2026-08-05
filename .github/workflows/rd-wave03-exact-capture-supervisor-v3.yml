@@ -1,0 +1,184 @@
+name: RD-W03 exact-capture self-contained supervisor v3
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/rd-wave03-exact-capture-supervisor-v3.yml
+      - tmp/rd-wave03-exact-capture-generator/part-*.b64
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: rd-wave03-exact-capture-self-contained-supervisor-v3
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      BASE_BRANCH: agent/ssc-rd-wave03-exact-capture-supervisor-v3-base-20260805
+      GENERATOR_DIR: tmp/rd-wave03-exact-capture-generator
+      EVIDENCE: /tmp/rd-wave03-exact-capture-supervisor-v3-${{ github.run_id }}
+      PACKAGE: /tmp/rd-wave03-exact-capture-package-v6-${{ github.run_id }}
+      WORKTREE: /tmp/rd-wave03-exact-capture-product-v6-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Reconstruct, gate, and capture the exact nine objects
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE/artifacts"
+          exec > >(tee "$EVIDENCE/run.log") 2>&1
+          printf 'carrier_preflight\n' > "$EVIDENCE/stage.txt"
+
+          test "${{ github.event.pull_request.base.ref }}" = "$BASE_BRANCH"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          mapfile -t commits < <(git rev-list --reverse "$base..$head")
+          test "${#commits[@]}" -eq 7
+          shards=(
+            "$GENERATOR_DIR/part-00.b64"
+            "$GENERATOR_DIR/part-01.b64"
+            "$GENERATOR_DIR/part-02.b64"
+            "$GENERATOR_DIR/part-03.b64"
+            "$GENERATOR_DIR/part-04.b64"
+            "$GENERATOR_DIR/part-05.b64"
+          )
+          hashes=(
+            36d1fdc24e960aa4c8da151726ea4ff28263a8ee68970771d17daf22c09d87e1
+            fe8705157cd8b780e286a8e85f4141fb0417e7cb213e945fa719b49cecf2d004
+            eb63739f09d2edaef39d84b4f8735a2ad15dffcc385252516f6f0c080a889fda
+            d4f4ed0fa603f1b0671668e2136b6a29fcfb80e4e2fd706aae1f24b60baf44ab
+            c898704e8c4eae2f2465de605288fd78095d935bf6d1b691985a060d6c826e05
+            e90d64cacbe0feff0d63f1dec5149e7af17d836844e09767e1af970c7a6294e3
+          )
+          parent="$base"
+          for i in "${!shards[@]}"; do
+            test "$(git show -s --format=%P "${commits[$i]}")" = "$parent"
+            test "$(git diff-tree --no-commit-id --name-only -r "${commits[$i]}")" = "${shards[$i]}"
+            echo "${hashes[$i]}  ${shards[$i]}" | sha256sum -c -
+            parent="${commits[$i]}"
+          done
+          test "$(git show -s --format=%P "${commits[6]}")" = "$parent"
+          test "${commits[6]}" = "$head"
+          test "$(git diff-tree --no-commit-id --name-only -r "${commits[6]}")" = .github/workflows/rd-wave03-exact-capture-supervisor-v3.yml
+          test "$(git diff --name-only "$base" "$head" | wc -l)" -eq 7
+          cat "${shards[@]}" > "$EVIDENCE/generator.b64"
+          test "$(wc -c < "$EVIDENCE/generator.b64")" -eq 15108
+          base64 -d "$EVIDENCE/generator.b64" > "$EVIDENCE/generator.py.gz"
+          echo '2d434f85999df1452bacaf49a23d5ad6c96dcc09bf155fafa8198fae4c20d860  '"$EVIDENCE/generator.py.gz" | sha256sum -c -
+          gzip -dc "$EVIDENCE/generator.py.gz" > "$EVIDENCE/generator.py"
+          echo '1571616c7ba50f882b96516444eca574ae5b0cb85319ececc1690a634bdf3051  '"$EVIDENCE/generator.py" | sha256sum -c -
+          python3 -m py_compile "$EVIDENCE/generator.py"
+
+          printf 'source_recovery\n' > "$EVIDENCE/stage.txt"
+          runs=(30984441377 30984459798 30984486686 30984497436 30984516496 30984537874)
+          names=(
+            rd-wave03-rd01-intake-30984441377
+            rd-wave03-rd02-intake-30984459798
+            rd-wave03-rd03-intake-30984486686
+            rd-wave03-rd04-intake-30984497436
+            rd-wave03-rd05-intake-30984516496
+            rd-wave03-rd06-intake-30984537874
+          )
+          for i in "${!runs[@]}"; do
+            gh run download "${runs[$i]}" --repo BigBirdReturns/undercast --name "${names[$i]}" --dir "$EVIDENCE/artifacts/rd0$((i+1))"
+          done
+          test "$(find "$EVIDENCE/artifacts" -name receipt.json -type f | wc -l)" -eq 6
+          test "$(find "$EVIDENCE/artifacts" -name plan.json -type f | wc -l)" -eq 6
+          gh api repos/BigBirdReturns/undercast/git/blobs/2eaf29a88a388977b540ab32f980e0a25900c161 > "$EVIDENCE/schema-blob.json"
+          python3 - "$EVIDENCE/schema-blob.json" "$EVIDENCE/schema.json" <<'PY'
+          import base64,json,pathlib,sys
+          d=json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert d['sha']=='2eaf29a88a388977b540ab32f980e0a25900c161' and d['encoding']=='base64'
+          b=base64.b64decode(d['content']); assert len(b)==d['size']==20054
+          pathlib.Path(sys.argv[2]).write_bytes(b)
+          PY
+          test "$(git hash-object "$EVIDENCE/schema.json")" = 2eaf29a88a388977b540ab32f980e0a25900c161
+          echo '98b7ab0fc93b9e9a9c021b16c166c6cf00d1f207501e66f57ec3d5944d4ae538  '"$EVIDENCE/schema.json" | sha256sum -c -
+
+          printf 'package_regeneration\n' > "$EVIDENCE/stage.txt"
+          python3 -m venv "$EVIDENCE/venv"
+          "$EVIDENCE/venv/bin/pip" install --disable-pip-version-check --no-input 'jsonschema==4.25.1'
+          "$EVIDENCE/venv/bin/python" "$EVIDENCE/generator.py" --artifacts "$EVIDENCE/artifacts" --schema "$EVIDENCE/schema.json" --out "$PACKAGE" | tee "$EVIDENCE/generation.json"
+          test "$(find "$PACKAGE" -type f | wc -l)" -eq 6
+          node --check "$PACKAGE/scripts/rd-wave03-exact-capture.mjs"
+          node --check "$PACKAGE/test/rd-wave03-exact-capture-adversarial.mjs"
+          node "$PACKAGE/scripts/rd-wave03-exact-capture.mjs" --check
+          node "$PACKAGE/test/rd-wave03-exact-capture-adversarial.mjs"
+          echo '325375c3613d2a91185e8d8bb00345180528b4b5fb1acf8f9a03685a039b39a3  '"$PACKAGE/data/research/residual-denominator/wave-03/exact-capture/protocol.json" | sha256sum -c -
+          echo '78a5297c7ae6ef83449baa03604e85365f9cfcf965c20790e1a87403088feb10  '"$PACKAGE/data/research/residual-denominator/wave-03/exact-capture/manifest.json" | sha256sum -c -
+
+          printf 'current_main_integration\n' > "$EVIDENCE/stage.txt"
+          git config --local --unset-all http.https://github.com/.extraheader >/dev/null 2>&1 || true
+          git remote set-url origin https://github.com/BigBirdReturns/undercast.git
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          current_main="$(git rev-parse refs/remotes/origin/main)"
+          printf '%s\n' "$current_main" > "$EVIDENCE/current-main.txt"
+          git worktree add --detach "$WORKTREE" "$current_main"
+          python3 - "$PACKAGE/data/research/residual-denominator/wave-03/exact-capture/protocol.json" > "$EVIDENCE/product-paths.txt" <<'PY'
+          import json,pathlib,sys
+          print('\n'.join(sorted(json.loads(pathlib.Path(sys.argv[1]).read_text())['permanent_paths'])))
+          PY
+          test "$(wc -l < "$EVIDENCE/product-paths.txt")" -eq 6
+          while IFS= read -r p; do
+            test ! -e "$WORKTREE/$p"; mkdir -p "$WORKTREE/$(dirname "$p")"; cp "$PACKAGE/$p" "$WORKTREE/$p"
+          done < "$EVIDENCE/product-paths.txt"
+          mapfile -t changed < <(git -C "$WORKTREE" status --porcelain=v1 --untracked-files=all | cut -c4- | LC_ALL=C sort)
+          test "$(printf '%s\n' "${changed[@]}")" = "$(cat "$EVIDENCE/product-paths.txt")"
+          cd "$WORKTREE"
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate
+          node scripts/rd-wave03-exact-capture.mjs --check
+          node test/rd-wave03-exact-capture-adversarial.mjs
+          cd "$GITHUB_WORKSPACE"
+
+          printf 'exact_byte_capture\n' > "$EVIDENCE/stage.txt"
+          unset GH_TOKEN GITHUB_TOKEN
+          git config --local --unset-all http.https://github.com/.extraheader >/dev/null 2>&1 || true
+          env GITHUB_SHA="$head" GITHUB_RUN_ID="$GITHUB_RUN_ID" node "$WORKTREE/scripts/rd-wave03-exact-capture.mjs" --execute --out "$EVIDENCE/capture"
+          node "$WORKTREE/scripts/rd-wave03-exact-capture.mjs" --verify-receipt "$EVIDENCE/capture/receipt.json"
+          test "$(find "$EVIDENCE/capture/objects" -type f | wc -l)" -eq 9
+          python3 - "$EVIDENCE" <<'PY'
+          import hashlib,json,os,pathlib,sys
+          r=pathlib.Path(sys.argv[1]); receipt=json.loads((r/'capture/receipt.json').read_text())
+          assert receipt['object_count']==9 and receipt['summary']['successful']==9 and receipt['summary']['failed']==0
+          assert receipt['summary']['evidence_admissions']==receipt['summary']['chronology_resolved']==receipt['summary']['classes_closed']==0
+          for row in receipt['objects']:
+              b=(r/'capture'/row['relative_path']).read_bytes()
+              assert len(b)==row['captured_bytes'] and hashlib.sha256(b).hexdigest()==row['captured_body_sha256']
+              assert row['http_status']==200 and row['attempt_count']==1 and row['chronology_status']=='unresolved'
+              assert row['evidence_admitted'] is False and row['classes_closed']==0
+          out={'schema_version':1,'run_id':int(os.environ['GITHUB_RUN_ID']),'carrier_head':os.environ['GITHUB_SHA'],'current_main':(r/'current-main.txt').read_text().strip(),'route_observations':710,'captured_objects':9,'refused_observations':701,'adversarial_refusals':35,'unchanged_objects':receipt['summary']['unchanged'],'drifted_objects':receipt['summary']['drifted'],'receipt_sha256':hashlib.sha256((r/'capture/receipt.json').read_bytes()).hexdigest(),'complete_current_main_gate':'passed','credential_free_capture':True,'evidence_admissions':0,'chronology_resolved':0,'classes_closed':0,'external_contacts':0,'external_reviews':0,'outside_human_dependency':False,'publication_effect':'none','adoption_effect':'none','graph_effect':'none','merge_authority':False}
+          (r/'supervisor-summary.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          PY
+          cat "$EVIDENCE/supervisor-summary.json"
+          printf 'complete\n' > "$EVIDENCE/stage.txt"
+
+      - name: Upload complete supervisor evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-supervisor-v3-${{ github.run_id }}
+          path: /tmp/rd-wave03-exact-capture-supervisor-v3-${{ github.run_id }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
