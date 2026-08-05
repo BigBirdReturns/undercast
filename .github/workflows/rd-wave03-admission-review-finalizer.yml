@@ -1,0 +1,293 @@
+name: RD-W03 offline admission-review finalizer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: rd-wave03-admission-review-finalizer
+  cancel-in-progress: true
+
+jobs:
+  verify-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: BigBirdReturns/undercast
+      CARRIER_PR: ${{ github.event.pull_request.number }}
+      CARRIER_HEAD: ${{ github.event.pull_request.head.sha }}
+      BASE_BRANCH: agent/ssc-rd-wave03-exact-capture-product-20260805
+      PARENT_SHA: b996deefe04f73580bd5480bd4c388e6f313f02a
+      PARENT_TREE: 2470615305e397d724ee7876124e63b1d123c13b
+      TARGET_BRANCH: agent/ssc-rd-wave03-admission-review-product-20260805
+      PACKAGE_B64_SHA256: 4db1de4d8c14d05ebf5fd6fe0e7e2f8e37a014b0c91a8a8e4d154e95f72a661e
+      PACKAGE_SHA256: 28d8bef813465f76488920fdfc7554bd84912b9b898f7ec100fa250f1ffd44e0
+      PRODUCT_DATE: "2026-08-05T17:53:10Z"
+      PYTHONDONTWRITEBYTECODE: "1"
+      EVIDENCE: /tmp/rd-wave03-admission-review-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Verify exact never-merge carrier and recover package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE/package" "$EVIDENCE/receipt"
+          exec > >(tee "$EVIDENCE/finalizer.log") 2>&1
+          test "$(git rev-parse HEAD)" = "$CARRIER_HEAD"
+          test "$(git rev-parse HEAD^)" = "$PARENT_SHA"
+          test "$(git rev-parse "$PARENT_SHA^{tree}")" = "$PARENT_TREE"
+          python3 - <<'PY'
+          import json, os, urllib.error, urllib.request
+          repo=os.environ['REPO']; token=os.environ['GH_TOKEN']; number=os.environ['CARRIER_PR']
+          req=urllib.request.Request(
+              f'https://api.github.com/repos/{repo}/pulls/{number}',
+              headers={'Accept':'application/vnd.github+json','Authorization':f'Bearer {token}','User-Agent':'rd-wave03-admission-review-finalizer','X-GitHub-Api-Version':'2022-11-28'})
+          with urllib.request.urlopen(req, timeout=60) as response:
+              pr=json.load(response)
+          assert pr['base']['ref']==os.environ['BASE_BRANCH']
+          assert pr['base']['sha']==os.environ['PARENT_SHA']
+          assert pr['head']['sha']==os.environ['CARRIER_HEAD']
+          assert pr['draft'] is False and pr['state']=='open'
+          PY
+          cat > "$EVIDENCE/expected-carrier-paths.txt" <<'EOF'
+          .github/rd-wave03-admission-review/package.b64.00
+          .github/rd-wave03-admission-review/package.b64.01
+          .github/rd-wave03-admission-review/package.b64.02
+          .github/rd-wave03-admission-review/package.b64.03
+          .github/rd-wave03-admission-review/package.b64.04
+          .github/rd-wave03-admission-review/package.b64.05
+          .github/rd-wave03-admission-review/package.b64.06
+          .github/rd-wave03-admission-review/package.b64.07
+          .github/workflows/rd-wave03-admission-review-finalizer.yml
+          EOF
+          git diff --name-only "$PARENT_SHA..HEAD" | sort > "$EVIDENCE/actual-carrier-paths.txt"
+          diff -u "$EVIDENCE/expected-carrier-paths.txt" "$EVIDENCE/actual-carrier-paths.txt"
+          cat .github/rd-wave03-admission-review/package.b64.* > "$EVIDENCE/package.tgz.b64"
+          echo "$PACKAGE_B64_SHA256  $EVIDENCE/package.tgz.b64" | sha256sum -c -
+          base64 -d "$EVIDENCE/package.tgz.b64" > "$EVIDENCE/package.tgz"
+          echo "$PACKAGE_SHA256  $EVIDENCE/package.tgz" | sha256sum -c -
+          tar -tzf "$EVIDENCE/package.tgz" | sort > "$EVIDENCE/package-paths.txt"
+          cat > "$EVIDENCE/expected-product-paths.txt" <<'EOF'
+          data/research/residual-denominator/wave-03/admission-review/manifest.json
+          data/research/residual-denominator/wave-03/admission-review/protocol.json
+          docs/research/residual-denominator/wave-03/RD-ADMISSION-REVIEW.md
+          schema/rd-wave03-admission-review.schema.json
+          scripts/rd-wave03-admission-review.py
+          test/rd-wave03-admission-review-adversarial.py
+          EOF
+          diff -u "$EVIDENCE/expected-product-paths.txt" "$EVIDENCE/package-paths.txt"
+          tar -xzf "$EVIDENCE/package.tgz" -C "$EVIDENCE/package"
+
+      - name: Download exact capture verification artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-final-31029020122
+          path: ${{ env.EVIDENCE }}/capture
+          github-token: ${{ github.token }}
+          repository: ${{ env.REPO }}
+          run-id: "31029020122"
+
+      - name: Download exact RD-01 intake artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rd-wave03-rd01-intake-30984441377
+          path: ${{ env.EVIDENCE }}/intake/rd01
+          github-token: ${{ github.token }}
+          repository: ${{ env.REPO }}
+          run-id: "30984441377"
+
+      - name: Download exact RD-02 intake artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rd-wave03-rd02-intake-30984459798
+          path: ${{ env.EVIDENCE }}/intake/rd02
+          github-token: ${{ github.token }}
+          repository: ${{ env.REPO }}
+          run-id: "30984459798"
+
+      - name: Download exact RD-04 intake artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rd-wave03-rd04-intake-30984497436
+          path: ${{ env.EVIDENCE }}/intake/rd04
+          github-token: ${{ github.token }}
+          repository: ${{ env.REPO }}
+          run-id: "30984497436"
+
+      - name: Download exact RD-05 intake artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rd-wave03-rd05-intake-30984516496
+          path: ${{ env.EVIDENCE }}/intake/rd05
+          github-token: ${{ github.token }}
+          repository: ${{ env.REPO }}
+          run-id: "30984516496"
+
+      - name: Verify immutable artifact, source-contract, and body custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec >> >(tee -a "$EVIDENCE/finalizer.log") 2>&1
+          python3 - <<'PY'
+          import json, os, pathlib, urllib.request
+          repo=os.environ['REPO']; token=os.environ['GH_TOKEN']; root=pathlib.Path(os.environ['EVIDENCE'])
+          expected={
+            8940053176:('rd-wave03-exact-capture-final-31029020122','sha256:b0fb0b27259349775b0d48b4eeab3024a5831139c05ebe58a3955aaf50d3e079',31029020122,'7e9ace84816a137d0e1df952cdafccd95ac4b1ce'),
+            8921486625:('rd-wave03-rd01-intake-30984441377','sha256:71cae00e0122445642342e0a8a1a12e45a828a47a0e6941f3eea90e38e35607d',30984441377,'7f00c571c96f393a8cf15f052c151992edb1a961'),
+            8921491294:('rd-wave03-rd02-intake-30984459798','sha256:9530dd7688458b9bde67045f5496d3876160c0b4ec8de11b9cc688e04dd3c829',30984459798,'55a69c566270b01e35587123daff42808f48e3dd'),
+            8921512275:('rd-wave03-rd04-intake-30984497436','sha256:d4d5653c72dca66b56e0688106c41111a35ef7335a7910f33a378fb97584fd66',30984497436,'4b4f3d44c4926c6961e1e7f1ebe982acee6c2c9c'),
+            8921517083:('rd-wave03-rd05-intake-30984516496','sha256:2e8dc781631ae8c86d6ebd732780b949e200d33ba9d1da1f01e99214bcc3beea',30984516496,'b472a5bdcc737e0a6b1b55f6087fb4e0f10aaed6'),
+          }
+          headers={'Accept':'application/vnd.github+json','Authorization':f'Bearer {token}','User-Agent':'rd-wave03-admission-review-finalizer','X-GitHub-Api-Version':'2022-11-28'}
+          rows=[]
+          for artifact_id,(name,digest,run,head) in expected.items():
+              req=urllib.request.Request(f'https://api.github.com/repos/{repo}/actions/artifacts/{artifact_id}',headers=headers)
+              with urllib.request.urlopen(req,timeout=60) as response: value=json.load(response)
+              assert value['name']==name and value['digest']==digest and value['expired'] is False
+              assert value['workflow_run']['id']==run and value['workflow_run']['head_sha']==head
+              rows.append(value)
+          (root/'receipt'/'artifact-custody.json').write_text(json.dumps(rows,sort_keys=True,indent=2)+'\n')
+          PY
+          for commit in \
+            7f00c571c96f393a8cf15f052c151992edb1a961 \
+            55a69c566270b01e35587123daff42808f48e3dd \
+            4b4f3d44c4926c6961e1e7f1ebe982acee6c2c9c \
+            b472a5bdcc737e0a6b1b55f6087fb4e0f10aaed6; do
+            git cat-file -e "$commit^{commit}" 2>/dev/null || git fetch --quiet --no-tags origin "$commit"
+            git cat-file -e "$commit^{commit}"
+          done
+          (cd "$EVIDENCE/capture" && sha256sum -c SHA256SUMS)
+          echo '3a041787a3e4f12d1e977753b4affa48ae30e2dd1643f274bbb9f58c23986dbd  '"$EVIDENCE/intake/rd01/plan.json" | sha256sum -c -
+          echo '2b72b84a845484151bc27e8c46ead57b39ee85f53cd78a1a27d701b43d929171  '"$EVIDENCE/intake/rd01/receipt.json" | sha256sum -c -
+          echo '0cc9707d25aabf46871a7cb73f8965c978dcef7c76640323412d05a7c23dda77  '"$EVIDENCE/intake/rd02/plan.json" | sha256sum -c -
+          echo 'cc90f314fdae7d99791425454794d283a20d35211374f9bcc371f4272b51f237  '"$EVIDENCE/intake/rd02/receipt.json" | sha256sum -c -
+          echo 'e42eb9c1d62e63d200e92e69964a5d8699caddd2348eb7210063421a3e704499  '"$EVIDENCE/intake/rd04/plan.json" | sha256sum -c -
+          echo 'c43933b2ec62debe9fc4d876b83515ea2c0d733040c7b9230dc1e142a9035e19  '"$EVIDENCE/intake/rd04/receipt.json" | sha256sum -c -
+          echo '59831a8652726a42df45ad2044686ac829752c1b16785b807c2c90233b397a1a  '"$EVIDENCE/intake/rd05/plan.json" | sha256sum -c -
+          echo '3bd959f0bd19b3c8eb6afb52642026725406b4d90b02d36e9155ec7f84267210  '"$EVIDENCE/intake/rd05/receipt.json" | sha256sum -c -
+          test "$(git rev-parse 7f00c571c96f393a8cf15f052c151992edb1a961:data/research/residual-denominator/wave-03/rd-01/protocol.json)" = 00ede8f34a9eb976b18b4f7d019e1fb721b4f79e
+          test "$(git rev-parse 7f00c571c96f393a8cf15f052c151992edb1a961:data/research/residual-denominator/wave-03/rd-01/field-matrix.json)" = 363fd1f549430851c1e5dc29c9ff1aee809b8fe1
+          test "$(git rev-parse 55a69c566270b01e35587123daff42808f48e3dd:data/research/residual-denominator/wave-03/rd-02/protocol.json)" = ddfb1e466a17587de9059094fad0725dd587f9cf
+          test "$(git rev-parse 4b4f3d44c4926c6961e1e7f1ebe982acee6c2c9c:data/research/residual-denominator/wave-03/rd-04/protocol.json)" = 8efcc42bd58aef3cf94205039d83be0feee14b23
+          test "$(git rev-parse b472a5bdcc737e0a6b1b55f6087fb4e0f10aaed6:data/research/residual-denominator/wave-03/rd-05/protocol.json)" = a3b5e7a5b3708164065dec9492481ab531b00a5d
+          test "$(git rev-parse b472a5bdcc737e0a6b1b55f6087fb4e0f10aaed6:data/research/residual-denominator/wave-03/rd-05/field-matrix.json)" = 326c15360240a460c3cd15ea337b58aaf096316d
+
+      - name: Materialize exact six-file product and run all gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec >> >(tee -a "$EVIDENCE/finalizer.log") 2>&1
+          git checkout --detach "$PARENT_SHA"
+          git clean -ffdqx
+          cp -a "$EVIDENCE/package/." .
+          git status --short
+          python3 scripts/rd-wave03-admission-review.py --check
+          python3 scripts/rd-wave03-admission-review.py --verify-inputs --capture-root "$EVIDENCE/capture" --intake-root "$EVIDENCE/intake"
+          python3 test/rd-wave03-admission-review-adversarial.py
+          python3 -m pip install --disable-pip-version-check --quiet jsonschema==4.25.1
+          python3 - <<'PY'
+          import json
+          from jsonschema import Draft202012Validator
+          schema=json.load(open('schema/rd-wave03-admission-review.schema.json'))
+          protocol=json.load(open('data/research/residual-denominator/wave-03/admission-review/protocol.json'))
+          Draft202012Validator.check_schema(schema)
+          Draft202012Validator(schema).validate(protocol)
+          print('RD-W03 admission review schema: PASS')
+          PY
+          PYTHONPYCACHEPREFIX="$EVIDENCE/pycache" python3 -m py_compile scripts/rd-wave03-admission-review.py test/rd-wave03-admission-review-adversarial.py
+          git add -- $(cat "$EVIDENCE/expected-product-paths.txt")
+          git diff --cached --name-only | sort > "$EVIDENCE/actual-product-paths.txt"
+          diff -u "$EVIDENCE/expected-product-paths.txt" "$EVIDENCE/actual-product-paths.txt"
+          test "$(git diff --cached --name-only | sort | sha256sum | cut -d' ' -f1)" = "$(sort "$EVIDENCE/expected-product-paths.txt" | sha256sum | cut -d' ' -f1)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          GIT_AUTHOR_DATE="$PRODUCT_DATE" GIT_COMMITTER_DATE="$PRODUCT_DATE" git commit -m 'research: RD-W03 offline admission refusal ledger'
+          PRODUCT_HEAD="$(git rev-parse HEAD)"
+          PRODUCT_TREE="$(git rev-parse HEAD^{tree})"
+          test "$(git rev-parse HEAD^)" = "$PARENT_SHA"
+          git diff --name-only "$PARENT_SHA..HEAD" | sort > "$EVIDENCE/committed-product-paths.txt"
+          diff -u "$EVIDENCE/expected-product-paths.txt" "$EVIDENCE/committed-product-paths.txt"
+          test -z "$(git status --porcelain)"
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate
+          test -z "$(git status --porcelain)"
+          printf '%s\n' "$PRODUCT_HEAD" > "$EVIDENCE/receipt/product-head.txt"
+          printf '%s\n' "$PRODUCT_TREE" > "$EVIDENCE/receipt/product-tree.txt"
+          cp "$EVIDENCE/committed-product-paths.txt" "$EVIDENCE/receipt/product-paths.txt"
+          remote_head="$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          if [[ -z "$remote_head" ]]; then
+            git push origin "$PRODUCT_HEAD:refs/heads/$TARGET_BRANCH"
+          else
+            test "$remote_head" = "$PRODUCT_HEAD"
+          fi
+          test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')" = "$PRODUCT_HEAD"
+          python3 - <<'PY'
+          import json, os, pathlib
+          root=pathlib.Path(os.environ['EVIDENCE'])
+          protocol=json.load(open('data/research/residual-denominator/wave-03/admission-review/protocol.json'))
+          receipt={
+            'schema_version':1,
+            'transaction_id':'RD-W03-ADMISSION-REVIEW-FINAL-01',
+            'issue':413,
+            'carrier_pr':int(os.environ['CARRIER_PR']),
+            'carrier_head':os.environ['CARRIER_HEAD'],
+            'workflow_run_id':int(os.environ['GITHUB_RUN_ID']),
+            'product_parent':os.environ['PARENT_SHA'],
+            'product_head':(root/'receipt'/'product-head.txt').read_text().strip(),
+            'product_tree':(root/'receipt'/'product-tree.txt').read_text().strip(),
+            'product_branch':os.environ['TARGET_BRANCH'],
+            'product_path_count':6,
+            'summary':protocol['summary'],
+            'live_source_requests':0,
+            'external_contacts':0,
+            'external_reviews':0,
+            'outside_human_dependency':False,
+            'publication_effect':'none',
+            'adoption_effect':'none',
+            'graph_effect':'none',
+            'merge_authority':False,
+            'package_checks':'passed',
+            'immutable_input_replay':'passed',
+            'adversarial_refusals':40,
+            'complete_repository_gate':'passed',
+          }
+          (root/'receipt'/'finalizer-receipt.json').write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n')
+          PY
+          (cd "$EVIDENCE/receipt" && sha256sum * > SHA256SUMS)
+
+      - name: Upload terminal verification receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-admission-review-final-${{ github.run_id }}
+          path: ${{ env.EVIDENCE }}/receipt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload bounded failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-admission-review-failure-${{ github.run_id }}
+          path: |
+            ${{ env.EVIDENCE }}/finalizer.log
+            ${{ env.EVIDENCE }}/actual-carrier-paths.txt
+            ${{ env.EVIDENCE }}/actual-product-paths.txt
+            ${{ env.EVIDENCE }}/package-paths.txt
+            ${{ env.EVIDENCE }}/receipt
+          if-no-files-found: warn
+          retention-days: 30
