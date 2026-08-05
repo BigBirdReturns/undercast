@@ -75,6 +75,7 @@ jobs:
             --json > "$OUT/candidates.json"
           node scripts/waterline.mjs validate --scope doctor-who | tee "$OUT/waterline.log"
           node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/media-gate.log"
+          jq -e '.in_flight == 0' "$OUT/global-status.json" >/dev/null
           jq -e '
             .in_flight == 0 and
             .statuses.queued == 311 and
@@ -91,8 +92,10 @@ jobs:
           if (task.status !== 'queued') throw new Error(`Kayste status is ${task.status}, expected queued`);
           const durableFailedLease = ap.leases?.find?.(row => row.id === process.env.FAILED_LEASE || row.lease_id === process.env.FAILED_LEASE);
           if (durableFailedLease) throw new Error('failed runner lease entered durable AUTOPILOT state');
-          const activeJobs = ap.jobs.filter(row => !['queued','resolved','retired','cancelled'].includes(row.status));
+          const activeStatuses = new Set(['leased', 'claimed', 'running', 'in_flight']);
+          const activeJobs = ap.jobs.filter(row => activeStatuses.has(row.status));
           if (activeJobs.length) throw new Error(`durable active jobs remain: ${activeJobs.map(row => `${row.id}:${row.status}`).join(', ')}`);
+          const attention = ap.jobs.filter(row => row.status === 'attention').length;
           const receipt = {
             version: 1,
             exact_main: process.env.EXACT_MAIN,
@@ -101,6 +104,7 @@ jobs:
             task: { id: task.id, status: task.status, performer: task.performer, character: task.character },
             durable_failed_lease_present: false,
             durable_active_jobs: 0,
+            attention_backlog: attention,
             retry_authorized: true,
           };
           fs.writeFileSync(`${process.env.OUT}/postfailure-status.json`, `${JSON.stringify(receipt, null, 2)}\n`);
