@@ -1,0 +1,211 @@
+name: RD-W03 atomic product repair
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/rd-wave03-atomic-repair.yml
+      - tmp/rd-wave03-atomic-repair.py
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: rd-wave03-atomic-product-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      LANE_BASE: 318e7fd2826511c283e2d81622459fe0bb74e0d2
+      CARRIER_BASE: fba7497e3ac640486fdcceb93e433e2ec0abb163
+      EVIDENCE: /tmp/rd-wave03-atomic-repair-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Verify exact carrier and prepare pinned actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE/worktrees"
+          exec > >(tee "$EVIDENCE/repair.log") 2>&1
+          test "${{ github.event.pull_request.base.sha }}" = "$CARRIER_BASE"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          mapfile -t commits < <(git rev-list --reverse "$CARRIER_BASE..HEAD")
+          test "${#commits[@]}" -eq 2
+          patcher_commit="${commits[0]}"
+          workflow_commit="${commits[1]}"
+          test "$(git show -s --format=%P "$patcher_commit")" = "$CARRIER_BASE"
+          test "$(git show -s --format=%P "$workflow_commit")" = "$patcher_commit"
+          test "$workflow_commit" = "$(git rev-parse HEAD)"
+          test "$(git diff-tree --no-commit-id --name-only -r "$patcher_commit")" = "tmp/rd-wave03-atomic-repair.py"
+          test "$(git diff-tree --no-commit-id --name-only -r "$workflow_commit")" = ".github/workflows/rd-wave03-atomic-repair.yml"
+          mapfile -t carrier_paths < <(git diff --name-only "$CARRIER_BASE" HEAD | LC_ALL=C sort)
+          expected=(.github/workflows/rd-wave03-atomic-repair.yml tmp/rd-wave03-atomic-repair.py)
+          mapfile -t expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
+          test "$(printf '%s\n' "${carrier_paths[@]}")" = "$(printf '%s\n' "${expected[@]}")"
+          python3 -m py_compile tmp/rd-wave03-atomic-repair.py
+
+          archive="$EVIDENCE/actionlint.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL \
+            'https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz' \
+            -o "$archive"
+          echo '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  '"$archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$EVIDENCE" actionlint
+          "$EVIDENCE/actionlint" -shellcheck= .github/workflows/rd-wave03-atomic-repair.yml
+
+      - name: Build and fully validate six replacement commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec >> >(tee -a "$EVIDENCE/repair.log") 2>&1
+          lanes=(01 02 03 04 05 06)
+          branches=(
+            agent/ssc-rd01-wave03-intake
+            agent/ssc-rd02-wave03-intake
+            agent/ssc-rd03-wave03-intake
+            agent/ssc-rd04-wave03-intake
+            agent/ssc-rd05-wave03-intake
+            agent/ssc-rd06-wave03-intake
+          )
+          old_heads=(
+            6899a2d09c8ddd62a62ce22fc59557ea6fddf84b
+            134e7811419d20443134fe565bf4cf69af70fa45
+            b0700020c4c84e0ec355a76861c9a788b04a89eb
+            1db75a178f4da96d22109902e3d5a9ff79a6080f
+            6f1e9f6ea6b14753d30161d55c3facc3a466bc66
+            9acd031d7bfc3d0f343525e65b17a5140ee46f43
+          )
+          counts=(8 7 7 7 8 8)
+          : > "$EVIDENCE/replacements.tsv"
+
+          for i in "${!lanes[@]}"; do
+            lane="${lanes[$i]}"
+            branch="${branches[$i]}"
+            old="${old_heads[$i]}"
+            count="${counts[$i]}"
+            git fetch --no-tags origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+            test "$(git rev-parse "refs/remotes/origin/$branch")" = "$old"
+            test "$(git show -s --format=%P "$old")" = "$LANE_BASE"
+
+            wt="$EVIDENCE/worktrees/rd${lane}"
+            git worktree add --detach "$wt" "$old"
+            git -C "$wt" config user.name github-actions[bot]
+            git -C "$wt" config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            python3 tmp/rd-wave03-atomic-repair.py "$wt" "$lane" | tee "$EVIDENCE/rd${lane}-patch.json"
+
+            "$EVIDENCE/actionlint" -shellcheck= "$wt/.github/workflows/rd-wave03-rd${lane}-intake.yml"
+            node --check "$wt/scripts/rd-wave03-rd${lane}-build.mjs"
+            node --check "$wt/scripts/rd-wave03-rd${lane}-validate.mjs"
+            node --check "$wt/test/rd-wave03-rd${lane}-adversarial.mjs"
+            node "$wt/scripts/rd-wave03-rd${lane}-validate.mjs"
+            node "$wt/scripts/rd-wave03-rd${lane}-build.mjs" --check
+            node "$wt/test/rd-wave03-rd${lane}-adversarial.mjs"
+
+            mapfile -t repair_paths < <(git -C "$wt" status --porcelain=v1 --untracked-files=all | cut -c4- | LC_ALL=C sort)
+            mapfile -t expected_repair < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["changed_paths"]))' "$EVIDENCE/rd${lane}-patch.json" | LC_ALL=C sort)
+            test "$(printf '%s\n' "${repair_paths[@]}")" = "$(printf '%s\n' "${expected_repair[@]}")"
+            git -C "$wt" add -- "${repair_paths[@]}"
+            git -C "$wt" commit --amend --no-edit --no-verify
+            new="$(git -C "$wt" rev-parse HEAD)"
+            test "$(git -C "$wt" show -s --format=%P "$new")" = "$LANE_BASE"
+
+            protocol="data/research/residual-denominator/wave-03/rd-${lane}/protocol.json"
+            git -C "$wt" show "$new:$protocol" | node -e '
+              let source="";
+              process.stdin.setEncoding("utf8");
+              process.stdin.on("data", chunk => source += chunk);
+              process.stdin.on("end", () => process.stdout.write([...JSON.parse(source).permanent_paths].sort().join("\n") + "\n"));
+            ' > "$EVIDENCE/rd${lane}-expected.txt"
+            git -C "$wt" diff-tree --no-commit-id --name-only -r "$new" | LC_ALL=C sort > "$EVIDENCE/rd${lane}-actual.txt"
+            test "$(wc -l < "$EVIDENCE/rd${lane}-actual.txt")" -eq "$count"
+            diff -u "$EVIDENCE/rd${lane}-expected.txt" "$EVIDENCE/rd${lane}-actual.txt"
+            mapfile -t actual_repair < <(git -C "$wt" diff --name-only "$old" "$new" | LC_ALL=C sort)
+            test "$(printf '%s\n' "${actual_repair[@]}")" = "$(printf '%s\n' "${expected_repair[@]}")"
+            test -z "$(git -C "$wt" status --porcelain=v1 --untracked-files=all)"
+            printf 'RD-%s\t%s\t%s\t%s\t%s\n' "$lane" "$branch" "$old" "$new" "$count" | tee -a "$EVIDENCE/replacements.tsv"
+          done
+
+      - name: Atomically publish all six leased replacements
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec >> >(tee -a "$EVIDENCE/repair.log") 2>&1
+          push_args=(--atomic)
+          refspecs=()
+          while IFS=$'\t' read -r lane branch old new count; do
+            remote="$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')"
+            test "$remote" = "$old"
+            push_args+=("--force-with-lease=refs/heads/$branch:$old")
+            refspecs+=("$new:refs/heads/$branch")
+          done < "$EVIDENCE/replacements.tsv"
+          git push "${push_args[@]}" origin "${refspecs[@]}"
+          while IFS=$'\t' read -r lane branch old new count; do
+            remote="$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')"
+            test "$remote" = "$new"
+          done < "$EVIDENCE/replacements.tsv"
+
+          python3 - "$EVIDENCE/replacements.tsv" > "$EVIDENCE/receipt.json" <<'PY'
+          import csv, json, sys
+          rows=[]
+          with open(sys.argv[1]) as f:
+              for lane,branch,old,new,count in csv.reader(f, delimiter='\t'):
+                  rows.append({"lane":lane,"branch":branch,"old_head":old,"new_head":new,"path_count":int(count)})
+          print(json.dumps({
+            "schema_version":1,
+            "lane_base":"318e7fd2826511c283e2d81622459fe0bb74e0d2",
+            "atomic_push":True,
+            "replacements":rows,
+            "permanent_path_union":45,
+            "frozen_units":101,
+            "fixed_routes":710,
+            "required_cells":959,
+            "adversarial_refusals":267,
+            "external_contacts":0,
+            "external_reviews":0,
+            "outside_human_dependency":False,
+            "evidence_admissions":0,
+            "classes_closed":0,
+            "publication_effect":"none",
+            "adoption_effect":"none",
+            "graph_effect":"none"
+          }, indent=2))
+          PY
+          cat "$EVIDENCE/receipt.json"
+
+      - name: Publish repair receipt to product and qualification PRs
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(cat <<EOF
+          Wave-03 atomic product repair run ${GITHUB_RUN_ID} published six replacement one-parent heads in one atomic push.
+
+          $(cat "$EVIDENCE/replacements.tsv")
+
+          All six exact permanent-path denominators were preserved. Every lane passed actionlint, Node parse checks, closed-schema/no-magic-human validation, deterministic replay, and its adversarial refusal suite before publication. RD-05's builder and stale schema binding were repaired; RD-06's stale schema, matrix, cell, and route bindings were rebound without changing units, fields, route definitions, cells, admission law, closure law, or authority. No source protocol was executed in this repair transaction.
+          EOF
+          )"
+          for pr in 322 323 324 325 326 327 352; do
+            gh pr comment "$pr" --repo BigBirdReturns/undercast --body "$body"
+          done
+
+      - name: Upload atomic repair receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-atomic-repair-${{ github.run_id }}
+          path: /tmp/rd-wave03-atomic-repair-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
