@@ -1,0 +1,226 @@
+name: doctor-who-cycle-007-writer-builder-v2
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-007-writer-builder-v2.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-007-writer-builder-v2-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-007-writer-builder-v2.yml
+  EXACT_MAIN: 45fc33aa8de8c01f03f006c5c01765dd1929385f
+  ATTESTED_MAIN: 45fc33aa8de8c01f03f006c5c01765dd1929385f
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  OUT: /tmp/doctor-who-cycle-007-writer-builder-v2
+  CYCLE_ASSET_DIR: /tmp/doctor-who-cycle-007
+  CYCLE_CONTEXT: /tmp/doctor-who-cycle-007-context.json
+  SELECTION_DIR: /tmp/doctor-who-cycle-007-selection
+  PREFLIGHT_DIR: /tmp/doctor-who-cycle-007-preflight
+  MEDIA_DIR: /tmp/doctor-who-cycle-007-media-review
+  CYCLE_AT: 2026-08-05T18:15:00.000Z
+  TRANSPORT_SHA256: e632c84859d5f998fbe045c773aab1b4a0ca6fbf7cc84a5a6225bc9234868edb
+  TRANSPORT_MANIFEST_SHA256: c157adaa8a3f424ccbe0772018c8c82eaf49e4af8a32b9fa96e4ca7b565ad3af
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  builder:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-007-writer-builder-v2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 2
+          filter: blob:none
+
+      - name: Bind exact canonical main and one-file read-only builder carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT" "$CYCLE_ASSET_DIR" "$SELECTION_DIR" "$PREFLIGHT_DIR" "$MEDIA_DIR"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags --filter=blob:none origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${HEAD_BRANCH})" = "$HEAD_SHA"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          git checkout --detach "$EXACT_MAIN"
+          test "$(git rev-parse HEAD)" = "$EXACT_MAIN"
+          test -z "$(git status --porcelain)"
+          printf 'exact_main=%s\ncarrier_head=%s\nmain_tree=%s\n' \
+            "$EXACT_MAIN" "$HEAD_SHA" "$(git rev-parse "$EXACT_MAIN^{tree}")" > "$OUT/main-identity.txt"
+
+      - name: Recover and bind exact writer transport from ordered checksum-bound PR comments
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments?per_page=100" > "$OUT/pr-comments.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const comments = JSON.parse(fs.readFileSync(`${process.env.OUT}/pr-comments.json`, 'utf8'));
+          const parts = [];
+          for (const comment of comments) {
+            const match = String(comment.body || '').match(/^CYCLE007_TRANSPORT_PART (\d{2})\/(\d{2})\n([A-Za-z0-9+/=\r\n]+)$/);
+            if (!match) continue;
+            parts.push({ index: Number(match[1]), total: Number(match[2]), payload: match[3].replace(/\s/g, '') });
+          }
+          if (!parts.length) throw new Error('no cycle-007 transport comments found');
+          parts.sort((a, b) => a.index - b.index);
+          const total = parts[0].total;
+          if (parts.length !== total || parts.some((row, i) => row.total !== total || row.index !== i + 1)) throw new Error('cycle-007 transport comment set is incomplete or unordered');
+          fs.writeFileSync(`${process.env.OUT}/transport.b64`, parts.map((row) => row.payload).join(''));
+          NODE
+          test -s "$OUT/transport.b64"
+          test -z "$(tr -d 'A-Za-z0-9+/=' < "$OUT/transport.b64")"
+          base64 --decode "$OUT/transport.b64" > "$OUT/transport.tgz"
+          test "$(sha256sum "$OUT/transport.tgz" | awk '{print $1}')" = "$TRANSPORT_SHA256"
+          tar -xzf "$OUT/transport.tgz" -C "$CYCLE_ASSET_DIR"
+          test "$(sha256sum "$CYCLE_ASSET_DIR/transport-manifest.json" | awk '{print $1}')" = "$TRANSPORT_MANIFEST_SHA256"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const root = process.env.CYCLE_ASSET_DIR;
+          const manifest = JSON.parse(fs.readFileSync(`${root}/transport-manifest.json`, 'utf8'));
+          if (manifest.version !== 1 || manifest.transaction !== 'DOCTOR-WHO-CYCLE-007-KRAGAR-BUILDER') throw new Error('transport manifest identity drifted');
+          for (const row of manifest.files) {
+            const bytes = fs.readFileSync(`${root}/${row.path}`);
+            const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+            if (bytes.length !== row.bytes || sha !== row.sha256) throw new Error(`transport member drifted: ${row.path}`);
+          }
+          NODE
+          chmod +x "$CYCLE_ASSET_DIR"/*.sh "$CYCLE_ASSET_DIR"/*.mjs
+          node --check "$CYCLE_ASSET_DIR/apply-doctor-who-cycle-007.mjs"
+          node --check "$CYCLE_ASSET_DIR/apply-doctor-who-cycle-finalize-007.mjs"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies and rendered runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y imagemagick >/dev/null
+          identify -version | head -1 | tee "$OUT/imagemagick-version.txt"
+
+      - name: Download exact cycle-007 selection packet
+        uses: actions/download-artifact@v4
+        with:
+          name: doctor-who-cycle-007-selection-31023209453
+          path: ${{ env.SELECTION_DIR }}
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: 31023209453
+
+      - name: Download exact complete cycle-007 preflight
+        uses: actions/download-artifact@v4
+        with:
+          name: doctor-who-cycle-007-preflight-31024339060
+          path: ${{ env.PREFLIGHT_DIR }}
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: 31024339060
+
+      - name: Download exact final Kragar media review
+        uses: actions/download-artifact@v4
+        with:
+          name: doctor-who-cycle-007-kragar-media-review-v3-31027579331
+          path: ${{ env.MEDIA_DIR }}
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: 31027579331
+
+      - name: Bind recovered evidence and prepare normalized writer inputs
+        shell: bash
+        run: bash "$CYCLE_ASSET_DIR/01-prepare.sh"
+
+      - name: Materialize exact workflow-free Kragar candidate
+        shell: bash
+        run: bash "$CYCLE_ASSET_DIR/02-materialize.sh"
+
+      - name: Completely gate and commit exact local candidate
+        shell: bash
+        run: bash "$CYCLE_ASSET_DIR/03-candidate.sh"
+
+      - name: Upload exact local candidate evidence
+        id: candidate-upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-candidate-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            ${{ env.CYCLE_CONTEXT }}
+            ${{ env.OUT }}/candidate-*
+            ${{ env.OUT }}/materialize.log
+            ${{ env.OUT }}/prepared-inputs.sha256
+            ${{ env.CYCLE_ASSET_DIR }}/kragar-normalized-verification.json
+            ${{ env.CYCLE_ASSET_DIR }}/kragar-still-candidate.jpg
+
+      - name: Bind candidate artifact and workflow job custody
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.candidate-upload.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.candidate-upload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          job_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" --jq '.jobs[] | select(.name=="builder") | .id' | head -1)"
+          test -n "$job_id"
+          digest="${ARTIFACT_DIGEST#sha256:}"
+          candidate="$(cat "$OUT/candidate-commit.txt")"
+          candidate_gate="$(cat "$OUT/candidate-gate.sha256")"
+          artifact_name="doctor-who-cycle-007-candidate-${GITHUB_RUN_ID}"
+          test -n "$ARTIFACT_ID" -a -n "$digest" -a -n "$candidate" -a -n "$candidate_gate"
+          printf 'CANDIDATE_COMMIT=%s\n' "$candidate" >> "$GITHUB_ENV"
+          printf 'CANDIDATE_GATE_SHA256=%s\n' "$candidate_gate" >> "$GITHUB_ENV"
+          printf 'CANDIDATE_ARTIFACT_NAME=%s\n' "$artifact_name" >> "$GITHUB_ENV"
+          printf 'CANDIDATE_ARTIFACT_ID=%s\n' "$ARTIFACT_ID" >> "$GITHUB_ENV"
+          printf 'CANDIDATE_ARTIFACT_SHA256=%s\n' "$digest" >> "$GITHUB_ENV"
+          printf 'WORKFLOW_JOB=%s\n' "$job_id" >> "$GITHUB_ENV"
+          printf 'workflow_job=%s\ncandidate_artifact_id=%s\ncandidate_artifact_sha256=%s\n' "$job_id" "$ARTIFACT_ID" "$digest" > "$OUT/candidate-custody.txt"
+
+      - name: Write reviewed cycle receipt and permanent checker
+        shell: bash
+        run: bash "$CYCLE_ASSET_DIR/04-finalize.sh"
+
+      - name: Completely gate and seal exact local final product
+        shell: bash
+        run: bash "$CYCLE_ASSET_DIR/05-final-gate.sh"
+
+      - name: Upload complete cycle-007 writer qualification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-writer-builder-v2-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: warn
+          path: |
+            ${{ env.OUT }}
+            ${{ env.CYCLE_CONTEXT }}
+            ${{ env.CYCLE_ASSET_DIR }}/kragar-normalized-verification.json
+            ${{ env.CYCLE_ASSET_DIR }}/kragar-still-candidate.jpg
+            data/review/adapter-sdk/doctor-who-cycle-007-kragar.json
+            scripts/doctor-who-cycle-007.mjs
