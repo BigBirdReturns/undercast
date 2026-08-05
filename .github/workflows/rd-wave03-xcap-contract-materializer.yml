@@ -1,0 +1,106 @@
+name: RD-W03 exact-capture contract blob materializer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/rd-wave03-xcap-contract-materializer.yml
+      - tmp/rd-wave03-xcap-contract/**
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_SHA: 30b7bd2628c7228c9abfd350eb776eb0d6eb8090
+      EXPECTED_SHA256: 7f47e7e0728aea36ebb133baefe1ad1b8151bcc1b194c9bb50f7df0d4f4379e1
+      EXPECTED_BYTES: "53407"
+      OUT: /tmp/rd-wave03-xcap-contract-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact bounded carrier and reconstruct contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          exec > >(tee "$OUT/materializer.log") 2>&1
+          test "${{ github.event.pull_request.base.sha }}" = "$BASE_SHA"
+          mapfile -t actual < <(git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort)
+          mapfile -t expected < <({
+            printf '%s\n' .github/workflows/rd-wave03-xcap-contract-materializer.yml
+            printf '%s\n' tmp/rd-wave03-xcap-contract/manifest.json
+            find tmp/rd-wave03-xcap-contract -maxdepth 1 -type f -name 'chunk-*.b64' -printf '%p\n'
+          } | LC_ALL=C sort)
+          test "$(printf '%s\n' "${actual[@]}")" = "$(printf '%s\n' "${expected[@]}")"
+          python3 - <<'PY'
+          import hashlib, json, pathlib
+          root=pathlib.Path('tmp/rd-wave03-xcap-contract')
+          manifest=json.loads((root/'manifest.json').read_text())
+          chunks=manifest['chunks']
+          assert len(chunks) == 6
+          encoded=''
+          for row in chunks:
+              p=pathlib.Path(row['path'])
+              b=p.read_bytes()
+              assert len(b) == row['characters']
+              assert hashlib.sha256(b).hexdigest() == row['sha256']
+              encoded += b.decode('ascii')
+          import base64
+          raw=base64.b64decode(encoded, validate=True)
+          import os
+          out=pathlib.Path(os.environ['OUT']) / 'contract.json.gz'
+          out.write_bytes(raw)
+          assert len(raw) == manifest['output_bytes'] == 53407
+          assert hashlib.sha256(raw).hexdigest() == manifest['output_sha256'] == '${{ env.EXPECTED_SHA256 }}'
+          PY
+
+      - name: Create unreferenced exact Git blob
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$OUT/contract.json.gz" > "$OUT/blob-request.json" <<'PY'
+          import base64, json, pathlib, sys
+          raw=pathlib.Path(sys.argv[1]).read_bytes()
+          print(json.dumps({"content":base64.b64encode(raw).decode("ascii"),"encoding":"base64"}))
+          PY
+          blob_sha="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/git/blobs" --input "$OUT/blob-request.json" --jq .sha)"
+          test "$blob_sha" != ""
+          printf '%s\n' "$blob_sha" | tee "$OUT/blob-sha.txt"
+          python3 - "$blob_sha" > "$OUT/receipt.json" <<'PY'
+          import json, sys
+          print(json.dumps({
+            "schema_version":1,
+            "purpose":"RD-W03-XCAP-01 exact contract blob materialization",
+            "workflow_run_id":"${{ github.run_id }}",
+            "carrier_head":"${{ github.event.pull_request.head.sha }}",
+            "base_sha":"${{ env.BASE_SHA }}",
+            "git_blob_sha":sys.argv[1],
+            "output_bytes":53407,
+            "output_sha256":"${{ env.EXPECTED_SHA256 }}",
+            "repository_ref_effect":"none",
+            "evidence_admissions":0,
+            "classes_closed":0,
+            "external_contacts":0,
+            "external_reviews":0,
+            "outside_human_dependency":False
+          },sort_keys=True,indent=2))
+          PY
+          cat "$OUT/receipt.json"
+
+      - name: Upload materialization receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-xcap-contract-materializer-${{ github.run_id }}
+          path: /tmp/rd-wave03-xcap-contract-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
