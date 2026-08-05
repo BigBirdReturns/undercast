@@ -1,0 +1,191 @@
+name: doctor-who-cycle-006-clean-main-rebind-v3
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-006-clean-main-rebind-v3.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-006-clean-main-rebind-v3-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-006-clean-main-rebind-v3.yml
+  EXACT_MAIN: 66cf3de636558edd79bbf471c336a2c1c93a76a1
+  PRIOR_MAIN: e149be170525ded693bd2a607515857765e63ede
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  OUT: /tmp/doctor-who-cycle-006-clean-main-rebind-v3
+  PRIOR_REBIND_RUN: "30968974603"
+  PRIOR_REBIND_ARTIFACT: doctor-who-cycle-006-current-main-rebind-v2-30968974603
+  PRIOR_REBIND_RECEIPT_SHA256: 88719e2b1cf3561e5abc5b8b4886cd52066fabe06bb8b8d6286a023b77b24430
+
+jobs:
+  rebind:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          filter: blob:none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact clean main and tree-equivalent predecessor
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test -z "$(git status --porcelain)"
+          git fetch --no-tags origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${HEAD_BRANCH})" = "$HEAD_SHA"
+          printf '%s\n' "$SELF" > /tmp/expected-paths.txt
+          git diff --name-only "$EXACT_MAIN"...HEAD | sort > /tmp/actual-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+          test "$(git rev-parse "$PRIOR_MAIN^{tree}")" = "$(git rev-parse "$EXACT_MAIN^{tree}")"
+          git diff --exit-code "$PRIOR_MAIN" "$EXACT_MAIN"
+          for path in \
+            .github/workflows/rd-wave03-v2-review-fix.yml \
+            tmp/rd-wave03-v2-review-fix.py \
+            tmp/rd-wave03-v2-review-fix.trigger \
+            .github/workflows/rd-wave03-hosted-executor.yml \
+            tmp/rd-wave03-integration.sh \
+            tmp/ux02a.trigger; do
+            test ! -e "$path"
+          done
+          printf 'exact_main=%s\nprior_main=%s\ntree=%s\n' \
+            "$EXACT_MAIN" "$PRIOR_MAIN" "$(git rev-parse "$EXACT_MAIN^{tree}")" \
+            > "$OUT/tree-equivalence.txt"
+
+      - name: Install exact dependencies and rendered runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Download prior exact Kayste rebind packet
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PRIOR_REBIND_ARTIFACT }}
+          path: ${{ env.OUT }}/prior
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: ${{ env.PRIOR_REBIND_RUN }}
+
+      - name: Rebind prior packet to the exact tree-equivalent current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          prior="$OUT/prior"
+          test -f "$prior/exact-main.txt"
+          test -f "$prior/current-main-rebind.json"
+          test -f "$prior/current-main-rebind.sha256"
+          test "$(cat "$prior/exact-main.txt")" = "$PRIOR_MAIN"
+          test "$(cat "$prior/current-main-rebind.sha256")" = "$PRIOR_REBIND_RECEIPT_SHA256"
+          jq -e --arg prior "$PRIOR_MAIN" '
+            .exact_main == $prior and
+            .lease_issued == false and
+            .global_active_count == 0 and
+            .task.id == "ap_c8e74653ac0877837814db21" and
+            .task.performer == "Dan Starkey" and
+            .task.role == "Kayste" and
+            .queue.queued == 311 and
+            .queue.resolved == 5 and
+            .boundary.claim_authorized == true and
+            .boundary.queue_mutated == false and
+            .boundary.canonical_record_created == false and
+            .boundary.media_adopted == false and
+            .boundary.cycle_receipt_written == false
+          ' "$prior/current-main-rebind.json" >/dev/null
+          jq -S \
+            --arg current "$EXACT_MAIN" \
+            --arg prior "$PRIOR_MAIN" \
+            --arg prior_sha "$PRIOR_REBIND_RECEIPT_SHA256" \
+            '.version = 4 |
+             .exact_main = $current |
+             .previous_rebind = {
+               exact_main: $prior,
+               receipt_sha256: $prior_sha,
+               tree_equivalent: true
+             } |
+             .boundary.tree_equivalent_rebind = true |
+             .boundary.claim_authorized = true |
+             .boundary.queue_mutated = false |
+             .boundary.canonical_record_created = false |
+             .boundary.media_adopted = false |
+             .boundary.cycle_receipt_written = false' \
+            "$prior/current-main-rebind.json" > "$OUT/current-main-rebind.json"
+          jq -cS . "$OUT/current-main-rebind.json" | sha256sum | awk '{print $1}' > "$OUT/current-main-rebind.sha256"
+          printf '%s\n' "$EXACT_MAIN" > "$OUT/exact-main.txt"
+
+      - name: Prove rolling Doctor Who custody and complete gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/autopilot.mjs validate | tee "$OUT/autopilot-validate.log"
+          node scripts/autopilot.mjs readiness --scope doctor-who --require-active --json > "$OUT/readiness.json"
+          node scripts/autopilot.mjs status --scope doctor-who --json > "$OUT/status.json"
+          node scripts/waterline.mjs validate --scope doctor-who | tee "$OUT/waterline.log"
+          node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/media-gate.log"
+          node scripts/doctor-who-cycle-004-still-correction.mjs | tee "$OUT/cycle-004.log"
+          node scripts/doctor-who-cycle-005.mjs | tee "$OUT/cycle-005.log"
+          node scripts/autopilot.mjs candidates \
+            --scope doctor-who \
+            --capability-profile text-vision \
+            --limit 200 \
+            --json > "$OUT/current-candidates.json"
+          jq -e '
+            .in_flight == 0 and
+            .queued == 311 and
+            .resolved == 5
+          ' "$OUT/status.json" >/dev/null
+          jq -e '
+            .compatible[0].task_id == "ap_c8e74653ac0877837814db21"
+          ' "$OUT/current-candidates.json" >/dev/null
+          npm run gate | tee "$OUT/complete-gate.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Record read-only terminal boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$OUT/boundary.json" <<EOF
+          {
+            "version": 1,
+            "exact_main": "$EXACT_MAIN",
+            "prior_main": "$PRIOR_MAIN",
+            "tree_equivalent": true,
+            "lease_issued": false,
+            "queue_mutated": false,
+            "canonical_record_created": false,
+            "media_adopted": false,
+            "cycle_receipt_written": false,
+            "product_published": false
+          }
+          EOF
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact current-main rebind evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-006-clean-main-rebind-v3-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
