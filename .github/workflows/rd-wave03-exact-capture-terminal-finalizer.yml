@@ -1,0 +1,92 @@
+name: RD-W03 exact-capture terminal finalizer
+
+on:
+  push:
+    branches:
+      - agent/ssc-rd-wave03-exact-capture-terminal-finalizer-20260805
+    paths:
+      - .github/workflows/rd-wave03-exact-capture-terminal-finalizer.yml
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: rd-wave03-exact-capture-terminal-finalizer
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      BASE_BRANCH: agent/ssc-rd-wave03-exact-capture-terminal-finalizer-base-20260805
+      EVIDENCE: /tmp/rd-wave03-exact-capture-terminal-finalizer-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Verify exact carrier and independently adjudicate supervisor artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          exec > >(tee "$EVIDENCE/carrier.log") 2>&1
+          test "$GITHUB_REF" = refs/heads/agent/ssc-rd-wave03-exact-capture-terminal-finalizer-20260805
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
+          base="$(git rev-parse "refs/remotes/origin/$BASE_BRANCH")"
+          mapfile -t commits < <(git rev-list --reverse "$base..$GITHUB_SHA")
+          test "${#commits[@]}" -eq 2
+          test "$(git show -s --format=%P "${commits[0]}")" = "$base"
+          test "$(git show -s --format=%P "${commits[1]}")" = "${commits[0]}"
+          test "${commits[1]}" = "$GITHUB_SHA"
+          test "$(git diff-tree --no-commit-id --name-only -r "${commits[0]}")" = "tmp/rd-wave03-exact-capture-terminal-finalize.sh"
+          test "$(git diff-tree --no-commit-id --name-only -r "${commits[1]}")" = ".github/workflows/rd-wave03-exact-capture-terminal-finalizer.yml"
+          mapfile -t actual < <(git diff --name-only "$base" "$GITHUB_SHA" | LC_ALL=C sort)
+          printf '%s\n' .github/workflows/rd-wave03-exact-capture-terminal-finalizer.yml tmp/rd-wave03-exact-capture-terminal-finalize.sh | LC_ALL=C sort > "$EVIDENCE/expected-carrier-paths.txt"
+          printf '%s\n' "${actual[@]}" > "$EVIDENCE/actual-carrier-paths.txt"
+          diff -u "$EVIDENCE/expected-carrier-paths.txt" "$EVIDENCE/actual-carrier-paths.txt"
+          bash -n tmp/rd-wave03-exact-capture-terminal-finalize.sh
+          printf 'carrier_base=%s\ncarrier_head=%s\ncommits=2\npaths=2\nmerge_authority=false\n' "$base" "$GITHUB_SHA" > "$EVIDENCE/carrier-custody.txt"
+          bash tmp/rd-wave03-exact-capture-terminal-finalize.sh
+
+      - name: Record fail-closed finalizer result
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          stage="$(cat "$EVIDENCE/stage.txt" 2>/dev/null || echo carrier_or_unknown)"
+          tail -n 200 "$EVIDENCE/finalizer.log" > "$EVIDENCE/failure-tail.txt" 2>/dev/null || true
+          {
+            printf 'RD-W03 terminal finalizer run %s failed closed at stage `%s`.\n\n' "$GITHUB_RUN_ID" "$stage"
+            printf 'No terminal evidence, chronology, closure, publication, adoption, graph, outside-human, or merge authority is accepted. Issue #387 remains open unless an already byte-verified ruling closed it.\n\n'
+            printf '```text\n'
+            cat "$EVIDENCE/failure-tail.txt" 2>/dev/null || true
+            printf '\n```\n'
+          } > "$EVIDENCE/failure-comment.md"
+          gh issue comment 387 --repo BigBirdReturns/undercast --body-file "$EVIDENCE/failure-comment.md" || true
+
+      - name: Upload terminal finalizer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-terminal-finalizer-${{ github.run_id }}
+          path: /tmp/rd-wave03-exact-capture-terminal-finalizer-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
