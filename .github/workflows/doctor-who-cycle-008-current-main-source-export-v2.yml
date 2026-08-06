@@ -1,0 +1,90 @@
+name: doctor-who-cycle-008-current-main-source-export-v2
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-current-main-source-export-v2.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-008-current-main-source-export-v2-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  EXACT_MAIN: 3228efd6ede786586352b1b990a94d16ab02d5f9
+  EXACT_MAIN_TREE: 95ee48e863fc1c0d169dd530dd858c7d0e524d56
+  CARRIER_BRANCH: agent/doctor-who-cycle-008-current-main-source-export-v2
+  SELF: .github/workflows/doctor-who-cycle-008-current-main-source-export-v2.yml
+  OUT: /tmp/doctor-who-cycle-008-current-main-source-export-v2
+
+jobs:
+  export:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-current-main-source-export-v2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind exact one-path carrier and live main
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = "1"
+          test "$(git merge-base "$EXACT_MAIN" HEAD)" = "$EXACT_MAIN"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse "$EXACT_MAIN^{tree}")" = "$EXACT_MAIN_TREE"
+          test -z "$(git status --porcelain)"
+
+      - name: Export exact canonical source tree within transport ceiling
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$EXACT_MAIN"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          test "$tree" = "$EXACT_MAIN_TREE"
+          paths="$(git ls-tree -r --name-only HEAD | wc -l)"
+          git ls-tree -r --name-only HEAD | LC_ALL=C sort > "$OUT/tracked-paths.txt"
+          git archive --format=tar --prefix=undercast/ "$EXACT_MAIN" | gzip -n -9 > "$OUT/source.tar.gz"
+          gzip -t "$OUT/source.tar.gz"
+          sha256sum "$OUT/source.tar.gz" > "$OUT/source.tar.gz.sha256"
+          sha256sum "$OUT/tracked-paths.txt" > "$OUT/tracked-paths.sha256"
+          printf 'exact_main=%s\nmain_tree=%s\ntracked_paths=%s\nsource_gzip_bytes=%s\n' \
+            "$EXACT_MAIN" "$tree" "$paths" "$(wc -c < "$OUT/source.tar.gz")" \
+            > "$OUT/source-identity.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Rebind live main after export
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload immutable exact-main source export
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-current-main-source-export-v2-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
