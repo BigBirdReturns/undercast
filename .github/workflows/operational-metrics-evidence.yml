@@ -4,6 +4,11 @@ on:
   pull_request:
     paths:
       - ".github/workflows/operational-metrics-evidence.yml"
+      - ".github/workflows/operational-metrics-evidence-publisher.yml"
+      - "scripts/publisher-custody.mjs"
+      - "scripts/publisher-handoff-files.mjs"
+      - "scripts/publisher-artifact-attempt.mjs"
+      - "scripts/publisher-artifact-attempt-fixtures.mjs"
       - "scripts/operational-metrics.mjs"
       - "scripts/operational-metrics-fixtures.mjs"
       - "scripts/operational-metrics-ledger.mjs"
@@ -17,6 +22,11 @@ on:
       - main
     paths:
       - ".github/workflows/operational-metrics-evidence.yml"
+      - ".github/workflows/operational-metrics-evidence-publisher.yml"
+      - "scripts/publisher-custody.mjs"
+      - "scripts/publisher-handoff-files.mjs"
+      - "scripts/publisher-artifact-attempt.mjs"
+      - "scripts/publisher-artifact-attempt-fixtures.mjs"
       - "scripts/operational-metrics.mjs"
       - "scripts/operational-metrics-fixtures.mjs"
       - "scripts/operational-metrics-ledger.mjs"
@@ -29,14 +39,12 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: operational-metrics-evidence-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  GH_TOKEN: ${{ github.token }}
   EVIDENCE_ROOT: /tmp/undercast-operational-metrics
   BUILD_SAMPLES: "5"
 
@@ -126,10 +134,7 @@ jobs:
           const freshness = evidence.metrics.source_freshness_p95_days;
           const cost = evidence.metrics.cost_per_verified_record_usd;
           const rights = evidence.metrics.rights_response_sla_days;
-          const ledgerCounts = {
-            cost: costLedger.observations.length,
-            rights: rightsLedger.cases.length,
-          };
+          const ledgerCounts = { cost: costLedger.observations.length, rights: rightsLedger.cases.length };
           if (build.status !== 'measured' || build.population !== 5) throw new Error('build p95 was not measured from five samples');
           if (freshness.status !== 'measured' || freshness.population < 1) throw new Error('source freshness population is missing');
           const assertLedgerMetric = (row, count, label) => {
@@ -161,90 +166,39 @@ jobs:
           console.log('Measured values remain workflow-executed and unreviewed. Empty ledgers remain null; populated ledgers are measured.');
           NODE
 
+      - name: Create immutable trusted-publisher handoff
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const path = require('path');
+          const root = process.env.EVIDENCE_ROOT;
+          const files = ['operational-metrics.json', 'build-samples.json', 'measurement.stdout.json'];
+          const hashes = {};
+          for (const file of files) hashes[file] = crypto.createHash('sha256').update(fs.readFileSync(path.join(root, file))).digest('hex');
+          const handoff = {
+            schema_version: 1,
+            kind: 'operational-metrics-evidence',
+            repository: process.env.GITHUB_REPOSITORY,
+            run_id: Number(process.env.GITHUB_RUN_ID),
+            run_attempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            event_name: process.env.GITHUB_EVENT_NAME,
+            head_branch: process.env.GITHUB_REF_NAME,
+            head_sha: process.env.GITHUB_SHA,
+            artifact_name: `operational-metrics-evidence-${process.env.GITHUB_RUN_ID}-attempt-${process.env.GITHUB_RUN_ATTEMPT}`,
+            files: hashes,
+          };
+          fs.writeFileSync(path.join(root, 'publisher-handoff.json'), JSON.stringify(handoff, null, 2) + '\n');
+          NODE
+
       - name: Upload immutable metric evidence and all build logs
         id: metric_artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: operational-metrics-evidence-${{ github.run_id }}
+          name: operational-metrics-evidence-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: /tmp/undercast-operational-metrics
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
-
-      - name: Publish exact-main metric evidence discovery
-        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        env:
-          ARTIFACT_ID: ${{ steps.metric_artifact.outputs.artifact-id }}
-          ARTIFACT_NAME: operational-metrics-evidence-${{ github.run_id }}
-          ARTIFACT_URL: ${{ steps.metric_artifact.outputs.artifact-url }}
-          ARTIFACT_DIGEST: ${{ steps.metric_artifact.outputs.artifact-digest }}
-          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          test -n "$ARTIFACT_ID"
-          test -n "$ARTIFACT_URL"
-          test -n "$ARTIFACT_DIGEST"
-
-          payload="$EVIDENCE_ROOT/ledger/issue-payload.json"
-          node scripts/operational-metrics-ledger.mjs issue-payload \
-            --evidence "$EVIDENCE_ROOT/operational-metrics.json" \
-            --build-samples "$EVIDENCE_ROOT/build-samples.json" \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --run-url "$RUN_URL" \
-            --repository "$GITHUB_REPOSITORY" \
-            --event-name "$GITHUB_EVENT_NAME" \
-            --head-branch "$GITHUB_REF_NAME" \
-            --head-sha "$GITHUB_SHA" \
-            --generated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --artifact-id "$ARTIFACT_ID" \
-            --artifact-name "$ARTIFACT_NAME" \
-            --artifact-url "$ARTIFACT_URL" \
-            --artifact-digest "$ARTIFACT_DIGEST" \
-            --output "$payload" \
-            > "$EVIDENCE_ROOT/ledger/facts.json"
-
-          PAYLOAD="$payload" node - <<'NODE'
-          const fs = require('fs');
-          const payload = JSON.parse(fs.readFileSync(process.env.PAYLOAD, 'utf8'));
-          fs.writeFileSync(process.env.EVIDENCE_ROOT + '/ledger/title.txt', payload.title + '\n');
-          fs.writeFileSync(process.env.EVIDENCE_ROOT + '/ledger/body.md', payload.body + '\n');
-          NODE
-
-          title="$(cat "$EVIDENCE_ROOT/ledger/title.txt")"
-          body="$EVIDENCE_ROOT/ledger/body.md"
-          gh api --method GET /search/issues \
-            -f q="repo:${GITHUB_REPOSITORY} type:issue in:title \"${title}\"" \
-            -f per_page=100 \
-            > "$EVIDENCE_ROOT/ledger/search.json"
-
-          match="$(TITLE="$title" SEARCH="$EVIDENCE_ROOT/ledger/search.json" node - <<'NODE'
-          const fs = require('fs');
-          const rows = JSON.parse(fs.readFileSync(process.env.SEARCH, 'utf8')).items || [];
-          const exact = rows.filter((row) => row.title === process.env.TITLE && !row.pull_request);
-          if (exact.length > 1) throw new Error(`multiple exact metric evidence issues found for ${process.env.TITLE}`);
-          if (exact[0]) process.stdout.write(`${exact[0].number}\t${exact[0].state}`);
-          NODE
-          )"
-
-          if [ -n "$match" ]; then
-            issue_number="${match%%$'\t'*}"
-            issue_state="${match#*$'\t'}"
-            if [ "$issue_state" = "closed" ]; then
-              gh issue reopen "$issue_number" --repo "$GITHUB_REPOSITORY"
-            fi
-            gh issue edit "$issue_number" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body"
-            issue_url="https://github.com/${GITHUB_REPOSITORY}/issues/${issue_number}"
-          else
-            issue_url="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body")"
-          fi
-
-          {
-            echo ""
-            echo "### Durable metric evidence ledger"
-            echo ""
-            echo "- issue: ${issue_url}"
-            echo "- artifact: ${ARTIFACT_URL}"
-            echo "- artifact digest: \`${ARTIFACT_DIGEST}\`"
-          } >> "$GITHUB_STEP_SUMMARY"

@@ -73,7 +73,7 @@ const base = {
   runUrl: `https://github.com/${repository}/actions/runs/${runId}`,
   repository, eventName: "push", headBranch: "main", headSha,
   generatedAt: "2026-08-02T00:11:00Z",
-  artifactId, artifactName: `operational-metrics-evidence-${runId}`,
+  artifactId, artifactName: `operational-metrics-evidence-${runId}-attempt-${runAttempt}`,
   artifactUrl: `https://github.com/${repository}/actions/runs/${runId}/artifacts/${artifactId}`,
   artifactDigest: `sha256:${sha256("artifact")}`,
 };
@@ -89,6 +89,7 @@ assert.match(issue.facts.ledger_sha256, /^[0-9a-f]{64}$/);
 assert.throws(() => buildOperationalMetricsIssue({ ...base, eventName: "pull_request" }), /only push evidence/);
 assert.throws(() => buildOperationalMetricsIssue({ ...base, headBranch: "feature" }), /only main evidence/);
 assert.throws(() => buildOperationalMetricsIssue({ ...base, runUrl: "https://example.test/run" }), /run URL/);
+assert.throws(() => buildOperationalMetricsIssue({ ...base, artifactName: `operational-metrics-evidence-${runId}` }), /artifact name/);
 assert.throws(() => buildOperationalMetricsIssue({ ...base, artifactUrl: "https://example.test/artifact" }), /artifact URL/);
 assert.throws(() => buildOperationalMetricsIssue({ ...base, headSha: "b".repeat(40) }), /target does not match/);
 assert.throws(() => buildOperationalMetricsIssue({ ...base, buildSamples: [...samples, samples[0]] }), /count does not match/);
@@ -104,16 +105,28 @@ const measuredCostIssue = buildOperationalMetricsIssue({ ...base, evidence: meas
 assert.equal(measuredCostIssue.facts.metrics.cost_per_verified_record_usd.value, 4);
 
 const workflowPath = fileURLToPath(new URL("../.github/workflows/operational-metrics-evidence.yml", import.meta.url));
+const publisherPath = fileURLToPath(new URL("../.github/workflows/operational-metrics-evidence-publisher.yml", import.meta.url));
 const workflow = await readFile(workflowPath, "utf8");
-assert.match(workflow, /permissions:\n  contents: read\n  issues: write/);
+const publisher = await readFile(publisherPath, "utf8");
+assert.match(workflow, /permissions:\n  contents: read/);
+assert.doesNotMatch(workflow, /issues:\s*write/);
 assert.match(workflow, /id: metric_artifact/);
-assert.match(workflow, /steps\.metric_artifact\.outputs\.artifact-id/);
-assert.match(workflow, /github\.event_name == 'push'/);
-assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
-assert.match(workflow, /operational-metrics-ledger\.mjs issue-payload/);
+assert.match(workflow, /publisher-handoff\.json/);
+assert.match(workflow, /attempt-\$\{process\.env\.GITHUB_RUN_ATTEMPT\}/);
+assert.match(workflow, /attempt-\$\{\{ github\.run_attempt \}\}/);
 assert.match(workflow, /ledgerCounts/);
-assert.match(workflow, /multiple exact metric evidence issues found/);
+assert.doesNotMatch(workflow, /operational-metrics-ledger\.mjs issue-payload/);
 assert.doesNotMatch(workflow, /waterline\.mjs record-metrics/);
 assert.doesNotMatch(workflow, /ROADMAP-STATE\.json/);
 
-console.log("PASS — operational metric exact-main ledger, populated-ledger compatibility, artifact binding, and unreviewed boundary");
+assert.match(publisher, /\n  workflow_run:\n/);
+assert.match(publisher, /permissions:\n  contents: read\n  actions: read\n  issues: write/);
+assert.match(publisher, /workflow_run\.head_sha/);
+assert.match(publisher, /workflow_run\.run_attempt/);
+assert.match(publisher, /publisher-artifact-attempt\.mjs select/);
+assert.match(publisher, /steps\.artifact\.outputs\.digest/);
+assert.match(publisher, /operational-metrics-ledger\.mjs issue-payload/);
+assert.match(publisher, /multiple exact metric evidence issues found/);
+assert.ok((publisher.match(/git\/ref\/heads\/main/g) || []).length >= 2);
+
+console.log("PASS — operational metric exact-main ledger, populated-ledger compatibility, attempt-bound artifact handoff, trusted publication, and unreviewed boundary");

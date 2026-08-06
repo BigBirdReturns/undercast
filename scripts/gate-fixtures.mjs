@@ -71,8 +71,16 @@ try {
 
   runCommand("Publisher custody fixtures", process.execPath, ["test/publisher-custody-fixtures.mjs"], { stdio: "pipe" });
   pass("publisher custody fixtures run inside canonical gate fixtures");
+  runCommand("Publisher handoff file fixtures", process.execPath, ["test/publisher-handoff-files-fixtures.mjs"], { stdio: "pipe" });
+  pass("publisher handoff file fixtures run inside canonical gate fixtures");
+  runCommand("Publisher condition fixtures", process.execPath, ["test/publisher-condition-custody-fixtures.mjs"], { stdio: "pipe" });
+  pass("publisher condition fixtures run inside canonical gate fixtures");
+  runCommand("Publisher attempt artifact fixtures", process.execPath, ["scripts/publisher-artifact-attempt-fixtures.mjs"], { stdio: "pipe" });
+  pass("publisher attempt artifact fixtures run inside canonical gate fixtures");
   runCommand("Publisher custody workflow scan", process.execPath, ["scripts/publisher-custody.mjs", "check-workflows"], { stdio: "pipe" });
   pass("publisher custody workflow scan runs inside canonical gate fixtures");
+  runCommand("Publisher write-condition scan", process.execPath, ["scripts/publisher-condition-custody.mjs"], { stdio: "pipe" });
+  pass("publisher write-condition scan runs inside canonical gate fixtures");
 
   console.log(failures ? `\n${failures} gate fixture(s) FAILED` : "\nall gate fixtures pass");
   if (failures) process.exitCode = 1;

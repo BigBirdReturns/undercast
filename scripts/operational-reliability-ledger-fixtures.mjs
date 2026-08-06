@@ -163,7 +163,7 @@ const input = {
   headSha,
   generatedAt: "2026-08-01T00:00:02Z",
   artifactId,
-  artifactName: `operational-reliability-evidence-${runId}`,
+  artifactName: `operational-reliability-evidence-${runId}-attempt-${runAttempt}`,
   artifactUrl: `https://github.com/${repository}/actions/runs/${runId}/artifacts/${artifactId}`,
   artifactDigest: `sha256:${sha256("artifact")}`,
 };
@@ -190,7 +190,7 @@ assert.throws(() => buildOperationalEvidenceIssue({ ...input, headBranch: "featu
 assert.throws(() => buildOperationalEvidenceIssue({ ...input, headSha: "e".repeat(40) }), /target does not match/);
 assert.throws(() => buildOperationalEvidenceIssue({ ...input, repository: "not-a-repository" }), /owner\/name/);
 assert.throws(() => buildOperationalEvidenceIssue({ ...input, runUrl: "https://example.test/run" }), /run URL/);
-assert.throws(() => buildOperationalEvidenceIssue({ ...input, artifactName: "wrong" }), /artifact name/);
+assert.throws(() => buildOperationalEvidenceIssue({ ...input, artifactName: `operational-reliability-evidence-${runId}` }), /artifact name/);
 assert.throws(() => buildOperationalEvidenceIssue({ ...input, artifactUrl: "https://example.test/artifact" }), /artifact URL/);
 assert.throws(() => buildOperationalEvidenceIssue({
   ...input,
@@ -206,18 +206,27 @@ assert.throws(() => buildOperationalEvidenceIssue({
 }), /review boundary/);
 
 const workflowPath = fileURLToPath(new URL("../.github/workflows/operational-reliability-evidence.yml", import.meta.url));
+const publisherPath = fileURLToPath(new URL("../.github/workflows/operational-reliability-evidence-publisher.yml", import.meta.url));
 const workflow = await readFile(workflowPath, "utf8");
-assert.match(workflow, /permissions:\n  contents: read\n  issues: write/);
+const publisher = await readFile(publisherPath, "utf8");
+assert.match(workflow, /permissions:\n  contents: read/);
+assert.doesNotMatch(workflow, /issues:\s*write/);
 assert.match(workflow, /id: evidence_artifact/);
-assert.match(workflow, /steps\.evidence_artifact\.outputs\.artifact-id/);
-assert.match(workflow, /steps\.evidence_artifact\.outputs\.artifact-url/);
-assert.match(workflow, /steps\.evidence_artifact\.outputs\.artifact-digest/);
-assert.match(workflow, /github\.event_name == 'push'/);
-assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
-assert.match(workflow, /operational-reliability-ledger\.mjs issue-payload/);
-assert.match(workflow, /multiple exact evidence issues found/);
-assert.ok(workflow.indexOf("id: evidence_artifact") < workflow.indexOf("Publish the exact-main evidence discovery issue"));
+assert.match(workflow, /publisher-handoff\.json/);
+assert.match(workflow, /attempt-\$\{process\.env\.GITHUB_RUN_ATTEMPT\}/);
+assert.match(workflow, /attempt-\$\{\{ github\.run_attempt \}\}/);
+assert.doesNotMatch(workflow, /operational-reliability-ledger\.mjs issue-payload/);
 assert.doesNotMatch(workflow, /waterline\.mjs record-drill/);
 assert.doesNotMatch(workflow, /ROADMAP-STATE\.json/);
 
-console.log("PASS — exact-main evidence issue payload, artifact binding, durable publication, idempotent title, and unreviewed boundary");
+assert.match(publisher, /\n  workflow_run:\n/);
+assert.match(publisher, /permissions:\n  contents: read\n  actions: read\n  issues: write/);
+assert.match(publisher, /workflow_run\.head_sha/);
+assert.match(publisher, /workflow_run\.run_attempt/);
+assert.match(publisher, /publisher-artifact-attempt\.mjs select/);
+assert.match(publisher, /steps\.artifact\.outputs\.digest/);
+assert.match(publisher, /operational-reliability-ledger\.mjs issue-payload/);
+assert.match(publisher, /multiple exact evidence issues found/);
+assert.ok((publisher.match(/git\/ref\/heads\/main/g) || []).length >= 2);
+
+console.log("PASS — exact-main evidence issue payload, attempt-bound artifact handoff, trusted publication, idempotent title, and unreviewed boundary");

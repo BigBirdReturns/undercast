@@ -6,26 +6,40 @@ on:
       - main
     paths:
       - ".github/workflows/operational-reliability-evidence.yml"
+      - ".github/workflows/operational-reliability-evidence-publisher.yml"
+      - "scripts/publisher-custody.mjs"
+      - "scripts/publisher-handoff-files.mjs"
+      - "scripts/publisher-artifact-attempt.mjs"
+      - "scripts/publisher-artifact-attempt-fixtures.mjs"
       - "scripts/operational-reliability.mjs"
       - "scripts/operational-reliability-execute.mjs"
+      - "scripts/operational-restore-git-objects.mjs"
       - "scripts/operational-reliability-ledger.mjs"
       - "scripts/operational-reliability-fixtures.mjs"
       - "scripts/operational-reliability-execute-fixtures.mjs"
       - "scripts/operational-workflow-fixtures.mjs"
       - "scripts/operational-reliability-ledger-fixtures.mjs"
+      - "data/review/operational-restore-git-object-set.json"
       - "package.json"
       - "package-lock.json"
       - "docs/OPERATIONAL-RELIABILITY.md"
   pull_request:
     paths:
       - ".github/workflows/operational-reliability-evidence.yml"
+      - ".github/workflows/operational-reliability-evidence-publisher.yml"
+      - "scripts/publisher-custody.mjs"
+      - "scripts/publisher-handoff-files.mjs"
+      - "scripts/publisher-artifact-attempt.mjs"
+      - "scripts/publisher-artifact-attempt-fixtures.mjs"
       - "scripts/operational-reliability.mjs"
       - "scripts/operational-reliability-execute.mjs"
+      - "scripts/operational-restore-git-objects.mjs"
       - "scripts/operational-reliability-ledger.mjs"
       - "scripts/operational-reliability-fixtures.mjs"
       - "scripts/operational-reliability-execute-fixtures.mjs"
       - "scripts/operational-workflow-fixtures.mjs"
       - "scripts/operational-reliability-ledger-fixtures.mjs"
+      - "data/review/operational-restore-git-object-set.json"
       - "package.json"
       - "package-lock.json"
       - "docs/OPERATIONAL-RELIABILITY.md"
@@ -39,7 +53,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: operational-reliability-evidence-${{ github.ref }}
@@ -105,6 +118,15 @@ jobs:
       - name: Restore the preservation snapshot, recover exact head, and run the canonical gate
         run: |
           set -euo pipefail
+          object_store="$RUNNER_TEMP/undercast-restored-git-objects.git"
+          node scripts/operational-restore-git-objects.mjs build \
+            --source-root . \
+            --manifest data/review/operational-restore-git-object-set.json \
+            --output "$object_store" \
+            --receipt "$EVIDENCE_ROOT/git-object-set.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            > "$EVIDENCE_ROOT/diagnostics/git-object-set.stdout.json"
+          export GIT_ALTERNATE_OBJECT_DIRECTORIES="$object_store/objects"
           node scripts/operational-reliability-execute.mjs restore-drill \
             --checkout-root . \
             --registry preservation/SNAPSHOTS.json \
@@ -140,11 +162,13 @@ jobs:
           const root = process.env.EVIDENCE_ROOT + '/evidence';
           const restore = JSON.parse(fs.readFileSync(root + '/repository-restore.json', 'utf8'));
           const rollback = JSON.parse(fs.readFileSync(root + '/publication-rollback.json', 'utf8'));
+          const objects = JSON.parse(fs.readFileSync(process.env.EVIDENCE_ROOT + '/git-object-set.json', 'utf8'));
           console.log('## Operational-reliability evidence');
           console.log('');
           console.log(`- snapshot: \`${restore.source_snapshot.id}\``);
           console.log(`- restored target: \`${restore.forward_recovery.target_head}\``);
           console.log(`- exact tracked files: ${restore.forward_recovery.target_files}`);
+          console.log(`- bounded historical commits: ${objects.commit_count}; paths: ${objects.path_count}; objects: ${objects.object_count}`);
           console.log(`- canonical gate: ${restore.canonical_gate.duration_ms} ms`);
           console.log(`- rollback surface: ${rollback.known_good.paths.length} critical files`);
           console.log(`- served exact-byte checks: ${rollback.served_checks.length}`);
@@ -152,98 +176,55 @@ jobs:
           console.log('These artifacts are workflow-executed evidence. They do not create reviewed waterline receipts or complete the roadmap milestone.');
           NODE
 
+      - name: Create immutable trusted-publisher handoff
+        if: success()
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const path = require('path');
+          const root = process.env.EVIDENCE_ROOT;
+          const files = [
+            'selection.json',
+            'git-object-set.json',
+            'evidence/repository-restore.json',
+            'evidence/publication-rollback.json',
+            'evidence/bundle.json',
+            'diagnostics/bundle-validation.json',
+          ];
+          const hashes = {};
+          for (const file of files) {
+            hashes[file] = crypto.createHash('sha256').update(fs.readFileSync(path.join(root, file))).digest('hex');
+          }
+          const handoff = {
+            schema_version: 1,
+            kind: 'operational-reliability-evidence',
+            repository: process.env.GITHUB_REPOSITORY,
+            run_id: Number(process.env.GITHUB_RUN_ID),
+            run_attempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            event_name: process.env.GITHUB_EVENT_NAME,
+            head_branch: process.env.GITHUB_REF_NAME,
+            head_sha: process.env.GITHUB_SHA,
+            artifact_name: `operational-reliability-evidence-${process.env.GITHUB_RUN_ID}-attempt-${process.env.GITHUB_RUN_ATTEMPT}`,
+            files: hashes,
+          };
+          fs.writeFileSync(path.join(root, 'publisher-handoff.json'), JSON.stringify(handoff, null, 2) + '\n');
+          NODE
+
       - name: Upload drill receipts and diagnostics
         id: evidence_artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: operational-reliability-evidence-${{ github.run_id }}
+          name: operational-reliability-evidence-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: |
             /tmp/undercast-operational-reliability/selection.json
+            /tmp/undercast-operational-reliability/git-object-set.json
             /tmp/undercast-operational-reliability/evidence
             /tmp/undercast-operational-reliability/restore/diagnostics
             /tmp/undercast-operational-reliability/diagnostics
+            /tmp/undercast-operational-reliability/publisher-handoff.json
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
-
-      - name: Publish the exact-main evidence discovery issue
-        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        env:
-          ARTIFACT_ID: ${{ steps.evidence_artifact.outputs.artifact-id }}
-          ARTIFACT_NAME: operational-reliability-evidence-${{ github.run_id }}
-          ARTIFACT_URL: ${{ steps.evidence_artifact.outputs.artifact-url }}
-          ARTIFACT_DIGEST: ${{ steps.evidence_artifact.outputs.artifact-digest }}
-          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          test -n "$ARTIFACT_ID"
-          test -n "$ARTIFACT_URL"
-          test -n "$ARTIFACT_DIGEST"
-
-          payload="$EVIDENCE_ROOT/diagnostics/issue-payload.json"
-          node scripts/operational-reliability-ledger.mjs issue-payload \
-            --restore-receipt "$EVIDENCE_ROOT/evidence/repository-restore.json" \
-            --rollback-receipt "$EVIDENCE_ROOT/evidence/publication-rollback.json" \
-            --bundle "$EVIDENCE_ROOT/evidence/bundle.json" \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --run-url "$RUN_URL" \
-            --repository "$GITHUB_REPOSITORY" \
-            --event-name "$GITHUB_EVENT_NAME" \
-            --head-branch "$GITHUB_REF_NAME" \
-            --head-sha "$GITHUB_SHA" \
-            --generated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --artifact-id "$ARTIFACT_ID" \
-            --artifact-name "$ARTIFACT_NAME" \
-            --artifact-url "$ARTIFACT_URL" \
-            --artifact-digest "$ARTIFACT_DIGEST" \
-            --output "$payload" \
-            > "$EVIDENCE_ROOT/diagnostics/ledger-facts.json"
-
-          PAYLOAD="$payload" node - <<'NODE'
-          const fs = require('fs');
-          const payload = JSON.parse(fs.readFileSync(process.env.PAYLOAD, 'utf8'));
-          fs.writeFileSync(process.env.EVIDENCE_ROOT + '/diagnostics/issue-title.txt', payload.title + '\n');
-          fs.writeFileSync(process.env.EVIDENCE_ROOT + '/diagnostics/issue-body.md', payload.body + '\n');
-          NODE
-
-          title="$(cat "$EVIDENCE_ROOT/diagnostics/issue-title.txt")"
-          body="$EVIDENCE_ROOT/diagnostics/issue-body.md"
-          gh api --method GET /search/issues \
-            -f q="repo:${GITHUB_REPOSITORY} type:issue in:title \"${title}\"" \
-            -f per_page=100 \
-            > "$EVIDENCE_ROOT/diagnostics/issue-search.json"
-
-          match="$(TITLE="$title" SEARCH="$EVIDENCE_ROOT/diagnostics/issue-search.json" node - <<'NODE'
-          const fs = require('fs');
-          const title = process.env.TITLE;
-          const rows = JSON.parse(fs.readFileSync(process.env.SEARCH, 'utf8')).items || [];
-          const exact = rows.filter((row) => row.title === title && !row.pull_request);
-          if (exact.length > 1) throw new Error(`multiple exact evidence issues found for ${title}`);
-          if (exact[0]) process.stdout.write(`${exact[0].number}\t${exact[0].state}`);
-          NODE
-          )"
-
-          if [ -n "$match" ]; then
-            issue_number="${match%%$'\t'*}"
-            issue_state="${match#*$'\t'}"
-            if [ "$issue_state" = "closed" ]; then
-              gh issue reopen "$issue_number" --repo "$GITHUB_REPOSITORY"
-            fi
-            gh issue edit "$issue_number" --repo "$GITHUB_REPOSITORY" \
-              --title "$title" --body-file "$body"
-            issue_url="https://github.com/${GITHUB_REPOSITORY}/issues/${issue_number}"
-          else
-            issue_url="$(gh issue create --repo "$GITHUB_REPOSITORY" \
-              --title "$title" --body-file "$body")"
-          fi
-
-          {
-            echo ""
-            echo "### Durable discovery ledger"
-            echo ""
-            echo "- issue: ${issue_url}"
-            echo "- artifact: ${ARTIFACT_URL}"
-            echo "- artifact digest: \`${ARTIFACT_DIGEST}\`"
-          } >> "$GITHUB_STEP_SUMMARY"

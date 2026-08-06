@@ -6,88 +6,37 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
+
+concurrency:
+  group: archive-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    env:
-      GH_TOKEN: ${{ github.token }}
-      EVIDENCE: ${{ runner.temp }}/ux-02a-dec0016-main-push
-      CARRIER_SHA: 40ef8f4eddc5ba0c65d8bf2c628fa88667cb2d96
-      MATERIALIZER_BLOB: e63a24419844750b0e8700dd5cf111fd4e828e33
-      REVIEW_FIX_BLOB: cb005ef9fa4736d1232b57c3fb3e7820906fbed6
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Detect bounded DEC-0016 main-push trigger
-        id: dec0016
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "push" && -f tmp/ux02a.trigger ]]; then
-            echo 'enabled=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'enabled=false' >> "$GITHUB_OUTPUT"
-          fi
 
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: npm
 
-      - name: Install rendered-test runtime
-        if: steps.dec0016.outputs.enabled != 'true'
+      - name: Install exact dependencies
         run: npm ci
 
       - name: Install Chromium
-        if: steps.dec0016.outputs.enabled != 'true'
         run: npx playwright install --with-deps chromium
 
       - name: Run canonical gate
-        if: steps.dec0016.outputs.enabled != 'true'
         run: npm run gate
 
-      - name: Materialize exact DEC-0016 product from immutable carrier
-        if: steps.dec0016.outputs.enabled == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$EVIDENCE"
-          gh pr comment 255 --repo BigBirdReturns/undercast --body "DEC-0016 main-push writer run ${GITHUB_RUN_ID} started on main ${GITHUB_SHA}; immutable carrier ${CARRIER_SHA}." || true
-          git fetch --no-tags origin "+refs/heads/agent/collection-only-operations:refs/remotes/origin/agent/collection-only-operations"
-          test "$(git rev-parse refs/remotes/origin/agent/collection-only-operations)" = "$CARRIER_SHA"
-          test "$(git rev-parse "$CARRIER_SHA:tmp/ux02a-materialize.sh")" = "$MATERIALIZER_BLOB"
-          test "$(git rev-parse "$CARRIER_SHA:tmp/ux02a-current-location-fix.py")" = "$REVIEW_FIX_BLOB"
-          git checkout --detach "$CARRIER_SHA"
-          test "$(git rev-parse HEAD)" = "$CARRIER_SHA"
-          set +e
-          bash tmp/ux02a-materialize.sh
-          status=$?
-          set -e
-          if [[ "$status" -ne 0 ]]; then
-            stage="$(awk -F= '$1=="stage"{print $2}' "$EVIDENCE/status.txt" 2>/dev/null || true)"
-            stage="${stage:-unknown}"
-            gh pr comment 255 --repo BigBirdReturns/undercast --body "DEC-0016 main-push writer run ${GITHUB_RUN_ID} failed at stage ${stage}; no product authority was published." || true
-            exit "$status"
-          fi
-
-      - name: Upload DEC-0016 main-push evidence
-        if: always() && steps.dec0016.outputs.enabled == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ux-02a-dec0016-main-push-${{ github.run_id }}
-          path: ${{ runner.temp }}/ux-02a-dec0016-main-push
-          if-no-files-found: warn
-          retention-days: 30
-
       - name: Upload projection drift diagnostics
-        if: failure() && steps.dec0016.outputs.enabled != 'true'
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: projection-drift
