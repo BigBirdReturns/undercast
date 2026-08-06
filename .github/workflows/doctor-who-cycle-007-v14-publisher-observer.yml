@@ -1,0 +1,71 @@
+name: doctor-who-cycle-007-v14-publisher-observer
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-007-v14-publisher-observer.yml"
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-007-v14-publisher-observer-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PUBLISHER_WORKFLOW: doctor-who-cycle-007-v14-publisher.yml
+  PUBLISHER_MAIN: 003fa7e0b8141edc8e6611ce5e4aaed8d2aaea90
+  OUT: /tmp/doctor-who-cycle-007-v14-publisher-observer
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  observe:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-007-v14-publisher-observer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Recover exact publisher run and jobs read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"; mkdir -p "$OUT"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/${PUBLISHER_WORKFLOW}/runs?per_page=20" > "$OUT/runs.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const root=process.env.OUT;
+          const rows=JSON.parse(fs.readFileSync(`${root}/runs.json`,'utf8')).workflow_runs||[];
+          const exact=rows.filter(r=>r.name==='doctor-who-cycle-007-v14-publisher' && r.event==='push' && r.head_branch==='main' && r.head_sha===process.env.PUBLISHER_MAIN);
+          if (exact.length!==1) throw new Error(`publisher run denominator ${exact.length}`);
+          fs.writeFileSync(`${root}/run.json`,JSON.stringify(exact[0],null,2)+'\n');
+          fs.writeFileSync(`${root}/run-id.txt`,String(exact[0].id)+'\n');
+          console.log(JSON.stringify({id:exact[0].id,status:exact[0].status,conclusion:exact[0].conclusion,attempt:exact[0].run_attempt,created_at:exact[0].created_at,updated_at:exact[0].updated_at},null,2));
+          NODE
+          run_id="$(cat "$OUT/run-id.txt")"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=latest&per_page=100" > "$OUT/jobs.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const root=process.env.OUT;
+          const jobs=JSON.parse(fs.readFileSync(`${root}/jobs.json`,'utf8')).jobs||[];
+          if (jobs.length!==1 || jobs[0].name!=='publish') throw new Error(`publisher job denominator ${jobs.length}`);
+          const j=jobs[0];
+          console.log(JSON.stringify({id:j.id,status:j.status,conclusion:j.conclusion,steps:j.steps.map(s=>({number:s.number,name:s.name,status:s.status,conclusion:s.conclusion}))},null,2));
+          fs.writeFileSync(`${root}/summary.json`,JSON.stringify({run:JSON.parse(fs.readFileSync(`${root}/run.json`,'utf8')),job:j},null,2)+'\n');
+          NODE
+
+      - name: Upload exact publisher observation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-v14-publisher-observer-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 14
