@@ -1,0 +1,203 @@
+name: operational-evidence-second-desk-publisher
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/operational-evidence-second-desk-publisher.yml"
+
+permissions: {}
+
+concurrency:
+  group: operational-evidence-second-desk-publisher
+  cancel-in-progress: false
+
+env:
+  INSTALLER_MAIN: ${{ github.sha }}
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  publish:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.INSTALLER_MAIN }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install exact publisher dependencies
+        run: npm ci
+      - name: Execute the transparent checksum-bound publisher
+        run: |
+          set -euo pipefail
+          cat > /tmp/operational-evidence-second-desk-publisher.sh <<'PUBLISHER'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          repo='BigBirdReturns/undercast'
+          base='37d681f419db5ef874b2cc41df1c631c047218d8'
+          base_tree='62ca43cd9f174d6f2ceb32db0a0579f2fe09cb38'
+          source_pr='497'
+          source_run='31088470731'
+          source_job='92573474384'
+          source_head='e6321bcc969f9033ac7dbf28b3cb4ddd1d611e35'
+          artifact='8962463936'
+          artifact_name='operational-evidence-second-desk-v2-31088470731'
+          artifact_sha='603a3f9dc95b2037a6be1fd383a85649fb58600e1194f8684a859c80228ea86a'
+          product_branch='agent/operational-evidence-second-desk-product-20260806'
+          root='/tmp/operational-evidence-publisher'
+          product_pr=''
+          pushed=0
+          
+          fail(){ echo "publisher: $*" >&2; exit 1; }
+          cleanup(){ s=$?; if ((s)); then [ -z "$product_pr" ] || gh pr close "$product_pr" --repo "$repo" --comment 'Closed automatically after terminal publisher verification failed.' >/dev/null 2>&1 || true; ((pushed==0)) || git push origin --delete "$product_branch" >/dev/null 2>&1 || true; fi; exit "$s"; }
+          trap cleanup EXIT
+          main_sha(){ gh api "/repos/$repo/git/ref/heads/main" --jq .object.sha; }
+          test "$GITHUB_REPOSITORY" = "$repo" && test "$GITHUB_EVENT_NAME" = push && test "$GITHUB_REF_NAME" = main || fail 'untrusted execution context'
+          test "$(git rev-parse HEAD)" = "$INSTALLER_MAIN" && test "$(git rev-parse HEAD^)" = "$base" || fail 'installer ancestry drifted'
+          test "$(git rev-parse "$base^{tree}")" = "$base_tree" || fail 'base tree drifted'
+          test "$(main_sha)" = "$INSTALLER_MAIN" || fail 'main advanced before publication'
+          test "$(git diff --name-only "$base..$INSTALLER_MAIN")" = '.github/workflows/operational-evidence-second-desk-publisher.yml' || fail 'installer path denominator drifted'
+          
+          rm -rf "$root"; mkdir -p "$root"/{api,artifact,payload,receipt}
+          gh api "/repos/$repo/pulls/$source_pr" > "$root/api/pr.json"
+          gh api "/repos/$repo/actions/runs/$source_run" > "$root/api/run.json"
+          gh api "/repos/$repo/actions/jobs/$source_job" > "$root/api/job.json"
+          gh api "/repos/$repo/actions/artifacts/$artifact" > "$root/api/artifact.json"
+          url=$(jq -r .archive_download_url "$root/api/artifact.json")
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'X-GitHub-Api-Version: 2022-11-28' "$url" -o "$root/artifact.zip"
+          
+          ROOT="$root" REPO="$repo" BASE="$base" SOURCE_HEAD="$source_head" ARTIFACT_SHA="$artifact_sha" python3 - <<'PY'
+          import hashlib,json,os,stat,tarfile,zipfile
+          from pathlib import Path,PurePosixPath
+          r=Path(os.environ['ROOT']); repo=os.environ['REPO']; base=os.environ['BASE']; head=os.environ['SOURCE_HEAD']; zipsha=os.environ['ARTIFACT_SHA']
+          def load(n): return json.loads((r/'api'/n).read_text())
+          p,run,job,a=map(load,['pr.json','run.json','job.json','artifact.json'])
+          assert p['number']==497 and p['head']['sha']==head and p['head']['ref']=='agent/operational-evidence-second-desk-refresh-20260806' and p['base']['sha']==base
+          assert run['id']==31088470731 and run['run_attempt']==1 and run['event']=='pull_request' and run['conclusion']=='success' and run['head_sha']==head
+          assert job['id']==92573474384 and job['run_id']==run['id'] and job['conclusion']=='success' and job['head_sha']==head
+          assert a['id']==8962463936 and a['name']=='operational-evidence-second-desk-v2-31088470731' and a['digest']=='sha256:'+zipsha and not a['expired']
+          z=r/'artifact.zip'; assert hashlib.sha256(z.read_bytes()).hexdigest()==zipsha
+          members={'SHA256SUMS','artifact-verification.json','complete-gate.log','files.tar','manifest.json','rebind-diagnostics.tar','rebind-ledger.jsonl','review-application.json'}
+          with zipfile.ZipFile(z) as q:
+           rows=q.infolist(); assert len(rows)==8 and {x.filename for x in rows}==members
+           for x in rows:
+            pp=PurePosixPath(x.filename); mode=(x.external_attr>>16)&0o170000
+            assert not pp.is_absolute() and '..' not in pp.parts and not x.is_dir() and mode in (0,stat.S_IFREG)
+           q.extractall(r/'artifact')
+          ledger={}
+          for line in (r/'artifact'/'SHA256SUMS').read_text().splitlines():
+           h,n=line.split(maxsplit=1); n=PurePosixPath(n).name; assert n not in ledger; ledger[n]=h
+          assert set(ledger)==members-{'SHA256SUMS'}
+          for n,h in ledger.items(): assert hashlib.sha256((r/'artifact'/n).read_bytes()).hexdigest()==h
+          m=json.loads((r/'artifact'/'manifest.json').read_text()); review=json.loads((r/'artifact'/'review-application.json').read_text()); s=review['settlement']
+          assert m['schema_version']==1 and m['status']=='passed' and m['base_sha']==base and m['base_tree']=='62ca43cd9f174d6f2ceb32db0a0579f2fe09cb38' and m['product_tree']=='527fced8e6bcc24344fd1203e56a920bcf6ca77b'
+          assert s['transaction']=='OPERATIONAL-EVIDENCE-SECOND-DESK-REFRESH-008F4BD0' and s['status']=='reviewed-product-qualified-locally' and s['reviewed_role']=='second-desk'
+          assert s['boundary']=={'cost_observation_invented':False,'external_contact_or_review':False,'live_publication_changed':False,'outside_human_dependency':False,'rights_observation_invented':False,'roadmap_recompleted':False}
+          rows=m['files']; assert len(rows)==27 and len({x['path'] for x in rows})==27 and all(not x['path'].startswith('.github/') for x in rows)
+          with tarfile.open(r/'artifact'/'files.tar') as t:
+           ti=t.getmembers(); assert len(ti)==27
+           for x in ti:
+            pp=PurePosixPath(x.name); assert x.isfile() and not pp.is_absolute() and '..' not in pp.parts and x.name in {y['path'] for y in rows}
+           t.extractall(r/'payload')
+          for x in rows:
+           b=(r/'payload'/x['path']).read_bytes(); git=hashlib.sha1(b'blob '+str(len(b)).encode()+b'\0'+b).hexdigest()
+           assert len(b)==x['bytes'] and hashlib.sha256(b).hexdigest()==x['sha256'] and git==x['blob']
+          (r/'paths').write_text('\n'.join(sorted(x['path'] for x in rows))+'\n')
+          PY
+          
+          test "$(main_sha)" = "$INSTALLER_MAIN" || fail 'main advanced during artifact review'
+          while IFS= read -r f; do mkdir -p "$(dirname "$f")"; cp "$root/payload/$f" "$f"; done < "$root/paths"
+          npm run gate
+          # Discard all gate byproducts, then stage only the exact reviewed bytes.
+          git reset --hard "$INSTALLER_MAIN"; git clean -fd
+          while IFS= read -r f; do mkdir -p "$(dirname "$f")"; cp "$root/payload/$f" "$f"; done < "$root/paths"
+          while IFS= read -r f; do cmp -s "$root/payload/$f" "$f" || fail "post-gate byte drift: $f"; done < "$root/paths"
+          git add --pathspec-from-file="$root/paths"
+          git diff --cached --name-only | LC_ALL=C sort > "$root/staged"; diff -u "$root/paths" "$root/staged"
+          test "$(git status --porcelain=v1 | wc -l)" = 27 || fail 'product worktree denominator drifted'
+          git config user.name undercast-operations; git config user.email undercast-operations@users.noreply.github.com
+          git commit -m 'Operations: refresh reviewed exact-main reliability evidence'
+          product_commit=$(git rev-parse HEAD); product_tree=$(git rev-parse 'HEAD^{tree}')
+          test "$(main_sha)" = "$INSTALLER_MAIN" || fail 'main advanced before branch publication'
+          if git ls-remote --exit-code --heads origin "$product_branch" >/dev/null 2>&1; then fail 'product branch already exists'; fi
+          git push origin "HEAD:refs/heads/$product_branch"; pushed=1
+          product_pr=$(gh pr create --repo "$repo" --base main --head "$product_branch" --draft --title 'Operations: refresh reviewed exact-main reliability evidence' --body 'Draft-only 27-path product from reviewed runs 31066623507 and 31066623514. No roadmap recompletion, cost/rights invention, live-publication change, external review, or outside-human dependency.')
+          product_pr=${product_pr##*/}
+          gh api "/repos/$repo/pulls/$product_pr" > "$root/api/product-pr.json"
+          gh api "/repos/$repo/pulls/$product_pr/files?per_page=100" > "$root/api/product-files.json"
+          gh api "/repos/$repo/git/commits/$product_commit" > "$root/api/product-commit.json"
+          ROOT="$root" PR="$product_pr" COMMIT="$product_commit" TREE="$product_tree" BASE="$INSTALLER_MAIN" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          r=Path(os.environ['ROOT']); pr=json.loads((r/'api/product-pr.json').read_text()); files=json.loads((r/'api/product-files.json').read_text()); c=json.loads((r/'api/product-commit.json').read_text()); paths=(r/'paths').read_text().splitlines()
+          assert pr['number']==int(os.environ['PR']) and pr['base']['ref']=='main' and pr['base']['sha']==os.environ['BASE'] and pr['head']['sha']==os.environ['COMMIT']
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False and pr['commits']==1 and pr['changed_files']==27
+          assert sorted(x['filename'] for x in files)==paths and len(files)==27
+          assert c['sha']==os.environ['COMMIT'] and c['tree']['sha']==os.environ['TREE'] and [x['sha'] for x in c['parents']]==[os.environ['BASE']]
+          PY
+          test "$(main_sha)" = "$INSTALLER_MAIN" || fail 'main advanced before terminal receipt'
+          ROOT="$root" PR="$product_pr" COMMIT="$product_commit" TREE="$product_tree" BASE="$INSTALLER_MAIN" python3 - <<'PY'
+          import hashlib,json,os
+          from datetime import datetime,timezone
+          from pathlib import Path
+          r=Path(os.environ['ROOT']); d={'schema_version':1,'transaction':'OPERATIONAL-EVIDENCE-SECOND-DESK-PUBLISHER-V2','status':'passed','generated_at':datetime.now(timezone.utc).isoformat().replace('+00:00','Z'),'installer_main':os.environ['BASE'],'review':{'pr':497,'run':31088470731,'job':92573474384,'artifact':8962463936,'artifact_sha256':'603a3f9dc95b2037a6be1fd383a85649fb58600e1194f8684a859c80228ea86a'},'product':{'pr':int(os.environ['PR']),'branch':'agent/operational-evidence-second-desk-product-20260806','commit':os.environ['COMMIT'],'tree':os.environ['TREE'],'parent':os.environ['BASE'],'commits':1,'paths':27,'draft':True,'merged':False},'boundary':{'roadmap_recompleted':False,'cost_observation_invented':False,'rights_observation_invented':False,'live_publication_changed':False,'external_contact_or_review':False,'outside_human_dependency':False}}
+          b=json.dumps(d,sort_keys=True,separators=(',',':')).encode(); d['receipt_sha256']=hashlib.sha256(b).hexdigest(); (r/'receipt/publication-receipt.json').write_text(json.dumps(d,indent=2)+'\n')
+          PY
+          sha256sum "$root/receipt/publication-receipt.json" > "$root/receipt/SHA256SUMS"
+          trap - EXIT
+          echo "Published draft product PR #$product_pr at $product_commit; no merge performed."
+          PUBLISHER
+          test "$(sha256sum /tmp/operational-evidence-second-desk-publisher.sh | awk '{print $1}')" = "cc58a0e52cb80c05213caf50c685e50c912395b52b0038eea16fce36ee7696b4"
+          bash -n /tmp/operational-evidence-second-desk-publisher.sh
+          bash /tmp/operational-evidence-second-desk-publisher.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: operational-evidence-second-desk-publication-${{ github.run_id }}
+          path: /tmp/operational-evidence-publisher/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Remove any product left by a failed publication step
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          root=/tmp/operational-evidence-publisher
+          branch=agent/operational-evidence-second-desk-product-20260806
+          pr=""
+          if [ -f "$root/receipt/publication-receipt.json" ]; then
+            pr="$(jq -r '.product.pr // empty' "$root/receipt/publication-receipt.json")"
+          fi
+          if [ -z "$pr" ]; then
+            pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state open --json number --jq '.[0].number // empty')"
+          fi
+          [ -z "$pr" ] || gh pr close "$pr" --repo "$GITHUB_REPOSITORY" --comment 'Closed automatically because the trusted publisher did not finish successfully.'
+          git push origin --delete "$branch" >/dev/null 2>&1 || true
+          exit 0
+
+      - name: Retain bounded diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-evidence-second-desk-publication-diagnostics-${{ github.run_id }}
+          path: |
+            /tmp/operational-evidence-publisher
+            test-results
+            playwright-report
+            .ci
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
