@@ -111,7 +111,7 @@ export function buildOperationalMetricsIssue({
   if (headBranch !== "main") throw new Error(`ledger accepts only main evidence, found ${headBranch}`);
   const expectedRunUrl = `https://github.com/${repository}/actions/runs/${runId}`;
   if (runUrl !== expectedRunUrl) throw new Error(`run URL ${runUrl} != ${expectedRunUrl}`);
-  const expectedArtifactName = `operational-metrics-evidence-${runId}`;
+  const expectedArtifactName = `operational-metrics-evidence-${runId}-attempt-${runAttempt}`;
   if (artifactName !== expectedArtifactName) throw new Error(`artifact name ${artifactName} != ${expectedArtifactName}`);
   const expectedArtifactUrl = `${expectedRunUrl}/artifacts/${artifactId}`;
   if (artifactUrl !== expectedArtifactUrl) throw new Error(`artifact URL ${artifactUrl} != ${expectedArtifactUrl}`);

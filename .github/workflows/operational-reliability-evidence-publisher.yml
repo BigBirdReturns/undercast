@@ -1,0 +1,196 @@
+name: operational-reliability-evidence-publisher
+
+on:
+  workflow_run:
+    workflows: ["operational-reliability-evidence"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: operational-reliability-evidence-publisher-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+      SOURCE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      SOURCE_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      ARTIFACT_NAME: operational-reliability-evidence-${{ github.event.workflow_run.id }}-attempt-${{ github.event.workflow_run.run_attempt }}
+      PUBLISH_ROOT: /tmp/undercast-operational-reliability-publisher
+    steps:
+      - name: Assert successful exact-main source run
+        run: |
+          set -euo pipefail
+          rm -rf "$PUBLISH_ROOT"
+          mkdir -p "$PUBLISH_ROOT"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" > "$PUBLISH_ROOT/source-run.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" > "$PUBLISH_ROOT/main-before.json"
+          node - <<'NODE'
+          const fs = require('fs');
+          const run = JSON.parse(fs.readFileSync(process.env.PUBLISH_ROOT + '/source-run.json', 'utf8'));
+          const main = JSON.parse(fs.readFileSync(process.env.PUBLISH_ROOT + '/main-before.json', 'utf8'));
+          if (run.id !== Number(process.env.SOURCE_RUN_ID)) throw new Error('source run id drifted');
+          if (run.run_attempt !== Number(process.env.SOURCE_RUN_ATTEMPT)) throw new Error('source run attempt drifted');
+          if (run.event !== 'push' || run.head_branch !== 'main') throw new Error('source run was not an exact-main push');
+          if (run.head_sha !== process.env.SOURCE_HEAD_SHA || run.conclusion !== 'success') throw new Error('source run head or conclusion drifted');
+          if (main.object?.sha !== process.env.SOURCE_HEAD_SHA) throw new Error('main advanced before trusted publication');
+          NODE
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_HEAD_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/publisher-custody.mjs
+            scripts/publisher-handoff-files.mjs
+            scripts/publisher-artifact-attempt.mjs
+            scripts/operational-reliability-ledger.mjs
+            scripts/operational-reliability-execute.mjs
+            scripts/operational-reliability.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Recover exact source attempt and immutable artifact metadata
+        id: artifact
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/attempts/${SOURCE_RUN_ATTEMPT}" \
+            > "$PUBLISH_ROOT/attempt.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts?name=${ARTIFACT_NAME}&per_page=100" \
+            > "$PUBLISH_ROOT/artifacts.json"
+          node scripts/publisher-artifact-attempt.mjs select \
+            --artifacts-json "$PUBLISH_ROOT/artifacts.json" \
+            --attempt-json "$PUBLISH_ROOT/attempt.json" \
+            --prefix operational-reliability-evidence \
+            --name "$ARTIFACT_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --run-attempt "$SOURCE_RUN_ATTEMPT" \
+            --event-name push \
+            --head-branch main \
+            --head-sha "$SOURCE_HEAD_SHA" \
+            --output "$PUBLISH_ROOT/artifact.json" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Download exact attempt artifact by immutable ID
+        env:
+          ARTIFACT_ARCHIVE_URL: ${{ steps.artifact.outputs.archive_url }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.digest }}
+        run: |
+          set -euo pipefail
+          rm -rf "$PUBLISH_ROOT/artifact" "$PUBLISH_ROOT/artifact.zip"
+          mkdir -p "$PUBLISH_ROOT/artifact"
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --output "$PUBLISH_ROOT/artifact.zip" \
+            "$ARTIFACT_ARCHIVE_URL"
+          expected="${ARTIFACT_DIGEST#sha256:}"
+          actual="$(sha256sum "$PUBLISH_ROOT/artifact.zip" | awk '{print $1}')"
+          test "$actual" = "$expected"
+          unzip -q "$PUBLISH_ROOT/artifact.zip" -d "$PUBLISH_ROOT/artifact"
+
+      - name: Verify artifact, handoff, run, head, and exact file set
+        run: |
+          set -euo pipefail
+          mapfile -t handoffs < <(find "$PUBLISH_ROOT/artifact" -type f -name publisher-handoff.json -print)
+          test "${#handoffs[@]}" -eq 1
+          handoff="${handoffs[0]}"
+          artifact_root="$(dirname "$handoff")"
+          node scripts/publisher-custody.mjs verify-evidence-handoff \
+            --handoff-json "$handoff" \
+            --artifact-json "$PUBLISH_ROOT/artifact.json" \
+            --root "$artifact_root" \
+            --kind operational-reliability-evidence \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --run-attempt "$SOURCE_RUN_ATTEMPT" \
+            --event-name push \
+            --head-branch main \
+            --head-sha "$SOURCE_HEAD_SHA" \
+            --artifact-id "${{ steps.artifact.outputs.id }}" \
+            --artifact-name "$ARTIFACT_NAME" \
+            --artifact-digest "${{ steps.artifact.outputs.digest }}"
+          node scripts/publisher-handoff-files.mjs verify --handoff-json "$handoff"
+          echo "artifact_root=$artifact_root" >> "$GITHUB_ENV"
+
+      - name: Build exact evidence-discovery issue payload
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.id }}
+          ARTIFACT_URL: ${{ steps.artifact.outputs.url }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.digest }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          payload="$PUBLISH_ROOT/issue-payload.json"
+          node scripts/operational-reliability-ledger.mjs issue-payload \
+            --restore-receipt "$artifact_root/evidence/repository-restore.json" \
+            --rollback-receipt "$artifact_root/evidence/publication-rollback.json" \
+            --bundle "$artifact_root/evidence/bundle.json" \
+            --run-id "$SOURCE_RUN_ID" \
+            --run-attempt "$SOURCE_RUN_ATTEMPT" \
+            --run-url "$RUN_URL" \
+            --repository "$GITHUB_REPOSITORY" \
+            --event-name push \
+            --head-branch main \
+            --head-sha "$SOURCE_HEAD_SHA" \
+            --generated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --artifact-id "$ARTIFACT_ID" \
+            --artifact-name "$ARTIFACT_NAME" \
+            --artifact-url "$ARTIFACT_URL" \
+            --artifact-digest "$ARTIFACT_DIGEST" \
+            --output "$payload" \
+            > "$PUBLISH_ROOT/ledger-facts.json"
+          PAYLOAD="$payload" node - <<'NODE'
+          const fs = require('fs');
+          const payload = JSON.parse(fs.readFileSync(process.env.PAYLOAD, 'utf8'));
+          fs.writeFileSync(process.env.PUBLISH_ROOT + '/issue-title.txt', payload.title + '\n');
+          fs.writeFileSync(process.env.PUBLISH_ROOT + '/issue-body.md', payload.body + '\n');
+          NODE
+
+      - name: Lease exact main through durable discovery issue publication
+        run: |
+          set -euo pipefail
+          assert_exact_main() {
+            test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')" = "$SOURCE_HEAD_SHA"
+          }
+          assert_exact_main
+          title="$(cat "$PUBLISH_ROOT/issue-title.txt")"
+          body="$PUBLISH_ROOT/issue-body.md"
+          gh api --method GET /search/issues \
+            -f q="repo:${GITHUB_REPOSITORY} type:issue in:title \"${title}\"" \
+            -f per_page=100 > "$PUBLISH_ROOT/issue-search.json"
+          match="$(TITLE="$title" SEARCH="$PUBLISH_ROOT/issue-search.json" node - <<'NODE'
+          const fs = require('fs');
+          const rows = JSON.parse(fs.readFileSync(process.env.SEARCH, 'utf8')).items || [];
+          const exact = rows.filter((row) => row.title === process.env.TITLE && !row.pull_request);
+          if (exact.length > 1) throw new Error(`multiple exact evidence issues found for ${process.env.TITLE}`);
+          if (exact[0]) process.stdout.write(`${exact[0].number}\t${exact[0].state}`);
+          NODE
+          )"
+          if [ -n "$match" ]; then
+            issue_number="${match%%$'\t'*}"
+            issue_state="${match#*$'\t'}"
+            assert_exact_main
+            if [ "$issue_state" = "closed" ]; then
+              gh issue reopen "$issue_number" --repo "$GITHUB_REPOSITORY"
+              assert_exact_main
+            fi
+            gh issue edit "$issue_number" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body"
+            assert_exact_main
+          else
+            assert_exact_main
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body"
+            assert_exact_main
+          fi
