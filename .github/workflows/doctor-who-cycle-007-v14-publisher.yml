@@ -1,0 +1,303 @@
+name: doctor-who-cycle-007-v14-publisher
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/doctor-who-cycle-007-v14-publisher.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-007-v14-publisher
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-007-v14-publisher.yml
+  BASE_MAIN: 89abe280e5f39fb75182a27a477b19927ff644b5
+  PUBLISHER_MAIN: ${{ github.sha }}
+  SOURCE_PR: "485"
+  SOURCE_HEAD: 5164bfc686a098c479a5fe578dda2ed75271e274
+  SOURCE_BRANCH: agent/doctor-who-cycle-007-v14-finalization
+  SOURCE_RUN: "31072356959"
+  SOURCE_JOB: "92522724079"
+  ARTIFACT_ID: "8956210712"
+  ARTIFACT_NAME: doctor-who-cycle-007-finalization-v14-31072356959
+  ARTIFACT_SHA256: 5aff21a35899ff35f0ee18dfeaaad74d51a4e4addcd0f70b53d74c0fefd23879
+  HANDOFF_SHA256: 18e1c3352bad9b881d879cbb9c2d900479dceff50e58e1461ceccc3bea490c04
+  REVIEWED_CANDIDATE_COMMIT: 1bac55a7cd06e64840c79d42924472a0e0c6910e
+  REVIEWED_CANDIDATE_TREE: 121ecef1c981e6da2048450902721e336c051138
+  INTEGRATED_FINAL_COMMIT: 48be9f5ff50c813229e2aa81096efcdacd43f058
+  INTEGRATED_FINAL_TREE: 270d44f790103f95044ab3141d3e725d3722c475
+  FINALIZER_GATE_SHA256: 87e016f0dd740c0e804562c380b9544c0df9309ff6085adf3d5d74ca038b45ce
+  PATCH_SHA256: 29483754b235b92528fa8ec9aa9c5b8097dc81b168d36eff4629666fa211f8aa
+  BUNDLE_SHA256: d9a85ff4cb55dc83156692bb87c616dc81d5adae0cad97fa8598c1c6dcd6f12c
+  RELEASE_ASSET_SHA256: f6f32eb1c51445838ba27ae449548d9bb581b04bb2b321a5789f7f285872d409
+  PRODUCT_BRANCH: agent/doctor-who-cycle-007-kragar-product-v14
+  PRODUCT_PR_TITLE: "Doctor Who: complete reviewed cycle 007 for Kragar"
+  ROOT: /tmp/doctor-who-cycle-007-v14-publisher
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  publish:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PUBLISHER_MAIN }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind installer, finalizer run, artifact, review boundary, and exact handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/artifact" "$ROOT/write" "$ROOT/receipt"
+          assert_exact_main() {
+            test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')" = "$PUBLISHER_MAIN"
+          }
+          assert_exact_main
+          test "$(git rev-parse HEAD)" = "$PUBLISHER_MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_MAIN"
+          test "$(git rev-list --count "$BASE_MAIN"..HEAD)" = "1"
+          printf '%s\n' "$SELF" > "$ROOT/expected-installer-paths.txt"
+          git diff --name-only "$BASE_MAIN"...HEAD | LC_ALL=C sort > "$ROOT/actual-installer-paths.txt"
+          diff -u "$ROOT/expected-installer-paths.txt" "$ROOT/actual-installer-paths.txt"
+          node scripts/publisher-custody.mjs check-workflows | tee "$ROOT/publisher-custody.log"
+          node scripts/publisher-custody-or-guard.mjs --self-test | tee "$ROOT/publisher-or-self-test.log"
+          node scripts/publisher-custody-or-guard.mjs | tee "$ROOT/publisher-or-guard.log"
+          assert_exact_main
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN}" > "$ROOT/source-run.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN}/jobs?filter=latest&per_page=100" > "$ROOT/source-jobs.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" > "$ROOT/artifact.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${SOURCE_PR}" > "$ROOT/source-pr.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const root=process.env.ROOT;
+          const run=JSON.parse(fs.readFileSync(`${root}/source-run.json`,'utf8'));
+          const jobs=JSON.parse(fs.readFileSync(`${root}/source-jobs.json`,'utf8')).jobs||[];
+          const artifact=JSON.parse(fs.readFileSync(`${root}/artifact.json`,'utf8'));
+          const pr=JSON.parse(fs.readFileSync(`${root}/source-pr.json`,'utf8'));
+          const fail=m=>{throw new Error(m)};
+          if (run.id!==Number(process.env.SOURCE_RUN) || run.status!=='completed' || run.conclusion!=='success' || run.event!=='pull_request') fail('source run drifted');
+          if (run.head_sha!==process.env.SOURCE_HEAD || run.head_branch!==process.env.SOURCE_BRANCH || run.repository?.full_name!==process.env.GITHUB_REPOSITORY || run.head_repository?.full_name!==process.env.GITHUB_REPOSITORY) fail('source run head drifted');
+          const exactJobs=jobs.filter(j=>j.id===Number(process.env.SOURCE_JOB) && j.name==='finalize' && j.status==='completed' && j.conclusion==='success' && j.head_sha===process.env.SOURCE_HEAD);
+          if (exactJobs.length!==1) fail(`source job denominator ${exactJobs.length}`);
+          if (artifact.id!==Number(process.env.ARTIFACT_ID) || artifact.name!==process.env.ARTIFACT_NAME || artifact.digest!==`sha256:${process.env.ARTIFACT_SHA256}` || artifact.expired) fail('artifact identity drifted');
+          if (artifact.workflow_run?.id!==Number(process.env.SOURCE_RUN) || artifact.workflow_run?.head_sha!==process.env.SOURCE_HEAD || artifact.workflow_run?.head_branch!==process.env.SOURCE_BRANCH) fail('artifact source drifted');
+          if (pr.number!==Number(process.env.SOURCE_PR) || pr.merged || pr.merged_at || pr.state!=='closed') fail('source PR terminal state drifted');
+          if (pr.base?.ref!=='main' || pr.base?.sha!==process.env.BASE_MAIN || pr.head?.ref!==process.env.SOURCE_BRANCH || pr.head?.sha!==process.env.SOURCE_HEAD || pr.head?.repo?.full_name!==process.env.GITHUB_REPOSITORY) fail('source PR binding drifted');
+          if (pr.commits!==1 || pr.changed_files!==6) fail('source PR denominator drifted');
+          fs.writeFileSync(`${root}/artifact-url.txt`,`${artifact.archive_download_url}\n`);
+          NODE
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --output "$ROOT/artifact.zip" \
+            "$(cat "$ROOT/artifact-url.txt")"
+          test "$(sha256sum "$ROOT/artifact.zip" | awk '{print $1}')" = "$ARTIFACT_SHA256"
+          python - <<'PY'
+          import os, pathlib, zipfile
+          root=pathlib.Path(os.environ['ROOT'])
+          with zipfile.ZipFile(root/'artifact.zip') as zf:
+              names=zf.namelist()
+              if len(names)!=len(set(names)): raise SystemExit('duplicate artifact members')
+              for name in names:
+                  p=pathlib.PurePosixPath(name)
+                  if p.is_absolute() or '..' in p.parts: raise SystemExit(f'unsafe artifact member {name}')
+              zf.extractall(root/'artifact')
+          PY
+          test -f "$ROOT/artifact/publisher-handoff.json"
+          test -f "$ROOT/artifact/doctor-who-cycle-007-current-main.patch"
+          test -f "$ROOT/artifact/integrated-final-paths.txt"
+          test -f "$ROOT/artifact/final-gate.log"
+          test "$(sha256sum "$ROOT/artifact/doctor-who-cycle-007-current-main.patch" | awk '{print $1}')" = "$PATCH_SHA256"
+          test "$(sha256sum "$ROOT/artifact/doctor-who-cycle-007-current-main.bundle" | awk '{print $1}')" = "$BUNDLE_SHA256"
+          test "$(sha256sum "$ROOT/artifact/final-gate.log" | awk '{print $1}')" = "$FINALIZER_GATE_SHA256"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const root=process.env.ROOT;
+          const h=JSON.parse(fs.readFileSync(`${root}/artifact/publisher-handoff.json`,'utf8'));
+          const receipt=h.receipt_sha256;
+          delete h.receipt_sha256;
+          const stable=value=>Array.isArray(value)?value.map(stable):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(k=>[k,stable(value[k])])):value;
+          const body=JSON.stringify(stable(h),null,2)+'\n';
+          const digest=crypto.createHash('sha256').update(body).digest('hex');
+          const fail=m=>{throw new Error(m)};
+          if (receipt!==process.env.HANDOFF_SHA256 || digest!==receipt) fail('handoff receipt drifted');
+          if (h.schema_version!==1 || h.kind!=='doctor-who-cycle-007-current-main-product-v14' || h.repository!==process.env.GITHUB_REPOSITORY) fail('handoff identity drifted');
+          if (h.run_id!==Number(process.env.SOURCE_RUN) || h.carrier_head!==process.env.SOURCE_HEAD || h.current_main!==process.env.BASE_MAIN) fail('handoff source drifted');
+          if (h.reviewed_candidate_commit!==process.env.REVIEWED_CANDIDATE_COMMIT || h.reviewed_candidate_tree!==process.env.REVIEWED_CANDIDATE_TREE) fail('reviewed candidate drifted');
+          if (h.integrated_final_commit!==process.env.INTEGRATED_FINAL_COMMIT || h.integrated_final_tree!==process.env.INTEGRATED_FINAL_TREE || h.final_gate_sha256!==process.env.FINALIZER_GATE_SHA256) fail('integrated product drifted');
+          if (!h.files || Object.keys(h.files).length!==49 || h.files['images/uc-1352-still.jpg']!==process.env.RELEASE_ASSET_SHA256 || h.files[process.env.SELF]) fail('handoff path denominator drifted');
+          if (h.boundary?.repository_written || h.boundary?.product_published || h.boundary?.merge_authorized || h.boundary?.eighth_lease_issued) fail('handoff authority drifted');
+          const expected=fs.readFileSync(`${root}/artifact/integrated-final-paths.txt`,'utf8').trim().split(/\n/).filter(Boolean);
+          const keys=Object.keys(h.files).sort();
+          if (expected.length!==49 || new Set(expected).size!==49 || JSON.stringify(expected)!==JSON.stringify(keys) || expected.some(p=>p.startsWith('.github/workflows/'))) fail('handoff path manifest drifted');
+          NODE
+          assert_exact_main
+
+      - name: Apply exact product over installer main and completely re-gate
+        id: product
+        shell: bash
+        run: |
+          set -euo pipefail
+          assert_exact_main() {
+            test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')" = "$PUBLISHER_MAIN"
+          }
+          assert_exact_main
+          git checkout -B "$PRODUCT_BRANCH" "$PUBLISHER_MAIN"
+          git apply --binary "$ROOT/artifact/doctor-who-cycle-007-current-main.patch"
+          { git diff --name-only; git ls-files --others --exclude-standard; } | LC_ALL=C sort > "$ROOT/product-paths.txt"
+          diff -u "$ROOT/artifact/integrated-final-paths.txt" "$ROOT/product-paths.txt"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const root=process.env.ROOT;
+          const h=JSON.parse(fs.readFileSync(`${root}/artifact/publisher-handoff.json`,'utf8'));
+          for (const [path,digest] of Object.entries(h.files)) {
+            const actual=crypto.createHash('sha256').update(fs.readFileSync(path)).digest('hex');
+            if (actual!==digest) throw new Error(`published product member drifted: ${path}`);
+          }
+          NODE
+          test "$(sha256sum images/uc-1352-still.jpg | awk '{print $1}')" = "$RELEASE_ASSET_SHA256"
+          npm ci
+          npx playwright install --with-deps chromium
+          git add --pathspec-from-file="$ROOT/artifact/integrated-final-paths.txt"
+          npm run gate 2>&1 | tee "$ROOT/publication-gate.log"
+          sha256sum "$ROOT/publication-gate.log" | awk '{print $1}' > "$ROOT/publication-gate.sha256"
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          git diff --cached --name-only | LC_ALL=C sort > "$ROOT/staged-product-paths.txt"
+          diff -u "$ROOT/artifact/integrated-final-paths.txt" "$ROOT/staged-product-paths.txt"
+          assert_exact_main
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          parent_epoch="$(git show -s --format=%ct "$PUBLISHER_MAIN")"
+          export GIT_AUTHOR_DATE="@$((parent_epoch + 1)) +0000"
+          export GIT_COMMITTER_DATE="$GIT_AUTHOR_DATE"
+          git commit -m 'Doctor Who: complete reviewed cycle 007 for Kragar'
+          product_commit="$(git rev-parse HEAD)"
+          product_tree="$(git rev-parse 'HEAD^{tree}')"
+          test "$(git show -s --format=%P HEAD)" = "$PUBLISHER_MAIN"
+          git diff --name-only "$PUBLISHER_MAIN"...HEAD | LC_ALL=C sort > "$ROOT/committed-product-paths.txt"
+          diff -u "$ROOT/artifact/integrated-final-paths.txt" "$ROOT/committed-product-paths.txt"
+          node scripts/doctor-who-cycle-007.mjs | tee "$ROOT/product-cycle-check.log"
+          test -z "$(git status --porcelain)"
+          {
+            echo "product_commit=$product_commit"
+            echo "product_tree=$product_tree"
+            echo "publication_gate_sha256=$(cat "$ROOT/publication-gate.sha256")"
+          } >> "$GITHUB_OUTPUT"
+          assert_exact_main
+
+      - name: Publish exact product ref, create one draft PR, and terminally verify
+        id: publish
+        shell: bash
+        env:
+          PRODUCT_COMMIT: ${{ steps.product.outputs.product_commit }}
+          PRODUCT_TREE: ${{ steps.product.outputs.product_tree }}
+          PUBLICATION_GATE_SHA256: ${{ steps.product.outputs.publication_gate_sha256 }}
+        run: |
+          set -euo pipefail
+          assert_exact_main() {
+            test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')" = "$PUBLISHER_MAIN"
+          }
+          assert_exact_main
+          remote_ref="$(git ls-remote --heads origin "refs/heads/${PRODUCT_BRANCH}" | awk '{print $1}')"
+          if [ -z "$remote_ref" ]; then
+            assert_exact_main
+            git push origin "HEAD:refs/heads/${PRODUCT_BRANCH}"
+            assert_exact_main
+          else
+            test "$remote_ref" = "$PRODUCT_COMMIT"
+          fi
+          test "$(git ls-remote --heads origin "refs/heads/${PRODUCT_BRANCH}" | awk '{print $1}')" = "$PRODUCT_COMMIT"
+          assert_exact_main
+
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls?head=BigBirdReturns:${PRODUCT_BRANCH}&state=all&per_page=100" > "$ROOT/product-pr-search.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const rows=JSON.parse(fs.readFileSync(`${process.env.ROOT}/product-pr-search.json`,'utf8'));
+          if (rows.length>1) throw new Error(`product PR denominator ${rows.length}`);
+          const body=[
+            'Trusted default-branch publication of the completely re-gated Doctor Who cycle-007 Kragar product.',
+            '',
+            `Exact parent main: ${process.env.PUBLISHER_MAIN}`,
+            `Exact product tree: ${process.env.PRODUCT_TREE}`,
+            `Exact product commit: ${process.env.PRODUCT_COMMIT}`,
+            'Product paths: 49',
+            `Finalizer run: ${process.env.SOURCE_RUN}`,
+            `Finalizer artifact: ${process.env.ARTIFACT_ID}`,
+            `Finalizer artifact SHA-256: ${process.env.ARTIFACT_SHA256}`,
+            `Publisher gate SHA-256: ${process.env.PUBLICATION_GATE_SHA256}`,
+            `Media asset SHA-256: ${process.env.RELEASE_ASSET_SHA256}`,
+            '',
+            'This pull request contains one product commit and no workflow or transport paths. It remains draft and unmerged pending exact-head qualification and review. The publisher has no merge authority.',
+          ].join('\n');
+          fs.writeFileSync(`${process.env.ROOT}/product-pr-request.json`,JSON.stringify({title:process.env.PRODUCT_PR_TITLE,head:process.env.PRODUCT_BRANCH,base:'main',body,draft:true})+'\n');
+          if (rows[0]) fs.writeFileSync(`${process.env.ROOT}/existing-product-pr.json`,JSON.stringify(rows[0],null,2)+'\n');
+          NODE
+          if [ -f "$ROOT/existing-product-pr.json" ]; then
+            product_pr="$(node --input-type=module -e "import fs from 'node:fs'; const p=JSON.parse(fs.readFileSync(process.env.ROOT+'/existing-product-pr.json')); if(p.state!=='open'||!p.draft||p.merged_at||p.base?.ref!=='main'||p.base?.sha!==process.env.PUBLISHER_MAIN||p.head?.ref!==process.env.PRODUCT_BRANCH||p.head?.sha!==process.env.PRODUCT_COMMIT) throw new Error('existing product PR drifted'); process.stdout.write(String(p.number))")"
+          else
+            assert_exact_main
+            gh api --method POST "/repos/${GITHUB_REPOSITORY}/pulls" --input "$ROOT/product-pr-request.json" > "$ROOT/product-pr-created.json"
+            assert_exact_main
+            product_pr="$(node -p "require('$ROOT/product-pr-created.json').number")"
+          fi
+          test -n "$product_pr"
+          assert_exact_main
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${product_pr}" > "$ROOT/product-pr.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${product_pr}/files?per_page=100" > "$ROOT/product-pr-files.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${product_pr}/commits?per_page=100" > "$ROOT/product-pr-commits.json"
+          PRODUCT_PR="$product_pr" node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const root=process.env.ROOT;
+          const pr=JSON.parse(fs.readFileSync(`${root}/product-pr.json`,'utf8'));
+          const files=JSON.parse(fs.readFileSync(`${root}/product-pr-files.json`,'utf8'));
+          const commits=JSON.parse(fs.readFileSync(`${root}/product-pr-commits.json`,'utf8'));
+          const expected=fs.readFileSync(`${root}/artifact/integrated-final-paths.txt`,'utf8').trim().split(/\n/);
+          const actual=files.map(f=>f.filename).sort();
+          const fail=m=>{throw new Error(m)};
+          if (pr.number!==Number(process.env.PRODUCT_PR) || pr.state!=='open' || !pr.draft || pr.merged || pr.merged_at) fail('product PR state drifted');
+          if (pr.base?.ref!=='main' || pr.base?.sha!==process.env.PUBLISHER_MAIN || pr.head?.ref!==process.env.PRODUCT_BRANCH || pr.head?.sha!==process.env.PRODUCT_COMMIT || pr.head?.repo?.full_name!==process.env.GITHUB_REPOSITORY) fail('product PR binding drifted');
+          if (pr.commits!==1 || pr.changed_files!==49 || commits.length!==1 || commits[0].sha!==process.env.PRODUCT_COMMIT) fail('product PR denominator drifted');
+          if (JSON.stringify(actual)!==JSON.stringify(expected) || actual.some(p=>p.startsWith('.github/workflows/'))) fail('product PR paths drifted');
+          const receipt={schema_version:1,transaction:'DOCTOR-WHO-CYCLE-007-KRAGAR-PUBLICATION-V14',repository:process.env.GITHUB_REPOSITORY,publisher_main:process.env.PUBLISHER_MAIN,source_run:Number(process.env.SOURCE_RUN),source_job:Number(process.env.SOURCE_JOB),source_artifact:Number(process.env.ARTIFACT_ID),source_artifact_sha256:process.env.ARTIFACT_SHA256,source_handoff_sha256:process.env.HANDOFF_SHA256,product_tree:process.env.PRODUCT_TREE,product_commit:process.env.PRODUCT_COMMIT,product_branch:process.env.PRODUCT_BRANCH,product_pr:Number(process.env.PRODUCT_PR),path_count:49,publication_gate_sha256:process.env.PUBLICATION_GATE_SHA256,release_asset_sha256:process.env.RELEASE_ASSET_SHA256,boundary:{main_merged:false,product_pr_draft:true,force_push:false,existing_ref_mutated:false,outside_human_dependency:false}};
+          fs.writeFileSync(`${root}/receipt/publication-receipt.json`,JSON.stringify(receipt,null,2)+'\n');
+          const bytes=fs.readFileSync(`${root}/receipt/publication-receipt.json`);
+          fs.writeFileSync(`${root}/receipt/publication-receipt.sha256`,crypto.createHash('sha256').update(bytes).digest('hex')+'  publication-receipt.json\n');
+          NODE
+          (cd "$ROOT/receipt" && sha256sum --check publication-receipt.sha256)
+          assert_exact_main
+          {
+            echo "product_pr=$product_pr"
+            echo "product_commit=$PRODUCT_COMMIT"
+            echo "product_tree=$PRODUCT_TREE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload trusted V14 publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-publication-v14-${{ github.run_id }}
+          path: ${{ env.ROOT }}/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
