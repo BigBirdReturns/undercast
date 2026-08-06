@@ -1,0 +1,138 @@
+name: doctor-who-cycle-008-kreg-source-recovery-v1
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-source-recovery-v1.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-source-recovery-v1
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-source-recovery-v1.yml
+  EXACT_MAIN: 489a09639c534688cf9feaf73687eee847d5141b
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  PAYLOAD_BLOB: 06d2eed93b9e2a03b4d23dcaf6f82e0c131df498
+  PAYLOAD_TEXT_SHA256: 614bda7dd19ad5934c773a607a7d0ceb674efff66a7ce8d62eb287e4156ed83d
+  PAYLOAD_GZIP_SHA256: 3a395fc2194fe207f32eb393b7680be6658875e8114aebb2c6210dd180b80504
+  ENV_SHA256: c8483b7d1226731a5e1a1e9879e2caa53cb8a7b23bc0d294f827871188be3871
+  MANIFEST_SHA256: b96979efed799976096f0bc4f94fc9a74116e25319bf16859d3a6ab3cd29fed9
+  MATERIALIZER_SHA256: ce40bf80c3d1ebcafd729f834fe04b52b24da29abef00403110c09a68ab4e274
+  RUNNER_SHA256: 72c911f8be1b2fa0bdc9ec88b914ddec3be0379408bf3435e2cde82a4167a44d
+  OUT: /tmp/doctor-who-cycle-008-kreg-source-recovery-v1
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  recover:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-source-recovery-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 2
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-file carrier and canonical main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/payload/extracted" "$OUT/source"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = "1"
+          test "$(git merge-base "$EXACT_MAIN" HEAD)" = "$EXACT_MAIN"
+          git fetch --no-tags --filter=blob:none origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${HEAD_BRANCH})" = "$HEAD_SHA"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          test -z "$(git status --porcelain)"
+          printf 'exact_main=%s\ncarrier_head=%s\ncarrier_tree=%s\n' \
+            "$EXACT_MAIN" "$HEAD_SHA" "$(git rev-parse 'HEAD^{tree}')" \
+            > "$OUT/carrier-identity.txt"
+
+      - name: Recover and verify exact Kreg V1 payload source
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${PAYLOAD_BLOB}" > "$OUT/payload/blob.json"
+          jq -e --arg sha "$PAYLOAD_BLOB" '.sha==$sha and .encoding=="base64"' "$OUT/payload/blob.json" >/dev/null
+          jq -r '.content' "$OUT/payload/blob.json" | tr -d '\n' | base64 --decode > "$OUT/payload/kreg-candidate-v1-payload.tar.gz.b64"
+          test "$(git hash-object "$OUT/payload/kreg-candidate-v1-payload.tar.gz.b64")" = "$PAYLOAD_BLOB"
+          test "$(sha256sum "$OUT/payload/kreg-candidate-v1-payload.tar.gz.b64" | awk '{print $1}')" = "$PAYLOAD_TEXT_SHA256"
+          base64 --decode "$OUT/payload/kreg-candidate-v1-payload.tar.gz.b64" > "$OUT/payload/kreg-candidate-v1-payload.tar.gz"
+          test "$(sha256sum "$OUT/payload/kreg-candidate-v1-payload.tar.gz" | awk '{print $1}')" = "$PAYLOAD_GZIP_SHA256"
+          PAYLOAD_ARCHIVE="$OUT/payload/kreg-candidate-v1-payload.tar.gz" PAYLOAD_TARGET="$OUT/payload/extracted" python3 - <<'PY'
+          import os
+          import pathlib
+          import tarfile
+
+          archive = pathlib.Path(os.environ['PAYLOAD_ARCHIVE'])
+          target = pathlib.Path(os.environ['PAYLOAD_TARGET'])
+          expected = ['env.sh', 'manifest.json', 'materialize.py', 'runner.sh']
+          with tarfile.open(archive, 'r:gz') as tf:
+              members = tf.getmembers()
+              names = [member.name for member in members]
+              if names != expected or len(names) != len(set(names)):
+                  raise SystemExit(f'payload member drift: {names!r}')
+              for member in members:
+                  path = pathlib.PurePosixPath(member.name)
+                  if path.is_absolute() or '..' in path.parts or member.issym() or member.islnk() or not member.isfile():
+                      raise SystemExit(f'unsafe payload member: {member.name}')
+              tf.extractall(target)
+          PY
+          test "$(sha256sum "$OUT/payload/extracted/env.sh" | awk '{print $1}')" = "$ENV_SHA256"
+          test "$(sha256sum "$OUT/payload/extracted/manifest.json" | awk '{print $1}')" = "$MANIFEST_SHA256"
+          test "$(sha256sum "$OUT/payload/extracted/materialize.py" | awk '{print $1}')" = "$MATERIALIZER_SHA256"
+          test "$(sha256sum "$OUT/payload/extracted/runner.sh" | awk '{print $1}')" = "$RUNNER_SHA256"
+          sha256sum "$OUT/payload/extracted"/* > "$OUT/payload/extracted-sha256.txt"
+          printf 'payload_blob=%s\npayload_text_sha256=%s\npayload_gzip_sha256=%s\n' \
+            "$PAYLOAD_BLOB" "$PAYLOAD_TEXT_SHA256" "$PAYLOAD_GZIP_SHA256" \
+            > "$OUT/payload/custody.txt"
+
+      - name: Export exact current-main source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$EXACT_MAIN"
+          test "$(git rev-parse HEAD)" = "$EXACT_MAIN"
+          test -z "$(git status --porcelain)"
+          git archive --format=tar --prefix=undercast/ "$EXACT_MAIN" | gzip -n > "$OUT/source/source.tar.gz"
+          git ls-tree -r --full-tree "$EXACT_MAIN" > "$OUT/source/ls-tree.txt"
+          git ls-tree -r --name-only "$EXACT_MAIN" > "$OUT/source/tracked-paths.txt"
+          sha256sum "$OUT/source/source.tar.gz" > "$OUT/source/source.tar.gz.sha256"
+          sha256sum "$OUT/source/ls-tree.txt" > "$OUT/source/ls-tree.sha256"
+          sha256sum "$OUT/source/tracked-paths.txt" > "$OUT/source/tracked-paths.sha256"
+          printf 'exact_main=%s\nmain_tree=%s\ntracked_paths=%s\nsource_gzip_bytes=%s\n' \
+            "$EXACT_MAIN" "$(git rev-parse "$EXACT_MAIN^{tree}")" \
+            "$(wc -l < "$OUT/source/tracked-paths.txt")" \
+            "$(wc -c < "$OUT/source/source.tar.gz")" \
+            > "$OUT/source/source-identity.txt"
+
+      - name: Upload exact source and payload recovery packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-source-recovery-v1-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
