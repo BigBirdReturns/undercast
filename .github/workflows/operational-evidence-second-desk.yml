@@ -1,0 +1,232 @@
+name: operational-evidence-second-desk
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/operational-evidence-second-desk.yml"
+      - ".github/operational-review/reviewer.mjs.gz.b64"
+
+permissions:
+  contents: read
+  actions: read
+  issues: read
+
+concurrency:
+  group: operational-evidence-second-desk-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EVIDENCE_ROOT: /tmp/undercast-operational-second-desk/evidence
+      METADATA_ROOT: /tmp/undercast-operational-second-desk/metadata
+      PRODUCT_ROOT: /tmp/undercast-operational-second-desk/product
+      OUTPUT_ROOT: /tmp/undercast-operational-second-desk/output
+      RELIABILITY_RUN_ID: "31066623507"
+      RELIABILITY_ARTIFACT_ID: "8954096314"
+      RELIABILITY_ARTIFACT_SHA256: "9607228651fabdbecef07212477c8912d6d1dd0db576ed537e4193a0df036ed7"
+      METRICS_RUN_ID: "31066623514"
+      METRICS_ARTIFACT_ID: "8954187797"
+      METRICS_ARTIFACT_SHA256: "db041070cbdbb6e88bba593a794a75ab0f7f718c54f10c08890624aaa387c0c8"
+      REVIEWER: /tmp/operational-evidence-second-desk-reviewer.mjs
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Validate the temporary reviewer before network recovery
+        run: |
+          set -euo pipefail
+          base64 -d .github/operational-review/reviewer.mjs.gz.b64 | gzip -d > "$REVIEWER"
+          test "$(sha256sum "$REVIEWER" | awk '{print $1}')" = "180dcccc50ea8642fb757de36b40c7e8c06c4c89b33177df8df68f9febf10ec4"
+          node --check "$REVIEWER"
+          test "$(git diff --name-only "${{ github.event.pull_request.base.sha }}"..."${{ github.event.pull_request.head.sha }}" | sort | paste -sd ' ' -)" = ".github/operational-review/reviewer.mjs.gz.b64 .github/workflows/operational-evidence-second-desk.yml"
+
+      - name: Recover exact source runs, issues, artifacts, and archives
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/undercast-operational-second-desk
+          mkdir -p "$EVIDENCE_ROOT/reliability" "$EVIDENCE_ROOT/metrics" "$METADATA_ROOT" "$OUTPUT_ROOT"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${RELIABILITY_RUN_ID}" > "$METADATA_ROOT/reliability-run.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${RELIABILITY_RUN_ID}/jobs?per_page=100" > "$METADATA_ROOT/reliability-jobs.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${RELIABILITY_ARTIFACT_ID}" > "$METADATA_ROOT/reliability-artifact.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/issues/460" > "$METADATA_ROOT/reliability-issue.json"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${METRICS_RUN_ID}" > "$METADATA_ROOT/metrics-run.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${METRICS_RUN_ID}/jobs?per_page=100" > "$METADATA_ROOT/metrics-jobs.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${METRICS_ARTIFACT_ID}" > "$METADATA_ROOT/metrics-artifact.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/issues/461" > "$METADATA_ROOT/metrics-issue.json"
+
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --output "$EVIDENCE_ROOT/reliability.zip" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${RELIABILITY_ARTIFACT_ID}/zip"
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --output "$EVIDENCE_ROOT/metrics.zip" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${METRICS_ARTIFACT_ID}/zip"
+
+          test "$(sha256sum "$EVIDENCE_ROOT/reliability.zip" | awk '{print $1}')" = "$RELIABILITY_ARTIFACT_SHA256"
+          test "$(sha256sum "$EVIDENCE_ROOT/metrics.zip" | awk '{print $1}')" = "$METRICS_ARTIFACT_SHA256"
+
+          python - <<'PY'
+          import os
+          import pathlib
+          import stat
+          import zipfile
+
+          for name in ("reliability", "metrics"):
+              archive = pathlib.Path(os.environ["EVIDENCE_ROOT"]) / f"{name}.zip"
+              target = pathlib.Path(os.environ["EVIDENCE_ROOT"]) / name
+              with zipfile.ZipFile(archive) as zf:
+                  for info in zf.infolist():
+                      value = pathlib.PurePosixPath(info.filename)
+                      if value.is_absolute() or ".." in value.parts or "\\" in info.filename:
+                          raise SystemExit(f"unsafe artifact member {info.filename}")
+                      mode = info.external_attr >> 16
+                      if stat.S_ISLNK(mode):
+                          raise SystemExit(f"artifact symlink refused: {info.filename}")
+                  zf.extractall(target)
+          PY
+
+          node "$REVIEWER" verify-artifacts \
+            --evidence-root "$EVIDENCE_ROOT" \
+            > "$OUTPUT_ROOT/artifact-verification.json"
+
+      - name: Build the exact current-main reviewed refresh product
+        run: |
+          set -euo pipefail
+          base_sha="$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          git fetch --no-tags origin "+${base_sha}:refs/remotes/origin/review-base" --depth=1
+          git worktree add --detach "$PRODUCT_ROOT" "$base_sha"
+          test -z "$(git -C "$PRODUCT_ROOT" status --porcelain=v1 --untracked-files=all)"
+          printf '%s\n' "$base_sha" > "$OUTPUT_ROOT/base-sha.txt"
+          git -C "$PRODUCT_ROOT" rev-parse "${base_sha}^{tree}" > "$OUTPUT_ROOT/base-tree.txt"
+
+          node "$REVIEWER" apply \
+            --root "$PRODUCT_ROOT" \
+            --evidence-root "$EVIDENCE_ROOT" \
+            --metadata-root "$METADATA_ROOT" \
+            --base-sha "$base_sha" \
+            --reliability-archive-sha256 "$RELIABILITY_ARTIFACT_SHA256" \
+            --metrics-archive-sha256 "$METRICS_ARTIFACT_SHA256" \
+            > "$OUTPUT_ROOT/review-application.json"
+
+      - name: Qualify the exact reviewed product through the complete gate
+        run: |
+          set -euo pipefail
+          cd "$PRODUCT_ROOT"
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate | tee "$OUTPUT_ROOT/complete-gate.log"
+          test -z "$(git diff --check)"
+          node - <<'NODE'
+          const fs = require('fs');
+          const cp = require('child_process');
+          const settlement = JSON.parse(fs.readFileSync('data/review/operational-reliability/exact-main-refresh-008f4bd0-2026-08-06.json', 'utf8'));
+          const actual = cp.execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], { encoding: 'utf8' })
+            .split(/\r?\n/).filter(Boolean).map((line) => line.slice(3)).sort();
+          const expected = [...settlement.permanent_paths].sort();
+          if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            throw new Error(`post-gate product paths drifted: ${JSON.stringify(actual)}`);
+          }
+          NODE
+
+      - name: Seal deterministic product transport and final live-main lease
+        run: |
+          set -euo pipefail
+          cd "$PRODUCT_ROOT"
+          base_sha="$(cat "$OUTPUT_ROOT/base-sha.txt")"
+          live_main="$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          test "$live_main" = "$base_sha"
+
+          node - <<'NODE' > "$OUTPUT_ROOT/changed-paths.txt"
+          const fs = require('fs');
+          const settlement = JSON.parse(fs.readFileSync('data/review/operational-reliability/exact-main-refresh-008f4bd0-2026-08-06.json', 'utf8'));
+          process.stdout.write(settlement.permanent_paths.join('\n') + '\n');
+          NODE
+          git add -A --pathspec-from-file="$OUTPUT_ROOT/changed-paths.txt"
+          git diff --cached --check
+          test "$(git diff --cached --name-only | sort | sha256sum | awk '{print $1}')" = "$(sort "$OUTPUT_ROOT/changed-paths.txt" | sha256sum | awk '{print $1}')"
+          product_tree="$(git write-tree)"
+          printf '%s\n' "$product_tree" > "$OUTPUT_ROOT/product-tree.txt"
+
+          node - <<'NODE' > "$OUTPUT_ROOT/product-manifest.json"
+          const crypto = require('crypto');
+          const fs = require('fs');
+          const cp = require('child_process');
+          const path = require('path');
+          const output = process.env.OUTPUT_ROOT;
+          const base = fs.readFileSync(path.join(output, 'base-sha.txt'), 'utf8').trim();
+          const baseTree = fs.readFileSync(path.join(output, 'base-tree.txt'), 'utf8').trim();
+          const productTree = fs.readFileSync(path.join(output, 'product-tree.txt'), 'utf8').trim();
+          const paths = fs.readFileSync(path.join(output, 'changed-paths.txt'), 'utf8').trim().split(/\r?\n/).filter(Boolean);
+          const files = paths.map((file) => {
+            const row = cp.execFileSync('git', ['ls-files', '-s', '--', file], { encoding: 'utf8' }).trim();
+            const match = row.match(/^([0-7]{6}) ([0-9a-f]{40}) 0\t(.+)$/);
+            if (!match || match[3] !== file) throw new Error(`cannot resolve staged file ${file}`);
+            const bytes = fs.readFileSync(file);
+            return {
+              path: file,
+              mode: match[1],
+              git_blob: match[2],
+              bytes: bytes.length,
+              sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+            };
+          });
+          const manifest = {
+            schema_version: 1,
+            status: 'passed',
+            repository: process.env.GITHUB_REPOSITORY,
+            base_sha: base,
+            base_tree: baseTree,
+            product_tree: productTree,
+            permanent_path_count: files.length,
+            files,
+            boundary: {
+              review_carrier_paths_in_product: 0,
+              workflow_paths_in_product: 0,
+              roadmap_state_changed: false,
+              cost_or_rights_observation_invented: false,
+              live_publication_changed: false,
+              external_contact_or_review: false,
+              outside_human_dependency: false,
+            },
+          };
+          process.stdout.write(JSON.stringify(manifest, null, 2) + '\n');
+          NODE
+
+          mkdir -p "$OUTPUT_ROOT/product"
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -cf "$OUTPUT_ROOT/product/files.tar" \
+            -T "$OUTPUT_ROOT/changed-paths.txt"
+          cp "$OUTPUT_ROOT/product-manifest.json" "$OUTPUT_ROOT/product/manifest.json"
+          cp "$OUTPUT_ROOT/review-application.json" "$OUTPUT_ROOT/product/review-application.json"
+          cp "$OUTPUT_ROOT/artifact-verification.json" "$OUTPUT_ROOT/product/artifact-verification.json"
+          cp "$OUTPUT_ROOT/complete-gate.log" "$OUTPUT_ROOT/product/complete-gate.log"
+          sha256sum "$OUTPUT_ROOT/product/files.tar" "$OUTPUT_ROOT/product/manifest.json" \
+            "$OUTPUT_ROOT/product/review-application.json" "$OUTPUT_ROOT/product/artifact-verification.json" \
+            "$OUTPUT_ROOT/product/complete-gate.log" \
+            > "$OUTPUT_ROOT/product/SHA256SUMS"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: operational-evidence-second-desk-${{ github.run_id }}
+          path: /tmp/undercast-operational-second-desk/output/product
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
