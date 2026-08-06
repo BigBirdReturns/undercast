@@ -35,20 +35,37 @@ jobs:
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/blobs/${TARGET_BLOB}" \
             > "$AUDIT_ROOT/blob.json"
 
-          jq -e --arg sha "$TARGET_BLOB" \
-            '.sha == $sha and .encoding == "base64" and (.content | type == "string")' \
-            "$AUDIT_ROOT/blob.json" > /dev/null
+          python3 - "$AUDIT_ROOT/blob.json" "$TARGET_BLOB" "$AUDIT_ROOT" "$EXPECTED_SCRIPT_SHA256" <<'PY'
+          import base64
+          import gzip
+          import hashlib
+          import json
+          from pathlib import Path
+          import sys
 
-          jq -r '.content' "$AUDIT_ROOT/blob.json" \
-            | tr -d '\n' \
-            | base64 -d \
-            > "$AUDIT_ROOT/publisher.sh.gz.b64"
+          blob_path = Path(sys.argv[1])
+          expected_blob = sys.argv[2]
+          root = Path(sys.argv[3])
+          expected_script_sha = sys.argv[4]
+          document = json.loads(blob_path.read_text())
+          if document.get("sha") != expected_blob or document.get("encoding") != "base64":
+              raise SystemExit("GitHub blob identity or encoding drifted")
+          encoded_blob = document.get("content")
+          if not isinstance(encoded_blob, str):
+              raise SystemExit("GitHub blob content is not a string")
+          publisher_b64 = base64.b64decode(encoded_blob, validate=False)
+          (root / "publisher.sh.gz.b64").write_bytes(publisher_b64)
+          publisher_gzip = base64.b64decode(b"".join(publisher_b64.split()), validate=True)
+          (root / "publisher.sh.gz").write_bytes(publisher_gzip)
+          publisher_script = gzip.decompress(publisher_gzip)
+          (root / "publisher.sh").write_bytes(publisher_script)
+          actual = hashlib.sha256(publisher_script).hexdigest()
+          if actual != expected_script_sha:
+              raise SystemExit(f"publisher script SHA-256 drifted: {actual}")
+          PY
 
           test "$(git hash-object "$AUDIT_ROOT/publisher.sh.gz.b64")" = "$TARGET_BLOB"
-          base64 -d "$AUDIT_ROOT/publisher.sh.gz.b64" > "$AUDIT_ROOT/publisher.sh.gz"
           gzip -t "$AUDIT_ROOT/publisher.sh.gz"
-          gzip -dc "$AUDIT_ROOT/publisher.sh.gz" > "$AUDIT_ROOT/publisher.sh"
-          test "$(sha256sum "$AUDIT_ROOT/publisher.sh" | awk '{print $1}')" = "$EXPECTED_SCRIPT_SHA256"
           bash -n "$AUDIT_ROOT/publisher.sh"
 
           {
@@ -75,6 +92,7 @@ jobs:
             > "$AUDIT_ROOT/SHA256SUMS"
 
       - name: Upload exact decoded publisher for independent review
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: operational-evidence-publisher-payload-audit-${{ github.run_id }}
