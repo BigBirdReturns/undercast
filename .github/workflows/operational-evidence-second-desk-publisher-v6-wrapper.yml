@@ -1,0 +1,173 @@
+name: operational-evidence-second-desk-publisher-v6-wrapper
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/operational-evidence-second-desk-publisher-v6-wrapper.yml"
+
+permissions: {}
+
+concurrency:
+  group: operational-evidence-second-desk-publisher-v6-wrapper
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INSTALLER_MAIN: ${{ github.sha }}
+      EXPECTED_PARENT: 489a09639c534688cf9feaf73687eee847d5141b
+      V3_WORKFLOW_BLOB: c28876fda070c0da6df9acde7bf49a4e98d1bda7
+      IGNITER_WORKFLOW_BLOB: cb1d999205d927120d7a7a4251621b47a67b31b7
+      WRAPPER_PATH: .github/workflows/operational-evidence-second-desk-publisher-v6-wrapper.yml
+      PRODUCT_BRANCH: agent/operational-evidence-second-desk-product-v6-20260806
+      PRODUCT_TITLE: "Operations: refresh reviewed exact-main reliability evidence (V6)"
+      PUBLISH_ROOT: /tmp/undercast-operational-second-desk-publisher-v6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact trusted-main wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$PUBLISH_ROOT"
+          rm -rf "$root"
+          mkdir -p "$root"/{diagnostics,receipt}
+          test "$GITHUB_REPOSITORY" = 'BigBirdReturns/undercast'
+          test "$GITHUB_EVENT_NAME" = 'push'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$(git rev-parse HEAD)" = "$INSTALLER_MAIN"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
+          test "$(git diff --name-only "$EXPECTED_PARENT..$INSTALLER_MAIN")" = "$WRAPPER_PATH"
+          test "$(git hash-object .github/workflows/operational-evidence-second-desk-publisher.yml)" = "$V3_WORKFLOW_BLOB"
+          test "$(git hash-object .github/workflows/operational-evidence-second-desk-workflow-run.yml)" = "$IGNITER_WORKFLOW_BLOB"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$INSTALLER_MAIN"
+
+      - name: Recover and execute reviewed V3 publisher as V6
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          node --input-type=module - <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import YAML from 'yaml';
+
+          const workflow = YAML.parse(
+            readFileSync('.github/workflows/operational-evidence-second-desk-publisher.yml', 'utf8'),
+            { schema: 'core', uniqueKeys: true, maxAliasCount: 100 },
+          );
+          const step = workflow.jobs?.publish?.steps?.find(
+            (row) => row?.name === 'Publish the exact reviewed 27-path product',
+          );
+          if (!step || typeof step.run !== 'string') throw new Error('V3 publisher shell block is missing');
+          let source = step.run;
+          const replaceOnce = (oldValue, newValue, label) => {
+            const count = source.split(oldValue).length - 1;
+            if (count !== 1) throw new Error(`${label} replacement count ${count}`);
+            source = source.replace(oldValue, newValue);
+          };
+          replaceOnce(
+            "expected_parent='3228efd6ede786586352b1b990a94d16ab02d5f9'",
+            "expected_parent='489a09639c534688cf9feaf73687eee847d5141b'",
+            'wrapper parent',
+          );
+          replaceOnce(
+            "workflow_path='.github/workflows/operational-evidence-second-desk-publisher.yml'",
+            "workflow_path='.github/workflows/operational-evidence-second-desk-publisher-v6-wrapper.yml'",
+            'wrapper path',
+          );
+          const oldBoundary = [
+            "assert settlement['boundary'] == {",
+            "    'cost_observation_invented': False,",
+            "    'external_contact_or_review': False,",
+            "    'live_publication_changed': False,",
+            "    'outside_human_dependency': False,",
+            "    'rights_observation_invented': False,",
+            "    'roadmap_recompleted': False,",
+            "}",
+          ].join('\n');
+          const reviewedBoundary = [
+            "assert settlement['boundary'] == {",
+            "    'canonical_corpus_changed': False,",
+            "    'cost_observation_invented': False,",
+            "    'external_contact_or_review': False,",
+            "    'live_publication_changed': False,",
+            "    'operational_reliability_completed_again': False,",
+            "    'outside_human_dependency': False,",
+            "    'owner_physical_action': False,",
+            "    'rights_observation_invented': False,",
+            "    'roadmap_state_changed': False,",
+            "    'roadmap_state_sha256': 'c010ca3dd05f3b826417d39b3306d76b662c0ba6caf0eb73dfc2440599dac77a',",
+            "    'source_graph_changed': False,",
+            "}",
+          ].join('\n');
+          replaceOnce(oldBoundary, reviewedBoundary, 'review boundary schema');
+          const oldBlobCustody = [
+            "assert hashlib.sha256(data).hexdigest() == row['sha256']",
+            "        target = payload / member.name",
+          ].join('\n');
+          const reviewedBlobCustody = [
+            "assert hashlib.sha256(data).hexdigest() == row['sha256']",
+            "        git_blob = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\\0' + data).hexdigest()",
+            "        assert git_blob == row['git_blob']",
+            "        target = payload / member.name",
+          ].join('\n');
+          replaceOnce(oldBlobCustody, reviewedBlobCustody, 'manifest Git-blob custody');
+          source = source.replaceAll('V3', 'V6');
+          writeFileSync('/tmp/operational-evidence-second-desk-publisher-v6.sh', `#!/usr/bin/env bash\n${source}`);
+          NODE
+          bash -n /tmp/operational-evidence-second-desk-publisher-v6.sh
+          sha256sum /tmp/operational-evidence-second-desk-publisher-v6.sh | tee "$PUBLISH_ROOT/diagnostics/executed-script.sha256"
+          bash /tmp/operational-evidence-second-desk-publisher-v6.sh
+
+      - name: Upload exact V6 publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-evidence-second-desk-publication-v6-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/undercast-operational-second-desk-publisher-v6/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Remove partial V6 publication after any later failure
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          root="$PUBLISH_ROOT"
+          pr=""
+          if [ -f "$root/product-pr.txt" ]; then
+            pr="$(cat "$root/product-pr.txt")"
+          fi
+          if [ -z "$pr" ]; then
+            pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$PRODUCT_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          fi
+          [ -z "$pr" ] || gh pr close "$pr" --repo "$GITHUB_REPOSITORY" --comment 'Closed automatically because V6 publication did not reach terminal success.'
+          gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$PRODUCT_BRANCH" >/dev/null 2>&1 || true
+
+      - name: Upload V6 failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-evidence-second-desk-publication-v6-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/undercast-operational-second-desk-publisher-v6
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
