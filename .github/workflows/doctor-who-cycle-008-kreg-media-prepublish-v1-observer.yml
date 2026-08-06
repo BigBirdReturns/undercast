@@ -1,0 +1,139 @@
+name: doctor-who-cycle-008-kreg-media-prepublish-v1-observer
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/doctor-who-cycle-008-kreg-media-prepublish-v1-observer.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-media-prepublish-v1-observer-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-media-prepublish-v1-observer.yml
+  EXACT_MAIN: 37d681f419db5ef874b2cc41df1c631c047218d8
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  OBSERVER_BRANCH: agent/doctor-who-cycle-008-kreg-media-prepublish-v1-observer
+  PUBLISHER_BRANCH: agent/doctor-who-cycle-008-kreg-media-prepublish-v1
+  PUBLISHER_HEAD: df35fd606be95a443c5a2e2d6a561b8155cabb63
+  PUBLISHER_WORKFLOW: doctor-who-cycle-008-kreg-media-prepublish-v1
+  PUBLISHER_ARTIFACT_PREFIX: doctor-who-cycle-008-kreg-media-prepublish-v1-
+  ASSET: uc-1353-still-5d19f72c.jpg
+  ASSET_URL: https://github.com/BigBirdReturns/undercast/releases/download/media-0003/uc-1353-still-5d19f72c.jpg
+  ASSET_SHA256: 5d19f72cbe08648568c84469287dfcd14a9c0789156cd3d740edf4c1c5bb0622
+  ASSET_BYTES: "67113"
+  OUT: /tmp/doctor-who-cycle-008-kreg-media-prepublish-v1-observer
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  observe:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-media-prepublish-v1-observer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 2
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact observer and discover terminal push publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/evidence"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = "1"
+          test "$HEAD_BRANCH" = "$OBSERVER_BRANCH"
+          git fetch --no-tags --filter=blob:none origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${PUBLISHER_BRANCH}:refs/remotes/origin/${PUBLISHER_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${PUBLISHER_BRANCH})" = "$PUBLISHER_HEAD"
+          test "$(git show -s --format=%P "$PUBLISHER_HEAD")" = "$EXACT_MAIN"
+          printf '%s\n' "$SELF" > "$OUT/expected-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-paths.txt"
+          diff -u "$OUT/expected-paths.txt" "$OUT/actual-paths.txt"
+
+          run_id=''; status=''; conclusion=''
+          for attempt in $(seq 1 90); do
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${PUBLISHER_HEAD}&event=push&per_page=100" > "$OUT/push-runs.json"
+            run_id="$(jq -r --arg head "$PUBLISHER_HEAD" --arg branch "$PUBLISHER_BRANCH" --arg name "$PUBLISHER_WORKFLOW" '
+              [.workflow_runs[] | select(.name==$name and .head_sha==$head and .head_branch==$branch and .event=="push")]
+              | sort_by(.created_at) | last | .id // empty
+            ' "$OUT/push-runs.json")"
+            if [ -n "$run_id" ]; then
+              status="$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id==$id) | .status' "$OUT/push-runs.json")"
+              conclusion="$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id==$id) | .conclusion // empty' "$OUT/push-runs.json")"
+              if [ "$status" = completed ]; then break; fi
+            fi
+            sleep 4
+          done
+          printf 'run_id=%s\nstatus=%s\nconclusion=%s\n' "$run_id" "$status" "$conclusion" > "$OUT/push-state.txt"
+          test -n "$run_id"
+          test "$status" = completed
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/push-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "$OUT/push-jobs.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/push-artifacts.json"
+          jq -e --argjson id "$run_id" --arg head "$PUBLISHER_HEAD" --arg branch "$PUBLISHER_BRANCH" '
+            .id==$id and .event=="push" and .head_sha==$head and .head_branch==$branch and .status=="completed"
+          ' "$OUT/push-run.json" >/dev/null
+          if [ "$conclusion" != success ]; then
+            jq -r '.jobs[] | [.id,.name,.status,.conclusion] | @tsv' "$OUT/push-jobs.json" > "$OUT/failed-job-summary.tsv"
+            exit 1
+          fi
+          job_id="$(jq -r '.jobs[] | select(.name=="publish" and .status=="completed" and .conclusion=="success") | .id' "$OUT/push-jobs.json" | head -1)"
+          test -n "$job_id"
+          printf '%s\n' "$run_id" > "$OUT/push-run-id.txt"
+          printf '%s\n' "$job_id" > "$OUT/push-job-id.txt"
+          artifact_name="${PUBLISHER_ARTIFACT_PREFIX}${run_id}"
+          artifact_id="$(jq -r --arg name "$artifact_name" '[.artifacts[] | select(.name==$name and .expired==false)] | if length==1 then .[0].id else empty end' "$OUT/push-artifacts.json")"
+          test -n "$artifact_id"
+          printf '%s\n' "$artifact_id" > "$OUT/push-artifact-id.txt"
+          printf '%s\n' "$artifact_name" > "$OUT/push-artifact-name.txt"
+
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$artifact_name" --dir "$OUT/evidence"
+          test -f "$OUT/evidence/receipt.json"
+          RECEIPT="$OUT/evidence/receipt.json" python - <<'PY'
+          import hashlib,json,os,pathlib
+          p=pathlib.Path(os.environ['RECEIPT']); d=json.loads(p.read_text()); r=d.pop('receipt_sha256')
+          body=(json.dumps(d,indent=2,sort_keys=True)+'\n').encode()
+          assert hashlib.sha256(body).hexdigest()==r
+          assert d['transaction']=='DOCTOR-WHO-CYCLE-008-KREG-MEDIA-PREPUBLISH-V1'
+          assert d['exact_main']==os.environ['EXACT_MAIN'] and d['carrier_head']==os.environ['PUBLISHER_HEAD']
+          assert d['asset']['name']==os.environ['ASSET']
+          assert d['asset']['sha256']==os.environ['ASSET_SHA256'] and d['asset']['bytes']==int(os.environ['ASSET_BYTES'])
+          assert d['boundary']['release_asset_published'] is True
+          assert d['boundary']['corpus_mutated'] is False and d['boundary']['lease_issued'] is False
+          print(r)
+          PY
+          curl --fail --location --silent --show-error "$ASSET_URL" -o "$OUT/served.jpg"
+          test "$(sha256sum "$OUT/served.jpg" | awk '{print $1}')" = "$ASSET_SHA256"
+          test "$(wc -c < "$OUT/served.jpg")" = "$ASSET_BYTES"
+          sha256sum "$OUT/served.jpg" > "$OUT/served.sha256"
+          cp "$OUT/evidence/receipt.json" "$OUT/publication-receipt.json"
+          cp "$OUT/evidence/receipt.file.sha256" "$OUT/publication-receipt.file.sha256"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload immutable observer packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-media-prepublish-v1-observer-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
