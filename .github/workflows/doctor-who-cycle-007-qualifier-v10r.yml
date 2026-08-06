@@ -1,0 +1,216 @@
+name: doctor-who-cycle-007-qualifier-v10r
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-007-qualifier-v10r.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-007-qualifier-v10r-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-007-qualifier-v10r.yml
+  EXACT_MAIN: 014dbd3a4d9d4e82c0832d4c14f08cfff5138a58
+  EXACT_MAIN_TREE: be0aa58db34860018d65a4bae1700c7b0e098a9c
+  ATTESTED_MAIN: 45fc33aa8de8c01f03f006c5c01765dd1929385f
+  CHRONOLOGY_PRODUCT: 47227e26abab0e197f860e00e81679a04c62cbbf
+  V8_HEAD: f5f11c9be693c6d55f4ade5e471a354969da50ea
+  V8_SELF: .github/workflows/doctor-who-cycle-007-qualifier-v8.yml
+  V8_WORKFLOW_SHA256: f8cc23f7351c50bcef0d202a0e6bb5b16cc05b9b618d3329ed9b2ea8a3a90aea
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  PR_NUMBER: ${{ github.event.pull_request.number }}
+  OUT: /tmp/doctor-who-cycle-007-qualifier-v10r
+  QUALIFIER_PAYLOAD_DIR: /tmp/doctor-who-cycle-007-qualifier-payload-v10r
+  CYCLE_ASSET_DIR: /tmp/doctor-who-cycle-007-v8
+  CYCLE_CONTEXT: /tmp/doctor-who-cycle-007-context.json
+  SELECTION_DIR: /tmp/doctor-who-cycle-007-selection
+  PREFLIGHT_DIR: /tmp/doctor-who-cycle-007-preflight
+  MEDIA_DIR: /tmp/doctor-who-cycle-007-media-review
+  PRODUCT_DIR: /tmp/doctor-who-cycle-007-product
+  CYCLE_AT: 2026-08-05T20:55:00.000Z
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  qualify:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-007-qualifier-v10r'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Recover the checksum-proven V8 payload and bind the authorized head
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT" "$QUALIFIER_PAYLOAD_DIR" "$CYCLE_ASSET_DIR" "$SELECTION_DIR" "$PREFLIGHT_DIR" "$MEDIA_DIR" "$PRODUCT_DIR"
+          test "$AUTHORIZED_HEAD" = "$HEAD_SHA"
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+${V8_HEAD}:refs/qualifier/v8"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse "${EXACT_MAIN}^{tree}")" = "$EXACT_MAIN_TREE"
+          test "$(git rev-parse refs/qualifier/v8)" = "$V8_HEAD"
+          git show "${V8_HEAD}:${V8_SELF}" > "$OUT/v8-workflow.yml"
+          test "$(sha256sum "$OUT/v8-workflow.yml" | awk '{print $1}')" = "$V8_WORKFLOW_SHA256"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/444/comments?per_page=100" > "$OUT/v8-comments.json"
+          python - <<'PY'
+          import base64,hashlib,json,os,re,tarfile
+          from pathlib import Path
+          out=Path(os.environ['OUT']); payload=Path(os.environ['QUALIFIER_PAYLOAD_DIR'])
+          workflow=(out/'v8-workflow.yml').read_text()
+          def env(name):
+              m=re.search(rf'^\s*{re.escape(name)}:\s*([0-9a-f]+)\s*$',workflow,re.M)
+              if not m: raise SystemExit(f'missing V8 identity: {name}')
+              return m.group(1)
+          payload_sha=env('PAYLOAD_SHA256'); manifest_sha=env('PAYLOAD_MANIFEST_SHA256')
+          comments=json.loads((out/'v8-comments.json').read_text())
+          parts=[]
+          for comment in comments:
+              m=re.match(r'^CYCLE007_V8_QUALIFIER_PAYLOAD_PART (\d{2})/(\d{2})\n([A-Za-z0-9+/=\r\n]+)$',str(comment.get('body','')))
+              if m: parts.append((int(m.group(1)),int(m.group(2)),comment['id'],re.sub(r'\s','',m.group(3))))
+          parts.sort()
+          if len(parts)!=5 or any(n!=i+1 or total!=5 for i,(n,total,_,_) in enumerate(parts)):
+              raise SystemExit('V8 payload comment set drifted')
+          raw=base64.b64decode(''.join(row[3] for row in parts),validate=True)
+          if hashlib.sha256(raw).hexdigest()!=payload_sha: raise SystemExit('V8 payload archive drifted')
+          archive=out/'v8-payload.tgz'; archive.write_bytes(raw)
+          expected=['candidate-phase.sh','cycle007-v8-transport.tgz','expected-candidate-paths.txt','expected-final-paths.txt','final-phase.sh','package-product.mjs','payload-manifest.json']
+          with tarfile.open(archive,'r:gz') as tf:
+              if tf.getnames()!=expected: raise SystemExit('V8 payload member set drifted')
+              if any(n.startswith('/') or '..' in n.split('/') for n in tf.getnames()): raise SystemExit('unsafe V8 payload member')
+              tf.extractall(payload)
+          if hashlib.sha256((payload/'payload-manifest.json').read_bytes()).hexdigest()!=manifest_sha:
+              raise SystemExit('V8 payload manifest drifted')
+          manifest=json.loads((payload/'payload-manifest.json').read_text())
+          for row in manifest['files']:
+              data=(payload/row['path']).read_bytes()
+              if len(data)!=row['bytes'] or hashlib.sha256(data).hexdigest()!=row['sha256']:
+                  raise SystemExit(f"V8 payload member drifted: {row['path']}")
+          (out/'v8-payload-comments.json').write_text(json.dumps([{'number':n,'total':t,'comment_id':cid,'payload_bytes':len(body)} for n,t,cid,body in parts],indent=2)+'\n')
+          PY
+          chmod +x "$QUALIFIER_PAYLOAD_DIR"/*.sh "$QUALIFIER_PAYLOAD_DIR"/*.mjs
+          bash -n "$QUALIFIER_PAYLOAD_DIR/candidate-phase.sh"
+          bash -n "$QUALIFIER_PAYLOAD_DIR/final-phase.sh"
+          node --check "$QUALIFIER_PAYLOAD_DIR/package-product.mjs"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact dependencies, rendered runtime, and image tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y imagemagick >/dev/null
+          identify -version | head -1 | tee "$OUT/imagemagick-version.txt"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: doctor-who-cycle-007-selection-31023209453
+          path: ${{ env.SELECTION_DIR }}
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: 31023209453
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: doctor-who-cycle-007-preflight-31024339060
+          path: ${{ env.PREFLIGHT_DIR }}
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: 31024339060
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: doctor-who-cycle-007-kragar-media-review-v3-31027579331
+          path: ${{ env.MEDIA_DIR }}
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: 31027579331
+
+      - name: Build and completely gate immutable candidate
+        shell: bash
+        run: bash "$QUALIFIER_PAYLOAD_DIR/candidate-phase.sh"
+
+      - name: Upload exact candidate qualification
+        id: candidate-upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-candidate-v10r-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            ${{ env.CYCLE_CONTEXT }}
+            ${{ env.OUT }}/candidate-*
+            ${{ env.OUT }}/materialize.log
+            ${{ env.OUT }}/prepared-inputs.sha256
+            ${{ env.CYCLE_ASSET_DIR }}/kragar-normalized-verification.json
+            ${{ env.CYCLE_ASSET_DIR }}/kragar-still-candidate.jpg
+
+      - name: Build and completely gate immutable final product
+        shell: bash
+        env:
+          CANDIDATE_UPLOAD_ID: ${{ steps.candidate-upload.outputs.artifact-id }}
+          CANDIDATE_UPLOAD_DIGEST: ${{ steps.candidate-upload.outputs.artifact-digest }}
+        run: bash "$QUALIFIER_PAYLOAD_DIR/final-phase.sh"
+
+      - name: Upload complete trusted-publisher qualification
+        id: qualification-upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-trusted-qualification-v10r-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            ${{ env.OUT }}
+            ${{ env.CYCLE_CONTEXT }}
+            ${{ env.CYCLE_ASSET_DIR }}/transport-manifest.json
+            ${{ env.CYCLE_ASSET_DIR }}/kragar-normalized-verification.json
+            ${{ env.PRODUCT_DIR }}/product-files.tgz
+            ${{ env.PRODUCT_DIR }}/product-manifest.json
+            ${{ env.PRODUCT_DIR }}/publisher-settlement.json
+            ${{ env.PRODUCT_DIR }}/qualification.sha256
+            ${{ env.PRODUCT_DIR }}/uc-1352-still-f6f32eb1.jpg
+
+      - name: Record uploaded qualification identity
+        shell: bash
+        env:
+          QUALIFICATION_ID: ${{ steps.qualification-upload.outputs.artifact-id }}
+          QUALIFICATION_DIGEST: ${{ steps.qualification-upload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          test -n "$QUALIFICATION_ID" -a -n "$QUALIFICATION_DIGEST"
+          printf 'qualification_artifact_id=%s\nqualification_artifact_sha256=%s\n' "$QUALIFICATION_ID" "${QUALIFICATION_DIGEST#sha256:}"
+
+      - name: Retain bounded failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-qualifier-v10r-failure-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.OUT }}
+            ${{ env.CYCLE_CONTEXT }}
+            test-results
+            playwright-report
+            .ci
