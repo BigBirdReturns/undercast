@@ -130,20 +130,38 @@ jobs:
         run: |
           set -euo pipefail
           cd "$PRODUCT_ROOT"
+          node - <<'NODE' > "$OUTPUT_ROOT/changed-paths.txt"
+          const fs = require('fs');
+          const settlement = JSON.parse(fs.readFileSync('data/review/operational-reliability/exact-main-refresh-008f4bd0-2026-08-06.json', 'utf8'));
+          process.stdout.write(settlement.permanent_paths.join('\n') + '\n');
+          NODE
+          git add -A --pathspec-from-file="$OUTPUT_ROOT/changed-paths.txt"
+          git diff --cached --check
+          test "$(git diff --cached --name-only | sort | sha256sum | awk '{print $1}')" = "$(sort "$OUTPUT_ROOT/changed-paths.txt" | sha256sum | awk '{print $1}')"
+
           npm ci
           npx playwright install --with-deps chromium
           npm run gate | tee "$OUTPUT_ROOT/complete-gate.log"
-          test -z "$(git diff --check)"
+          git diff --cached --check
           node - <<'NODE'
           const fs = require('fs');
           const cp = require('child_process');
           const settlement = JSON.parse(fs.readFileSync('data/review/operational-reliability/exact-main-refresh-008f4bd0-2026-08-06.json', 'utf8'));
-          const actual = cp.execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], { encoding: 'utf8' })
-            .split(/\r?\n/).filter(Boolean).map((line) => line.slice(3)).sort();
+          const rows = cp.execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], { encoding: 'utf8' })
+            .split(/\r?\n/).filter(Boolean);
+          const actual = rows.map((line) => line.slice(3)).sort();
           const expected = [...settlement.permanent_paths].sort();
           if (JSON.stringify(actual) !== JSON.stringify(expected)) {
             throw new Error(`post-gate product paths drifted: ${JSON.stringify(actual)}`);
           }
+          for (const row of rows) {
+            const code = row.slice(0, 2);
+            if (code !== 'M ' && code !== 'A ') throw new Error(`post-gate path has non-staged or ambiguous status ${JSON.stringify(row)}`);
+          }
+          const unstaged = cp.execFileSync('git', ['diff', '--name-only'], { encoding: 'utf8' }).trim();
+          if (unstaged) throw new Error(`post-gate unstaged drift: ${unstaged}`);
+          const untracked = cp.execFileSync('git', ['ls-files', '--others', '--exclude-standard'], { encoding: 'utf8' }).trim();
+          if (untracked) throw new Error(`post-gate untracked drift: ${untracked}`);
           NODE
 
       - name: Seal deterministic product transport and final live-main lease
