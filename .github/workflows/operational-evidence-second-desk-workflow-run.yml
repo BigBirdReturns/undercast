@@ -1,0 +1,161 @@
+name: operational-evidence-second-desk-workflow-run
+
+on:
+  workflow_run:
+    workflows: ["doctor-who-cycle-008-current-main-source-export-v2"]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: operational-evidence-second-desk-workflow-run
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.id == 31119338755 &&
+      github.event.workflow_run.run_attempt == 2 &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INSTALLER_MAIN: ${{ github.sha }}
+      PRODUCT_BRANCH: agent/operational-evidence-second-desk-product-v4-20260806
+      PRODUCT_TITLE: "Operations: refresh reviewed exact-main reliability evidence (V4)"
+      PUBLISH_ROOT: /tmp/undercast-operational-second-desk-publisher-v4
+      TRIGGER_RUN_ID: "31119338755"
+      TRIGGER_ATTEMPT: "2"
+      EXPECTED_PARENT: 48f6b900e78f29748957142f433018fa17ce4532
+      V3_WORKFLOW_BLOB: c28876fda070c0da6df9acde7bf49a4e98d1bda7
+      WRAPPER_PATH: .github/workflows/operational-evidence-second-desk-workflow-run.yml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind the exact trusted workflow-run ignition
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$PUBLISH_ROOT"
+          rm -rf "$root"
+          mkdir -p "$root"/{diagnostics,receipt}
+
+          test "$GITHUB_REPOSITORY" = 'BigBirdReturns/undercast'
+          test "$GITHUB_EVENT_NAME" = 'workflow_run'
+          test "$(git rev-parse HEAD)" = "$INSTALLER_MAIN"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
+          test "$(git diff --name-only "$EXPECTED_PARENT..$INSTALLER_MAIN")" = "$WRAPPER_PATH"
+          test "$(git hash-object .github/workflows/operational-evidence-second-desk-publisher.yml)" = "$V3_WORKFLOW_BLOB"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$INSTALLER_MAIN"
+
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$TRIGGER_RUN_ID" > "$root/trigger-run.json"
+          EVENT_PATH="$GITHUB_EVENT_PATH" ROOT="$root" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          root = Path(os.environ['ROOT'])
+          event = json.loads(Path(os.environ['EVENT_PATH']).read_text())
+          run = json.loads((root / 'trigger-run.json').read_text())
+          payload = event['workflow_run']
+          assert payload['id'] == 31119338755
+          assert payload['run_attempt'] == 2
+          assert payload['conclusion'] == 'success'
+          assert payload['name'] == 'doctor-who-cycle-008-current-main-source-export-v2'
+          assert payload['event'] == 'pull_request'
+          assert payload['head_repository']['full_name'] == 'BigBirdReturns/undercast'
+          assert run['id'] == 31119338755
+          assert run['run_attempt'] == 2
+          assert run['status'] == 'completed' and run['conclusion'] == 'success'
+          assert run['name'] == 'doctor-who-cycle-008-current-main-source-export-v2'
+          assert run['event'] == 'pull_request'
+          assert run['head_repository']['full_name'] == 'BigBirdReturns/undercast'
+          PY
+
+      - name: Recover and execute the reviewed transparent publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          node --input-type=module - <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import YAML from 'yaml';
+
+          const workflow = YAML.parse(
+            readFileSync('.github/workflows/operational-evidence-second-desk-publisher.yml', 'utf8'),
+            { schema: 'core', uniqueKeys: true, maxAliasCount: 100 },
+          );
+          const step = workflow.jobs?.publish?.steps?.find(
+            (row) => row?.name === 'Publish the exact reviewed 27-path product',
+          );
+          if (!step || typeof step.run !== 'string') throw new Error('V3 publisher shell block is missing');
+          let source = step.run;
+          const replaceOnce = (oldValue, newValue, label) => {
+            const count = source.split(oldValue).length - 1;
+            if (count !== 1) throw new Error(`${label} replacement count ${count}`);
+            source = source.replace(oldValue, newValue);
+          };
+          replaceOnce(
+            "expected_parent='3228efd6ede786586352b1b990a94d16ab02d5f9'",
+            "expected_parent='48f6b900e78f29748957142f433018fa17ce4532'",
+            'wrapper parent',
+          );
+          replaceOnce(
+            "workflow_path='.github/workflows/operational-evidence-second-desk-publisher.yml'",
+            "workflow_path='.github/workflows/operational-evidence-second-desk-workflow-run.yml'",
+            'wrapper path',
+          );
+          replaceOnce(
+            "[[ \"$GITHUB_REPOSITORY\" == \"$repo\" && \"$GITHUB_EVENT_NAME\" == 'push' && \"$GITHUB_REF_NAME\" == 'main' ]] || fail 'untrusted execution context'",
+            "[[ \"$GITHUB_REPOSITORY\" == \"$repo\" && \"$GITHUB_EVENT_NAME\" == 'workflow_run' ]] || fail 'untrusted execution context'",
+            'workflow-run context',
+          );
+          source = source.replaceAll('V3', 'V4');
+          writeFileSync('/tmp/operational-evidence-second-desk-publisher-v4.sh', `#!/usr/bin/env bash\n${source}`);
+          NODE
+          bash -n /tmp/operational-evidence-second-desk-publisher-v4.sh
+          sha256sum /tmp/operational-evidence-second-desk-publisher-v4.sh | tee "$PUBLISH_ROOT/diagnostics/executed-script.sha256"
+          bash /tmp/operational-evidence-second-desk-publisher-v4.sh
+
+      - name: Upload exact V4 publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-evidence-second-desk-publication-v4-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/undercast-operational-second-desk-publisher-v4/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Remove partial publication after any later failure
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          root="$PUBLISH_ROOT"
+          if [ -f "$root/product-pr.txt" ]; then
+            gh pr close "$(cat "$root/product-pr.txt")" --repo "$GITHUB_REPOSITORY" --comment 'Closed automatically because V4 publication did not reach terminal success.'
+          fi
+          gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$PRODUCT_BRANCH" >/dev/null 2>&1 || true
+
+      - name: Upload V4 failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-evidence-second-desk-publication-v4-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/undercast-operational-second-desk-publisher-v4
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
