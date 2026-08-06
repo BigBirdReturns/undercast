@@ -1,0 +1,214 @@
+name: merge-doctor-who-cycle-007-v8-product-v2
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/merge-doctor-who-cycle-007-v8-product-v2.yml"
+
+permissions:
+  contents: write
+  actions: read
+  pull-requests: write
+  checks: read
+  statuses: read
+
+concurrency:
+  group: merge-doctor-who-cycle-007-v8-product-v2-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  EXACT_MAIN: 014dbd3a4d9d4e82c0832d4c14f08cfff5138a58
+  GUARDIAN_BRANCH: agent/doctor-who-cycle-007-v8-merge-guardian-v2
+  QUALIFIER_BRANCH: agent/doctor-who-cycle-007-v8-product-qualifier-v2
+  QUALIFIER_WORKFLOW_NAME: qualify-doctor-who-cycle-007-v8-product-v2
+  QUALIFIER_WORKFLOW_PATH: .github/workflows/qualify-doctor-who-cycle-007-v8-product-v2.yml
+  PRODUCT_BRANCH: agent/doctor-who-cycle-007-kragar-completion-v8-final
+  SELF: .github/workflows/merge-doctor-who-cycle-007-v8-product-v2.yml
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  ROOT: /tmp/doctor-who-cycle-007-v8-merge-guardian-v2
+  OUT: /tmp/doctor-who-cycle-007-v8-merge-guardian-v2/out
+  QUALIFICATION: /tmp/doctor-who-cycle-007-v8-merge-guardian-v2/qualification
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  merge:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-007-v8-merge-guardian-v2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+
+      - name: Bind exact guardian and repaired read-only qualifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$ROOT" "$OUT" "$QUALIFICATION"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = "1"
+          test "$HEAD_BRANCH" = "$GUARDIAN_BRANCH"
+          printf '%s\n' "$SELF" > "$OUT/expected-guardian-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-guardian-paths.txt"
+          diff -u "$OUT/expected-guardian-paths.txt" "$OUT/actual-guardian-paths.txt"
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main" "+refs/heads/${QUALIFIER_BRANCH}:refs/remotes/origin/${QUALIFIER_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          qualifier_head="$(git rev-parse refs/remotes/origin/${QUALIFIER_BRANCH})"
+          test "$(git show -s --format=%P "$qualifier_head")" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN".."$qualifier_head")" = "1"
+          printf '%s\n' "$QUALIFIER_WORKFLOW_PATH" > "$OUT/expected-qualifier-paths.txt"
+          git diff --name-only "$EXACT_MAIN"..."$qualifier_head" | LC_ALL=C sort > "$OUT/actual-qualifier-paths.txt"
+          diff -u "$OUT/expected-qualifier-paths.txt" "$OUT/actual-qualifier-paths.txt"
+          git show "${qualifier_head}:${QUALIFIER_WORKFLOW_PATH}" > "$OUT/qualifier-workflow.yml"
+          grep -F 'contents: read' "$OUT/qualifier-workflow.yml" >/dev/null
+          grep -F 'pull-requests: read' "$OUT/qualifier-workflow.yml" >/dev/null
+          ! grep -F 'contents: write' "$OUT/qualifier-workflow.yml" >/dev/null
+          ! grep -F 'pull-requests: write' "$OUT/qualifier-workflow.yml" >/dev/null
+          ! grep -F 'git push' "$OUT/qualifier-workflow.yml" >/dev/null
+          printf '%s\n' "$qualifier_head" > "$OUT/qualifier-head.txt"
+
+      - name: Discover exact green repaired qualification
+        id: qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          qualifier_head="$(cat "$OUT/qualifier-head.txt")"
+          run=''
+          for _ in $(seq 1 480); do
+            run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?event=pull_request&branch=${QUALIFIER_BRANCH}&per_page=100" --jq ".workflow_runs[] | select(.name==\"${QUALIFIER_WORKFLOW_NAME}\" and .head_sha==\"${qualifier_head}\" and .status==\"completed\" and .conclusion==\"success\") | .id" | head -1)"
+            test -n "$run" && break
+            sleep 5
+          done
+          test -n "$run"
+          job="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run}/jobs?per_page=100" --jq '.jobs[] | select(.name=="qualify" and .status=="completed" and .conclusion=="success") | .id' | head -1)"
+          test -n "$job"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run}/jobs?per_page=100" > "$OUT/qualifier-jobs.json"
+          jq -e '.jobs | length==1 and all(.[]; .status=="completed" and .conclusion=="success" and all(.steps[]; .conclusion=="success" or .conclusion=="skipped"))' "$OUT/qualifier-jobs.json" >/dev/null
+          name="doctor-who-cycle-007-v8-product-qualification-v2-${run}"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run}/artifacts?per_page=100" > "$OUT/qualifier-artifacts.json"
+          id="$(jq -r --arg name "$name" '.artifacts[] | select(.name==$name and .expired==false) | .id' "$OUT/qualifier-artifacts.json" | head -1)"
+          digest="$(jq -r --arg name "$name" '.artifacts[] | select(.name==$name and .expired==false) | .digest' "$OUT/qualifier-artifacts.json" | head -1)"
+          test -n "$id" -a -n "$digest"
+          printf 'run=%s\njob=%s\nname=%s\nid=%s\ndigest=%s\nhead=%s\n' "$run" "$job" "$name" "$id" "$digest" "$qualifier_head" > "$OUT/qualification-custody.txt"
+          printf 'run=%s\njob=%s\nname=%s\nid=%s\ndigest=%s\n' "$run" "$job" "$name" "$id" "$digest" >> "$GITHUB_OUTPUT"
+          printf 'QUALIFIER_RUN=%s\nQUALIFIER_JOB=%s\nQUALIFICATION_ARTIFACT_ID=%s\nQUALIFICATION_ARTIFACT_DIGEST=%s\n' "$run" "$job" "$id" "${digest#sha256:}" >> "$GITHUB_ENV"
+
+      - name: Download immutable repaired product qualification
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.qualification.outputs.name }}
+          path: ${{ env.QUALIFICATION }}
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: ${{ steps.qualification.outputs.run }}
+
+      - name: Bind exact qualified product PR, head, tree, and paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          receipt="$(find "$QUALIFICATION" -type f -name product-qualification.json -print -quit)"
+          sha_file="$(find "$QUALIFICATION" -type f -name product-qualification.sha256 -print -quit)"
+          paths="$(find "$QUALIFICATION" -type f -name product-paths.txt -print -quit)"
+          gate="$(find "$QUALIFICATION" -type f -name complete-gate.log -print -quit)"
+          test -n "$receipt" -a -n "$sha_file" -a -n "$paths" -a -n "$gate"
+          receipt_sha="$(sha256sum "$receipt" | awk '{print $1}')"
+          test "$(cat "$sha_file")" = "$receipt_sha"
+          jq -e --arg main "$EXACT_MAIN" --arg branch "$PRODUCT_BRANCH" '
+            .schema_version==1 and .transaction=="DOCTOR-WHO-CYCLE-007-KRAGAR-PRODUCT-QUALIFICATION-V2" and .canonical_main==$main and .product_branch==$branch and .verdict=="approved-for-exact-merge" and
+            (.product_pr|type)=="number" and (.product_commit|test("^[0-9a-f]{40}$")) and (.product_tree|test("^[0-9a-f]{40}$")) and (.product_paths|type)=="number" and .product_paths>0 and
+            (.complete_gate_sha256|test("^[0-9a-f]{64}$")) and (.independent_review_receipt_sha256|test("^[0-9a-f]{64}$"))
+          ' "$receipt" >/dev/null
+          product_pr="$(jq -r '.product_pr' "$receipt")"; product_head="$(jq -r '.product_commit' "$receipt")"; product_tree="$(jq -r '.product_tree' "$receipt")"; count="$(jq -r '.product_paths' "$receipt")"
+          test "$(wc -l < "$paths")" = "$count"
+          ! grep -E '^(\.github/workflows/|tmp/)' "$paths" >/dev/null
+          test "$(sha256sum "$gate" | awk '{print $1}')" = "$(jq -r '.complete_gate_sha256' "$receipt")"
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main" "+refs/heads/${PRODUCT_BRANCH}:refs/remotes/origin/${PRODUCT_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${PRODUCT_BRANCH})" = "$product_head"
+          test "$(git rev-parse "${product_head}^{tree}")" = "$product_tree"
+          test "$(git show -s --format=%P "$product_head")" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN".."$product_head")" = 1
+          git diff --name-only "$EXACT_MAIN"..."$product_head" | LC_ALL=C sort > "$OUT/live-product-paths.txt"
+          cmp "$paths" "$OUT/live-product-paths.txt"
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${product_pr}" > "$OUT/product-pr.json"
+          jq -e --arg branch "$PRODUCT_BRANCH" --arg head "$product_head" --arg base "$EXACT_MAIN" '.state=="open" and .merged==false and .draft==false and .head.ref==$branch and .head.sha==$head and .base.ref=="main" and .base.sha==$base' "$OUT/product-pr.json" >/dev/null
+          printf 'PRODUCT_PR=%s\nPRODUCT_HEAD=%s\nPRODUCT_TREE=%s\nPRODUCT_PATH_COUNT=%s\nQUALIFICATION_RECEIPT_SHA256=%s\n' "$product_pr" "$product_head" "$product_tree" "$count" "$receipt_sha" >> "$GITHUB_ENV"
+          cp "$receipt" "$OUT/product-qualification.json"; cp "$sha_file" "$OUT/product-qualification.sha256"; cp "$paths" "$OUT/qualified-product-paths.txt"
+
+      - name: Require completed product checks and clean mergeability
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 300); do
+            gh api -H 'Accept: application/vnd.github+json' "repos/${GITHUB_REPOSITORY}/commits/${PRODUCT_HEAD}/check-runs?per_page=100" > "$OUT/product-check-runs.json"
+            total="$(jq -r '.total_count' "$OUT/product-check-runs.json")"; pending="$(jq '[.check_runs[]|select(.status!="completed")]|length' "$OUT/product-check-runs.json")"; bad="$(jq '[.check_runs[]|select(.status=="completed" and (.conclusion!="success" and .conclusion!="neutral" and .conclusion!="skipped"))]|length' "$OUT/product-check-runs.json")"
+            pr="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PRODUCT_PR}")"; mergeable="$(jq -r '.mergeable' <<<"$pr")"; state="$(jq -r '.mergeable_state' <<<"$pr")"
+            if test "$total" -ge 1 -a "$pending" = 0 -a "$bad" = 0 -a "$mergeable" = true && test "$state" != dirty -a "$state" != blocked; then printf '%s\n' "$pr" > "$OUT/product-pr-ready.json"; break; fi
+            sleep 5
+          done
+          test -s "$OUT/product-pr-ready.json"
+          jq -e '.total_count>=1 and all(.check_runs[]; .status=="completed" and (.conclusion=="success" or .conclusion=="neutral" or .conclusion=="skipped"))' "$OUT/product-check-runs.json" >/dev/null
+
+      - name: Merge only the exact repaired product head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main" "+refs/heads/${PRODUCT_BRANCH}:refs/remotes/origin/${PRODUCT_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${PRODUCT_BRANCH})" = "$PRODUCT_HEAD"
+          gh api -X PUT "repos/${GITHUB_REPOSITORY}/pulls/${PRODUCT_PR}/merge" -f sha="$PRODUCT_HEAD" -f merge_method=squash -f commit_title='Corpus: publish Doctor Who cycle 007 Kragar product' -f commit_message='Publish the exact independently reviewed, receipt-finalized, workflow-free Kragar cycle product.' > "$OUT/merge-response.json"
+          jq -e '.merged==true and (.sha|test("^[0-9a-f]{40}$"))' "$OUT/merge-response.json" >/dev/null
+          jq -r '.sha' "$OUT/merge-response.json" > "$OUT/merged-main.txt"
+
+      - name: Verify canonical main tree and close never-merge carriers
+        shell: bash
+        run: |
+          set -euo pipefail
+          merged="$(cat "$OUT/merged-main.txt")"
+          for _ in $(seq 1 30); do git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"; test "$(git rev-parse refs/remotes/origin/main)" = "$merged" && break; sleep 2; done
+          test "$(git rev-parse refs/remotes/origin/main)" = "$merged"
+          test "$(git show -s --format=%P "$merged")" = "$EXACT_MAIN"
+          test "$(git rev-parse "${merged}^{tree}")" = "$PRODUCT_TREE"
+          git diff --name-only "$EXACT_MAIN"..."$merged" | LC_ALL=C sort > "$OUT/merged-main-paths.txt"
+          cmp "$OUT/qualified-product-paths.txt" "$OUT/merged-main-paths.txt"
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PRODUCT_PR}" > "$OUT/merged-product-pr.json"
+          jq -e --arg merged "$merged" '.state=="closed" and .merged==true and .merge_commit_sha==$merged' "$OUT/merged-product-pr.json" >/dev/null
+          cat > "$OUT/canonical-merge-receipt.json" <<JSON
+          {
+            "schema_version": 1,
+            "transaction": "DOCTOR-WHO-CYCLE-007-KRAGAR-CANONICAL-MERGE-V2",
+            "previous_main": "$EXACT_MAIN",
+            "canonical_main": "$merged",
+            "canonical_tree": "$PRODUCT_TREE",
+            "product_pr": $PRODUCT_PR,
+            "product_commit": "$PRODUCT_HEAD",
+            "product_paths": $PRODUCT_PATH_COUNT,
+            "qualifier_run": $QUALIFIER_RUN,
+            "qualifier_job": $QUALIFIER_JOB,
+            "qualification_artifact_id": $QUALIFICATION_ARTIFACT_ID,
+            "qualification_artifact_sha256": "$QUALIFICATION_ARTIFACT_DIGEST",
+            "qualification_receipt_sha256": "$QUALIFICATION_RECEIPT_SHA256",
+            "verdict": "merged-exact-reviewed-product"
+          }
+          JSON
+          sha256sum "$OUT/canonical-merge-receipt.json" | awk '{print $1}' > "$OUT/canonical-merge-receipt.sha256"
+          body="Exact cycle-007 Kragar product merged at ${merged}; canonical tree ${PRODUCT_TREE}; reviewed product ${PRODUCT_HEAD}; merge receipt SHA-256 $(cat "$OUT/canonical-merge-receipt.sha256")."
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PRODUCT_PR}/comments" -f body="$body" >/dev/null
+          for branch in agent/doctor-who-cycle-007-v8-materializer agent/doctor-who-cycle-007-v8-independent-review-v2 agent/doctor-who-cycle-007-v8-independent-review-v3-probe agent/doctor-who-cycle-007-v8-independent-review-v4-probe agent/doctor-who-cycle-007-v8-finalizer-v1 agent/doctor-who-cycle-007-v8-finalizer-v2 agent/doctor-who-cycle-007-v8-product-qualifier-v1 agent/doctor-who-cycle-007-v8-product-qualifier-v2 agent/doctor-who-cycle-007-v8-merge-guardian-v1 agent/doctor-who-cycle-007-v8-merge-guardian-v2; do
+            pr="$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&head=BigBirdReturns:${branch}&per_page=100" --jq '.[0].number // empty')"; test -z "$pr" || gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${pr}" -f state=closed >/dev/null
+          done
+
+      - name: Upload canonical repaired merge custody
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-v8-canonical-merge-v2-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: warn
+          path: ${{ env.OUT }}
