@@ -1,0 +1,134 @@
+name: review-doctor-who-cycle-007-v8
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/review-doctor-who-cycle-007-v8.yml"
+      - "tmp/review-doctor-who-cycle-007-v8.mjs.xz.b64"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: review-doctor-who-cycle-007-v8-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  EXACT_MAIN: 014dbd3a4d9d4e82c0832d4c14f08cfff5138a58
+  REVIEW_BRANCH: agent/doctor-who-cycle-007-v8-independent-review-v2
+  CANDIDATE_BRANCH: agent/doctor-who-cycle-007-v8-materializer
+  CANDIDATE_HEAD: 0b0adcf29b87142cd12e06471124edd52fe7c99a
+  CANDIDATE_RUN: 31059092270
+  CANDIDATE_JOB: 92482853201
+  CANDIDATE_ARTIFACT: doctor-who-cycle-007-candidate-31059092270
+  DIAGNOSTICS_ARTIFACT: doctor-who-cycle-007-v8-candidate-only-31059092270
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  SELF: .github/workflows/review-doctor-who-cycle-007-v8.yml
+  REVIEWER_ARCHIVE: tmp/review-doctor-who-cycle-007-v8.mjs.xz.b64
+  REVIEWER: /tmp/review-doctor-who-cycle-007-v8.mjs
+  REVIEWER_SHA256: ee89ff3b7733e05dfb94f369e330f3005db2ac17c71733b7e24d1b6460ba2696
+  EXPECTED_RECEIPT_SHA256: fd00947e2d6adca2a6bf558c667d93c96e8c3cf4fcdc31071b1343ecd2ae83c5
+  ROOT: /tmp/doctor-who-cycle-007-v8-independent-review
+  CANDIDATE: /tmp/doctor-who-cycle-007-v8-independent-review/candidate
+  DIAGNOSTICS: /tmp/doctor-who-cycle-007-v8-independent-review/diagnostics
+  OUT: /tmp/doctor-who-cycle-007-v8-independent-review/out
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  review:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-007-v8-independent-review-v2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Bind exact two-path independent-review carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$ROOT" "$CANDIDATE" "$DIAGNOSTICS" "$OUT"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = "1"
+          test "$(git merge-base "$EXACT_MAIN" HEAD)" = "$EXACT_MAIN"
+          test -z "$(git status --porcelain)"
+          printf '%s\n' "$SELF" "$REVIEWER_ARCHIVE" | LC_ALL=C sort > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+
+          base64 --decode "$REVIEWER_ARCHIVE" | xz --decompress > "$REVIEWER"
+          test "$(sha256sum "$REVIEWER" | awk '{print $1}')" = "$REVIEWER_SHA256"
+          node --check "$REVIEWER"
+          printf '%s\n' "$REVIEWER_SHA256" > "$OUT/reviewer.sha256"
+
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${CANDIDATE_BRANCH}:refs/remotes/origin/${CANDIDATE_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${CANDIDATE_BRANCH})" = "$CANDIDATE_HEAD"
+          git show "$CANDIDATE_HEAD:.github/workflows/materialize-doctor-who-cycle-007-v8.yml" > "$OUT/candidate-workflow.yml"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN}/artifacts?per_page=100" > "$OUT/candidate-artifacts.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN}/jobs?per_page=100" > "$OUT/candidate-jobs.json"
+
+      - name: Download immutable candidate artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CANDIDATE_ARTIFACT }}
+          path: ${{ env.CANDIDATE }}
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: ${{ env.CANDIDATE_RUN }}
+
+      - name: Download immutable candidate diagnostics
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.DIAGNOSTICS_ARTIFACT }}
+          path: ${{ env.DIAGNOSTICS }}
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: ${{ env.CANDIDATE_RUN }}
+
+      - name: Perform independent candidate review
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$REVIEWER" \
+            "$CANDIDATE" \
+            "$DIAGNOSTICS" \
+            "$OUT/candidate-artifacts.json" \
+            "$OUT/candidate-jobs.json" \
+            "$OUT/candidate-workflow.yml" \
+            "$OUT" \
+            | tee "$OUT/review.log"
+          test -s "$OUT/independent-review-receipt.json"
+          test "$(sha256sum "$OUT/independent-review-receipt.json" | awk '{print $1}')" = "$EXPECTED_RECEIPT_SHA256"
+          test "$(cat "$OUT/independent-review-receipt.sha256")" = "$EXPECTED_RECEIPT_SHA256"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload immutable independent-review receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-independent-review-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            ${{ env.OUT }}/actual-carrier-paths.txt
+            ${{ env.OUT }}/candidate-artifacts.json
+            ${{ env.OUT }}/candidate-extracted-manifest.sha256
+            ${{ env.OUT }}/candidate-jobs.json
+            ${{ env.OUT }}/candidate-workflow.yml
+            ${{ env.OUT }}/diagnostics-extracted-manifest.sha256
+            ${{ env.OUT }}/expected-carrier-paths.txt
+            ${{ env.OUT }}/independent-review-receipt.json
+            ${{ env.OUT }}/independent-review-receipt.sha256
+            ${{ env.OUT }}/review.log
+            ${{ env.OUT }}/reviewer.sha256
