@@ -1,0 +1,84 @@
+name: operational-evidence-publisher-payload-audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/operational-evidence-publisher-payload-audit.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_BLOB: 0122cc194fc7c800a86f1ef84d737e3b3c10509e
+  EXPECTED_SCRIPT_SHA256: c9eeee34235b5850b96c5f136427e4a2faa8740c0bd0cbdd277b8a8995f0b41a
+  AUDIT_ROOT: /tmp/undercast-operational-publisher-payload-audit
+
+jobs:
+  audit:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Recover and verify the exact publisher blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -rf "$AUDIT_ROOT"
+          mkdir -p "$AUDIT_ROOT"
+
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/blobs/${TARGET_BLOB}" \
+            > "$AUDIT_ROOT/blob.json"
+
+          jq -e --arg sha "$TARGET_BLOB" \
+            '.sha == $sha and .encoding == "base64" and (.content | type == "string")' \
+            "$AUDIT_ROOT/blob.json" > /dev/null
+
+          jq -r '.content' "$AUDIT_ROOT/blob.json" \
+            | tr -d '\n' \
+            | base64 -d \
+            > "$AUDIT_ROOT/publisher.sh.gz.b64"
+
+          test "$(git hash-object "$AUDIT_ROOT/publisher.sh.gz.b64")" = "$TARGET_BLOB"
+          base64 -d "$AUDIT_ROOT/publisher.sh.gz.b64" > "$AUDIT_ROOT/publisher.sh.gz"
+          gzip -t "$AUDIT_ROOT/publisher.sh.gz"
+          gzip -dc "$AUDIT_ROOT/publisher.sh.gz" > "$AUDIT_ROOT/publisher.sh"
+          test "$(sha256sum "$AUDIT_ROOT/publisher.sh" | awk '{print $1}')" = "$EXPECTED_SCRIPT_SHA256"
+          bash -n "$AUDIT_ROOT/publisher.sh"
+
+          {
+            printf 'target_blob=%s\n' "$TARGET_BLOB"
+            printf 'publisher_git_blob=%s\n' "$(git hash-object "$AUDIT_ROOT/publisher.sh.gz.b64")"
+            printf 'publisher_base64_bytes=%s\n' "$(wc -c < "$AUDIT_ROOT/publisher.sh.gz.b64")"
+            printf 'publisher_gzip_bytes=%s\n' "$(wc -c < "$AUDIT_ROOT/publisher.sh.gz")"
+            printf 'publisher_script_bytes=%s\n' "$(wc -c < "$AUDIT_ROOT/publisher.sh")"
+            printf 'publisher_script_sha256=%s\n' "$(sha256sum "$AUDIT_ROOT/publisher.sh" | awk '{print $1}')"
+            printf 'bash_syntax=pass\n'
+          } > "$AUDIT_ROOT/receipt.txt"
+
+          grep -nE '(^|[^[:alnum:]_])(git push|gh pr create|gh api|curl|tar|rm -rf|eval|source|chmod|mktemp)([^[:alnum:]_]|$)|BASE_SHA|INSTALLER_MAIN|PRODUCT_BRANCH|SOURCE_RUN_ID|ARTIFACT_ID' \
+            "$AUDIT_ROOT/publisher.sh" \
+            > "$AUDIT_ROOT/static-scan.txt" || true
+
+          sha256sum \
+            "$AUDIT_ROOT/blob.json" \
+            "$AUDIT_ROOT/publisher.sh.gz.b64" \
+            "$AUDIT_ROOT/publisher.sh.gz" \
+            "$AUDIT_ROOT/publisher.sh" \
+            "$AUDIT_ROOT/static-scan.txt" \
+            "$AUDIT_ROOT/receipt.txt" \
+            > "$AUDIT_ROOT/SHA256SUMS"
+
+      - name: Upload exact decoded publisher for independent review
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-evidence-publisher-payload-audit-${{ github.run_id }}
+          path: /tmp/undercast-operational-publisher-payload-audit
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
