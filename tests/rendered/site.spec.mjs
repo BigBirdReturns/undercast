@@ -6,6 +6,12 @@ const open=(page,path)=>page.goto(sitePath(path),{waitUntil:"domcontentloaded"})
 const pixel=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+Xh9WAAAAAElFTkSuQmCC","base64");
 const jpeg=await readFile(new URL("../../images/uc-035-portrait.jpg",import.meta.url));
 const specimens=JSON.parse(await readFile(new URL("../../data/specimens.json",import.meta.url),"utf8"));
+const decadeOf=years=>{
+  const match=String(years).match(/\d{4}/);
+  if(!match) return "—";
+  const decade=Math.floor(Number.parseInt(match[0],10)/10)*10;
+  return decade<1970?"pre-70s":`${String(decade).slice(2)}s`;
+};
 const mediaLive=JSON.parse(await readFile(new URL("../../data/media-live.json",import.meta.url),"utf8"));
 const releaseImage=/^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\/[^/]+\/[^/?#]+$/;
 const missingPortraitFixture=specimens.find(record=>record.still?.src&&!record.portrait?.src&&releaseImage.test(mediaLive.urls?.[record.still.src]||""));
@@ -182,7 +188,8 @@ test("wall search, current decade, flip semantics, and partial failure are hones
 
   await page.getByRole("searchbox",{name:"Search a character, a performer, or a production",exact:true}).fill("");
   await page.getByRole("button",{name:"20s",exact:true}).click();
-  await expect(page.locator("#result-status")).toHaveText("89 specimens match; 89 shown.");
+  const currentDecadeCount=specimens.filter(record=>decadeOf(record.years)==="20s").length;
+  await expect(page.locator("#result-status")).toHaveText(`${currentDecadeCount} specimens match; ${currentDecadeCount} shown.`);
 
   const firstArticle=page.locator("article.cast").first();
   const character=await firstArticle.locator(".charname").textContent();
