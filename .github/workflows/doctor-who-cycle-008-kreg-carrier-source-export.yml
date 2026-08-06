@@ -1,0 +1,99 @@
+name: doctor-who-cycle-008-kreg-carrier-source-export
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-carrier-source-export.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-carrier-source-export-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  EXACT_MAIN: 3228efd6ede786586352b1b990a94d16ab02d5f9
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-carrier-source-export.yml
+  CARRIER_BRANCH: agent/doctor-who-cycle-008-kreg-carrier-source-export
+  V1_BRANCH: agent/doctor-who-cycle-008-kreg-candidate-v1
+  V2_BRANCH: agent/doctor-who-cycle-008-kreg-candidate-v2
+  OUT: /tmp/doctor-who-cycle-008-kreg-carrier-source-export
+
+jobs:
+  export:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-carrier-source-export'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact read-only export carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = "1"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          git fetch --no-tags --filter=blob:none origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${CARRIER_BRANCH}:refs/remotes/origin/${CARRIER_BRANCH}" \
+            "+refs/heads/${V1_BRANCH}:refs/remotes/origin/${V1_BRANCH}" \
+            "+refs/heads/${V2_BRANCH}:refs/remotes/origin/${V2_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${CARRIER_BRANCH})" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --porcelain)"
+
+      - name: Export immutable V1 payload and partial V2 carrier bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          v1="refs/remotes/origin/${V1_BRANCH}"
+          v2="refs/remotes/origin/${V2_BRANCH}"
+          git rev-parse "$v1" > "$OUT/v1-head.txt"
+          git rev-parse "$v2" > "$OUT/v2-head.txt"
+          git show "$v1:.github/doctor-who-cycle-008/kreg-candidate-v1-payload.tar.gz.b64" > "$OUT/kreg-candidate-v1-payload.tar.gz.b64"
+          git show "$v1:.github/workflows/doctor-who-cycle-008-kreg-candidate-v1.yml" > "$OUT/kreg-candidate-v1-workflow.yml"
+          git show "$v2:.github/doctor-who-cycle-008/kreg-candidate-v2-payload.part-00.b64" > "$OUT/kreg-candidate-v2-payload.part-00.b64"
+          git show "$v2:.github/doctor-who-cycle-008/kreg-candidate-v2-payload.part-01.b64" > "$OUT/kreg-candidate-v2-payload.part-01.b64"
+          sha256sum "$OUT"/kreg-candidate-* > "$OUT/SHA256SUMS"
+          printf 'v1_parent=%s\nv1_tree=%s\nv2_parent=%s\nv2_tree=%s\n' \
+            "$(git show -s --format=%P "$v1")" "$(git rev-parse "$v1^{tree}")" \
+            "$(git show -s --format=%P "$v2")" "$(git rev-parse "$v2^{tree}")" \
+            > "$OUT/git-identities.txt"
+          test "$(sha256sum "$OUT/kreg-candidate-v1-payload.tar.gz.b64" | awk '{print $1}')" = "614bda7dd19ad5934c773a607a7d0ceb674efff66a7ce8d62eb287e4156ed83d"
+          test "$(sha256sum "$OUT/kreg-candidate-v2-payload.part-00.b64" | awk '{print $1}')" = "5abcd85d23a33d282dea06e5162a0a848efa5c79946be1b9c8a356e22d7d910e"
+          test "$(sha256sum "$OUT/kreg-candidate-v2-payload.part-01.b64" | awk '{print $1}')" = "5d4ae5e0bdac53c631cbcf04e0f7e50282a16b424c2ef9ca441c30be0b0432b4"
+
+      - name: Rebind live main after export
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact carrier source packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-carrier-source-export-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
