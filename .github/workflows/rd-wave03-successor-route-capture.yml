@@ -1,0 +1,124 @@
+name: RD-W03 frozen successor-route capture
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/rd-wave03-successor-route-capture.yml"
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: rd-wave03-successor-route-capture-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_PARENT: cb8472c84500f12afeb4da5441189c136b17ba1c
+      EXPECTED_PARENT_TREE: c3539da760933302fc6af4371fd1ac2124375db9
+      EXPECTED_HEAD_BRANCH: agent/ssc-rd-wave03-successor-route-capture-v2-20260805
+      EXPECTED_BASE_BRANCH: agent/ssc-rd-wave03-successor-route-census-product-20260805
+      CARRIER_HEAD: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      ISSUE_NUMBER: "487"
+      LEDGER_PATH: data/research/residual-denominator/wave-03/successor-route-census/ledger.json
+      LEDGER_SHA256: d2634f65b0c15ef4aa444e2510eec60dcfe50ddaf516e6038f683736ae8f23d6
+      ROUTE_SET_SHA256: 160c0f500b7df184ab084e031704f2dead793f13807c2cbdb8cc612f72dd998f
+      RUNNER_SOURCE_BYTES: "17508"
+      RUNNER_SOURCE_SHA256: c89abdcdc80848495123519925a51ce774fb0854cfd251101f566c67da5d73ee
+      RUNNER_XZ_BYTES: "4680"
+      RUNNER_XZ_SHA256: 03fd33b78cbbce68f14eff6ca6cc05e643b3d9fd98f0c1ef268c76b94747d2a9
+      RUNNER_BASE64_BYTES: "6240"
+      RUNNER_BASE64_SHA256: 267d3c5976f8eda2078a1f41507cbb07f8f33b1cac5983eadcb5a3e4fae3e8ac
+      RUNNER_PATH: /tmp/rd-wave03-successor-capture.py
+      CAPTURE_ROOT: /tmp/rd-wave03-successor-route-capture
+      USER_AGENT: undercast-rd-wave03-successor-capture/1.0
+      REQUEST_TIMEOUT_SECONDS: "45"
+      MAX_BODY_BYTES: "5242880"
+      MAX_WORKERS: "2"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact one-path read-only carrier
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = pull_request
+          test "${{ github.event.pull_request.head.ref }}" = "$EXPECTED_HEAD_BRANCH"
+          test "${{ github.event.pull_request.base.ref }}" = "$EXPECTED_BASE_BRANCH"
+          test "${{ github.event.pull_request.base.sha }}" = "$EXPECTED_PARENT"
+          test "$(git rev-parse HEAD)" = "$CARRIER_HEAD"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
+          test "$(git rev-parse "$EXPECTED_PARENT^{tree}")" = "$EXPECTED_PARENT_TREE"
+          test "$(git rev-list --count "$EXPECTED_PARENT"..HEAD)" -eq 1
+          git diff --name-only "$EXPECTED_PARENT"..HEAD > /tmp/carrier-paths.txt
+          printf '%s\n' '.github/workflows/rd-wave03-successor-route-capture.yml' > /tmp/expected-carrier-paths.txt
+          diff -u /tmp/expected-carrier-paths.txt /tmp/carrier-paths.txt
+          test "$(sha256sum "$LEDGER_PATH" | awk '{print $1}')" = "$LEDGER_SHA256"
+
+      - name: Recover the checksum-bound capture runner
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments?per_page=100" > /tmp/capture-comments.json
+          COMMENTS=/tmp/capture-comments.json OUTPUT=/tmp/capture-runner.xz.b64 python - <<'PY'
+          import json, os, pathlib, re
+          rows=json.loads(pathlib.Path(os.environ['COMMENTS']).read_text())
+          marker='<!-- RD-W03-SUCCESSOR-CAPTURE-RUNNER-V1 -->'
+          begin='<!-- RD-W03-SUCCESSOR-CAPTURE-BASE64-BEGIN -->'
+          end='<!-- RD-W03-SUCCESSOR-CAPTURE-BASE64-END -->'
+          bodies=[str(row.get('body') or '') for row in rows if marker in str(row.get('body') or '')]
+          if len(bodies)!=1: raise SystemExit(f'expected one runner payload, found {len(bodies)}')
+          body=bodies[0]
+          if body.count(begin)!=1 or body.count(end)!=1 or body.index(begin)>=body.index(end): raise SystemExit('runner markers drifted')
+          payload=re.sub(r'\s+','',body.split(begin,1)[1].split(end,1)[0])
+          if re.fullmatch(r'[A-Za-z0-9+/=]+',payload) is None: raise SystemExit('runner base64 shape invalid')
+          pathlib.Path(os.environ['OUTPUT']).write_text(payload)
+          PY
+          test "$(wc -c < /tmp/capture-runner.xz.b64)" -eq "$RUNNER_BASE64_BYTES"
+          test "$(sha256sum /tmp/capture-runner.xz.b64 | awk '{print $1}')" = "$RUNNER_BASE64_SHA256"
+          base64 -d /tmp/capture-runner.xz.b64 > /tmp/capture-runner.xz
+          test "$(wc -c < /tmp/capture-runner.xz)" -eq "$RUNNER_XZ_BYTES"
+          test "$(sha256sum /tmp/capture-runner.xz | awk '{print $1}')" = "$RUNNER_XZ_SHA256"
+          xz -t /tmp/capture-runner.xz
+          xz -dc /tmp/capture-runner.xz > "$RUNNER_PATH"
+          test "$(wc -c < "$RUNNER_PATH")" -eq "$RUNNER_SOURCE_BYTES"
+          test "$(sha256sum "$RUNNER_PATH" | awk '{print $1}')" = "$RUNNER_SOURCE_SHA256"
+          python -m py_compile "$RUNNER_PATH"
+          python "$RUNNER_PATH" preflight
+
+      - name: Install exact repository runtime
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run complete repository gate before source access
+        run: npm run gate
+
+      - name: Execute exactly 28 predeclared requests
+        run: python "$RUNNER_PATH" capture
+
+      - name: Validate the closed capture artifact
+        run: |
+          set -euo pipefail
+          python "$RUNNER_PATH" validate
+          git status --porcelain=v1 > /tmp/final-status.txt
+          test ! -s /tmp/final-status.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rd-wave03-successor-route-capture-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/rd-wave03-successor-route-capture
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
