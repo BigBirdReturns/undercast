@@ -1,0 +1,252 @@
+name: qualify-doctor-who-cycle-007-v8-product
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/qualify-doctor-who-cycle-007-v8-product.yml"
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: qualify-doctor-who-cycle-007-v8-product-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  EXACT_MAIN: 014dbd3a4d9d4e82c0832d4c14f08cfff5138a58
+  QUALIFIER_BRANCH: agent/doctor-who-cycle-007-v8-product-qualifier-v1
+  FINALIZER_BRANCH: agent/doctor-who-cycle-007-v8-finalizer-v1
+  FINALIZER_WORKFLOW_NAME: finalize-doctor-who-cycle-007-v8
+  FINALIZER_WORKFLOW_PATH: .github/workflows/finalize-doctor-who-cycle-007-v8.yml
+  PRODUCT_BRANCH: agent/doctor-who-cycle-007-kragar-completion-v8-final
+  SELF: .github/workflows/qualify-doctor-who-cycle-007-v8-product.yml
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  ROOT: /tmp/doctor-who-cycle-007-v8-product-qualification
+  OUT: /tmp/doctor-who-cycle-007-v8-product-qualification/out
+  FINALIZATION: /tmp/doctor-who-cycle-007-v8-product-qualification/finalization
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  qualify:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-007-v8-product-qualifier-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind exact one-path qualifier and finalizer carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$ROOT" "$OUT" "$FINALIZATION"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = "1"
+          test "$(git merge-base "$EXACT_MAIN" HEAD)" = "$EXACT_MAIN"
+          test "$HEAD_BRANCH" = "$QUALIFIER_BRANCH"
+          test -z "$(git status --porcelain)"
+          printf '%s\n' "$SELF" > "$OUT/expected-qualifier-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-qualifier-paths.txt"
+          diff -u "$OUT/expected-qualifier-paths.txt" "$OUT/actual-qualifier-paths.txt"
+
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${FINALIZER_BRANCH}:refs/remotes/origin/${FINALIZER_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          finalizer_head="$(git rev-parse refs/remotes/origin/${FINALIZER_BRANCH})"
+          test "$(git show -s --format=%P "$finalizer_head")" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN".."$finalizer_head")" = "1"
+          test "$(git merge-base "$EXACT_MAIN" "$finalizer_head")" = "$EXACT_MAIN"
+          printf '%s\n' "$FINALIZER_WORKFLOW_PATH" > "$OUT/expected-finalizer-carrier-paths.txt"
+          git diff --name-only "$EXACT_MAIN"..."$finalizer_head" | LC_ALL=C sort > "$OUT/actual-finalizer-carrier-paths.txt"
+          diff -u "$OUT/expected-finalizer-carrier-paths.txt" "$OUT/actual-finalizer-carrier-paths.txt"
+          printf '%s\n' "$finalizer_head" > "$OUT/finalizer-head.txt"
+
+      - name: Discover exact green finalizer and workflow-free product
+        id: product
+        shell: bash
+        run: |
+          set -euo pipefail
+          finalizer_head="$(cat "$OUT/finalizer-head.txt")"
+          finalizer_run=''
+          for _ in $(seq 1 240); do
+            finalizer_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?event=pull_request&branch=${FINALIZER_BRANCH}&per_page=100" --jq ".workflow_runs[] | select(.name==\"${FINALIZER_WORKFLOW_NAME}\" and .head_sha==\"${finalizer_head}\" and .status==\"completed\" and .conclusion==\"success\") | .id" | head -1)"
+            if test -n "$finalizer_run"; then break; fi
+            sleep 5
+          done
+          test -n "$finalizer_run"
+          finalizer_job="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${finalizer_run}/jobs?per_page=100" --jq '.jobs[] | select(.name=="finalize" and .status=="completed" and .conclusion=="success") | .id' | head -1)"
+          test -n "$finalizer_job"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${finalizer_run}/jobs?per_page=100" > "$OUT/finalizer-jobs.json"
+          jq -e '.jobs | length == 1 and all(.[]; .status == "completed" and .conclusion == "success" and all(.steps[]; .conclusion == "success" or .conclusion == "skipped"))' "$OUT/finalizer-jobs.json" >/dev/null
+
+          product_head=''
+          for _ in $(seq 1 120); do
+            product_head="$(git ls-remote --heads origin "refs/heads/${PRODUCT_BRANCH}" | awk '{print $1}')"
+            if test -n "$product_head"; then break; fi
+            sleep 5
+          done
+          test -n "$product_head"
+          git fetch --no-tags origin "+refs/heads/${PRODUCT_BRANCH}:refs/remotes/origin/${PRODUCT_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/${PRODUCT_BRANCH})" = "$product_head"
+          test "$(git show -s --format=%P "$product_head")" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN".."$product_head")" = "1"
+          test "$(git merge-base "$EXACT_MAIN" "$product_head")" = "$EXACT_MAIN"
+          git diff --name-only "$EXACT_MAIN"..."$product_head" | LC_ALL=C sort > "$OUT/product-paths.txt"
+          test -s "$OUT/product-paths.txt"
+          ! grep -E '^(\.github/workflows/|tmp/)' "$OUT/product-paths.txt" >/dev/null
+
+          product_tree="$(git rev-parse "${product_head}^{tree}")"
+          pulls="$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&head=BigBirdReturns:${PRODUCT_BRANCH}&per_page=100")"
+          test "$(jq 'length' <<<"$pulls")" = "1"
+          product_pr="$(jq -r '.[0].number' <<<"$pulls")"
+          test "$(jq -r '.[0].head.sha' <<<"$pulls")" = "$product_head"
+          test "$(jq -r '.[0].base.sha' <<<"$pulls")" = "$EXACT_MAIN"
+          test "$(jq -r '.[0].draft' <<<"$pulls")" = "false"
+
+          finalization_artifact_name="doctor-who-cycle-007-v8-finalization-${finalizer_run}"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${finalizer_run}/artifacts?per_page=100" > "$OUT/finalizer-artifacts.json"
+          finalization_artifact_id="$(jq -r --arg name "$finalization_artifact_name" '.artifacts[] | select(.name==$name and .expired==false) | .id' "$OUT/finalizer-artifacts.json" | head -1)"
+          finalization_artifact_digest="$(jq -r --arg name "$finalization_artifact_name" '.artifacts[] | select(.name==$name and .expired==false) | .digest' "$OUT/finalizer-artifacts.json" | head -1)"
+          test -n "$finalization_artifact_id" -a -n "$finalization_artifact_digest"
+
+          printf 'finalizer_run=%s\nfinalizer_job=%s\nfinalization_artifact_name=%s\nfinalization_artifact_id=%s\nfinalization_artifact_digest=%s\nproduct_pr=%s\nproduct_head=%s\nproduct_tree=%s\n' \
+            "$finalizer_run" "$finalizer_job" "$finalization_artifact_name" "$finalization_artifact_id" "$finalization_artifact_digest" "$product_pr" "$product_head" "$product_tree" > "$OUT/discovered-product.txt"
+          printf 'finalizer_run=%s\n' "$finalizer_run" >> "$GITHUB_OUTPUT"
+          printf 'finalization_artifact_name=%s\n' "$finalization_artifact_name" >> "$GITHUB_OUTPUT"
+          printf 'product_pr=%s\nproduct_head=%s\nproduct_tree=%s\n' "$product_pr" "$product_head" "$product_tree" >> "$GITHUB_OUTPUT"
+          printf 'FINALIZER_RUN=%s\nFINALIZER_JOB=%s\nFINALIZATION_ARTIFACT_ID=%s\nFINALIZATION_ARTIFACT_DIGEST=%s\nPRODUCT_PR=%s\nPRODUCT_HEAD=%s\nPRODUCT_TREE=%s\n' \
+            "$finalizer_run" "$finalizer_job" "$finalization_artifact_id" "${finalization_artifact_digest#sha256:}" "$product_pr" "$product_head" "$product_tree" >> "$GITHUB_ENV"
+
+      - name: Download immutable finalization custody
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.product.outputs.finalization_artifact_name }}
+          path: ${{ env.FINALIZATION }}
+          github-token: ${{ github.token }}
+          repository: BigBirdReturns/undercast
+          run-id: ${{ steps.product.outputs.finalizer_run }}
+
+      - name: Compare product head to finalization custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          custody="$(find "$FINALIZATION" -type f -name product-custody.txt -print -quit)"
+          final_paths="$(find "$FINALIZATION" -type f -name product-paths.txt -print -quit)"
+          review_receipt="$(find "$FINALIZATION" -type f -name independent-review-receipt.json -print -quit)"
+          review_sha="$(find "$FINALIZATION" -type f -name independent-review-receipt.sha256 -print -quit)"
+          test -n "$custody" -a -n "$final_paths" -a -n "$review_receipt" -a -n "$review_sha"
+          grep -Fx "product_commit=${PRODUCT_HEAD}" "$custody" >/dev/null
+          grep -Fx "product_tree=${PRODUCT_TREE}" "$custody" >/dev/null
+          grep -Fx "product_branch=${PRODUCT_BRANCH}" "$custody" >/dev/null
+          grep -Fx "product_paths=$(wc -l < "$OUT/product-paths.txt")" "$custody" >/dev/null
+          cmp "$OUT/product-paths.txt" "$final_paths"
+          test "$(sha256sum "$review_receipt" | awk '{print $1}')" = "$(cat "$review_sha")"
+          cp "$review_receipt" "$OUT/independent-review-receipt.json"
+          cp "$review_sha" "$OUT/independent-review-receipt.sha256"
+
+      - name: Checkout exact workflow-free product
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$PRODUCT_HEAD"
+          test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
+          test "$(git rev-parse HEAD^{tree})" = "$PRODUCT_TREE"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test -z "$(git status --porcelain)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact qualification runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y imagemagick >/dev/null
+          identify -version | head -1 | tee "$OUT/imagemagick-version.txt"
+
+      - name: Independently verify exact Kragar product semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const records = JSON.parse(fs.readFileSync('data/specimens.json','utf8'));
+          const row = records.find((item) => item.id === 'UC-1352');
+          if (!row) throw new Error('UC-1352 missing');
+          const text = JSON.stringify(row);
+          for (const marker of ['Dan Starkey','Kragar','physical-prosthetic']) {
+            if (!text.includes(marker)) throw new Error(`UC-1352 marker missing: ${marker}`);
+          }
+          if (!fs.existsSync('scripts/doctor-who-cycle-007.mjs')) throw new Error('cycle-007 checker missing');
+          const packageJson = JSON.parse(fs.readFileSync('package.json','utf8'));
+          if (!packageJson.scripts?.['doctor-who:cycle-007:check']) throw new Error('cycle-007 package gate missing');
+          NODE
+          node scripts/doctor-who-cycle-006-chronology-composable.mjs | tee "$OUT/cycle-006-chronology.log"
+          npm run doctor-who:cycle-007:check | tee "$OUT/cycle-007.log"
+          node scripts/publisher-custody.mjs check-workflows | tee "$OUT/publisher-custody.log"
+          node scripts/publisher-custody-or-guard.mjs --self-test | tee "$OUT/publisher-or-guard-self-test.log"
+          node scripts/publisher-custody-or-guard.mjs | tee "$OUT/publisher-or-guard.log"
+
+      - name: Run complete repository and rendered qualification gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run gate | tee "$OUT/complete-gate.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Seal exact product qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${PRODUCT_BRANCH}:refs/remotes/origin/${PRODUCT_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${PRODUCT_BRANCH})" = "$PRODUCT_HEAD"
+          test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
+          gate_sha="$(sha256sum "$OUT/complete-gate.log" | awk '{print $1}')"
+          receipt_sha="$(cat "$OUT/independent-review-receipt.sha256")"
+          cat > "$OUT/product-qualification.json" <<JSON
+          {
+            "schema_version": 1,
+            "transaction": "DOCTOR-WHO-CYCLE-007-KRAGAR-PRODUCT-QUALIFICATION-V1",
+            "canonical_main": "$EXACT_MAIN",
+            "product_branch": "$PRODUCT_BRANCH",
+            "product_pr": $PRODUCT_PR,
+            "product_commit": "$PRODUCT_HEAD",
+            "product_tree": "$PRODUCT_TREE",
+            "product_paths": $(wc -l < "$OUT/product-paths.txt"),
+            "finalizer_run": $FINALIZER_RUN,
+            "finalizer_job": $FINALIZER_JOB,
+            "finalization_artifact_id": $FINALIZATION_ARTIFACT_ID,
+            "finalization_artifact_sha256": "$FINALIZATION_ARTIFACT_DIGEST",
+            "independent_review_receipt_sha256": "$receipt_sha",
+            "complete_gate_sha256": "$gate_sha",
+            "verdict": "approved-for-exact-merge"
+          }
+          JSON
+          sha256sum "$OUT/product-qualification.json" | awk '{print $1}' > "$OUT/product-qualification.sha256"
+
+      - name: Upload immutable exact-head product qualification
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-007-v8-product-qualification-${{ github.run_id }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+          path: ${{ env.OUT }}
