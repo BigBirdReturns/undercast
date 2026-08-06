@@ -1,0 +1,175 @@
+name: doctor-who-cycle-008-kreg-candidate-v1-observer
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-candidate-v1-observer.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-candidate-v1-observer-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-candidate-v1-observer.yml
+  EXACT_MAIN: 3228efd6ede786586352b1b990a94d16ab02d5f9
+  CARRIER_BRANCH: agent/doctor-who-cycle-008-kreg-candidate-v1-observer
+  CANDIDATE_BRANCH: agent/doctor-who-cycle-008-kreg-candidate-v1
+  CANDIDATE_HEAD: 9afe1f0cbf06ba85dcb3de64a3a9415f82805573
+  CANDIDATE_WORKFLOW: doctor-who-cycle-008-kreg-candidate-v1
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  OUT: /tmp/doctor-who-cycle-008-kreg-candidate-v1-observer
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  observe:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-candidate-v1-observer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 2
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-path observer and current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/diagnostic"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test "$HEAD_BRANCH" = "$CARRIER_BRANCH"
+          git fetch --no-tags --filter=blob:none origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}" \
+            "+refs/heads/${CANDIDATE_BRANCH}:refs/remotes/origin/${CANDIDATE_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(git rev-parse refs/remotes/origin/${HEAD_BRANCH})" = "$HEAD_SHA"
+          test "$(git rev-parse refs/remotes/origin/${CANDIDATE_BRANCH})" = "$CANDIDATE_HEAD"
+          printf '%s\n' "$SELF" > "$OUT/expected-observer-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-observer-paths.txt"
+          diff -u "$OUT/expected-observer-paths.txt" "$OUT/actual-observer-paths.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Discover and retain terminal candidate push diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=''
+          status=''
+          conclusion=''
+          for attempt in $(seq 1 120); do
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${CANDIDATE_HEAD}&event=push&per_page=100" > "$OUT/candidate-runs.json"
+            run_id="$(jq -r --arg workflow "$CANDIDATE_WORKFLOW" --arg branch "$CANDIDATE_BRANCH" --arg head "$CANDIDATE_HEAD" '
+              [.workflow_runs[]
+                | select(.name==$workflow and .head_branch==$branch and .head_sha==$head and .event=="push")]
+              | sort_by(.created_at)
+              | last
+              | .id // empty
+            ' "$OUT/candidate-runs.json")"
+            if [ -n "$run_id" ]; then
+              status="$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id==$id) | .status' "$OUT/candidate-runs.json")"
+              conclusion="$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id==$id) | .conclusion // empty' "$OUT/candidate-runs.json")"
+              if [ "$status" = completed ]; then break; fi
+            fi
+            sleep 5
+          done
+          test -n "$run_id"
+          test "$status" = completed
+          printf '%s\n' "$run_id" > "$OUT/candidate-run-id.txt"
+          printf '%s\n' "$conclusion" > "$OUT/candidate-conclusion.txt"
+
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/candidate-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "$OUT/candidate-jobs.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/candidate-artifacts.json"
+          jq -e --argjson run "$run_id" --arg head "$CANDIDATE_HEAD" --arg branch "$CANDIDATE_BRANCH" --arg conclusion "$conclusion" '
+            .id==$run and .head_sha==$head and .head_branch==$branch and .event=="push" and
+            .status=="completed" and .conclusion==$conclusion
+          ' "$OUT/candidate-run.json" >/dev/null
+          job_id="$(jq -r '.jobs[] | select(.name=="candidate" and .status=="completed") | .id' "$OUT/candidate-jobs.json" | head -1)"
+          test -n "$job_id"
+          printf '%s\n' "$job_id" > "$OUT/candidate-job-id.txt"
+          artifact_name="doctor-who-cycle-008-kreg-candidate-v1-diagnostic-${run_id}"
+          artifact_id="$(jq -r --arg name "$artifact_name" '[.artifacts[] | select(.name==$name and .expired==false)] | if length==1 then .[0].id else empty end' "$OUT/candidate-artifacts.json")"
+          test -n "$artifact_id"
+          printf '%s\n' "$artifact_id" > "$OUT/candidate-artifact-id.txt"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}" > "$OUT/candidate-artifact.json"
+          archive_url="$(jq -r '.archive_download_url' "$OUT/candidate-artifact.json")"
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --output "$OUT/candidate-diagnostic.zip" \
+            "$archive_url"
+          sha256sum "$OUT/candidate-diagnostic.zip" > "$OUT/candidate-diagnostic.zip.sha256"
+
+          ZIP="$OUT/candidate-diagnostic.zip" TARGET="$OUT/diagnostic" python - <<'PY'
+          import os, pathlib, zipfile
+          zpath=pathlib.Path(os.environ['ZIP'])
+          target=pathlib.Path(os.environ['TARGET'])
+          with zipfile.ZipFile(zpath) as zf:
+              names=zf.namelist()
+              if not names or len(names)!=len(set(names)):
+                  raise SystemExit(f'invalid diagnostic members: {names!r}')
+              for name in names:
+                  p=pathlib.PurePosixPath(name)
+                  if p.is_absolute() or '..' in p.parts:
+                      raise SystemExit(f'unsafe diagnostic member: {name}')
+              zf.extractall(target)
+          PY
+          test -f "$OUT/diagnostic/runner.exit"
+          test -f "$OUT/diagnostic/runner.trace.log"
+          test -f "$OUT/diagnostic/runner.stdout.log"
+          test -f "$OUT/diagnostic/git-identity.txt"
+          cp "$OUT/diagnostic/runner.exit" "$OUT/runner.exit"
+          tail -n 200 "$OUT/diagnostic/runner.trace.log" > "$OUT/runner.trace.tail.log"
+          tail -n 200 "$OUT/diagnostic/runner.stdout.log" > "$OUT/runner.stdout.tail.log"
+          RUN_ID="$run_id" JOB_ID="$job_id" ARTIFACT_ID="$artifact_id" CONCLUSION="$conclusion" python - <<'PY'
+          import hashlib, json, os, pathlib
+          out=pathlib.Path(os.environ['OUT'])
+          runner_exit=int((out/'runner.exit').read_text().strip())
+          doc={
+            'version':1,
+            'transaction':'DOCTOR-WHO-CYCLE-008-KREG-CANDIDATE-V1-OBSERVER',
+            'exact_main':os.environ['EXACT_MAIN'],
+            'candidate_head':os.environ['CANDIDATE_HEAD'],
+            'candidate_run':int(os.environ['RUN_ID']),
+            'candidate_job':int(os.environ['JOB_ID']),
+            'candidate_artifact':int(os.environ['ARTIFACT_ID']),
+            'candidate_conclusion':os.environ['CONCLUSION'],
+            'runner_exit':runner_exit,
+            'diagnostic_retained':True,
+            'repository_written':False,
+            'product_published':False,
+            'merged':False,
+            'outside_human_dependency':False,
+          }
+          body=(json.dumps(doc,indent=2,sort_keys=True)+'\n').encode()
+          doc['receipt_sha256']=hashlib.sha256(body).hexdigest()
+          final=(json.dumps(doc,indent=2,sort_keys=True)+'\n').encode()
+          (out/'observer-receipt.json').write_bytes(final)
+          (out/'observer-receipt.file.sha256').write_text(f"{hashlib.sha256(final).hexdigest()}  observer-receipt.json\n")
+          PY
+
+      - name: Upload immutable Kreg candidate observer packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-candidate-v1-observer-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
