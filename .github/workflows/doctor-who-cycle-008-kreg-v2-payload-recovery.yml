@@ -19,6 +19,7 @@ env:
   EXPECTED_MAIN: a22fc2787686cb614e143c36d45f03f648329196
   FIRST_HEAD: 49396be81682fee5157729a1c5be48b0b75c6b81
   SECOND_HEAD: 1803becc38844a8703fa559e508369ccdba7ccc0
+  THIRD_HEAD: 3ae0b3ecd8bec57a43626ca3e9288a2c111623bf
   HEAD_SHA: ${{ github.event.pull_request.head.sha }}
   HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
   AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-v2-payload-recovery-pr
@@ -50,7 +51,7 @@ jobs:
           filter: blob:none
           persist-credentials: false
 
-      - name: Bind exact three-commit recovery carrier
+      - name: Bind exact four-commit recovery carrier
         shell: bash
         run: |
           set -euo pipefail
@@ -58,10 +59,11 @@ jobs:
           mkdir -p "$OUT/shards" "$OUT/extracted"
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
           test "$HEAD_BRANCH" = "$AUTHORIZED_BRANCH"
-          test "$(git show -s --format=%P HEAD)" = "$SECOND_HEAD"
+          test "$(git show -s --format=%P HEAD)" = "$THIRD_HEAD"
+          test "$(git show -s --format=%P "$THIRD_HEAD")" = "$SECOND_HEAD"
           test "$(git show -s --format=%P "$SECOND_HEAD")" = "$FIRST_HEAD"
           test "$(git show -s --format=%P "$FIRST_HEAD")" = "$EXPECTED_MAIN"
-          test "$(git rev-list --count "$EXPECTED_MAIN"..HEAD)" = "3"
+          test "$(git rev-list --count "$EXPECTED_MAIN"..HEAD)" = "4"
           test "$(git merge-base "$EXPECTED_MAIN" HEAD)" = "$EXPECTED_MAIN"
           printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
           git diff --name-only "$EXPECTED_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
@@ -77,26 +79,40 @@ jobs:
             "$HEAD_SHA" "$EXPECTED_MAIN" "$(git rev-parse 'HEAD^{tree}')" \
             > "$OUT/carrier-identity.txt"
 
-      - name: Bind exact two-commit V2 shard carrier
+      - name: Bind and diagnose exact two-commit V2 shard carrier
         shell: bash
         run: |
           set -euo pipefail
           v2="refs/remotes/origin/${V2_BRANCH}"
-          test "$(git merge-base "$V2_BASE" "$v2")" = "$V2_BASE"
-          test "$(git rev-list --count "$V2_BASE".."$v2")" = "2"
+          printf 'merge_base=%s\ncommit_count=%s\nhead=%s\nparent=%s\ntree=%s\n' \
+            "$(git merge-base "$V2_BASE" "$v2")" \
+            "$(git rev-list --count "$V2_BASE".."$v2")" \
+            "$(git rev-parse "$v2")" \
+            "$(git show -s --format=%P "$v2")" \
+            "$(git rev-parse "$v2^{tree}")" \
+            > "$OUT/v2-observed-geometry.txt"
           printf '%s\n%s\n' "$PART_00" "$PART_01" > "$OUT/expected-v2-paths.txt"
           git diff --name-only "$V2_BASE"..."$v2" | LC_ALL=C sort > "$OUT/actual-v2-paths.txt"
+          printf '%s  %s\n%s  %s\n' \
+            "$(git rev-parse "$v2:$PART_00")" "$PART_00" \
+            "$(git rev-parse "$v2:$PART_01")" "$PART_01" \
+            > "$OUT/v2-observed-blobs.txt"
+          git show "$v2:$PART_00" > "$OUT/shards/part-00.b64"
+          git show "$v2:$PART_01" > "$OUT/shards/part-01.b64"
+          sha256sum "$OUT/shards"/* > "$OUT/shard-sha256.txt"
+          cat "$OUT/v2-observed-geometry.txt"
+          cat "$OUT/actual-v2-paths.txt"
+          cat "$OUT/v2-observed-blobs.txt"
+          cat "$OUT/shard-sha256.txt"
+
+          test "$(git merge-base "$V2_BASE" "$v2")" = "$V2_BASE"
+          test "$(git rev-list --count "$V2_BASE".."$v2")" = "2"
           diff -u "$OUT/expected-v2-paths.txt" "$OUT/actual-v2-paths.txt"
           test "$(git rev-parse "$v2:$PART_00")" = "$PART_00_BLOB"
           test "$(git rev-parse "$v2:$PART_01")" = "$PART_01_BLOB"
-          git show "$v2:$PART_00" > "$OUT/shards/part-00.b64"
-          git show "$v2:$PART_01" > "$OUT/shards/part-01.b64"
           test "$(sha256sum "$OUT/shards/part-00.b64" | awk '{print $1}')" = "$PART_00_SHA256"
           test "$(sha256sum "$OUT/shards/part-01.b64" | awk '{print $1}')" = "$PART_01_SHA256"
-          printf 'v2_base=%s\nv2_head=%s\nv2_parent=%s\nv2_tree=%s\n' \
-            "$V2_BASE" "$V2_HEAD" "$(git show -s --format=%P "$v2")" "$(git rev-parse "$v2^{tree}")" \
-            > "$OUT/v2-identity.txt"
-          sha256sum "$OUT/shards"/* > "$OUT/shard-sha256.txt"
+          cp "$OUT/v2-observed-geometry.txt" "$OUT/v2-identity.txt"
 
       - name: Reconstruct and safely inspect the V2 archive
         shell: bash
@@ -170,6 +186,7 @@ jobs:
           git diff --cached --quiet
 
       - name: Upload exact Kreg V2 recovery packet
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: doctor-who-cycle-008-kreg-v2-payload-recovery-${{ github.run_id }}
