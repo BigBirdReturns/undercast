@@ -14,6 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  BASELINE_WRAPPER_BLOB: c8a569b7abcf4e98b817f4b3168dbdf7b6e8a120
   CURRENT_WRAPPER_BLOB: 15bb7e0dabed62425f04e3a46bac4d64233ab210
   WRAPPER_BLOB: ebf348c4fc17a9ae1f420b113d661f0611c490ec
   OLD_WORKFLOW_BLOB: 1fb8af74baef0f1a92bafcdc316df371038dfc4d
@@ -73,7 +74,7 @@ jobs:
       AUTHORIZED_PR: ${{ github.event.pull_request.number }}
       OUT: /tmp/doctor-who-cycle-008-kreg-final-product-v9b-finalize
       SCRIPT_ROOT: /tmp/doctor-who-cycle-008-kreg-final-product-v9b-scripts
-      REPAIR_ROOT: /tmp/doctor-who-cycle-008-kreg-final-product-v9b-baseline-repair
+      REPAIR_ROOT: /tmp/doctor-who-cycle-008-kreg-final-product-v9b-scalar-guard
     steps:
       - uses: actions/checkout@v4
         with:
@@ -87,17 +88,17 @@ jobs:
           node-version: "24"
           cache: npm
 
-      - name: Recover qualified scripts and bind the cycle-008 baseline to its generated registry
+      - name: Recover semantic-baseline repair and constrain URL rewriting to scalar values
         shell: bash
         run: |
           set -euo pipefail
           rm -rf "$REPAIR_ROOT"
           mkdir -p "$REPAIR_ROOT/api"
-          gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$CURRENT_WRAPPER_BLOB" > "$REPAIR_ROOT/api/current-wrapper.json"
-          jq -e --arg sha "$CURRENT_WRAPPER_BLOB" '.sha==$sha and .encoding=="base64"' "$REPAIR_ROOT/api/current-wrapper.json" >/dev/null
-          jq -r '.content' "$REPAIR_ROOT/api/current-wrapper.json" | tr -d '\n' | base64 --decode > "$REPAIR_ROOT/current-wrapper.yml"
-          test "$(git hash-object "$REPAIR_ROOT/current-wrapper.yml")" = "$CURRENT_WRAPPER_BLOB"
-          SOURCE="$REPAIR_ROOT/current-wrapper.yml" TARGET="$REPAIR_ROOT/recover-finalizer.sh" python3 - <<'PY'
+          gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$BASELINE_WRAPPER_BLOB" > "$REPAIR_ROOT/api/baseline-wrapper.json"
+          jq -e --arg sha "$BASELINE_WRAPPER_BLOB" '.sha==$sha and .encoding=="base64"' "$REPAIR_ROOT/api/baseline-wrapper.json" >/dev/null
+          jq -r '.content' "$REPAIR_ROOT/api/baseline-wrapper.json" | tr -d '\n' | base64 --decode > "$REPAIR_ROOT/baseline-wrapper.yml"
+          test "$(git hash-object "$REPAIR_ROOT/baseline-wrapper.yml")" = "$BASELINE_WRAPPER_BLOB"
+          SOURCE="$REPAIR_ROOT/baseline-wrapper.yml" TARGET="$REPAIR_ROOT/recover-finalizer.sh" python3 - <<'PY'
           import os
           from pathlib import Path
           import yaml
@@ -105,7 +106,7 @@ jobs:
           target=Path(os.environ['TARGET'])
           doc=yaml.safe_load(source.read_text())
           steps=doc['jobs']['finalize']['steps']
-          matches=[s.get('run') for s in steps if s.get('name')=='Recover qualified finalizer scripts and pay exact assignment and ledger defects']
+          matches=[s.get('run') for s in steps if s.get('name')=='Recover qualified scripts and bind the cycle-008 baseline to its generated registry']
           assert len(matches)==1 and isinstance(matches[0],str)
           target.write_text(matches[0])
           target.chmod(0o755)
@@ -118,28 +119,15 @@ jobs:
           from pathlib import Path
           root=Path(os.environ['ROOT'])
           derive=root/'06.sh'
-          lines=derive.read_text().splitlines()
-          anchors=[i for i,line in enumerate(lines) if line.startswith("old_adapter='data/review/adapter-sdk/doctor-who-cycle-007-kragar.json'")]
-          assert len(anchors)==1, anchors
-          assert not any(line.startswith('baseline_input=') for line in lines)
-          repair=[
-              "baseline_path=work/'data/review/adapter-sdk/BASELINE.json'",
-              "baseline=json.loads(baseline_path.read_text())",
-              "baseline_input=baseline.get('inputs',{}).get('estate_registry',{})",
-              "assert baseline_input.get('path')=='data/ESTATE-REGISTRY.json'",
-              "old_registry_sha=hashlib.sha256(tpath('data/ESTATE-REGISTRY.json','after').read_bytes()).hexdigest()",
-              "assert baseline_input.get('sha256')==old_registry_sha, (baseline_input.get('sha256'),old_registry_sha)",
-              "new_registry_sha=hashlib.sha256((work/'data/ESTATE-REGISTRY.json').read_bytes()).hexdigest()",
-              "assert new_registry_sha != old_registry_sha",
-              "baseline_input['sha256']=new_registry_sha",
-              "if isinstance(baseline.get('identity'),str) and re.fullmatch(r'[0-9a-f]{64}',baseline['identity']):",
-              "    tmp=dict(baseline); tmp.pop('identity'); baseline['identity']=hashlib.sha256(json.dumps(tmp,sort_keys=True,separators=(',',':')).encode()).hexdigest()",
-              "baseline_path.write_text(json.dumps(baseline,indent=2,ensure_ascii=False)+'\\n')",
-          ]
-          lines[anchors[0]:anchors[0]]=repair
-          derive.write_text('\n'.join(lines)+'\n')
-          candidate_lines=[line for line in lines if line.startswith('candidate=')]
-          assert candidate_lines==['candidate="$CANDIDATE_COMMIT"','candidate="$CANDIDATE_COMMIT"'],candidate_lines
+          text=derive.read_text()
+          old="if 'tardis.fandom.com/wiki/' in s and ('Kreg' in s or 'Kragar' in s): s=os.environ['SOURCE_URL']"
+          new="if '\n' not in s and s.startswith('https://tardis.fandom.com/wiki/') and ('Kreg' in s or 'Kragar' in s): s=os.environ['SOURCE_URL']"
+          assert text.count(old)==1, text.count(old)
+          text=text.replace(old,new)
+          derive.write_text(text)
+          assert text.count(new)==1
+          assert "baseline_input['sha256']=new_registry_sha" in text
+          assert text.count('candidate="$CANDIDATE_COMMIT"')==2
           seal=(root/'08.sh').read_text()
           assert "! -name 'SHA256SUMS.pre' ! -name 'SHA256SUMS'" in seal
           PY
@@ -244,11 +232,11 @@ jobs:
           set -euo pipefail
           rm -rf "$REPAIR_ROOT"
           mkdir -p "$REPAIR_ROOT/api"
-          gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$CURRENT_WRAPPER_BLOB" > "$REPAIR_ROOT/api/current-wrapper.json"
-          jq -e --arg sha "$CURRENT_WRAPPER_BLOB" '.sha==$sha and .encoding=="base64"' "$REPAIR_ROOT/api/current-wrapper.json" >/dev/null
-          jq -r '.content' "$REPAIR_ROOT/api/current-wrapper.json" | tr -d '\n' | base64 --decode > "$REPAIR_ROOT/current-wrapper.yml"
-          test "$(git hash-object "$REPAIR_ROOT/current-wrapper.yml")" = "$CURRENT_WRAPPER_BLOB"
-          SOURCE="$REPAIR_ROOT/current-wrapper.yml" TARGET="$REPAIR_ROOT/recover-review.sh" python3 - <<'PY'
+          gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$BASELINE_WRAPPER_BLOB" > "$REPAIR_ROOT/api/baseline-wrapper.json"
+          jq -e --arg sha "$BASELINE_WRAPPER_BLOB" '.sha==$sha and .encoding=="base64"' "$REPAIR_ROOT/api/baseline-wrapper.json" >/dev/null
+          jq -r '.content' "$REPAIR_ROOT/api/baseline-wrapper.json" | tr -d '\n' | base64 --decode > "$REPAIR_ROOT/baseline-wrapper.yml"
+          test "$(git hash-object "$REPAIR_ROOT/baseline-wrapper.yml")" = "$BASELINE_WRAPPER_BLOB"
+          SOURCE="$REPAIR_ROOT/baseline-wrapper.yml" TARGET="$REPAIR_ROOT/recover-review.sh" python3 - <<'PY'
           import os
           from pathlib import Path
           import yaml
@@ -256,7 +244,7 @@ jobs:
           target=Path(os.environ['TARGET'])
           doc=yaml.safe_load(source.read_text())
           steps=doc['jobs']['review']['steps']
-          matches=[s.get('run') for s in steps if s.get('name')=='Recover qualified review scripts and pay exact ledger defect']
+          matches=[s.get('run') for s in steps if s.get('name')=='Recover qualified independent-review scripts']
           assert len(matches)==1 and isinstance(matches[0],str)
           target.write_text(matches[0])
           target.chmod(0o755)
