@@ -1,0 +1,148 @@
+name: doctor-who-cycle-008-kreg-v13-v14-observer
+
+"on":
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-v13-v14-observer.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-v13-v14-observer-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  BASE: e39b5f5bec011b84a32bc46021089d3432c6c5df
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-v13-v14-observer.yml
+  OUT: /tmp/doctor-who-cycle-008-kreg-v13-v14-observer
+
+jobs:
+  observe:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-v13-v14-observer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-path observer
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git show -s --format=%P HEAD)" = "$BASE"
+          test "$(git rev-list --count "$BASE"..HEAD)" = 1
+          printf '%s\n' "$SELF" > /tmp/expected-observer-paths.txt
+          git diff --name-only "$BASE"...HEAD | LC_ALL=C sort > /tmp/actual-observer-paths.txt
+          diff -u /tmp/expected-observer-paths.txt /tmp/actual-observer-paths.txt
+          test -z "$(git status --porcelain)"
+
+      - name: Census V9b, V13, V14, products, and current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" > "$OUT/main.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/doctor-who-cycle-008-kreg-final-product-v9b.yml/runs?per_page=100" > "$OUT/v9b-runs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/doctor-who-cycle-008-kreg-trusted-publisher-v13.yml/runs?per_page=100" > "$OUT/v13-runs.json"
+          if gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/doctor-who-cycle-008-kreg-trusted-merger-v14.yml/runs?per_page=100" > "$OUT/v14-runs.json" 2> "$OUT/v14-query.stderr"; then
+            printf 'true\n' > "$OUT/v14-installed.txt"
+          else
+            printf 'false\n' > "$OUT/v14-installed.txt"
+            printf '{"total_count":0,"workflow_runs":[]}\n' > "$OUT/v14-runs.json"
+          fi
+          gh api "/repos/$GITHUB_REPOSITORY/pulls?state=all&sort=updated&direction=desc&per_page=100" > "$OUT/recent-prs.json"
+          if gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/agent/doctor-who-cycle-008-kreg-product-v13-" > "$OUT/product-refs.json" 2> "$OUT/product-refs.stderr"; then
+            :
+          else
+            printf '[]\n' > "$OUT/product-refs.json"
+          fi
+
+          for lane in v9b v13 v14; do
+            run="$(jq -r '.workflow_runs[0].id // empty' "$OUT/$lane-runs.json")"
+            printf '%s\n' "$run" > "$OUT/latest-$lane-run.txt"
+            if test -n "$run"; then
+              gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run" > "$OUT/latest-$lane-run.json"
+              gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?per_page=100" > "$OUT/latest-$lane-jobs.json"
+              gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" > "$OUT/latest-$lane-artifacts.json"
+            else
+              printf '{}\n' > "$OUT/latest-$lane-run.json"
+              printf '{"total_count":0,"jobs":[]}\n' > "$OUT/latest-$lane-jobs.json"
+              printf '{"total_count":0,"artifacts":[]}\n' > "$OUT/latest-$lane-artifacts.json"
+            fi
+          done
+
+          jq '[.[] | select(
+            .head.ref=="agent/doctor-who-cycle-008-kreg-final-product-v9b" or
+            .head.ref=="agent/doctor-who-cycle-008-kreg-trusted-publisher-v13-qualify" or
+            .head.ref=="agent/doctor-who-cycle-008-kreg-trusted-merger-v14-qualify" or
+            (.head.ref | startswith("agent/doctor-who-cycle-008-kreg-product-v13-"))
+          ) | {
+            number,state,draft,merged_at,title,
+            head:.head.ref,head_sha:.head.sha,
+            base:.base.ref,base_sha:.base.sha,
+            updated_at
+          }]' "$OUT/recent-prs.json" > "$OUT/relevant-prs.json"
+
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          out=Path(os.environ['OUT'])
+          summary={
+            'main':json.loads((out/'main.json').read_text())['object']['sha'],
+            'v14_installed':(out/'v14-installed.txt').read_text().strip()=='true',
+            'product_refs':json.loads((out/'product-refs.json').read_text()),
+            'relevant_prs':json.loads((out/'relevant-prs.json').read_text()),
+            'lanes':{},
+          }
+          for lane in ('v9b','v13','v14'):
+            runs=json.loads((out/f'{lane}-runs.json').read_text()).get('workflow_runs',[])
+            latest=runs[0] if runs else None
+            jobs=json.loads((out/f'latest-{lane}-jobs.json').read_text()).get('jobs',[])
+            artifacts=json.loads((out/f'latest-{lane}-artifacts.json').read_text()).get('artifacts',[])
+            summary['lanes'][lane]={
+              'recent_runs':[
+                {k:r.get(k) for k in ('id','name','event','status','conclusion','head_branch','head_sha','run_attempt','created_at','run_started_at','updated_at')}
+                for r in runs[:10]
+              ],
+              'latest_jobs':[
+                {
+                  'id':j.get('id'),'name':j.get('name'),'status':j.get('status'),'conclusion':j.get('conclusion'),
+                  'steps':[{k:s.get(k) for k in ('number','name','status','conclusion')} for s in j.get('steps',[])]
+                }
+                for j in jobs
+              ],
+              'latest_artifacts':[
+                {k:a.get(k) for k in ('id','name','size_in_bytes','expired','digest','created_at','expires_at')}
+                for a in artifacts
+              ],
+            }
+          (out/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          PY
+
+      - name: Upload read-only census
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-v13-v14-observer-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-v13-v14-observer
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
