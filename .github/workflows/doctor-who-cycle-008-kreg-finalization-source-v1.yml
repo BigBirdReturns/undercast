@@ -1,0 +1,274 @@
+name: doctor-who-cycle-008-kreg-finalization-source-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-finalization-source-v1.yml"
+
+permissions:
+  actions: read
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-finalization-source-v1
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-finalization-source-v1.yml
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-finalization-source-v1
+  REVIEW_BRANCH: agent/doctor-who-cycle-008-kreg-v1-candidate-review-v1
+  REVIEW_WORKFLOW: doctor-who-cycle-008-kreg-v1-candidate-review-v1.yml
+  REVIEW_ARTIFACT_PREFIX: doctor-who-cycle-008-kreg-v1-candidate-review-v1-
+  WRITER_RECOVERY_BRANCH: agent/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v3
+  WRITER_MARKER: CYCLE008_KREG_RECOVERED_CYCLE007_WRITER_V3_PART
+  WRITER_SHA256: d674b41cd76c393b62373eac8fe827f5ad4da42cc1793e3f86fbd8696c01e06e
+  OUT: /tmp/doctor-who-cycle-008-kreg-finalization-source-v1
+  CANDIDATE_WORKTREE: /tmp/doctor-who-cycle-008-kreg-finalization-source-candidate
+  WRITER_DIR: /tmp/doctor-who-cycle-008-kreg-finalization-source-writer
+
+jobs:
+  collect:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-finalization-source-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-path source collector
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" "$CANDIDATE_WORKTREE" "$WRITER_DIR"
+          mkdir -p "$OUT/review-artifact" "$OUT/candidate-source" "$OUT/writer-source" "$WRITER_DIR"
+          test "$GITHUB_HEAD_REF" = "$AUTHORIZED_BRANCH"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = "1"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$BASE_SHA"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          start_main="$(git rev-parse refs/remotes/origin/main)"
+          git merge-base --is-ancestor "$BASE_SHA" "$start_main"
+          git diff --name-only "$BASE_SHA"..."$start_main" | LC_ALL=C sort > "$OUT/base-to-live-main-paths.txt"
+          if test -s "$OUT/base-to-live-main-paths.txt"; then
+            awk '!/^\.github\/workflows\// { bad=1 } END { exit bad }' "$OUT/base-to-live-main-paths.txt"
+          fi
+          printf '%s\n' "$start_main" > "$OUT/start-main.txt"
+          printf 'head=%s\nbase=%s\ntree=%s\nstart_main=%s\n' "$HEAD_SHA" "$BASE_SHA" "$(git rev-parse 'HEAD^{tree}')" "$start_main" > "$OUT/collector-identity.txt"
+
+      - name: Discover approved independent review packet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls?state=all&head=BigBirdReturns:${REVIEW_BRANCH}&base=main&per_page=100" > "$OUT/review-prs.json"
+          test "$(jq length "$OUT/review-prs.json")" -ge 1
+          jq 'sort_by(.number) | last' "$OUT/review-prs.json" > "$OUT/review-pr.json"
+          review_head="$(jq -r .head.sha "$OUT/review-pr.json")"
+          printf '%s\n' "$review_head" > "$OUT/review-head.txt"
+
+          endpoint="/repos/${GITHUB_REPOSITORY}/actions/workflows/${REVIEW_WORKFLOW}/runs?event=pull_request&branch=${REVIEW_BRANCH}&per_page=100"
+          run_id=''
+          for _ in $(seq 1 720); do
+            gh api "$endpoint" > "$OUT/review-runs.json"
+            run_id="$(jq -r --arg head "$review_head" '[.workflow_runs[] | select(.head_sha == $head and .head_branch == env.REVIEW_BRANCH and .event == "pull_request")] | sort_by(.id) | last | .id // empty' "$OUT/review-runs.json")"
+            if test -n "$run_id"; then break; fi
+            sleep 10
+          done
+          test -n "$run_id"
+          printf '%s\n' "$run_id" > "$OUT/review-run-id.txt"
+          for _ in $(seq 1 720); do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/review-run.json"
+            status="$(jq -r .status "$OUT/review-run.json")"
+            if test "$status" = completed; then break; fi
+            sleep 10
+          done
+          jq -e --arg head "$review_head" '.status == "completed" and .conclusion == "success" and .head_sha == $head' "$OUT/review-run.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/review-artifacts.json"
+          expected_name="${REVIEW_ARTIFACT_PREFIX}${run_id}"
+          test "$(jq --arg name "$expected_name" '[.artifacts[] | select(.name == $name and (.expired | not))] | length' "$OUT/review-artifacts.json")" = 1
+          jq --arg name "$expected_name" '.artifacts[] | select(.name == $name and (.expired | not))' "$OUT/review-artifacts.json" > "$OUT/review-artifact.json"
+          artifact_id="$(jq -r .id "$OUT/review-artifact.json")"
+          printf '%s\n' "$artifact_id" > "$OUT/review-artifact-id.txt"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$OUT/review-artifact.zip"
+
+      - name: Safely extract and verify approved review receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$OUT/review-artifact.zip" TARGET="$OUT/review-artifact" OUT="$OUT" python3 - <<'PY'
+          import hashlib, json, os, pathlib, stat, zipfile
+          archive = pathlib.Path(os.environ['ZIP']); target = pathlib.Path(os.environ['TARGET'])
+          seen=set(); expanded=0
+          with zipfile.ZipFile(archive) as zf:
+              infos=zf.infolist()
+              if not infos or len(infos)>4096: raise SystemExit('unsafe review artifact denominator')
+              for info in infos:
+                  path=pathlib.PurePosixPath(info.filename); mode=(info.external_attr>>16)&0o170000
+                  if path.is_absolute() or '..' in path.parts or info.filename in seen or mode==stat.S_IFLNK:
+                      raise SystemExit(f'unsafe review artifact member: {info.filename!r}')
+                  seen.add(info.filename)
+                  if info.is_dir(): continue
+                  expanded += info.file_size
+                  if expanded > 3_000_000_000: raise SystemExit('review artifact exceeds expansion ceiling')
+                  destination=target.joinpath(*path.parts); destination.parent.mkdir(parents=True,exist_ok=True)
+                  with zf.open(info) as src, destination.open('wb') as dst:
+                      while True:
+                          chunk=src.read(1024*1024)
+                          if not chunk: break
+                          dst.write(chunk)
+          receipts=[p for p in target.rglob('candidate-review-receipt.json') if p.is_file()]
+          bundles=[p for p in target.rglob('candidate.bundle') if p.is_file()]
+          paths=[p for p in target.rglob('verified-candidate-paths.txt') if p.is_file()]
+          semantic=[p for p in target.rglob('semantic-review.json') if p.is_file()]
+          if not (len(receipts)==len(bundles)==len(paths)==len(semantic)==1):
+              raise SystemExit({'receipt':len(receipts),'bundle':len(bundles),'paths':len(paths),'semantic':len(semantic)})
+          receipt=json.loads(receipts[0].read_text()); claimed=receipt.pop('receipt_sha256')
+          actual=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          assert actual==claimed and receipt['status']=='approved-for-separate-finalization'
+          receipt['receipt_sha256']=claimed
+          resolved={'receipt':str(receipts[0]),'bundle':str(bundles[0]),'paths':str(paths[0]),'semantic':str(semantic[0])}
+          pathlib.Path(os.environ['OUT']).joinpath('resolved-review-source.json').write_text(json.dumps(resolved,indent=2,sort_keys=True)+'\n')
+          pathlib.Path(os.environ['OUT']).joinpath('review-receipt-copy.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          pathlib.Path(os.environ['OUT']).joinpath('review-artifact-sha256.txt').write_text(hashlib.sha256(archive.read_bytes()).hexdigest()+'\n')
+          PY
+
+      - name: Check out exact approved candidate and freeze terminal schemas
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$(jq -r .bundle "$OUT/resolved-review-source.json")"
+          candidate="$(jq -r .candidate_commit "$OUT/review-receipt-copy.json")"
+          tree="$(jq -r .candidate_tree "$OUT/review-receipt-copy.json")"
+          parent="$(jq -r .candidate_parent "$OUT/review-receipt-copy.json")"
+          git fetch "$bundle" 'refs/heads/kreg-cycle008-candidate:refs/remotes/kreg-finalization-source/candidate'
+          test "$(git rev-parse refs/remotes/kreg-finalization-source/candidate)" = "$candidate"
+          test "$(git show -s --format=%P "$candidate")" = "$parent"
+          test "$(git rev-parse "$candidate^{tree}")" = "$tree"
+          git worktree add --detach "$CANDIDATE_WORKTREE" "$candidate"
+          source="$OUT/candidate-source"
+          for path in \
+            data/review/adapter-sdk/doctor-who-cycle-007-kragar.json \
+            scripts/doctor-who-cycle-007.mjs \
+            package.json \
+            data/AUTOPILOT.json \
+            data/WATERLINE-STATE.json \
+            data/specimens.json \
+            data/media-manifest.json \
+            data/MEDIA-AUDIT.json \
+            data/journal/autopilot.jsonl \
+            data/journal/candidates.jsonl \
+            data/journal/media-audit.jsonl \
+            data/journal/waterline.jsonl; do
+            test -f "$CANDIDATE_WORKTREE/$path"
+            mkdir -p "$source/$(dirname "$path")"
+            cp "$CANDIDATE_WORKTREE/$path" "$source/$path"
+          done
+          cp "$(jq -r .paths "$OUT/resolved-review-source.json")" "$OUT/approved-candidate-paths.txt"
+          cp "$(jq -r .semantic "$OUT/resolved-review-source.json")" "$OUT/approved-semantic-review.json"
+          grep -nEi 'Kragar|Kayste|Kreg|cycle.?00[678]|UC-135[123]|ap_469d79ea29fd7f877395d20f|lease_e65f837070361eacbb1abd46' \
+            "$source"/data/journal/*.jsonl > "$OUT/relevant-journal-lines.txt" || true
+          sha256sum $(find "$source" -type f | LC_ALL=C sort) > "$OUT/candidate-source-sha256.txt"
+
+      - name: Recover durable historical writer archive from V3 comments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls?state=all&head=BigBirdReturns:${WRITER_RECOVERY_BRANCH}&base=main&per_page=100" > "$OUT/writer-recovery-prs.json"
+          test "$(jq length "$OUT/writer-recovery-prs.json")" -ge 1
+          writer_pr="$(jq -r 'sort_by(.number) | last | .number' "$OUT/writer-recovery-prs.json")"
+          printf '%s\n' "$writer_pr" > "$OUT/writer-recovery-pr-number.txt"
+          comments="$OUT/writer-recovery-comments.json"
+          for _ in $(seq 1 720); do
+            gh api "/repos/${GITHUB_REPOSITORY}/issues/${writer_pr}/comments?per_page=100" > "$comments"
+            count="$(jq --arg marker "$WRITER_MARKER" '[.[] | select((.body // "") | startswith($marker))] | length' "$comments")"
+            if test "$count" -ge 1; then break; fi
+            sleep 10
+          done
+          COMMENTS="$comments" MARKER="$WRITER_MARKER" SHA="$WRITER_SHA256" OUT="$OUT" python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, re
+          comments=json.loads(pathlib.Path(os.environ['COMMENTS']).read_text()); marker=os.environ['MARKER']
+          rows=[]
+          pattern=re.compile(r'^'+re.escape(marker)+r'\s+(\d{2})/(\d{2})\r?\n([A-Za-z0-9+/=\r\n]+)$')
+          for comment in comments:
+              match=pattern.match(str(comment.get('body') or ''))
+              if match:
+                  rows.append((int(match.group(1)),int(match.group(2)),''.join(match.group(3).split()),comment['id']))
+          totals={row[1] for row in rows}
+          if len(totals)!=1: raise SystemExit(f'writer total denominator: {totals}')
+          total=totals.pop(); by={}
+          for part,declared,payload,cid in rows:
+              if part in by and by[part][0]!=payload: raise SystemExit(f'conflicting writer part {part}')
+              by[part]=(payload,cid)
+          if sorted(by)!=list(range(1,total+1)): raise SystemExit(f'missing writer parts: {sorted(by)} / {total}')
+          joined=''.join(by[n][0] for n in range(1,total+1)); decoded=base64.b64decode(joined,validate=True)
+          if hashlib.sha256(decoded).hexdigest()!=os.environ['SHA']: raise SystemExit('writer archive digest mismatch')
+          out=pathlib.Path(os.environ['OUT']); (out/'writer-payload.b64').write_text(joined); (out/'writer-payload.tgz').write_bytes(decoded)
+          (out/'writer-comment-custody.json').write_text(json.dumps([{'part':n,'comment_id':by[n][1],'length':len(by[n][0]),'sha256':hashlib.sha256(by[n][0].encode()).hexdigest()} for n in range(1,total+1)],indent=2,sort_keys=True)+'\n')
+          PY
+          test "$(sha256sum "$OUT/writer-payload.tgz" | awk '{print $1}')" = "$WRITER_SHA256"
+          WRITER="$OUT/writer-payload.tgz" TARGET="$WRITER_DIR" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib,tarfile
+          archive=pathlib.Path(os.environ['WRITER']); target=pathlib.Path(os.environ['TARGET']); rows=[]
+          with tarfile.open(archive,'r:gz') as tf:
+              members=tf.getmembers(); names=[m.name for m in members]
+              if not members or len(members)>128 or len(names)!=len(set(names)): raise SystemExit('unsafe writer denominator')
+              for member in members:
+                  path=pathlib.PurePosixPath(member.name)
+                  if path.is_absolute() or '..' in path.parts or not member.isfile() or member.issym() or member.islnk(): raise SystemExit(f'unsafe writer member {member.name!r}')
+              for member in members:
+                  data=tf.extractfile(member).read(); dest=target.joinpath(*pathlib.PurePosixPath(member.name).parts); dest.parent.mkdir(parents=True,exist_ok=True); dest.write_bytes(data)
+                  rows.append({'path':member.name,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
+          pathlib.Path(os.environ['OUT']).joinpath('writer-source-inventory.json').write_text(json.dumps({'archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest(),'members':rows,'executed':False},indent=2,sort_keys=True)+'\n')
+          PY
+          cp -a "$WRITER_DIR"/. "$OUT/writer-source/"
+          sha256sum $(find "$OUT/writer-source" -type f | LC_ALL=C sort) > "$OUT/writer-source-sha256.txt"
+
+      - name: Seal exact finalization-source packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_main="$(cat "$OUT/start-main.txt")"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$start_main"
+          test -z "$(git status --porcelain)"
+          START="$start_main" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          out=pathlib.Path(os.environ['OUT']); review=json.loads((out/'review-receipt-copy.json').read_text())
+          receipt={'schema_version':1,'transaction':'DOCTOR-WHO-CYCLE-008-KREG-FINALIZATION-SOURCE-V1','status':'source-packet-complete','start_main':os.environ['START'],'candidate_commit':review['candidate_commit'],'candidate_tree':review['candidate_tree'],'candidate_review_receipt':review['receipt_sha256'],'writer_archive_sha256':'d674b41cd76c393b62373eac8fe827f5ad4da42cc1793e3f86fbd8696c01e06e','repository_write':False,'finalization_executed':False,'product_published':False,'merge_performed':False}
+          receipt['receipt_sha256']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (out/'finalization-source-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          (
+            cd "$OUT"
+            find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
+          )
+
+      - name: Upload immutable finalization source packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-finalization-source-v1-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
