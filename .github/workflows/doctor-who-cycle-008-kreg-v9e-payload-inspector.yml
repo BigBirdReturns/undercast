@@ -44,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           git merge-base --is-ancestor "$BASE" HEAD
-          test "$(git rev-list --count "$BASE"..HEAD)" = 2
+          test "$(git rev-list --count "$BASE"..HEAD)" = 3
           printf '%s\n' "$SELF" > /tmp/expected-inspector-paths.txt
           git diff --name-only "$BASE"...HEAD | LC_ALL=C sort > /tmp/actual-inspector-paths.txt
           diff -u /tmp/expected-inspector-paths.txt /tmp/actual-inspector-paths.txt
@@ -58,7 +58,7 @@ jobs:
           diff -u /tmp/expected-payload-paths.txt /tmp/actual-payload-paths.txt
           test -z "$(git status --porcelain)"
 
-      - name: Reconstruct, normalize, and statically inspect exact V9e payload
+      - name: Reconstruct, uniquely repair, and statically inspect exact V9e payload
         shell: bash
         run: |
           set -euo pipefail
@@ -69,169 +69,287 @@ jobs:
             git show "$PAYLOAD_SHA:$path" > "$OUT/payload/part-$n.b64"
           done
           OUT="$OUT" python3 - <<'PY'
-          import base64, hashlib, io, json, lzma, os, pathlib, re, tarfile
-          out=pathlib.Path(os.environ["OUT"])
-          report={"payload_parts":[],"transport_repair":None,"payload_members":[],"matches":[]}
-          chunks=[]
-          mapping=[]
-          overlong_positions=[]
-          alphabet=set(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+          import base64, hashlib, io, json, os, pathlib, re, tarfile
+
+          out = pathlib.Path(os.environ["OUT"])
+          report = {
+              "payload_parts": [],
+              "transport_repair": None,
+              "payload_members": [],
+              "matches": [],
+          }
+          chunks = []
+          insertion_sites = []
+          alphabet = set(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+          insertion_alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
           for n in range(5):
-              path=out/f"payload/part-{n:02d}.b64"
-              raw=path.read_bytes()
-              compact=bytearray()
-              line_rows=[]
-              for line_no,line in enumerate(raw.splitlines(),1):
-                  clean=bytes(b for b in line if b not in b" \t\r\n\v\f")
-                  illegal=[{"column":i+1,"byte":b} for i,b in enumerate(clean) if b not in alphabet]
-                  line_rows.append({"line":line_no,"characters":len(clean),"illegal":illegal})
-                  for column,b in enumerate(clean,1):
-                      compact.append(b)
-                      mapping.append({"file":path.name,"line":line_no,"column":column,"byte":b})
-                      if len(clean)>76:
-                          overlong_positions.append(len(mapping)-1)
+              path = out / f"payload/part-{n:02d}.b64"
+              raw = path.read_bytes()
+              raw_lines = raw.splitlines()
+              compact = bytearray()
+              line_rows = []
+              for line_no, line in enumerate(raw_lines, 1):
+                  clean = bytes(b for b in line if b not in b" \t\r\n\v\f")
+                  illegal = [
+                      {"column": i + 1, "byte": b}
+                      for i, b in enumerate(clean)
+                      if b not in alphabet
+                  ]
+                  is_final = line_no == len(raw_lines)
+                  global_start = sum(len(chunk) for chunk in chunks) + len(compact)
+                  if not is_final and len(clean) == 75:
+                      for boundary in range(len(clean) + 1):
+                          insertion_sites.append({
+                              "offset": global_start + boundary,
+                              "file": path.name,
+                              "line": line_no,
+                              "column": boundary + 1,
+                          })
+                  line_rows.append({
+                      "line": line_no,
+                      "characters": len(clean),
+                      "illegal": illegal,
+                  })
+                  compact.extend(clean)
               chunks.append(bytes(compact))
               report["payload_parts"].append({
-                  "path":path.name,
-                  "raw_bytes":len(raw),
-                  "lines":len(line_rows),
-                  "compact_characters":len(compact),
-                  "compact_modulo_4":len(compact)%4,
-                  "sha256_raw":hashlib.sha256(raw).hexdigest(),
-                  "sha256_compact":hashlib.sha256(compact).hexdigest(),
-                  "nonstandard_lines":[r for i,r in enumerate(line_rows) if r["characters"]!=76 and i!=len(line_rows)-1],
-                  "final_line":line_rows[-1] if line_rows else None,
+                  "path": path.name,
+                  "raw_bytes": len(raw),
+                  "lines": len(line_rows),
+                  "compact_characters": len(compact),
+                  "compact_modulo_4": len(compact) % 4,
+                  "sha256_raw": hashlib.sha256(raw).hexdigest(),
+                  "sha256_compact": hashlib.sha256(compact).hexdigest(),
+                  "nonstandard_lines": [
+                      row
+                      for i, row in enumerate(line_rows)
+                      if row["characters"] != 76 and i != len(line_rows) - 1
+                  ],
+                  "final_line": line_rows[-1] if line_rows else None,
               })
-          joined=b"".join(chunks)
-          (out/"payload/joined-as-stored.b64").write_bytes(joined)
-          report["joined_as_stored"]={
-              "characters":len(joined),
-              "modulo_4":len(joined)%4,
-              "sha256":hashlib.sha256(joined).hexdigest(),
-              "overlong_candidate_positions":len(overlong_positions),
+
+          joined = b"".join(chunks)
+          (out / "payload/joined-as-stored.b64").write_bytes(joined)
+          report["joined_as_stored"] = {
+              "characters": len(joined),
+              "modulo_4": len(joined) % 4,
+              "sha256": hashlib.sha256(joined).hexdigest(),
+              "short_line_insertion_sites": len(insertion_sites),
           }
+
+          short_lines = [
+              (part["path"], row["line"], row["characters"])
+              for part in report["payload_parts"]
+              for row in part["nonstandard_lines"]
+          ]
+          if short_lines != [("part-00.b64", 22, 75)]:
+              raise SystemExit(f"unexpected payload line-shape defect: {short_lines!r}")
+          if len(insertion_sites) != 76:
+              raise SystemExit(f"unexpected insertion-site count: {len(insertion_sites)}")
+          if any(
+              row["illegal"]
+              for part in report["payload_parts"]
+              for row in part["nonstandard_lines"] + [part["final_line"]]
+              if row is not None
+          ):
+              raise SystemExit("non-base64 byte found in payload transport")
+
           def valid_archive(text):
               try:
-                  decoded=base64.b64decode(text,validate=True)
+                  decoded = base64.b64decode(text, validate=True)
                   if not decoded.startswith(b"\xfd7zXZ\x00"):
                       return None
-                  with tarfile.open(fileobj=io.BytesIO(decoded),mode="r:xz") as tf:
+                  with tarfile.open(fileobj=io.BytesIO(decoded), mode="r:xz") as tf:
                       tf.getmembers()
                   return decoded
               except Exception:
                   return None
-          candidates=[]
-          decoded=valid_archive(joined)
+
+          candidates = []
+          decoded = valid_archive(joined)
           if decoded is not None:
-              candidates.append((joined,decoded,None))
+              candidates.append((joined, decoded, None, None))
           else:
-              positions=overlong_positions if overlong_positions else list(range(len(joined)))
-              for pos in positions:
-                  candidate=joined[:pos]+joined[pos+1:]
-                  if len(candidate)%4:
-                      continue
-                  recovered=valid_archive(candidate)
-                  if recovered is not None:
-                      candidates.append((candidate,recovered,pos))
-          unique={}
-          for text,blob,pos in candidates:
-              unique[(hashlib.sha256(text).hexdigest(),hashlib.sha256(blob).hexdigest())]=(text,blob,pos)
-          candidates=list(unique.values())
-          report["valid_transport_candidates"]=len(candidates)
-          (out/"result/preflight-report.json").write_text(json.dumps(report,indent=2,sort_keys=True)+"\n")
-          if len(candidates)!=1:
-              print(json.dumps(report,indent=2,sort_keys=True))
-              raise SystemExit(f"expected one valid payload transport candidate, found {len(candidates)}")
-          corrected,archive_bytes,pos=candidates[0]
-          (out/"payload/joined-corrected.b64").write_bytes(corrected)
-          archive=out/"payload/payload.tar.xz"
+              for site in insertion_sites:
+                  pos = site["offset"]
+                  for char in insertion_alphabet:
+                      candidate = joined[:pos] + bytes([char]) + joined[pos:]
+                      if len(candidate) % 4:
+                          continue
+                      recovered = valid_archive(candidate)
+                      if recovered is not None:
+                          candidates.append((candidate, recovered, site, char))
+
+          unique = {}
+          for text, blob, site, char in candidates:
+              key = (hashlib.sha256(text).hexdigest(), hashlib.sha256(blob).hexdigest())
+              unique[key] = (text, blob, site, char)
+          candidates = list(unique.values())
+          report["transport_candidates_tested"] = len(insertion_sites) * len(insertion_alphabet)
+          report["valid_transport_candidates"] = len(candidates)
+          (out / "result/preflight-report.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n"
+          )
+          if len(candidates) != 1:
+              print(json.dumps(report, indent=2, sort_keys=True))
+              raise SystemExit(
+                  f"expected one valid payload transport candidate, found {len(candidates)}"
+              )
+
+          corrected, archive_bytes, site, char = candidates[0]
+          (out / "payload/joined-corrected.b64").write_bytes(corrected)
+          archive = out / "payload/payload.tar.xz"
           archive.write_bytes(archive_bytes)
-          if pos is not None:
-              m=mapping[pos]
-              report["transport_repair"]={
-                  "operation":"delete-one-base64-alphabet-character",
-                  "compact_offset_zero_based":pos,
-                  "file":m["file"],"line":m["line"],"column":m["column"],
-                  "byte":m["byte"],"character":chr(m["byte"]),
-                  "corrected_characters":len(corrected),
-                  "corrected_sha256":hashlib.sha256(corrected).hexdigest(),
-                  "archive_bytes":len(archive_bytes),
-                  "archive_sha256":hashlib.sha256(archive_bytes).hexdigest(),
+          if site is None:
+              report["transport_repair"] = {
+                  "operation": "none",
+                  "corrected_characters": len(corrected),
+                  "corrected_sha256": hashlib.sha256(corrected).hexdigest(),
+                  "archive_bytes": len(archive_bytes),
+                  "archive_sha256": hashlib.sha256(archive_bytes).hexdigest(),
               }
           else:
-              report["transport_repair"]={
-                  "operation":"none",
-                  "corrected_characters":len(corrected),
-                  "corrected_sha256":hashlib.sha256(corrected).hexdigest(),
-                  "archive_bytes":len(archive_bytes),
-                  "archive_sha256":hashlib.sha256(archive_bytes).hexdigest(),
+              report["transport_repair"] = {
+                  "operation": "insert-one-base64-character",
+                  "compact_offset_zero_based": site["offset"],
+                  "file": site["file"],
+                  "line": site["line"],
+                  "column": site["column"],
+                  "byte": char,
+                  "character": chr(char),
+                  "corrected_characters": len(corrected),
+                  "corrected_sha256": hashlib.sha256(corrected).hexdigest(),
+                  "archive_bytes": len(archive_bytes),
+                  "archive_sha256": hashlib.sha256(archive_bytes).hexdigest(),
               }
-          target=out/"extracted"
-          total=0
-          with tarfile.open(archive,"r:xz") as tf:
-              names=[]
-              for m in tf.getmembers():
-                  p=pathlib.PurePosixPath(m.name)
-                  if p.is_absolute() or ".." in p.parts or m.issym() or m.islnk():
-                      raise SystemExit(f"unsafe payload member: {m.name!r}")
-                  if m.isdir():
+
+          target = out / "extracted"
+          total = 0
+          with tarfile.open(archive, "r:xz") as tf:
+              names = []
+              for member in tf.getmembers():
+                  member_path = pathlib.PurePosixPath(member.name)
+                  if (
+                      member_path.is_absolute()
+                      or ".." in member_path.parts
+                      or member.issym()
+                      or member.islnk()
+                  ):
+                      raise SystemExit(f"unsafe payload member: {member.name!r}")
+                  if member.isdir():
                       continue
-                  if not m.isfile():
-                      raise SystemExit(f"unsupported payload member: {m.name!r}")
-                  total+=m.size
-                  if total>10_000_000:
+                  if not member.isfile():
+                      raise SystemExit(f"unsupported payload member: {member.name!r}")
+                  total += member.size
+                  if total > 10_000_000:
                       raise SystemExit("payload expansion ceiling exceeded")
-                  names.append(m.name)
-              if len(names)!=len(set(names)):
+                  names.append(member.name)
+              if len(names) != len(set(names)):
                   raise SystemExit("duplicate payload members")
               tf.extractall(target)
-          expected_joined_sha="bf084419659110104b4b7b116b328d7907d6ed95b2996fb9375e10092cd68ff8"
-          expected_archive_sha="0fcf1de0881e4879505a9da28edc769915e496ffe325e06440f09ee7e8a05f4c"
-          exact=None
+
+          expected_joined_sha = "bf084419659110104b4b7b116b328d7907d6ed95b2996fb9375e10092cd68ff8"
+          expected_archive_sha = "0fcf1de0881e4879505a9da28edc769915e496ffe325e06440f09ee7e8a05f4c"
+          part_specs = {
+              1: (4000, "86b45061cf9356455cfacc44ec5799170ec5c4d55a97d1852c5fe6ecc834dac4"),
+              2: (4000, "116932021ed437f1fb8bfa658db730bfc35834fb5f3d37f6732048501cbb8c35"),
+              3: (4000, "c1cdddfa28f4130a0e8476d92f48eab6e56c5155cbc82068e864c6b6485d4cbd"),
+              4: (4000, "481a152352d6b027940c52720a96256aa16cc09413e91e556ba1151b2aa9b0d4"),
+              5: (2320, "f4996984e07d1181c8c2ab08f6bb442b0337f06cbc599e2f81d1654cb405aa5a"),
+          }
+          recovered_parts = {}
+          exact = None
+
+          def inspect_base64_candidate(label, possible):
+              nonlocal_exact = None
+              if len(possible) == 18320 and hashlib.sha256(possible).hexdigest() == expected_joined_sha:
+                  nonlocal_exact = possible.decode("ascii")
+                  report["matches"].append({"path": label, "kind": "exact-joined-base64"})
+              for number, (length, digest) in part_specs.items():
+                  if len(possible) == length and hashlib.sha256(possible).hexdigest() == digest:
+                      recovered_parts[number] = possible.decode("ascii")
+                      report["matches"].append({
+                          "path": label,
+                          "kind": f"exact-code-part-{number:02d}",
+                      })
+              try:
+                  nested = base64.b64decode(possible, validate=True)
+              except Exception:
+                  nested = None
+              if nested is not None and hashlib.sha256(nested).hexdigest() == expected_archive_sha:
+                  nonlocal_exact = possible.decode("ascii")
+                  report["matches"].append({
+                      "path": label,
+                      "kind": "base64-of-exact-code-archive",
+                  })
+              return nonlocal_exact
+
           for path in sorted(target.rglob("*")):
               if not path.is_file():
                   continue
-              data=path.read_bytes()
-              rel=path.relative_to(target).as_posix()
-              row={"path":rel,"bytes":len(data),"sha256":hashlib.sha256(data).hexdigest()}
+              data = path.read_bytes()
+              rel = path.relative_to(target).as_posix()
+              row = {
+                  "path": rel,
+                  "bytes": len(data),
+                  "sha256": hashlib.sha256(data).hexdigest(),
+              }
               report["payload_members"].append(row)
-              compact=re.sub(rb"\s+",b"",data)
-              candidates_for_file=[compact]
-              candidates_for_file.extend(
-                  re.sub(rb"\s+",b"",m.group(0))
-                  for m in re.finditer(rb"(?:[A-Za-z0-9+/=]{40,}\r?\n){40,}[A-Za-z0-9+/=]{4,}",data)
-              )
-              for possible in candidates_for_file:
-                  if len(possible)==18320 and hashlib.sha256(possible).hexdigest()==expected_joined_sha:
-                      exact=possible.decode("ascii")
-                      report["matches"].append({"path":rel,"kind":"exact-joined-base64"})
-                  try:
-                      nested=base64.b64decode(possible,validate=True)
-                  except Exception:
-                      nested=None
-                  if nested is not None and hashlib.sha256(nested).hexdigest()==expected_archive_sha:
-                      exact=possible.decode("ascii")
-                      report["matches"].append({"path":rel,"kind":"base64-of-exact-code-archive"})
-              if row["sha256"]==expected_archive_sha:
-                  exact=base64.b64encode(data).decode("ascii")
-                  report["matches"].append({"path":rel,"kind":"exact-code-archive"})
-          (out/"result/report.json").write_text(json.dumps(report,indent=2,sort_keys=True)+"\n")
-          print(json.dumps(report,indent=2,sort_keys=True))
+              if row["sha256"] == expected_archive_sha:
+                  exact = base64.b64encode(data).decode("ascii")
+                  report["matches"].append({"path": rel, "kind": "exact-code-archive"})
+
+              compact = re.sub(rb"\s+", b"", data)
+              found = inspect_base64_candidate(rel, compact)
+              if found is not None:
+                  exact = found
+
+              for index, match in enumerate(
+                  re.finditer(rb"(?:[A-Za-z0-9+/=]{40,}[\r\n\t ]*)+", data)
+              ):
+                  possible = re.sub(rb"\s+", b"", match.group(0))
+                  if len(possible) > 20000:
+                      continue
+                  found = inspect_base64_candidate(f"{rel}#run-{index}", possible)
+                  if found is not None:
+                      exact = found
+
+          if exact is None and set(recovered_parts) == set(part_specs):
+              joined_code = "".join(recovered_parts[number] for number in range(1, 6))
+              if (
+                  len(joined_code) == 18320
+                  and hashlib.sha256(joined_code.encode("ascii")).hexdigest() == expected_joined_sha
+              ):
+                  exact = joined_code
+                  report["matches"].append({
+                      "path": "reassembled-exact-code-parts",
+                      "kind": "exact-joined-base64",
+                  })
+
+          (out / "result/report.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(report, indent=2, sort_keys=True))
           if exact is None:
               raise SystemExit("exact 18,320-byte joined code Base64 not recovered")
-          if len(exact)!=18320 or hashlib.sha256(exact.encode()).hexdigest()!=expected_joined_sha:
+          if (
+              len(exact) != 18320
+              or hashlib.sha256(exact.encode("ascii")).hexdigest() != expected_joined_sha
+          ):
               raise SystemExit("recovered joined Base64 custody drift")
-          part5=exact[16000:]
-          if len(part5)!=2320:
+
+          part5 = exact[16000:]
+          if len(part5) != 2320:
               raise SystemExit("recovered part 5 length drift")
-          digest=hashlib.sha256(part5.encode()).hexdigest()
-          if digest!="f4996984e07d1181c8c2ab08f6bb442b0337f06cbc599e2f81d1654cb405aa5a":
+          digest = hashlib.sha256(part5.encode("ascii")).hexdigest()
+          if digest != part_specs[5][1]:
               raise SystemExit("recovered part 5 digest drift")
-          body=(
+          body = (
               "CYCLE008_KREG_V9E_CODE_PART 05/05 "
               f"SHA256 {digest} LENGTH {len(part5)}\n{part5}"
           )
-          (out/"result/exact-part-05-comment.txt").write_text(body)
+          (out / "result/exact-part-05-comment.txt").write_text(body)
           print("RECOVERED_EXACT_PART_05_BEGIN")
           print(body)
           print("RECOVERED_EXACT_PART_05_END")
