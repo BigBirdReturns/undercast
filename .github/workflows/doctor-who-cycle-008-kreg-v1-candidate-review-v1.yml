@@ -1,0 +1,406 @@
+name: doctor-who-cycle-008-kreg-v1-candidate-review-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-v1-candidate-review-v1.yml"
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-v1-candidate-review-v1
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-v1-candidate-review-v1.yml
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-v1-candidate-review-v1
+  CANDIDATE_BRANCH: agent/doctor-who-cycle-008-kreg-v1-materializer-current-main-v1
+  CANDIDATE_WORKFLOW: doctor-who-cycle-008-kreg-v1-materializer-current-main-v1.yml
+  CANDIDATE_ARTIFACT_PREFIX: doctor-who-cycle-008-kreg-v1-materializer-current-main-v1-
+  TASK_ID: ap_469d79ea29fd7f877395d20f
+  LEASE_ID: lease_e65f837070361eacbb1abd46
+  WALL_ID: UC-1353
+  STILL_PATH: images/uc-1353-still.jpg
+  STILL_SHA256: 5d19f72cbe08648568c84469287dfcd14a9c0789156cd3d740edf4c1c5bb0622
+  OUT: /tmp/doctor-who-cycle-008-kreg-v1-candidate-review-v1
+  REVIEW_WORKTREE: /tmp/doctor-who-cycle-008-kreg-v1-candidate-review-worktree
+  PATCH_WORKTREE: /tmp/doctor-who-cycle-008-kreg-v1-candidate-patch-worktree
+
+jobs:
+  review:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-v1-candidate-review-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact one-path independent reviewer
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" "$REVIEW_WORKTREE" "$PATCH_WORKTREE"
+          mkdir -p "$OUT/artifact"
+          test "$GITHUB_HEAD_REF" = "$AUTHORIZED_BRANCH"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = "1"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          printf '%s\n' "$SELF" > "$OUT/expected-review-paths.txt"
+          git diff --name-only "$BASE_SHA"...HEAD | LC_ALL=C sort > "$OUT/actual-review-paths.txt"
+          diff -u "$OUT/expected-review-paths.txt" "$OUT/actual-review-paths.txt"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          start_main="$(git rev-parse refs/remotes/origin/main)"
+          git merge-base --is-ancestor "$BASE_SHA" "$start_main"
+          git diff --name-only "$BASE_SHA"..."$start_main" | LC_ALL=C sort > "$OUT/base-to-live-main-paths.txt"
+          if test -s "$OUT/base-to-live-main-paths.txt"; then
+            awk '!/^\.github\/workflows\// { bad=1 } END { exit bad }' "$OUT/base-to-live-main-paths.txt"
+          fi
+          printf '%s\n' "$start_main" > "$OUT/review-start-main.txt"
+          printf 'review_head=%s\nreview_base=%s\nreview_tree=%s\nreview_start_main=%s\n' \
+            "$HEAD_SHA" "$BASE_SHA" "$(git rev-parse 'HEAD^{tree}')" "$start_main" \
+            > "$OUT/reviewer-identity.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Discover terminal candidate run and immutable artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls?state=all&head=BigBirdReturns:${CANDIDATE_BRANCH}&base=main&per_page=100" > "$OUT/candidate-prs.json"
+          test "$(jq 'length' "$OUT/candidate-prs.json")" -ge 1
+          jq 'sort_by(.number) | last' "$OUT/candidate-prs.json" > "$OUT/candidate-pr.json"
+          candidate_head="$(jq -r .head.sha "$OUT/candidate-pr.json")"
+          candidate_pr="$(jq -r .number "$OUT/candidate-pr.json")"
+          test -n "$candidate_head"
+          printf '%s\n' "$candidate_head" > "$OUT/candidate-head.txt"
+          printf '%s\n' "$candidate_pr" > "$OUT/candidate-pr-number.txt"
+
+          endpoint="/repos/${GITHUB_REPOSITORY}/actions/workflows/${CANDIDATE_WORKFLOW}/runs?event=pull_request&branch=${CANDIDATE_BRANCH}&per_page=100"
+          run_id=''
+          for _ in $(seq 1 240); do
+            gh api "$endpoint" > "$OUT/candidate-runs.json"
+            run_id="$(jq -r --arg head "$candidate_head" '[.workflow_runs[] | select(.head_sha == $head and .head_branch == env.CANDIDATE_BRANCH and .event == "pull_request")] | sort_by(.id) | last | .id // empty' "$OUT/candidate-runs.json")"
+            if test -n "$run_id"; then break; fi
+            sleep 5
+          done
+          test -n "$run_id"
+          printf '%s\n' "$run_id" > "$OUT/candidate-run-id.txt"
+
+          for _ in $(seq 1 360); do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/candidate-run.json"
+            status="$(jq -r .status "$OUT/candidate-run.json")"
+            if test "$status" = completed; then break; fi
+            sleep 10
+          done
+          jq -e --arg head "$candidate_head" '.status == "completed" and .head_sha == $head and .event == "pull_request"' "$OUT/candidate-run.json" >/dev/null
+          jq -r .conclusion "$OUT/candidate-run.json" > "$OUT/candidate-run-conclusion.txt"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "$OUT/candidate-jobs.json"
+          test "$(jq '[.jobs[] | select(.name == "qualify")] | length' "$OUT/candidate-jobs.json")" = 1
+          jq '.jobs[] | select(.name == "qualify")' "$OUT/candidate-jobs.json" > "$OUT/candidate-job.json"
+          jq -r .id "$OUT/candidate-job.json" > "$OUT/candidate-job-id.txt"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/candidate-artifacts.json"
+          expected_name="${CANDIDATE_ARTIFACT_PREFIX}${run_id}"
+          test "$(jq --arg name "$expected_name" '[.artifacts[] | select(.name == $name and (.expired | not))] | length' "$OUT/candidate-artifacts.json")" = 1
+          jq --arg name "$expected_name" '.artifacts[] | select(.name == $name and (.expired | not))' "$OUT/candidate-artifacts.json" > "$OUT/candidate-artifact.json"
+          artifact_id="$(jq -r .id "$OUT/candidate-artifact.json")"
+          printf '%s\n' "$artifact_id" > "$OUT/candidate-artifact-id.txt"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$OUT/candidate-artifact.zip"
+
+      - name: Safely extract and classify candidate evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$OUT/candidate-artifact.zip" TARGET="$OUT/artifact" OUT="$OUT" python3 - <<'PY'
+          import hashlib, json, os, pathlib, stat, zipfile
+          archive = pathlib.Path(os.environ['ZIP'])
+          target = pathlib.Path(os.environ['TARGET'])
+          seen = set(); expanded = 0
+          with zipfile.ZipFile(archive) as zf:
+              infos = zf.infolist()
+              if not infos or len(infos) > 1024:
+                  raise SystemExit(f'unsafe artifact member count: {len(infos)}')
+              for info in infos:
+                  path = pathlib.PurePosixPath(info.filename)
+                  mode = (info.external_attr >> 16) & 0o170000
+                  if path.is_absolute() or '..' in path.parts or info.filename in seen or mode == stat.S_IFLNK:
+                      raise SystemExit(f'unsafe artifact member: {info.filename!r}')
+                  seen.add(info.filename)
+                  if info.is_dir(): continue
+                  expanded += info.file_size
+                  if expanded > 2_000_000_000:
+                      raise SystemExit('candidate artifact exceeds expansion ceiling')
+                  destination = target.joinpath(*path.parts)
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  with zf.open(info) as src, destination.open('wb') as dst:
+                      while True:
+                          chunk = src.read(1024 * 1024)
+                          if not chunk: break
+                          dst.write(chunk)
+          required = [
+              'start-main.txt', 'candidate-commit.txt', 'candidate-tree.txt',
+              'candidate-paths.txt', 'candidate.bundle', 'current-main-candidate.patch',
+              'complete-gate.log',
+          ]
+          resolved = {}
+          for name in required:
+              matches = [p for p in target.rglob(name) if p.is_file()]
+              if len(matches) != 1:
+                  raise SystemExit(f'{name} denominator: {len(matches)}')
+              resolved[name] = str(matches[0])
+          optional = {}
+          for name in ('candidate-receipt.json', 'candidate-evidence.sha256', 'materializer-attempts.json', 'materializer-success.json'):
+              matches = [p for p in target.rglob(name) if p.is_file()]
+              if len(matches) > 1:
+                  raise SystemExit(f'{name} denominator: {len(matches)}')
+              if matches: optional[name] = str(matches[0])
+          pathlib.Path(os.environ['OUT']).joinpath('resolved-evidence.json').write_text(json.dumps({'required': resolved, 'optional': optional}, indent=2, sort_keys=True) + '\n')
+          pathlib.Path(os.environ['OUT']).joinpath('candidate-artifact-sha256.txt').write_text(hashlib.sha256(archive.read_bytes()).hexdigest() + '\n')
+          PY
+
+      - name: Verify bundle, commit, patch, and path denominator
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$(jq -r '.required["candidate.bundle"]' "$OUT/resolved-evidence.json")"
+          patch="$(jq -r '.required["current-main-candidate.patch"]' "$OUT/resolved-evidence.json")"
+          start_file="$(jq -r '.required["start-main.txt"]' "$OUT/resolved-evidence.json")"
+          commit_file="$(jq -r '.required["candidate-commit.txt"]' "$OUT/resolved-evidence.json")"
+          tree_file="$(jq -r '.required["candidate-tree.txt"]' "$OUT/resolved-evidence.json")"
+          paths_file="$(jq -r '.required["candidate-paths.txt"]' "$OUT/resolved-evidence.json")"
+          start_main="$(cat "$start_file")"
+          candidate="$(cat "$commit_file")"
+          expected_tree="$(cat "$tree_file")"
+
+          git cat-file -e "$start_main^{commit}"
+          git bundle verify "$bundle" > "$OUT/bundle-verify.txt"
+          git fetch "$bundle" 'refs/heads/kreg-cycle008-candidate:refs/remotes/kreg-review/candidate'
+          test "$(git rev-parse refs/remotes/kreg-review/candidate)" = "$candidate"
+          test "$(git show -s --format=%P "$candidate")" = "$start_main"
+          test "$(git rev-parse "$candidate^{tree}")" = "$expected_tree"
+          git diff --name-only "$start_main"..."$candidate" | LC_ALL=C sort > "$OUT/actual-candidate-paths.txt"
+          diff -u "$paths_file" "$OUT/actual-candidate-paths.txt"
+          test "$(wc -l < "$paths_file")" -ge 30
+          test "$(wc -l < "$paths_file")" -le 80
+          awk '/^(\.github\/|tmp\/|records\/)/ { bad=1 } END { exit bad }' "$paths_file"
+
+          git worktree add --detach "$PATCH_WORKTREE" "$start_main"
+          git -C "$PATCH_WORKTREE" apply --index --binary --3way "$patch"
+          test "$(git -C "$PATCH_WORKTREE" write-tree)" = "$expected_tree"
+          git worktree remove --force "$PATCH_WORKTREE"
+
+          receipt="$(jq -r '.optional["candidate-receipt.json"] // empty' "$OUT/resolved-evidence.json")"
+          if test -n "$receipt"; then
+            RECEIPT="$receipt" CANDIDATE="$candidate" TREE="$expected_tree" START="$start_main" python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          path = pathlib.Path(os.environ['RECEIPT'])
+          data = json.loads(path.read_text())
+          claimed = data.pop('receipt_sha256')
+          actual = hashlib.sha256(json.dumps(data, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+          assert actual == claimed
+          assert data['candidate_commit'] == os.environ['CANDIDATE']
+          assert data['candidate_tree'] == os.environ['TREE']
+          assert data['start_main'] == os.environ['START']
+          PY
+          fi
+          printf '%s\n' "$start_main" > "$OUT/verified-candidate-parent.txt"
+          printf '%s\n' "$candidate" > "$OUT/verified-candidate-commit.txt"
+          printf '%s\n' "$expected_tree" > "$OUT/verified-candidate-tree.txt"
+          cp "$paths_file" "$OUT/verified-candidate-paths.txt"
+
+      - name: Independently inspect Kreg semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$(cat "$OUT/verified-candidate-commit.txt")"
+          git worktree add --detach "$REVIEW_WORKTREE" "$candidate"
+          ROOT="$REVIEW_WORKTREE" OUT="$OUT" TASK_ID="$TASK_ID" LEASE_ID="$LEASE_ID" WALL_ID="$WALL_ID" STILL_PATH="$STILL_PATH" STILL_SHA256="$STILL_SHA256" python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          root = pathlib.Path(os.environ['ROOT'])
+          out = pathlib.Path(os.environ['OUT'])
+          task = os.environ['TASK_ID']; lease = os.environ['LEASE_ID']; wall = os.environ['WALL_ID']
+          still = root / os.environ['STILL_PATH']
+          assert still.is_file()
+          assert hashlib.sha256(still.read_bytes()).hexdigest() == os.environ['STILL_SHA256']
+
+          def walk(value):
+              if isinstance(value, dict):
+                  yield value
+                  for child in value.values(): yield from walk(child)
+              elif isinstance(value, list):
+                  for child in value: yield from walk(child)
+
+          specimens = json.loads((root / 'data/specimens.json').read_text())
+          specimen_rows = [row for row in walk(specimens) if wall in row.values()]
+          assert specimen_rows, 'UC-1353 specimen missing'
+          specimen_text = json.dumps(specimen_rows, sort_keys=True).lower()
+          assert 'kreg' in specimen_text and 'dan starkey' in specimen_text
+
+          autopilot = json.loads((root / 'data/AUTOPILOT.json').read_text())
+          task_rows = [row for row in walk(autopilot) if task in row.values()]
+          assert task_rows, 'Kreg task missing from AUTOPILOT'
+          task_text = json.dumps(task_rows, sort_keys=True).lower()
+          assert 'kreg' in task_text and 'dan starkey' in task_text
+          assert 'resolved' in task_text
+          assert lease in json.dumps(autopilot, sort_keys=True)
+
+          repository_text = ''
+          exact_hits = {task: [], lease: [], wall: [], os.environ['STILL_PATH']: []}
+          for path in sorted((root / 'data').rglob('*')):
+              if not path.is_file() or path.suffix not in ('.json', '.jsonl', '.md', '.txt'):
+                  continue
+              try: text = path.read_text()
+              except UnicodeDecodeError: continue
+              for needle in exact_hits:
+                  if needle in text: exact_hits[needle].append(path.relative_to(root).as_posix())
+          assert all(exact_hits.values())
+          report = {
+              'task': task,
+              'lease': lease,
+              'wall': wall,
+              'performer': 'Dan Starkey',
+              'role': 'Kreg',
+              'mode': 'voice',
+              'still_path': os.environ['STILL_PATH'],
+              'still_bytes': still.stat().st_size,
+              'still_sha256': os.environ['STILL_SHA256'],
+              'task_rows': len(task_rows),
+              'specimen_rows': len(specimen_rows),
+              'exact_hits': exact_hits,
+              'source_assigned_identity': True,
+              'performer_portrait_absent': True,
+              'biometric_inference': False,
+          }
+          (out / 'semantic-review.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+          PY
+
+      - name: Run independent complete gate on exact candidate commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$REVIEW_WORKTREE"
+          test -z "$(git status --porcelain)"
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate 2>&1 | tee "$OUT/independent-complete-gate.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Seal independent candidate-review receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          review_start="$(cat "$OUT/review-start-main.txt")"
+          candidate_parent="$(cat "$OUT/verified-candidate-parent.txt")"
+          candidate="$(cat "$OUT/verified-candidate-commit.txt")"
+          tree="$(cat "$OUT/verified-candidate-tree.txt")"
+          run_id="$(cat "$OUT/candidate-run-id.txt")"
+          job_id="$(cat "$OUT/candidate-job-id.txt")"
+          artifact_id="$(cat "$OUT/candidate-artifact-id.txt")"
+          conclusion="$(cat "$OUT/candidate-run-conclusion.txt")"
+          REVIEW_START="$review_start" PARENT="$candidate_parent" CANDIDATE="$candidate" TREE="$tree" RUN_ID="$run_id" JOB_ID="$job_id" ARTIFACT_ID="$artifact_id" CONCLUSION="$conclusion" OUT="$OUT" python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          out = pathlib.Path(os.environ['OUT'])
+          receipt = {
+              'schema_version': 1,
+              'transaction': 'DOCTOR-WHO-CYCLE-008-KREG-INDEPENDENT-CANDIDATE-REVIEW-V1',
+              'status': 'approved-for-separate-finalization',
+              'candidate_run': int(os.environ['RUN_ID']),
+              'candidate_job': int(os.environ['JOB_ID']),
+              'candidate_artifact': int(os.environ['ARTIFACT_ID']),
+              'candidate_run_conclusion': os.environ['CONCLUSION'],
+              'candidate_parent': os.environ['PARENT'],
+              'candidate_commit': os.environ['CANDIDATE'],
+              'candidate_tree': os.environ['TREE'],
+              'candidate_path_count': len((out / 'verified-candidate-paths.txt').read_text().splitlines()),
+              'review_start_main': os.environ['REVIEW_START'],
+              'candidate_artifact_sha256': (out / 'candidate-artifact-sha256.txt').read_text().strip(),
+              'independent_gate_sha256': hashlib.sha256((out / 'independent-complete-gate.log').read_bytes()).hexdigest(),
+              'semantic_review_sha256': hashlib.sha256((out / 'semantic-review.json').read_bytes()).hexdigest(),
+              'repository_write': False,
+              'product_published': False,
+              'merge_performed': False,
+              'finalization_authorized_separately_only': True,
+          }
+          canonical = json.dumps(receipt, sort_keys=True, separators=(',', ':')).encode()
+          receipt['receipt_sha256'] = hashlib.sha256(canonical).hexdigest()
+          (out / 'candidate-review-receipt.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
+          PY
+          sha256sum "$OUT/candidate-review-receipt.json" "$OUT/semantic-review.json" "$OUT/independent-complete-gate.log" > "$OUT/review-evidence.sha256"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          live_main="$(git rev-parse refs/remotes/origin/main)"
+          git merge-base --is-ancestor "$review_start" "$live_main"
+          git diff --name-only "$review_start"..."$live_main" | LC_ALL=C sort > "$OUT/review-start-to-live-main-paths.txt"
+          if test -s "$OUT/review-start-to-live-main-paths.txt"; then
+            awk '!/^\.github\/workflows\// { bad=1 } END { exit bad }' "$OUT/review-start-to-live-main-paths.txt"
+          fi
+          test -z "$(git status --porcelain)"
+
+      - name: Upload immutable independent review packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-v1-candidate-review-v1-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Report independent review boundary
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status='review-failed'
+          candidate='unavailable'
+          tree='unavailable'
+          paths='unavailable'
+          receipt='unavailable'
+          conclusion='unavailable'
+          if test -f "$OUT/candidate-run-conclusion.txt"; then conclusion="$(cat "$OUT/candidate-run-conclusion.txt")"; fi
+          if test -f "$OUT/candidate-review-receipt.json"; then
+            status="$(jq -r .status "$OUT/candidate-review-receipt.json")"
+            candidate="$(jq -r .candidate_commit "$OUT/candidate-review-receipt.json")"
+            tree="$(jq -r .candidate_tree "$OUT/candidate-review-receipt.json")"
+            paths="$(jq -r .candidate_path_count "$OUT/candidate-review-receipt.json")"
+            receipt="$(jq -r .receipt_sha256 "$OUT/candidate-review-receipt.json")"
+          fi
+          gate='independent gate unavailable'
+          semantic='semantic review unavailable'
+          if test -f "$OUT/independent-complete-gate.log"; then gate="$(tail -n 120 "$OUT/independent-complete-gate.log" | tail -c 12000)"; fi
+          if test -f "$OUT/semantic-review.json"; then semantic="$(cat "$OUT/semantic-review.json" | tail -c 12000)"; fi
+          body="$RUNNER_TEMP/kreg-candidate-review.md"
+          {
+            printf 'KREG_V1_INDEPENDENT_CANDIDATE_REVIEW_V1\n\n'
+            printf '```text\nstatus:               %s\ncandidate-run result: %s\ncandidate:            %s\ntree:                 %s\npaths:                %s\nreceipt:              %s\nreview run:           %s\n```\n\n' "$status" "$conclusion" "$candidate" "$tree" "$paths" "$receipt" "$GITHUB_RUN_ID"
+            printf '### Semantic review\n\n```json\n%s\n```\n\n' "$semantic"
+            printf '### Independent gate tail\n\n```text\n%s\n```\n' "$gate"
+          } > "$body"
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --raw-field body="$(cat "$body")" >/dev/null
