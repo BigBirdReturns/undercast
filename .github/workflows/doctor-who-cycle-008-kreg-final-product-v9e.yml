@@ -1,0 +1,246 @@
+name: doctor-who-cycle-008-kreg-final-product-v9e
+
+"on":
+  pull_request:
+    types: [reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-final-product-v9e.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-final-product-v9e-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CARRIER_BASE: 7ae6f5fde95b78caea03e1aafea618d3f05dfe32
+  CARRIER_BRANCH: agent/doctor-who-cycle-008-kreg-final-product-v9e-comments
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-final-product-v9e.yml
+  AUTHORIZED_PR: ${{ github.event.pull_request.number }}
+  AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+
+jobs:
+  finalize:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.action == 'reopened' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-final-product-v9e-comments'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CODE_ROOT: /tmp/doctor-who-cycle-008-kreg-v9e-code-finalize
+      OUT: /tmp/doctor-who-cycle-008-kreg-v9e-finalize
+      RUNNER_DIR: /tmp/doctor-who-cycle-008-kreg-v9e-code-finalize/code
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-path comment-sealed carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test "$(git show -s --format=%P HEAD)" = "$CARRIER_BASE"
+          test "$(git rev-list --count "$CARRIER_BASE"..HEAD)" = 1
+          printf '%s\n' "$SELF" > /tmp/expected-carrier-paths.txt
+          git diff --name-only "$CARRIER_BASE"...HEAD | LC_ALL=C sort > /tmp/actual-carrier-paths.txt
+          diff -u /tmp/expected-carrier-paths.txt /tmp/actual-carrier-paths.txt
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          git merge-base --is-ancestor "$CARRIER_BASE" refs/remotes/origin/main
+          test -z "$(git status --porcelain)"
+
+      - name: Recover and verify exact checksum-bound V9e code
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$CODE_ROOT"
+          mkdir -p "$CODE_ROOT"/{api,parts,code}
+          gh api "/repos/$GITHUB_REPOSITORY/issues/$AUTHORIZED_PR/comments?per_page=100" > "$CODE_ROOT/api/comments.json"
+          COMMENTS="$CODE_ROOT/api/comments.json" PARTS="$CODE_ROOT/parts" python3 - <<'PYCODE'
+          import hashlib,json,os,pathlib,re
+          comments=json.load(open(os.environ['COMMENTS']))
+          expected=[
+           (1,4000,'86b45061cf9356455cfacc44ec5799170ec5c4d55a97d1852c5fe6ecc834dac4'),
+           (2,4000,'116932021ed437f1fb8bfa658db730bfc35834fb5f3d37f6732048501cbb8c35'),
+           (3,4000,'c1cdddfa28f4130a0e8476d92f48eab6e56c5155cbc82068e864c6b6485d4cbd'),
+           (4,4000,'481a152352d6b027940c52720a96256aa16cc09413e91e556ba1151b2aa9b0d4'),
+           (5,2320,'f4996984e07d1181c8c2ab08f6bb442b0337f06cbc599e2f81d1654cb405aa5a'),
+          ]
+          pattern=re.compile(r'^CYCLE008_KREG_V9E_CODE_PART (\d{2})/(\d{2}) SHA256 ([0-9a-f]{64}) LENGTH (\d+)\n([A-Za-z0-9+/=]+)$')
+          found={}
+          for comment in comments:
+              m=pattern.fullmatch(str(comment.get('body','')))
+              if not m: continue
+              part,total,declared,length,payload=int(m[1]),int(m[2]),m[3],int(m[4]),m[5]
+              if part in found: raise SystemExit(f'duplicate code part {part}')
+              found[part]=(total,declared,length,payload,comment['id'],comment['html_url'])
+          if sorted(found)!=[1,2,3,4,5]: raise SystemExit(f'code part set drifted: {sorted(found)}')
+          out=pathlib.Path(os.environ['PARTS']); out.mkdir(parents=True,exist_ok=True); custody=[]; joined=''
+          for part,length,digest in expected:
+              total,declared,declared_length,payload,comment_id,url=found[part]
+              actual=hashlib.sha256(payload.encode()).hexdigest()
+              if total!=5 or declared!=digest or declared_length!=length or len(payload)!=length or actual!=digest:
+                  raise SystemExit(f'code part {part} custody failed')
+              (out/f'part-{part:02d}.b64').write_text(payload)
+              joined+=payload
+              custody.append({'part':part,'length':length,'sha256':digest,'comment_id':comment_id,'comment_url':url})
+          (out/'joined.b64').write_text(joined)
+          (out/'comment-custody.json').write_text(json.dumps(custody,indent=2,sort_keys=True)+'\n')
+          PYCODE
+          test "$(wc -c < "$CODE_ROOT/parts/joined.b64")" = 18320
+          test "$(sha256sum "$CODE_ROOT/parts/joined.b64" | awk '{print $1}')" = bf084419659110104b4b7b116b328d7907d6ed95b2996fb9375e10092cd68ff8
+          base64 --decode "$CODE_ROOT/parts/joined.b64" > "$CODE_ROOT/code.tar.xz"
+          test "$(sha256sum "$CODE_ROOT/code.tar.xz" | awk '{print $1}')" = 0fcf1de0881e4879505a9da28edc769915e496ffe325e06440f09ee7e8a05f4c
+          ARCHIVE="$CODE_ROOT/code.tar.xz" TARGET="$CODE_ROOT/code" python3 - <<'PYCODE'
+          import hashlib,json,os,pathlib,tarfile
+          archive=pathlib.Path(os.environ['ARCHIVE']); target=pathlib.Path(os.environ['TARGET'])
+          expected=['builder.py','finalize.sh','review.sh','manifest.json']; seen=[]; total=0
+          with tarfile.open(archive,'r:xz') as tf:
+              members=tf.getmembers(); names=[m.name for m in members]
+              if names!=expected or len(names)!=len(set(names)): raise SystemExit(f'code member set drifted: {names!r}')
+              for m in members:
+                  p=pathlib.PurePosixPath(m.name)
+                  if p.is_absolute() or '..' in p.parts or not m.isfile() or m.issym() or m.islnk(): raise SystemExit(f'unsafe code member {m.name!r}')
+                  total+=m.size
+                  if total>1_000_000: raise SystemExit('code expansion ceiling exceeded')
+              tf.extractall(target)
+          manifest=json.loads((target/'manifest.json').read_text())
+          rows={r['path']:r for r in manifest['members']}
+          for name in expected[:-1]:
+              data=(target/name).read_bytes(); row=rows[name]
+              if len(data)!=row['bytes'] or hashlib.sha256(data).hexdigest()!=row['sha256']: raise SystemExit(f'code hash drifted: {name}')
+          PYCODE
+          test "$(sha256sum "$CODE_ROOT/code/builder.py" | awk '{print $1}')" = daa78aade5ca50b5c986621f40e8dad4634df360648b513da0f2a33e59456695
+          test "$(sha256sum "$CODE_ROOT/code/finalize.sh" | awk '{print $1}')" = 6c17901443237ad8fe61f42c0e8e6eba56c55715c8391408351ef88107e803a4
+          test "$(sha256sum "$CODE_ROOT/code/review.sh" | awk '{print $1}')" = 912483c639edcc24fe4cbec91e994d03468b281e810b503e631ef9558b757601
+          test "$(sha256sum "$CODE_ROOT/code/manifest.json" | awk '{print $1}')" = 455318b9198dc2c14714189df4d1671a6fd40f78c9564c4d8cf0263a7f6c3a4c
+          chmod 0555 "$CODE_ROOT/code/finalize.sh" "$CODE_ROOT/code/review.sh"
+          bash -n "$CODE_ROOT/code/finalize.sh"
+          bash -n "$CODE_ROOT/code/review.sh"
+          python3 -m py_compile "$CODE_ROOT/code/builder.py"
+
+      - name: Materialize, gate, and seal exact forty-eight-path product
+        shell: bash
+        run: bash "$RUNNER_DIR/finalize.sh"
+
+      - name: Bind exact code and comment custody into prototype packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT/product/code"
+          cp "$RUNNER_DIR/builder.py" "$RUNNER_DIR/finalize.sh" "$RUNNER_DIR/review.sh" "$RUNNER_DIR/manifest.json" "$OUT/product/code/"
+          cp "$CODE_ROOT/parts/comment-custody.json" "$OUT/product/code/"
+          (cd "$OUT/product" && sha256sum code/* > code/SHA256SUMS)
+
+      - name: Upload exact V9e final-product prototype
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-final-product-v9e-prototype-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-v9e-finalize/product
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload V9e finalizer diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-final-product-v9e-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-v9e-finalize
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
+
+  review:
+    needs: finalize
+    if: needs.finalize.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CODE_ROOT: /tmp/doctor-who-cycle-008-kreg-v9e-code-review
+      OUT: /tmp/doctor-who-cycle-008-kreg-v9e-review
+      RUNNER_DIR: /tmp/doctor-who-cycle-008-kreg-v9e-code-review/code
+      PROTOTYPE_ID: ${{ needs.finalize.outputs.artifact_id }}
+      PROTOTYPE_DIGEST: ${{ needs.finalize.outputs.artifact_digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Rebind exact carrier before independent review
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test "$(git show -s --format=%P HEAD)" = "$CARRIER_BASE"
+          test "$(git rev-list --count "$CARRIER_BASE"..HEAD)" = 1
+          test "$(git diff --name-only "$CARRIER_BASE"...HEAD)" = "$SELF"
+
+      - name: Download same-run prototype code carrier
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.finalize.outputs.artifact_id }}
+          path: /tmp/doctor-who-cycle-008-kreg-v9e-review-bootstrap
+
+      - name: Verify exact code before independent execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(find /tmp/doctor-who-cycle-008-kreg-v9e-review-bootstrap -type d -path '*/code' -print -quit)"
+          test -d "$code"
+          test "$(sha256sum "$code/builder.py" | awk '{print $1}')" = daa78aade5ca50b5c986621f40e8dad4634df360648b513da0f2a33e59456695
+          test "$(sha256sum "$code/finalize.sh" | awk '{print $1}')" = 6c17901443237ad8fe61f42c0e8e6eba56c55715c8391408351ef88107e803a4
+          test "$(sha256sum "$code/review.sh" | awk '{print $1}')" = 912483c639edcc24fe4cbec91e994d03468b281e810b503e631ef9558b757601
+          test "$(sha256sum "$code/manifest.json" | awk '{print $1}')" = 455318b9198dc2c14714189df4d1671a6fd40f78c9564c4d8cf0263a7f6c3a4c
+          chmod 0555 "$code/review.sh"
+          bash -n "$code/review.sh"
+          printf 'RUNNER_DIR=%s\n' "$code" >> "$GITHUB_ENV"
+
+      - name: Independently verify bytes and rerun complete product gate
+        shell: bash
+        run: bash "$RUNNER_DIR/review.sh"
+
+      - name: Upload approved V9e final-product packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-final-product-v9e-approved-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-v9e-review/review
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload V9e independent-review diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-final-product-v9e-review-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-v9e-review
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
