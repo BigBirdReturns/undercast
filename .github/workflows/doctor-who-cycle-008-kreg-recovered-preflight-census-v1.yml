@@ -1,0 +1,125 @@
+name: doctor-who-cycle-008-kreg-recovered-preflight-census-v1
+
+"on":
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-recovered-preflight-census-v1.yml"
+
+permissions: {}
+
+jobs:
+  census:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-recovered-preflight-census-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SELF: .github/workflows/doctor-who-cycle-008-kreg-recovered-preflight-census-v1.yml
+      AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+      AUTHORIZED_PR: ${{ github.event.pull_request.number }}
+      SOURCE_COMMIT: 56909349076b397aa66cfc4db6c17b5532799457
+      PAYLOAD_PATH: .github/doctor-who-cycle-008/kreg-recovered-candidate-v1/delta.tar.xz.b64
+      RUNNER_PATH: .github/doctor-who-cycle-008/kreg-recovered-candidate-v1/runner.sh
+      OUT: /tmp/doctor-who-cycle-008-kreg-recovered-preflight-census-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact read-only census carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,source,archive,receipt}
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          floor="$(git rev-parse HEAD^)"
+          test "$(git rev-list --count "$floor"..HEAD)" = 1
+          test "$(git diff --name-only "$floor"...HEAD)" = "$SELF"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$AUTHORIZED_PR" > "$OUT/api/pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$AUTHORIZED_PR/files?per_page=100" > "$OUT/api/pr-files.json"
+          ROOT="$OUT" FLOOR="$floor" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])/'api'
+          pr=json.loads((root/'pr.json').read_text()); files=json.loads((root/'pr-files.json').read_text())
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['sha']==os.environ['FLOOR'] and pr['head']['sha']==os.environ['AUTHORIZED_HEAD']
+          assert pr['commits']==1 and pr['changed_files']==1
+          assert len(files)==1 and files[0]['filename']==os.environ['SELF'] and files[0]['status']=='added'
+          PY
+          git fetch --no-tags --filter=blob:none origin "$SOURCE_COMMIT"
+          printf 'FLOOR_MAIN=%s\n' "$floor" >> "$GITHUB_ENV"
+
+      - name: Measure exact payload and runner preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show "$SOURCE_COMMIT:$PAYLOAD_PATH" > "$OUT/source/delta.tar.xz.b64"
+          git show "$SOURCE_COMMIT:$RUNNER_PATH" > "$OUT/source/runner.sh"
+          payload_bytes="$(wc -c < "$OUT/source/delta.tar.xz.b64" | tr -d '[:space:]')"
+          payload_sha="$(sha256sum "$OUT/source/delta.tar.xz.b64" | awk '{print $1}')"
+          runner_bytes="$(wc -c < "$OUT/source/runner.sh" | tr -d '[:space:]')"
+          runner_sha="$(sha256sum "$OUT/source/runner.sh" | awk '{print $1}')"
+          invalid="$(LC_ALL=C tr -d 'A-Za-z0-9+/=\r\n' < "$OUT/source/delta.tar.xz.b64" | wc -c | tr -d '[:space:]')"
+          if bash -n "$OUT/source/runner.sh" > "$OUT/archive/runner-syntax.stdout" 2> "$OUT/archive/runner-syntax.stderr"; then syntax=passed; else syntax=failed; fi
+          printf 'payload_bytes=%s\npayload_sha256=%s\ninvalid_base64_bytes=%s\nrunner_bytes=%s\nrunner_sha256=%s\nrunner_syntax=%s\n' \
+            "$payload_bytes" "$payload_sha" "$invalid" "$runner_bytes" "$runner_sha" "$syntax" \
+            > "$OUT/archive/preflight-values.txt"
+
+          if base64 --decode "$OUT/source/delta.tar.xz.b64" > "$OUT/archive/payload.tar.xz" 2> "$OUT/archive/base64.stderr"; then decode=passed; else decode=failed; fi
+          if [ -f "$OUT/archive/payload.tar.xz" ]; then
+            printf 'decoded_bytes=%s\ndecoded_sha256=%s\n' \
+              "$(wc -c < "$OUT/archive/payload.tar.xz" | tr -d '[:space:]')" \
+              "$(sha256sum "$OUT/archive/payload.tar.xz" | awk '{print $1}')" \
+              >> "$OUT/archive/preflight-values.txt"
+          fi
+          printf 'base64_decode=%s\n' "$decode" >> "$OUT/archive/preflight-values.txt"
+
+          if [ "$decode" = passed ] && xz --decompress --stdout "$OUT/archive/payload.tar.xz" > "$OUT/archive/payload.tar" 2> "$OUT/archive/xz.stderr"; then xz_status=passed; else xz_status=failed; fi
+          if [ -f "$OUT/archive/payload.tar" ]; then
+            printf 'tar_bytes=%s\ntar_sha256=%s\n' \
+              "$(wc -c < "$OUT/archive/payload.tar" | tr -d '[:space:]')" \
+              "$(sha256sum "$OUT/archive/payload.tar" | awk '{print $1}')" \
+              >> "$OUT/archive/preflight-values.txt"
+          fi
+          printf 'xz_decode=%s\n' "$xz_status" >> "$OUT/archive/preflight-values.txt"
+
+          ROOT="$OUT" python3 - <<'PY'
+          import json,os,tarfile
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); path=root/'archive/payload.tar'
+          result={'tar_present':path.exists(),'members':[]}
+          if path.exists():
+              try:
+                  with tarfile.open(path,'r:') as tf:
+                      result['tar_valid']=True
+                      result['members']=[{'name':m.name,'bytes':m.size,'mode':oct(m.mode),'type':str(m.type)} for m in tf.getmembers()]
+                      result['member_bytes']=sum(m.size for m in tf.getmembers())
+              except Exception as exc:
+                  result['tar_valid']=False; result['error']=repr(exc)
+          (root/'archive/tar-census.json').write_text(json.dumps(result,indent=2,sort_keys=True)+'\n')
+          PY
+          cat "$OUT/archive/preflight-values.txt"
+          jq -n --arg source "$SOURCE_COMMIT" --arg head "$AUTHORIZED_HEAD" --arg floor "$FLOOR_MAIN" '{status:"preflight-census-complete",source_commit:$source,carrier_head:$head,floor_main:$floor,runner_executed:false,repository_write:false,merge_authority:false,outside_human_dependency:false}' > "$OUT/receipt/census.json"
+          find "$OUT" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/SHA256SUMS.pre"
+          sha256sum "$OUT/SHA256SUMS.pre" > "$OUT/SHA256SUMS"
+
+      - name: Upload exact recovered preflight census
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-recovered-preflight-census-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-recovered-preflight-census-v1
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
