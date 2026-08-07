@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+export FLOOR_MAIN=7ae6f5fde95b78caea03e1aafea618d3f05dfe32
+export SOURCE_BUILD_MAIN=3228efd6ede786586352b1b990a94d16ab02d5f9
+export CARRIER_BRANCH=agent/doctor-who-cycle-008-kreg-candidate-v5g
+export DELTA_ARCHIVE=.github/doctor-who-cycle-008/kreg-candidate-v5g/product-delta.tar.xz
+export DELTA_XZ_BYTES=233504
+export DELTA_XZ_SHA256=795a87794a38a5246bfd4803c93a852a15e1b01c1e33e75856549a2877bd9169
+export DELTA_TAR_BYTES=307200
+export DELTA_TAR_SHA256=e87d233db842f7226b41acc40558810581095948b7585347fe35b6fc7bbfa4e6
+export DELTA_MANIFEST_SHA256=6938b20fc1519bc49ac14e3e80645c3f74224e434b7cf42d543648c11c9475c9
+export SETTLEMENT_SHA256=0e8230f02d4f7a9e69b555602d7743ba05a40ec48226f3bc1f7a319ea6239d83
+export EXPECTED_PATHS_SHA256=936c96600265d2b2a82443ee98e603ac24e9b01b8184a8f82e3e0082b23a7786
+export FILE_MANIFEST_SHA256=644e33c8d745b2d868daef7e5e941422280b3a8b3a26b89760a4d059d6d124e7
+export OUT=/tmp/doctor-who-cycle-008-kreg-candidate-v5g
+export PAYLOAD_OUT=/tmp/doctor-who-cycle-008-kreg-candidate-v5g/payload
+export PRODUCT_OUT=/tmp/doctor-who-cycle-008-kreg-candidate-v5g/product
+export WORKTREE=/tmp/doctor-who-cycle-008-kreg-candidate-v5g/worktree
