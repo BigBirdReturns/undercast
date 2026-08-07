@@ -1,0 +1,183 @@
+name: doctor-who-cycle-008-kreg-v14-installer-pr-detail-hotfix-materializer
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-v14-installer-pr-detail-hotfix-materializer.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-v14-installer-pr-detail-hotfix-materializer
+  cancel-in-progress: false
+
+env:
+  BASE: dd823fa9fa9fff8ce3df4b968d34e3b8c20854f5
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-v14-installer-pr-detail-hotfix-materializer.yml
+  TARGET: .github/workflows/doctor-who-cycle-008-kreg-v14-installer.yml
+  EXPECTED_BLOB: 675fa27ec2d9e4268d059bfc50f7673a49f21c7a
+  OUT: /tmp/doctor-who-cycle-008-kreg-v14-installer-pr-detail-hotfix
+
+jobs:
+  install:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-v14-installer-pr-detail-hotfix-materializer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-path carrier and unchanged main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,receipt,work}
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          test "$(git show -s --format=%P HEAD)" = "$BASE"
+          test "$(git rev-list --count "$BASE"..HEAD)" = 1
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE"
+          printf '%s\n' "$SELF" > "$OUT/expected.txt"
+          git diff --name-only "$BASE"...HEAD | LC_ALL=C sort > "$OUT/actual.txt"
+          diff -u "$OUT/expected.txt" "$OUT/actual.txt"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/${{ github.event.pull_request.number }}" > "$OUT/api/pr.json"
+          ROOT="$OUT" HEAD_SHA='${{ github.event.pull_request.head.sha }}' python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          pr=json.loads((Path(os.environ['ROOT'])/'api/pr.json').read_text())
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['ref']=='main' and pr['base']['sha']==os.environ['BASE']
+          assert pr['head']['sha']==os.environ['HEAD_SHA'] and pr['commits']==1 and pr['changed_files']==1
+          PY
+
+      - name: Derive exact PR-detail and concurrency repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show "$BASE:$TARGET" > "$OUT/original.yml"
+          test "$(git hash-object "$OUT/original.yml")" = "$EXPECTED_BLOB"
+          ORIGINAL="$OUT/original.yml" PATCHED="$OUT/patched.yml" python3 - <<'PY'
+          import os
+          from pathlib import Path
+          text=Path(os.environ['ORIGINAL']).read_text()
+          assert text.count('  cancel-in-progress: false')==1
+          text=text.replace('  cancel-in-progress: false','  cancel-in-progress: true',1)
+          lines=text.splitlines()
+          needle='            target="$(jq -c --arg branch "$TARGET_BRANCH"'
+          hits=[i for i,line in enumerate(lines) if line.startswith(needle)]
+          assert len(hits)==1
+          i=hits[0]
+          assert lines[i+1]=='            if [ -n "$target" ]; then'
+          assert lines[i+2]=="              head=\"$(jq -r '.head.sha' <<<\"$target\")\""
+          lines[i]=lines[i].replace('target="','candidate="',1)
+          lines[i+1:i+3]=[
+              '            if [ -n "$candidate" ]; then',
+              "              target_pr=\"$(jq -r '.number' <<<\"$candidate\")\"",
+              '              gh api "/repos/$GITHUB_REPOSITORY/pulls/$target_pr" > "$OUT/api/target-pr-detail.json"',
+              '              target="$(cat "$OUT/api/target-pr-detail.json")"',
+              "              head=\"$(jq -r '.head.sha' <<<\"$target\")\"",
+          ]
+          patched='\n'.join(lines)+'\n'
+          assert patched.count('  cancel-in-progress: true')==1
+          assert patched.count('candidate="$(jq -c --arg branch "$TARGET_BRANCH"')==1
+          assert patched.count('target-pr-detail.json')==2
+          assert patched.count("assert target['commits']==1 and target['changed_files']==1")==1
+          Path(os.environ['PATCHED']).write_text(patched)
+          PY
+          python3 - <<'PY'
+          import yaml
+          d=yaml.safe_load(open('/tmp/doctor-who-cycle-008-kreg-v14-installer-pr-detail-hotfix/patched.yml'))
+          assert isinstance(d,dict) and d.get('permissions')=={} and set(d.get('jobs',{}))=={'install'}
+          assert d['concurrency']['cancel-in-progress'] is True
+          PY
+          diff -u "$OUT/original.yml" "$OUT/patched.yml" > "$OUT/exact.diff" || test "$?" = 1
+          test "$(grep -c '^[-+]  cancel-in-progress:' "$OUT/exact.diff")" = 2
+          test "$(grep -c '^[-+]            \(target\|candidate\)=' "$OUT/exact.diff")" = 2
+
+      - name: Run workflow custody and fixture gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$OUT/work/repository"
+          git worktree add --detach "$work" "$BASE"
+          cp "$OUT/patched.yml" "$work/$TARGET"
+          (
+            cd "$work"
+            npm ci
+            node scripts/publisher-custody.mjs check-workflows
+            node scripts/publisher-condition-custody.mjs check-workflows
+            node scripts/gate-fixtures.mjs
+            test "$(git diff --name-only | LC_ALL=C sort)" = "$TARGET"
+          )
+          git worktree remove --force "$work"
+
+      - name: Fast-forward only the repaired installer onto main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE"
+          base_tree="$(gh api "/repos/$GITHUB_REPOSITORY/git/commits/$BASE" --jq '.tree.sha')"
+          base64 -w0 "$OUT/patched.yml" | jq -Rs '{content:.,encoding:"base64"}' > "$OUT/blob.json"
+          blob="$(gh api --method POST "/repos/$GITHUB_REPOSITORY/git/blobs" --input "$OUT/blob.json" --jq '.sha')"
+          test "$blob" = "$(git hash-object "$OUT/patched.yml")"
+          jq -n --arg base "$base_tree" --arg path "$TARGET" --arg blob "$blob" '{base_tree:$base,tree:[{path:$path,mode:"100644",type:"blob",sha:$blob}]}' > "$OUT/tree.json"
+          tree="$(gh api --method POST "/repos/$GITHUB_REPOSITORY/git/trees" --input "$OUT/tree.json" --jq '.sha')"
+          jq -n --arg message 'CI: repair Kreg V14 qualifier discovery and rearm' --arg tree "$tree" --arg parent "$BASE" '{message:$message,tree:$tree,parents:[$parent]}' > "$OUT/commit.json"
+          commit="$(gh api --method POST "/repos/$GITHUB_REPOSITORY/git/commits" --input "$OUT/commit.json" --jq '.sha')"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE"
+          jq -n --arg sha "$commit" '{sha:$sha,force:false}' > "$OUT/ref.json"
+          gh api --method PATCH "/repos/$GITHUB_REPOSITORY/git/refs/heads/main" --input "$OUT/ref.json" > "$OUT/api/ref-update.json"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$commit"
+          gh api "/repos/$GITHUB_REPOSITORY/compare/$BASE...$commit" > "$OUT/api/compare.json"
+          jq -e --arg path "$TARGET" '.ahead_by==1 and .behind_by==0 and (.files|length)==1 and .files[0].filename==$path and .files[0].status=="modified"' "$OUT/api/compare.json" >/dev/null
+          printf 'INSTALLED_MAIN=%s\nINSTALLED_TREE=%s\nINSTALLED_BLOB=%s\n' "$commit" "$tree" "$blob" >> "$GITHUB_ENV"
+
+      - name: Seal installation receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          receipt={'status':'v14-installer-pr-detail-hotfix-installed','materializer_run':int(os.environ['GITHUB_RUN_ID']),'materializer_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'previous_main':os.environ['BASE'],'installed_main':os.environ['INSTALLED_MAIN'],'installed_tree':os.environ['INSTALLED_TREE'],'installed_blob':os.environ['INSTALLED_BLOB'],'installed_path':os.environ['TARGET'],'stale_run_cancellation':'delegated_to_corrected_concurrency','product_state_written':False,'queue_mutated':False,'merge_authority':False,'cycle_009_authorized':False,'outside_human_dependency':False}
+          canonical=json.dumps(receipt,sort_keys=True,separators=(',',':')).encode(); receipt['identity']=hashlib.sha256(canonical).hexdigest()
+          (root/'receipt/receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          sha256sum "$OUT/receipt/receipt.json" > "$OUT/receipt/SHA256SUMS"
+          cat "$OUT/receipt/receipt.json"
+
+      - name: Upload exact hotfix receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-v14-installer-pr-detail-hotfix-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-v14-installer-pr-detail-hotfix/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-v14-installer-pr-detail-hotfix-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-v14-installer-pr-detail-hotfix
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
