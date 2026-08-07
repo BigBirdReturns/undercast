@@ -1,0 +1,262 @@
+name: doctor-who-cycle-008-kreg-finalization-census-v9
+
+"on":
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-finalization-census-v9.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-finalization-census-v9-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  census:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-finalization-census-v9'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 210
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SELF: .github/workflows/doctor-who-cycle-008-kreg-finalization-census-v9.yml
+      AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-finalization-census-v9
+      AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+      AUTHORIZED_PR: ${{ github.event.pull_request.number }}
+      V8_BRANCH: agent/doctor-who-cycle-008-kreg-independent-review-v8
+      V8_WORKFLOW: doctor-who-cycle-008-kreg-independent-review-v8
+      CYCLE007_MERGE: e00b03436e354f3543cf4ed67a0c5b9f6ba4f97b
+      OUT: /tmp/doctor-who-cycle-008-kreg-finalization-census-v9
+      TASK_ID: ap_469d79ea29fd7f877395d20f
+      LEASE_ID: lease_e65f837070361eacbb1abd46
+      WALL_ID: UC-1353
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-file census and live main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,source,templates,analysis,diagnostics}
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          parents="$(git show -s --format=%P HEAD)"
+          set -- $parents
+          test "$#" = 1
+          base="$1"
+          test "$(git rev-list --count "$base"..HEAD)" = 1
+          test "$(git diff --name-only "$base"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$base"...HEAD)" = $'A\t'"$SELF"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$base"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$AUTHORIZED_PR" > "$OUT/api/pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$AUTHORIZED_PR/files?per_page=100" > "$OUT/api/pr-files.json"
+          ROOT="$OUT" BASE="$base" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          pr=json.loads((root/'api/pr.json').read_text()); files=json.loads((root/'api/pr-files.json').read_text())
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['ref']=='main' and pr['base']['sha']==os.environ['BASE']
+          assert pr['head']['ref']==os.environ['AUTHORIZED_BRANCH'] and pr['head']['sha']==os.environ['AUTHORIZED_HEAD']
+          assert pr['commits']==1 and pr['changed_files']==1
+          assert len(files)==1 and files[0]['filename']==os.environ['SELF'] and files[0]['status']=='added'
+          PY
+          printf '%s\n' "$base" > "$OUT/census-main.txt"
+          printf 'CENSUS_MAIN=%s\n' "$base" >> "$GITHUB_ENV"
+
+      - name: Retain exact terminal V8 review packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 540); do
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs?branch=$V8_BRANCH&event=pull_request&per_page=100" > "$OUT/api/v8-runs.json"
+            row="$(jq -c --arg name "$V8_WORKFLOW" --arg branch "$V8_BRANCH" '[.workflow_runs[] | select(.name==$name and .head_branch==$branch)] | sort_by(.created_at) | last // empty' "$OUT/api/v8-runs.json")"
+            if [ -n "$row" ] && [ "$(jq -r '.status' <<<"$row")" = completed ]; then
+              printf '%s\n' "$row" > "$OUT/source/v8-run.json"
+              break
+            fi
+            sleep 20
+          done
+          test -s "$OUT/source/v8-run.json"
+          run="$(jq -r '.id' "$OUT/source/v8-run.json")"
+          attempt="$(jq -r '.run_attempt' "$OUT/source/v8-run.json")"
+          conclusion="$(jq -r '.conclusion' "$OUT/source/v8-run.json")"
+          head="$(jq -r '.head_sha' "$OUT/source/v8-run.json")"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?per_page=100" > "$OUT/source/v8-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" > "$OUT/source/v8-artifacts.json"
+          artifact="$(jq -c --arg name "doctor-who-cycle-008-kreg-independent-review-v8-$run-attempt-$attempt" '[.artifacts[] | select(.name==$name and .expired==false)] | if length==1 then .[0] else empty end' "$OUT/source/v8-artifacts.json")"
+          test -n "$artifact"
+          artifact_id="$(jq -r '.id' <<<"$artifact")"
+          artifact_digest="$(jq -r '.digest' <<<"$artifact")"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$OUT/source/v8.zip"
+          ZIP="$OUT/source/v8.zip" TARGET="$OUT/source/v8" python3 - <<'PY'
+          import os, pathlib, zipfile
+          z=pathlib.Path(os.environ['ZIP']); target=pathlib.Path(os.environ['TARGET']); target.mkdir()
+          with zipfile.ZipFile(z) as f:
+              names=f.namelist(); assert len(names)==len(set(names))
+              for i in f.infolist():
+                  p=pathlib.PurePosixPath(i.filename)
+                  assert not p.is_absolute() and '..' not in p.parts and not i.is_dir()
+                  data=f.read(i); out=target/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(data)
+          PY
+          printf 'V8_RUN=%s\nV8_ATTEMPT=%s\nV8_CONCLUSION=%s\nV8_HEAD=%s\nV8_ARTIFACT=%s\nV8_ARTIFACT_DIGEST=%s\n' \
+            "$run" "$attempt" "$conclusion" "$head" "$artifact_id" "$artifact_digest" >> "$GITHUB_ENV"
+          test "$conclusion" = success
+
+      - name: Verify approved V8 review authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          receipt="$OUT/source/v8/review/review-receipt.json"
+          test -f "$receipt"
+          RECEIPT="$receipt" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          p=Path(os.environ['RECEIPT']); data=json.loads(p.read_text()); identity=data.pop('identity')
+          assert hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()==identity
+          assert data['status']=='approved-for-finalization'
+          assert data['task']==os.environ['TASK_ID'] and data['lease']==os.environ['LEASE_ID'] and data['wall_id']==os.environ['WALL_ID']
+          assert data['path_count']==40 and data['independent_gate']=='pass'
+          assert data['repository_write'] is False and data['merge_authority'] is False and data['cycle_009_authorized'] is False
+          assert data['outside_human_dependency'] is False
+          p.with_name('review-receipt.verified.json').write_text(json.dumps({**data,'identity':identity},indent=2,sort_keys=True)+'\n')
+          PY
+          cp "$OUT/source/v8/review/review-receipt.verified.json" "$OUT/analysis/v8-review-receipt.json"
+          jq -r '.review_main' "$receipt" > "$OUT/analysis/v8-review-main.txt"
+          jq -r '.composed_candidate_commit' "$receipt" > "$OUT/analysis/v8-composed-commit.txt"
+          jq -r '.composed_candidate_tree' "$receipt" > "$OUT/analysis/v8-composed-tree.txt"
+
+      - name: Inventory exact cycle-007 product chronology and finalization surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "$CYCLE007_MERGE^{commit}"
+          parents="$(git show -s --format=%P "$CYCLE007_MERGE")"
+          set -- $parents
+          test "$#" = 1
+          parent="$1"
+          printf '%s\n' "$parent" > "$OUT/analysis/cycle007-parent.txt"
+          git diff --name-status "$parent".."$CYCLE007_MERGE" > "$OUT/analysis/cycle007-name-status.txt"
+          git diff --name-only "$parent".."$CYCLE007_MERGE" | LC_ALL=C sort > "$OUT/analysis/cycle007-product-paths.txt"
+          test "$(wc -l < "$OUT/analysis/cycle007-product-paths.txt")" = 49
+          git ls-tree -r --name-only "$CYCLE007_MERGE" | grep -Ei 'doctor-who-cycle-007|kragar|uc-1352|cycle_540222fb1378fa680a43d080' | LC_ALL=C sort > "$OUT/analysis/cycle007-related-paths.txt" || true
+          git grep -Il -E 'Kragar|UC-1352|uc-1352|cycle_540222fb1378fa680a43d080|ap_ffea809b980b468b33fa462c' "$CYCLE007_MERGE" -- \
+            ':!images/**' ':!*.jpg' ':!*.png' | sed 's/^[^:]*://' | LC_ALL=C sort -u > "$OUT/analysis/cycle007-content-reference-paths.txt" || true
+          cat > "$OUT/analysis/known-finalization-paths.txt" <<'EOF'
+          data/ESTATE-REGISTRY.json
+          data/WATERLINE-STATE.json
+          data/journal/waterline.jsonl
+          data/review/adapter-sdk/BASELINE.json
+          data/review/adapter-sdk/doctor-who-cycle-007-kragar.json
+          docs/AUTOPILOT.md
+          package.json
+          scripts/doctor-who-cycle-007.mjs
+          EOF
+          sed -i 's/^          //' "$OUT/analysis/known-finalization-paths.txt"
+          while IFS= read -r path; do
+            git cat-file -e "$CYCLE007_MERGE:$path"
+          done < "$OUT/analysis/known-finalization-paths.txt"
+          comm -12 "$OUT/analysis/cycle007-product-paths.txt" <(LC_ALL=C sort "$OUT/analysis/known-finalization-paths.txt") > "$OUT/analysis/cycle007-known-finalization-intersection.txt"
+          test "$(wc -l < "$OUT/analysis/cycle007-known-finalization-intersection.txt")" = 8
+
+      - name: Export exact before-and-after templates and helper contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          parent="$(cat "$OUT/analysis/cycle007-parent.txt")"
+          ROOT="$OUT" REPO="$GITHUB_WORKSPACE" PARENT="$parent" MERGE="$CYCLE007_MERGE" python3 - <<'PY'
+          import hashlib,json,os,re,subprocess
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); parent=os.environ['PARENT']; merge=os.environ['MERGE']; repo=os.environ['REPO']
+          paths=(root/'analysis/known-finalization-paths.txt').read_text().splitlines()
+          rows=[]
+          for path in paths:
+              safe=path.replace('/','__')
+              before=subprocess.check_output(['git','-C',repo,'show',f'{parent}:{path}'])
+              after=subprocess.check_output(['git','-C',repo,'show',f'{merge}:{path}'])
+              (root/'templates'/f'{safe}.before').write_bytes(before)
+              (root/'templates'/f'{safe}.after').write_bytes(after)
+              rows.append({'path':path,'before_bytes':len(before),'before_sha256':hashlib.sha256(before).hexdigest(),'after_bytes':len(after),'after_sha256':hashlib.sha256(after).hexdigest()})
+          (root/'analysis/template-census.json').write_text(json.dumps(rows,indent=2)+'\n')
+          package=json.loads(subprocess.check_output(['git','-C',repo,'show',f'{merge}:package.json']))
+          scripts={k:v for k,v in package.get('scripts',{}).items() if re.search(r'doctor-who|adapter|waterline|estate|cycle',k+' '+str(v),re.I)}
+          (root/'analysis/package-helper-scripts.json').write_text(json.dumps(scripts,indent=2,sort_keys=True)+'\n')
+          schemas={}
+          for path in paths:
+              if path.endswith('.json'):
+                  raw=subprocess.check_output(['git','-C',repo,'show',f'{merge}:{path}'])
+                  obj=json.loads(raw)
+                  schemas[path]={'type':type(obj).__name__,'top_level_keys':sorted(obj.keys()) if isinstance(obj,dict) else None,'length':len(obj) if isinstance(obj,(list,dict)) else None}
+          (root/'analysis/json-schema-census.json').write_text(json.dumps(schemas,indent=2,sort_keys=True)+'\n')
+          PY
+          git show "$CYCLE007_MERGE:scripts/doctor-who-cycle-007.mjs" > "$OUT/templates/doctor-who-cycle-007.mjs"
+          git show "$CYCLE007_MERGE:data/review/adapter-sdk/doctor-who-cycle-007-kragar.json" > "$OUT/templates/doctor-who-cycle-007-kragar.json"
+          git show "$CYCLE007_MERGE:data/journal/waterline.jsonl" | tail -n 25 > "$OUT/analysis/waterline-tail-after-cycle007.jsonl"
+          git show "$CYCLE007_MERGE:data/ESTATE-REGISTRY.json" > "$OUT/templates/estate-registry-after-cycle007.json"
+          git show "$CYCLE007_MERGE:data/WATERLINE-STATE.json" > "$OUT/templates/waterline-state-after-cycle007.json"
+
+      - name: Compare current main with reviewed candidate and cycle-007 templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          review_main="$(cat "$OUT/analysis/v8-review-main.txt")"
+          git merge-base --is-ancestor "$review_main" "$CENSUS_MAIN"
+          git diff --name-only "$review_main".."$CENSUS_MAIN" | LC_ALL=C sort > "$OUT/analysis/review-to-census-main-paths.txt"
+          candidate_paths="$OUT/source/v8/review/candidate-paths.txt"
+          test -f "$candidate_paths"
+          comm -12 "$candidate_paths" "$OUT/analysis/review-to-census-main-paths.txt" > "$OUT/analysis/review-main-candidate-overlap.txt"
+          test ! -s "$OUT/analysis/review-main-candidate-overlap.txt"
+          git ls-tree -r --name-only "$CENSUS_MAIN" | grep -Ei 'doctor-who-cycle-00[1-8]|adapter-sdk/doctor-who|waterline|estate-registry' | LC_ALL=C sort > "$OUT/analysis/current-finalization-related-paths.txt" || true
+          git grep -n -E 'doctor-who-cycle-007|cycle_540222fb1378fa680a43d080|UC-1352|Kragar' "$CENSUS_MAIN" -- \
+            package.json docs scripts data ':!data/sources/**' > "$OUT/analysis/current-cycle007-reference-lines.txt" || true
+
+      - name: Seal finalization-census receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          receipt={
+            'status':'finalization-schema-recovered', 'task':os.environ['TASK_ID'], 'lease':os.environ['LEASE_ID'], 'wall_id':os.environ['WALL_ID'],
+            'census_main':os.environ['CENSUS_MAIN'], 'cycle007_merge':os.environ['CYCLE007_MERGE'],
+            'cycle007_parent':(root/'analysis/cycle007-parent.txt').read_text().strip(),
+            'cycle007_product_paths':len((root/'analysis/cycle007-product-paths.txt').read_text().splitlines()),
+            'known_finalization_paths':len((root/'analysis/known-finalization-paths.txt').read_text().splitlines()),
+            'v8_run':int(os.environ['V8_RUN']), 'v8_attempt':int(os.environ['V8_ATTEMPT']), 'v8_head':os.environ['V8_HEAD'],
+            'v8_artifact':int(os.environ['V8_ARTIFACT']), 'v8_artifact_digest':os.environ['V8_ARTIFACT_DIGEST'],
+            'review_authority':'approved-for-finalization', 'candidate_path_count':40,
+            'repository_write':False, 'merge_authority':False, 'cycle_009_authorized':False, 'outside_human_dependency':False,
+          }
+          canonical=json.dumps(receipt,sort_keys=True,separators=(',',':')).encode(); receipt['identity']=hashlib.sha256(canonical).hexdigest()
+          (root/'analysis/finalization-census-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          find "$OUT/analysis" "$OUT/templates" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/SHA256SUMS.pre"
+          sha256sum "$OUT/SHA256SUMS.pre" > "$OUT/SHA256SUMS"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CENSUS_MAIN"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$AUTHORIZED_BRANCH" --jq '.object.sha')" = "$AUTHORIZED_HEAD"
+
+      - name: Upload immutable V9 finalization census
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-finalization-census-v9-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-finalization-census-v9
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
