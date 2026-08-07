@@ -1,0 +1,188 @@
+name: doctor-who-cycle-008-kreg-original-carrier-replay-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-original-carrier-replay-v1.yml"
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-original-carrier-replay-v1
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-original-carrier-replay-v1.yml
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-original-carrier-replay-v1
+  ORIGINAL_HEAD: 7c7403c70ea4cc70169ef41129f1484a04475c2a
+  ORIGINAL_BASE: 37d681f419db5ef874b2cc41df1c631c047218d8
+  ORIGINAL_BRANCH: agent/doctor-who-cycle-008-kreg-candidate-v1
+  ORIGINAL_WORKFLOW: .github/workflows/doctor-who-cycle-008-kreg-candidate-v1.yml
+  PAYLOAD_PATH: .github/doctor-who-cycle-008/kreg-candidate-v1-payload.tar.gz.b64
+  PAYLOAD_BLOB: 06d2eed93b9e2a03b4d23dcaf6f82e0c131df498
+  PAYLOAD_TEXT_SHA256: 614bda7dd19ad5934c773a607a7d0ceb674efff66a7ce8d62eb287e4156ed83d
+  PAYLOAD_GZIP_SHA256: 3a395fc2194fe207f32eb393b7680be6658875e8114aebb2c6210dd180b80504
+  OUT: /tmp/doctor-who-cycle-008-kreg-original-carrier-replay-v1
+  ORIGINAL_WORKTREE: /tmp/doctor-who-cycle-008-kreg-original-carrier
+  PAYLOAD_DIR: /tmp/doctor-who-cycle-008-kreg-original-payload
+
+jobs:
+  replay:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-original-carrier-replay-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind replay carrier and immutable original commit
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" "$ORIGINAL_WORKTREE" "$PAYLOAD_DIR"
+          mkdir -p "$OUT" "$PAYLOAD_DIR"
+          test "$GITHUB_HEAD_REF" = "$AUTHORIZED_BRANCH"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = "1"
+          printf '%s\n' "$SELF" > "$OUT/expected-replay-paths.txt"
+          git diff --name-only "$BASE_SHA"...HEAD | LC_ALL=C sort > "$OUT/actual-replay-paths.txt"
+          diff -u "$OUT/expected-replay-paths.txt" "$OUT/actual-replay-paths.txt"
+
+          git fetch --no-tags --filter=blob:none origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+${ORIGINAL_HEAD}:refs/remotes/replay/original-head" \
+            "+${ORIGINAL_BASE}:refs/remotes/replay/original-base"
+          test "$(git rev-parse refs/remotes/replay/original-head)" = "$ORIGINAL_HEAD"
+          test "$(git show -s --format=%P "$ORIGINAL_HEAD")" = "$ORIGINAL_BASE"
+          test "$(git rev-list --count "$ORIGINAL_BASE".."$ORIGINAL_HEAD")" = "1"
+          printf '%s\n%s\n' "$PAYLOAD_PATH" "$ORIGINAL_WORKFLOW" > "$OUT/expected-original-paths.txt"
+          git diff --name-only "$ORIGINAL_BASE"..."$ORIGINAL_HEAD" | LC_ALL=C sort > "$OUT/actual-original-paths.txt"
+          diff -u "$OUT/expected-original-paths.txt" "$OUT/actual-original-paths.txt"
+          test "$(git rev-parse "$ORIGINAL_HEAD:$PAYLOAD_PATH")" = "$PAYLOAD_BLOB"
+          printf 'replay_head=%s\nreplay_base=%s\noriginal_head=%s\noriginal_base=%s\noriginal_tree=%s\nlive_main=%s\n' \
+            "$HEAD_SHA" "$BASE_SHA" "$ORIGINAL_HEAD" "$ORIGINAL_BASE" \
+            "$(git rev-parse "$ORIGINAL_HEAD^{tree}")" "$(git rev-parse refs/remotes/origin/main)" \
+            > "$OUT/git-identity.txt"
+          git worktree add --detach "$ORIGINAL_WORKTREE" "$ORIGINAL_HEAD"
+          test -z "$(git status --porcelain)"
+
+      - name: Recover exact payload and record actual member identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C "$ORIGINAL_WORKTREE" show "$ORIGINAL_HEAD:$PAYLOAD_PATH" > "$OUT/payload.b64"
+          test "$(sha256sum "$OUT/payload.b64" | awk '{print $1}')" = "$PAYLOAD_TEXT_SHA256"
+          base64 --decode "$OUT/payload.b64" > "$OUT/payload.tgz"
+          test "$(sha256sum "$OUT/payload.tgz" | awk '{print $1}')" = "$PAYLOAD_GZIP_SHA256"
+          PAYLOAD="$OUT/payload.tgz" TARGET="$PAYLOAD_DIR" OUT="$OUT" python3 - <<'PY'
+          import hashlib, json, os, pathlib, tarfile
+          archive = pathlib.Path(os.environ['PAYLOAD'])
+          target = pathlib.Path(os.environ['TARGET'])
+          expected = ['env.sh', 'manifest.json', 'materialize.py', 'runner.sh']
+          rows = []
+          with tarfile.open(archive, 'r:gz') as tf:
+              members = tf.getmembers()
+              names = [m.name for m in members]
+              if names != expected or len(names) != len(set(names)):
+                  raise SystemExit(f'payload member drift: {names!r}')
+              for member in members:
+                  path = pathlib.PurePosixPath(member.name)
+                  if path.is_absolute() or '..' in path.parts or not member.isfile() or member.issym() or member.islnk():
+                      raise SystemExit(f'unsafe payload member: {member.name!r}')
+              for member in members:
+                  data = tf.extractfile(member).read()
+                  destination = target / member.name
+                  destination.write_bytes(data)
+                  rows.append({'path': member.name, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
+          pathlib.Path(os.environ['OUT']).joinpath('actual-payload-members.json').write_text(
+              json.dumps({'archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(), 'members': rows}, indent=2, sort_keys=True) + '\n'
+          )
+          PY
+          chmod 0555 "$PAYLOAD_DIR/env.sh" "$PAYLOAD_DIR/materialize.py" "$PAYLOAD_DIR/runner.sh"
+          bash -n "$PAYLOAD_DIR/runner.sh"
+          python3 -m py_compile "$PAYLOAD_DIR/materialize.py"
+          sha256sum "$PAYLOAD_DIR"/* > "$OUT/actual-payload-members.sha256"
+
+      - name: Replay exact original candidate runner with full trace
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: 7c7403c70ea4cc70169ef41129f1484a04475c2a
+          HEAD_BRANCH: agent/doctor-who-cycle-008-kreg-candidate-v1
+          GITHUB_HEAD_REF: agent/doctor-who-cycle-008-kreg-candidate-v1
+          GITHUB_BASE_REF: main
+          GITHUB_EVENT_NAME: pull_request
+          GITHUB_REPOSITORY: BigBirdReturns/undercast
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_JOB: replay
+          PAYLOAD_PATH: .github/doctor-who-cycle-008/kreg-candidate-v1-payload.tar.gz.b64
+          PAYLOAD_DIR: /tmp/doctor-who-cycle-008-kreg-original-payload
+          OUT: /tmp/doctor-who-cycle-008-kreg-original-carrier-replay-v1/original-runner-output
+        shell: bash
+        run: |
+          set +e
+          mkdir -p "$OUT"
+          cd "$ORIGINAL_WORKTREE"
+          PS4='+${BASH_SOURCE}:${LINENO}: ' bash -x "$PAYLOAD_DIR/runner.sh" \
+            > "$OUT/runner.stdout.log" 2> "$OUT/runner.trace.log"
+          status=$?
+          printf '%s\n' "$status" > "$OUT/runner.exit"
+          git status --porcelain=v1 > "$OUT/worktree-status.txt"
+          git rev-parse HEAD > "$OUT/worktree-head.txt"
+          find "$OUT" -maxdepth 3 -type f -print | LC_ALL=C sort > "$OUT/output-files.txt"
+          exit "$status"
+
+      - name: Upload immutable replay packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-original-carrier-replay-v1-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Report exact replay boundary
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          result='unavailable'
+          trace='trace unavailable'
+          stdout='stdout unavailable'
+          if test -f "$OUT/original-runner-output/runner.exit"; then result="$(cat "$OUT/original-runner-output/runner.exit")"; fi
+          if test -f "$OUT/original-runner-output/runner.trace.log"; then trace="$(tail -n 160 "$OUT/original-runner-output/runner.trace.log" | tail -c 16000)"; fi
+          if test -f "$OUT/original-runner-output/runner.stdout.log"; then stdout="$(tail -n 100 "$OUT/original-runner-output/runner.stdout.log" | tail -c 8000)"; fi
+          body="$RUNNER_TEMP/kreg-original-replay.md"
+          {
+            printf 'KREG_ORIGINAL_CARRIER_REPLAY_V1\n\n'
+            printf '```text\noriginal head: %s\noriginal base: %s\nrunner exit:   %s\nrun:           %s\n```\n\n' "$ORIGINAL_HEAD" "$ORIGINAL_BASE" "$result" "$GITHUB_RUN_ID"
+            printf '### Trace tail\n\n```text\n%s\n```\n\n' "$trace"
+            printf '### Standard output tail\n\n```text\n%s\n```\n' "$stdout"
+          } > "$body"
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --raw-field body="$(cat "$body")" >/dev/null
