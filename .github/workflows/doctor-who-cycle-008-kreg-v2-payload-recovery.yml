@@ -1,8 +1,9 @@
 name: doctor-who-cycle-008-kreg-v2-payload-recovery
 
 on:
-  push:
+  pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened]
     paths:
       - ".github/workflows/doctor-who-cycle-008-kreg-v2-payload-recovery.yml"
 
@@ -10,12 +11,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: doctor-who-cycle-008-kreg-v2-payload-recovery
-  cancel-in-progress: false
+  group: doctor-who-cycle-008-kreg-v2-payload-recovery-v2-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 env:
   SELF: .github/workflows/doctor-who-cycle-008-kreg-v2-payload-recovery.yml
-  EXPECTED_PARENT: 82f7580775b3dc1fdacd73a7b7d2e3be238ca58b
+  ROOT_MAIN: ceca35cd4456c9e948de2e0a3c30a78d81a88c7e
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-v2-payload-recovery-v2
   V2_BASE: 3228efd6ede786586352b1b990a94d16ab02d5f9
   V2_BRANCH: agent/doctor-who-cycle-008-kreg-candidate-v2
   V2_HEAD: d205a67cd9240ed5e1746ac6050c21f476158bad
@@ -25,65 +29,89 @@ env:
   PART_01_BLOB: 42341e1431584fe9b345ebbe6fd1751e28a9b36b
   PART_00_SHA256: 5abcd85d23a33d282dea06e5162a0a848efa5c79946be1b9c8a356e22d7d910e
   PART_01_SHA256: 5d4ae5e0bdac53c631cbcf04e0f7e50282a16b424c2ef9ca441c30be0b0432b4
-  OUT: /tmp/doctor-who-cycle-008-kreg-v2-payload-recovery
+  OUT: /tmp/doctor-who-cycle-008-kreg-v2-payload-recovery-v2
 
 jobs:
   recover:
-    if: github.repository == 'BigBirdReturns/undercast' && github.ref == 'refs/heads/main'
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-v2-payload-recovery-v2'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.HEAD_SHA }}
           fetch-depth: 0
           filter: blob:none
           persist-credentials: false
 
-      - name: Bind exact one-path mainline recovery carrier
+      - name: Bind exact one-commit descendant-safe recovery carrier
         shell: bash
         run: |
           set -euo pipefail
           rm -rf "$OUT"
           mkdir -p "$OUT/shards" "$OUT/extracted"
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_PARENT"
-          test "$(git rev-list --count "$EXPECTED_PARENT"..HEAD)" = "1"
-          test "$(git merge-base "$EXPECTED_PARENT" HEAD)" = "$EXPECTED_PARENT"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$HEAD_BRANCH" = "$AUTHORIZED_BRANCH"
+          test "$(git show -s --format=%P HEAD)" = "$ROOT_MAIN"
+          test "$(git rev-list --count "$ROOT_MAIN"..HEAD)" = "1"
+          test "$(git merge-base "$ROOT_MAIN" HEAD)" = "$ROOT_MAIN"
           printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
-          git diff --name-only "$EXPECTED_PARENT"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          git diff --name-only "$ROOT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
           diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
           git fetch --no-tags --filter=blob:none origin \
             "+refs/heads/main:refs/remotes/origin/main" \
             "+refs/heads/${V2_BRANCH}:refs/remotes/origin/${V2_BRANCH}"
-          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
+          live_main="$(git rev-parse refs/remotes/origin/main)"
+          test "$(git merge-base "$ROOT_MAIN" "$live_main")" = "$ROOT_MAIN"
+          git diff --name-only "$ROOT_MAIN"..."$live_main" | LC_ALL=C sort > "$OUT/live-main-delta-paths.txt"
+          ! grep -Fx "$SELF" "$OUT/live-main-delta-paths.txt" >/dev/null
           test "$(git rev-parse refs/remotes/origin/${V2_BRANCH})" = "$V2_HEAD"
-          test -z "$(git status --porcelain)"
-          printf 'main=%s\nparent=%s\ncarrier_tree=%s\n' \
-            "$GITHUB_SHA" "$EXPECTED_PARENT" "$(git rev-parse 'HEAD^{tree}')" \
+          git diff --quiet
+          git diff --cached --quiet
+          printf '%s\n' "$live_main" > "$OUT/live-main.txt"
+          printf 'head=%s\nroot_main=%s\nlive_main=%s\ncarrier_tree=%s\nlive_main_delta_paths=%s\n' \
+            "$HEAD_SHA" "$ROOT_MAIN" "$live_main" "$(git rev-parse 'HEAD^{tree}')" \
+            "$(wc -l < "$OUT/live-main-delta-paths.txt")" \
             > "$OUT/carrier-identity.txt"
 
-      - name: Bind exact two-commit V2 shard carrier
+      - name: Bind and diagnose exact two-commit V2 shard carrier
         shell: bash
         run: |
           set -euo pipefail
           v2="refs/remotes/origin/${V2_BRANCH}"
-          test "$(git merge-base "$V2_BASE" "$v2")" = "$V2_BASE"
-          test "$(git rev-list --count "$V2_BASE".."$v2")" = "2"
           printf '%s\n%s\n' "$PART_00" "$PART_01" > "$OUT/expected-v2-paths.txt"
           git diff --name-only "$V2_BASE"..."$v2" | LC_ALL=C sort > "$OUT/actual-v2-paths.txt"
+          git show "$v2:$PART_00" > "$OUT/shards/part-00.b64"
+          git show "$v2:$PART_01" > "$OUT/shards/part-01.b64"
+          {
+            printf 'merge_base=%s\n' "$(git merge-base "$V2_BASE" "$v2")"
+            printf 'commit_count=%s\n' "$(git rev-list --count "$V2_BASE".."$v2")"
+            printf 'head=%s\n' "$(git rev-parse "$v2")"
+            printf 'parent=%s\n' "$(git show -s --format=%P "$v2")"
+            printf 'tree=%s\n' "$(git rev-parse "$v2^{tree}")"
+            printf 'part_00_blob=%s\n' "$(git rev-parse "$v2:$PART_00")"
+            printf 'part_01_blob=%s\n' "$(git rev-parse "$v2:$PART_01")"
+            printf 'part_00_bytes=%s\n' "$(wc -c < "$OUT/shards/part-00.b64")"
+            printf 'part_01_bytes=%s\n' "$(wc -c < "$OUT/shards/part-01.b64")"
+            printf 'part_00_sha256=%s\n' "$(sha256sum "$OUT/shards/part-00.b64" | awk '{print $1}')"
+            printf 'part_01_sha256=%s\n' "$(sha256sum "$OUT/shards/part-01.b64" | awk '{print $1}')"
+          } > "$OUT/v2-bind-diagnostics.txt"
+          sha256sum "$OUT/shards"/* > "$OUT/shard-sha256.txt"
+          cat "$OUT/v2-bind-diagnostics.txt"
+          cat "$OUT/actual-v2-paths.txt"
+          cat "$OUT/shard-sha256.txt"
+          test "$(git merge-base "$V2_BASE" "$v2")" = "$V2_BASE"
+          test "$(git rev-list --count "$V2_BASE".."$v2")" = "2"
           diff -u "$OUT/expected-v2-paths.txt" "$OUT/actual-v2-paths.txt"
           test "$(git rev-parse "$v2:$PART_00")" = "$PART_00_BLOB"
           test "$(git rev-parse "$v2:$PART_01")" = "$PART_01_BLOB"
-          git show "$v2:$PART_00" > "$OUT/shards/part-00.b64"
-          git show "$v2:$PART_01" > "$OUT/shards/part-01.b64"
           test "$(sha256sum "$OUT/shards/part-00.b64" | awk '{print $1}')" = "$PART_00_SHA256"
           test "$(sha256sum "$OUT/shards/part-01.b64" | awk '{print $1}')" = "$PART_01_SHA256"
-          printf 'v2_base=%s\nv2_head=%s\nv2_parent=%s\nv2_tree=%s\n' \
-            "$V2_BASE" "$V2_HEAD" "$(git show -s --format=%P "$v2")" "$(git rev-parse "$v2^{tree}")" \
-            > "$OUT/v2-identity.txt"
-          sha256sum "$OUT/shards"/* > "$OUT/shard-sha256.txt"
+          cp "$OUT/v2-bind-diagnostics.txt" "$OUT/v2-identity.txt"
 
       - name: Reconstruct and safely inspect the V2 archive
         shell: bash
@@ -147,18 +175,20 @@ jobs:
           sha256sum "$OUT/payload.b64" "$OUT/payload.tar.gz" > "$OUT/payload-sha256.txt"
           find "$OUT/extracted" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/extracted-sha256.txt"
 
-      - name: Rebind unchanged canonical main
+      - name: Rebind unchanged live main during recovery
         shell: bash
         run: |
           set -euo pipefail
           git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
-          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain)"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$(cat "$OUT/live-main.txt")"
+          git diff --quiet
+          git diff --cached --quiet
 
       - name: Upload exact Kreg V2 recovery packet
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: doctor-who-cycle-008-kreg-v2-payload-recovery-${{ github.run_id }}
+          name: doctor-who-cycle-008-kreg-v2-payload-recovery-v2-${{ github.run_id }}
           path: ${{ env.OUT }}
           if-no-files-found: error
           retention-days: 30
