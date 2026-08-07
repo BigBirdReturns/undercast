@@ -1,0 +1,249 @@
+name: doctor-who-cycle-008-kreg-v13-directory-hotfix-materializer
+
+"on":
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-v13-directory-hotfix-materializer.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-v13-directory-hotfix-materializer
+  cancel-in-progress: false
+
+env:
+  BASE: e39b5f5bec011b84a32bc46021089d3432c6c5df
+  BASE_TREE: 8a914e7e10148905e48496a8b5fcd44e4b10cdb3
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-v13-directory-hotfix-materializer.yml
+  TARGET_PATH: .github/workflows/doctor-who-cycle-008-kreg-trusted-publisher-v13.yml
+  TARGET_BRANCH: agent/doctor-who-cycle-008-kreg-trusted-publisher-v13-directory-hotfix
+  EXPECTED_TARGET_BLOB: 349a9dcfec5846ba7b6bb46725d661bc0a7d0364
+  OUT: /tmp/doctor-who-cycle-008-kreg-v13-directory-hotfix-materializer
+
+jobs:
+  materialize:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-v13-directory-hotfix-materializer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-path carrier and unchanged canonical main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,patched,receipt,work}
+          test "$(git show -s --format=%P HEAD)" = "$BASE"
+          test "$(git rev-list --count "$BASE"..HEAD)" = 1
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$BASE"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          test "$(git rev-parse "$BASE^{tree}")" = "$BASE_TREE"
+          live="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          test "$live" = "$BASE"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/${{ github.event.pull_request.number }}" > "$OUT/api/carrier-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/${{ github.event.pull_request.number }}/files?per_page=100" > "$OUT/api/carrier-files.json"
+          jq -e --arg branch '${{ github.event.pull_request.head.ref }}' --arg head '${{ github.event.pull_request.head.sha }}' --arg base "$BASE" '.state=="open" and .draft==true and .merged==false and .base.ref=="main" and .base.sha==$base and .head.ref==$branch and .head.sha==$head and .commits==1 and .changed_files==1' "$OUT/api/carrier-pr.json" >/dev/null
+          jq -e --arg path "$SELF" 'length==1 and .[0].filename==$path and .[0].status=="added"' "$OUT/api/carrier-files.json" >/dev/null
+          test -z "$(git status --porcelain)"
+
+      - name: Apply the unique fail-closed directory repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show "$BASE:$TARGET_PATH" > "$OUT/patched/original.yml"
+          test "$(git hash-object "$OUT/patched/original.yml")" = "$EXPECTED_TARGET_BLOB"
+          ORIGINAL="$OUT/patched/original.yml" PATCHED="$OUT/patched/publisher.yml" python3 - <<'PY'
+          import os
+          from pathlib import Path
+          original=Path(os.environ['ORIGINAL']).read_text()
+          before="z=pathlib.Path(os.environ['ZIP']); target=pathlib.Path(os.environ['TARGET']); target.mkdir()"
+          after="z=pathlib.Path(os.environ['ZIP']); target=pathlib.Path(os.environ['TARGET']); target.mkdir(exist_ok=True)"
+          assert original.count(before)==1
+          assert original.count(after)==0
+          patched=original.replace(before,after)
+          assert patched.count(before)==0
+          assert patched.count(after)==1
+          Path(os.environ['PATCHED']).write_text(patched)
+          PY
+          python3 - <<'PY'
+          import yaml
+          from pathlib import Path
+          path=Path('/tmp/doctor-who-cycle-008-kreg-v13-directory-hotfix-materializer/patched/publisher.yml')
+          data=yaml.safe_load(path.read_text())
+          assert isinstance(data,dict)
+          assert set(data.get('jobs',{}))=={'verify','publish'}
+          assert data.get('permissions')=={}
+          PY
+          mkdir -p "$OUT/work/probe/handoff"
+          TARGET="$OUT/work/probe/handoff" python3 - <<'PY'
+          import os
+          from pathlib import Path
+          target=Path(os.environ['TARGET'])
+          assert target.is_dir()
+          target.mkdir(exist_ok=True)
+          assert target.is_dir()
+          PY
+          diff -u "$OUT/patched/original.yml" "$OUT/patched/publisher.yml" > "$OUT/patched/exact.diff" || test "$?" = 1
+          test "$(grep -c '^[-+]          z=pathlib.Path' "$OUT/patched/exact.diff")" = 2
+
+      - name: Run repository-native custody and fixture gates over the patched workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$OUT/work/repository"
+          git worktree add --detach "$work" "$BASE"
+          cp "$OUT/patched/publisher.yml" "$work/$TARGET_PATH"
+          cd "$work"
+          npm ci
+          node scripts/publisher-custody.mjs check-workflows
+          node scripts/publisher-condition-custody.mjs check-workflows
+          node scripts/gate-fixtures.mjs
+          test "$(git diff --name-only | LC_ALL=C sort)" = "$TARGET_PATH"
+          test -z "$(git status --porcelain --untracked-files=no | grep -v "^ M $TARGET_PATH$" || true)"
+          cd - >/dev/null
+          git worktree remove --force "$work"
+
+      - name: Materialize one-parent one-path hotfix and draft qualification PR
+        id: materialize
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE"
+          if gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$TARGET_BRANCH" > "$OUT/api/preexisting-ref.json" 2>/dev/null; then
+            echo 'target branch already exists' >&2
+            exit 1
+          fi
+          gh api "/repos/$GITHUB_REPOSITORY/pulls?state=all&head=BigBirdReturns:$TARGET_BRANCH&per_page=100" > "$OUT/api/preexisting-prs.json"
+          jq -e 'length==0' "$OUT/api/preexisting-prs.json" >/dev/null
+
+          base64 -w0 "$OUT/patched/publisher.yml" | jq -Rs '{content:.,encoding:"base64"}' > "$OUT/blob-request.json"
+          blob="$(gh api --method POST "/repos/$GITHUB_REPOSITORY/git/blobs" --input "$OUT/blob-request.json" --jq '.sha')"
+          test "$blob" = "$(git hash-object "$OUT/patched/publisher.yml")"
+          jq -n --arg base "$BASE_TREE" --arg path "$TARGET_PATH" --arg blob "$blob" '{base_tree:$base,tree:[{path:$path,mode:"100644",type:"blob",sha:$blob}]}' > "$OUT/tree-request.json"
+          tree="$(gh api --method POST "/repos/$GITHUB_REPOSITORY/git/trees" --input "$OUT/tree-request.json" --jq '.sha')"
+          test "$tree" != "$BASE_TREE"
+          jq -n --arg message 'CI: make Kreg V13 handoff extraction directory-safe' --arg tree "$tree" --arg parent "$BASE" '{message:$message,tree:$tree,parents:[$parent]}' > "$OUT/commit-request.json"
+          commit="$(gh api --method POST "/repos/$GITHUB_REPOSITORY/git/commits" --input "$OUT/commit-request.json" --jq '.sha')"
+          jq -n --arg ref "refs/heads/$TARGET_BRANCH" --arg sha "$commit" '{ref:$ref,sha:$sha}' > "$OUT/ref-request.json"
+          gh api --method POST "/repos/$GITHUB_REPOSITORY/git/refs" --input "$OUT/ref-request.json" > "$OUT/api/created-ref.json"
+          touch "$OUT/ref-created"
+          printf '%s\n' "$commit" > "$OUT/product-commit.txt"
+
+          cat > "$OUT/pr-body.md" <<'EOF'
+          ## Exact V13 directory-safety hotfix
+
+          V13 completed its entire read-only source and 48-path product verification, then failed before any product ref was written because the publisher pre-created its handoff directory and immediately called `Path.mkdir()` without `exist_ok=True`.
+
+          This one-parent, one-path patch changes only that call to `Path.mkdir(exist_ok=True)`. It preserves every source-run, artifact, checksum, main/tree, product-path, no-force, no-merge, and no-cycle-009 guard.
+
+          ```text
+          source V9b run:       31224049249
+          failed V13 run:       31224465447
+          failed publish job:   93016303212
+          verified paths:       48
+          escaped product refs: 0
+          semantic delta:       one keyword argument
+          ```
+
+          This is a qualification carrier only. Fast-forward the exact checked head onto unchanged canonical `main`; do not merge a stale or recomposed variant.
+          EOF
+          sed -i 's/^          //' "$OUT/pr-body.md"
+          jq -n --arg title 'CI: make cycle 008 Kreg V13 handoff extraction directory-safe' --arg head "$TARGET_BRANCH" --arg base main --rawfile body "$OUT/pr-body.md" '{title:$title,head:$head,base:$base,body:$body,draft:true,maintainer_can_modify:false}' > "$OUT/pr-request.json"
+          gh api --method POST "/repos/$GITHUB_REPOSITORY/pulls" --input "$OUT/pr-request.json" > "$OUT/api/target-pr.json"
+          pr="$(jq -r '.number' "$OUT/api/target-pr.json")"
+          printf '%s\n' "$pr" > "$OUT/product-pr-number.txt"
+
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/target-pr-terminal.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr/files?per_page=100" > "$OUT/api/target-files.json"
+          gh api "/repos/$GITHUB_REPOSITORY/git/commits/$commit" > "$OUT/api/target-commit.json"
+          gh api "/repos/$GITHUB_REPOSITORY/compare/$BASE...$commit" > "$OUT/api/target-compare.json"
+          jq -e --arg branch "$TARGET_BRANCH" --arg base "$BASE" --arg commit "$commit" '.state=="open" and .draft==true and .merged==false and .base.ref=="main" and .base.sha==$base and .head.ref==$branch and .head.sha==$commit and .commits==1 and .changed_files==1' "$OUT/api/target-pr-terminal.json" >/dev/null
+          jq -e --arg path "$TARGET_PATH" 'length==1 and .[0].filename==$path and .[0].status=="modified"' "$OUT/api/target-files.json" >/dev/null
+          jq -e --arg parent "$BASE" --arg tree "$tree" '.parents|length==1 and .[0].sha==$parent' "$OUT/api/target-commit.json" >/dev/null
+          test "$(jq -r '.tree.sha' "$OUT/api/target-commit.json")" = "$tree"
+          jq -e --arg base "$BASE" --arg commit "$commit" --arg path "$TARGET_PATH" '.merge_base_commit.sha==$base and .head_commit.sha==$commit and .ahead_by==1 and .behind_by==0 and (.files|length)==1 and .files[0].filename==$path and .files[0].status=="modified"' "$OUT/api/target-compare.json" >/dev/null
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$TARGET_BRANCH" --jq '.object.sha')" = "$commit"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE"
+          printf 'commit=%s\ntree=%s\nblob=%s\npr=%s\n' "$commit" "$tree" "$blob" "$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Seal materialization receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" COMMIT='${{ steps.materialize.outputs.commit }}' TREE='${{ steps.materialize.outputs.tree }}' BLOB='${{ steps.materialize.outputs.blob }}' PR='${{ steps.materialize.outputs.pr }}' python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          receipt={
+            'status':'v13-directory-hotfix-materialized',
+            'materializer_run':int(os.environ['GITHUB_RUN_ID']),
+            'materializer_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),
+            'base':os.environ['BASE'],
+            'base_tree':os.environ['BASE_TREE'],
+            'target_path':os.environ['TARGET_PATH'],
+            'target_branch':os.environ['TARGET_BRANCH'],
+            'target_commit':os.environ['COMMIT'],
+            'target_tree':os.environ['TREE'],
+            'target_blob':os.environ['BLOB'],
+            'target_pr':int(os.environ['PR']),
+            'changed_paths':1,
+            'source_v9b_run':31224049249,
+            'failed_v13_run':31224465447,
+            'failed_publish_job':93016303212,
+            'verified_product_paths':48,
+            'escaped_product_refs':0,
+            'force_update':False,
+            'main_updated':False,
+            'merge_authority':False,
+            'cycle_009_authorized':False,
+            'outside_human_dependency':False,
+          }
+          canonical=json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()
+          receipt['identity']=hashlib.sha256(canonical).hexdigest()
+          (root/'receipt/materialization-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          cp "$OUT/patched/exact.diff" "$OUT/receipt/exact.diff"
+          sha256sum "$OUT/receipt/exact.diff" "$OUT/receipt/materialization-receipt.json" > "$OUT/receipt/SHA256SUMS.pre"
+          sha256sum "$OUT/receipt/SHA256SUMS.pre" > "$OUT/receipt/SHA256SUMS"
+
+      - name: Remove partial hotfix authority after any failure
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr=""
+          [ ! -f "$OUT/product-pr-number.txt" ] || pr="$(cat "$OUT/product-pr-number.txt")"
+          [ -z "$pr" ] || gh api --method PATCH "/repos/$GITHUB_REPOSITORY/pulls/$pr" -f state=closed >/dev/null 2>&1 || true
+          if [ -f "$OUT/ref-created" ] && [ -f "$OUT/product-commit.txt" ]; then
+            expected="$(cat "$OUT/product-commit.txt")"
+            observed="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$TARGET_BRANCH" --jq '.object.sha' 2>/dev/null || true)"
+            [ "$observed" != "$expected" ] || gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$TARGET_BRANCH" >/dev/null 2>&1 || true
+          fi
+
+      - name: Upload exact materialization receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-v13-directory-hotfix-materializer-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-v13-directory-hotfix-materializer
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
