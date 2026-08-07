@@ -1,0 +1,195 @@
+name: doctor-who-cycle-008-kreg-v1-payload-recovery-v14
+
+on:
+  push:
+    branches:
+      - agent/doctor-who-cycle-008-kreg-v1-payload-recovery-v14
+    paths:
+      - .github/workflows/doctor-who-cycle-008-kreg-v1-payload-recovery-v14.yml
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/doctor-who-cycle-008-kreg-v1-payload-recovery-v14.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-v1-payload-recovery-v14-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-v1-payload-recovery-v14.yml
+  CARRIER_BRANCH: agent/doctor-who-cycle-008-kreg-v1-payload-recovery-v14
+  V1_BLOB: 06d2eed93b9e2a03b4d23dcaf6f82e0c131df498
+  V1_TEXT_SHA256: 614bda7dd19ad5934c773a607a7d0ceb674efff66a7ce8d62eb287e4156ed83d
+  V1_GZIP_SHA256: 3a395fc2194fe207f32eb393b7680be6658875e8114aebb2c6210dd180b80504
+  ENV_SHA256: c8483b7d1226731a5e1a1e9879e2caa53cb8a7b23bc0d294f827871188be3871
+  MANIFEST_SHA256: b96979efed799976096f0bc4f94fc9a74116e25319bf16859d3a6ab3cd29fed9
+  MATERIALIZER_SHA256: ce40bf80c3d1ebcafd729f834fe04b52b24da29abef00403110c09a68ab4e274
+  RUNNER_SHA256: 72c911f8be1b2fa0bdc9ec88b914ddec3be0379408bf3435e2cde82a4167a44d
+  OUT: /tmp/doctor-who-cycle-008-kreg-v1-payload-recovery-v14
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  recover:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      (
+        (github.event_name == 'push' && github.ref_name == 'agent/doctor-who-cycle-008-kreg-v1-payload-recovery-v14') ||
+        (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-v1-payload-recovery-v14')
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-parent one-path carrier and live main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/extracted" "$OUT/diagnostics"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          parents="$(git show -s --format=%P HEAD)"
+          set -- $parents
+          test "$#" = 1
+          base="$1"
+          test "$(git rev-list --count "$base"..HEAD)" = 1
+          test "$(git merge-base "$base" HEAD)" = "$base"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$base"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          git fetch --no-tags --filter=blob:none origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${CARRIER_BRANCH}:refs/remotes/origin/${CARRIER_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$base"
+          test "$(git rev-parse refs/remotes/origin/${CARRIER_BRANCH})" = "$GITHUB_SHA"
+          printf 'base=%s\nbase_tree=%s\ncarrier=%s\ncarrier_tree=%s\n' \
+            "$base" "$(git rev-parse "$base^{tree}")" "$GITHUB_SHA" "$(git rev-parse 'HEAD^{tree}')" \
+            > "$OUT/git-identity.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Recover immutable Kreg V1 payload by Git blob
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${V1_BLOB}" > "$OUT/v1-blob.json"
+          jq -e --arg sha "$V1_BLOB" '.sha==$sha and .encoding=="base64"' "$OUT/v1-blob.json" >/dev/null
+          jq -r '.content' "$OUT/v1-blob.json" | tr -d '\n' | base64 --decode > "$OUT/kreg-candidate-v1-payload.tar.gz.b64"
+          test "$(git hash-object "$OUT/kreg-candidate-v1-payload.tar.gz.b64")" = "$V1_BLOB"
+          test "$(sha256sum "$OUT/kreg-candidate-v1-payload.tar.gz.b64" | awk '{print $1}')" = "$V1_TEXT_SHA256"
+          base64 --decode "$OUT/kreg-candidate-v1-payload.tar.gz.b64" > "$OUT/kreg-candidate-v1-payload.tar.gz"
+          test "$(sha256sum "$OUT/kreg-candidate-v1-payload.tar.gz" | awk '{print $1}')" = "$V1_GZIP_SHA256"
+          PAYLOAD_ARCHIVE="$OUT/kreg-candidate-v1-payload.tar.gz" PAYLOAD_TARGET="$OUT/extracted" python3 - <<'PY'
+          import os
+          import pathlib
+          import tarfile
+
+          archive = pathlib.Path(os.environ['PAYLOAD_ARCHIVE'])
+          target = pathlib.Path(os.environ['PAYLOAD_TARGET'])
+          expected = ['env.sh', 'manifest.json', 'materialize.py', 'runner.sh']
+          with tarfile.open(archive, 'r:gz') as tf:
+              members = tf.getmembers()
+              names = [member.name for member in members]
+              if names != expected or len(names) != len(set(names)):
+                  raise SystemExit(f'payload member set drifted: {names!r}')
+              for member in members:
+                  path = pathlib.PurePosixPath(member.name)
+                  if path.is_absolute() or '..' in path.parts or not member.isfile() or member.issym() or member.islnk():
+                      raise SystemExit(f'unsafe payload member: {member.name}')
+              tf.extractall(target)
+          PY
+          test "$(sha256sum "$OUT/extracted/env.sh" | awk '{print $1}')" = "$ENV_SHA256"
+          test "$(sha256sum "$OUT/extracted/manifest.json" | awk '{print $1}')" = "$MANIFEST_SHA256"
+          test "$(sha256sum "$OUT/extracted/materialize.py" | awk '{print $1}')" = "$MATERIALIZER_SHA256"
+          test "$(sha256sum "$OUT/extracted/runner.sh" | awk '{print $1}')" = "$RUNNER_SHA256"
+          bash -n "$OUT/extracted/env.sh"
+          bash -n "$OUT/extracted/runner.sh"
+          python3 -m py_compile "$OUT/extracted/materialize.py"
+          sha256sum "$OUT"/kreg-candidate-v1-payload.tar.gz* "$OUT"/extracted/* > "$OUT/SHA256SUMS"
+
+      - name: Archive exact current-main source parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$(git show -s --format=%P HEAD)"
+          git ls-tree -r --name-only "$base" | LC_ALL=C sort > "$OUT/source-paths.txt"
+          git archive --format=tar "$base" > "$OUT/source.tar"
+          gzip -n -9 -c "$OUT/source.tar" > "$OUT/source.tar.gz"
+          printf 'source_commit=%s\nsource_tree=%s\nsource_paths=%s\nsource_tar_sha256=%s\nsource_tgz_sha256=%s\n' \
+            "$base" "$(git rev-parse "$base^{tree}")" "$(wc -l < "$OUT/source-paths.txt")" \
+            "$(sha256sum "$OUT/source.tar" | awk '{print $1}')" \
+            "$(sha256sum "$OUT/source.tar.gz" | awk '{print $1}')" \
+            > "$OUT/source-identity.txt"
+          rm "$OUT/source.tar"
+
+      - name: Seal recovery receipt and rebind live main
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$(git show -s --format=%P HEAD)"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$base"
+          BASE="$base" python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          out = Path(os.environ['OUT'])
+          receipt = {
+              'version': 1,
+              'transaction': 'DOCTOR-WHO-CYCLE-008-KREG-V1-PAYLOAD-RECOVERY-V14',
+              'source_main': os.environ['BASE'],
+              'source_tree': (out / 'source-identity.txt').read_text().split('source_tree=', 1)[1].splitlines()[0],
+              'carrier_head': os.environ['GITHUB_SHA'],
+              'workflow_run': int(os.environ['GITHUB_RUN_ID']),
+              'workflow_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              'payload_blob': os.environ['V1_BLOB'],
+              'payload_text_sha256': os.environ['V1_TEXT_SHA256'],
+              'payload_gzip_sha256': os.environ['V1_GZIP_SHA256'],
+              'members': {
+                  'env.sh': os.environ['ENV_SHA256'],
+                  'manifest.json': os.environ['MANIFEST_SHA256'],
+                  'materialize.py': os.environ['MATERIALIZER_SHA256'],
+                  'runner.sh': os.environ['RUNNER_SHA256'],
+              },
+              'boundary': {
+                  'candidate_executed': False,
+                  'lease_issued': False,
+                  'queue_mutated': False,
+                  'canonical_record_created': False,
+                  'media_adopted': False,
+                  'waterline_event_written': False,
+                  'cycle_receipt_written': False,
+                  'product_published': False,
+                  'outside_human_dependency': False,
+              },
+          }
+          body = (json.dumps(receipt, indent=2, sort_keys=True) + '\n').encode()
+          receipt['receipt_sha256'] = hashlib.sha256(body).hexdigest()
+          final = (json.dumps(receipt, indent=2, sort_keys=True) + '\n').encode()
+          (out / 'recovery-receipt.json').write_bytes(final)
+          (out / 'recovery-receipt.file.sha256').write_text(
+              f"{hashlib.sha256(final).hexdigest()}  recovery-receipt.json\n"
+          )
+          PY
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact current-main and Kreg V1 recovery packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-v1-payload-recovery-v14-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
