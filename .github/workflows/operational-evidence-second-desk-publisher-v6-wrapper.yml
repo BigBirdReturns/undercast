@@ -1,4 +1,4 @@
-name: operational-evidence-second-desk-publisher-v6-wrapper
+name: operational-evidence-second-desk-publisher-v8-wrapper
 
 "on":
   push:
@@ -9,7 +9,7 @@ name: operational-evidence-second-desk-publisher-v6-wrapper
 permissions: {}
 
 concurrency:
-  group: operational-evidence-second-desk-publisher-v6-wrapper
+  group: operational-evidence-second-desk-publisher-v8-wrapper
   cancel-in-progress: false
 
 jobs:
@@ -25,13 +25,14 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       INSTALLER_MAIN: ${{ github.sha }}
-      EXPECTED_PARENT: 489a09639c534688cf9feaf73687eee847d5141b
+      REVIEW_BASE: 37d681f419db5ef874b2cc41df1c631c047218d8
       V3_WORKFLOW_BLOB: c28876fda070c0da6df9acde7bf49a4e98d1bda7
       IGNITER_WORKFLOW_BLOB: cb1d999205d927120d7a7a4251621b47a67b31b7
+      V6_WRAPPER_BLOB: 758849be10b98e37e452f73e96157792f369876c
       WRAPPER_PATH: .github/workflows/operational-evidence-second-desk-publisher-v6-wrapper.yml
-      PRODUCT_BRANCH: agent/operational-evidence-second-desk-product-v6-20260806
-      PRODUCT_TITLE: "Operations: refresh reviewed exact-main reliability evidence (V6)"
-      PUBLISH_ROOT: /tmp/undercast-operational-second-desk-publisher-v6
+      PRODUCT_BRANCH: agent/operational-evidence-second-desk-product-v8-20260806
+      PRODUCT_TITLE: "Operations: refresh reviewed exact-main reliability evidence (V8)"
+      PUBLISH_ROOT: /tmp/undercast-operational-second-desk-publisher-v8
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,7 +44,7 @@ jobs:
           node-version: "24"
           cache: npm
 
-      - name: Bind exact trusted-main wrapper
+      - name: Bind descendant-safe trusted-main wrapper
         shell: bash
         run: |
           set -euo pipefail
@@ -54,13 +55,17 @@ jobs:
           test "$GITHUB_EVENT_NAME" = 'push'
           test "$GITHUB_REF" = 'refs/heads/main'
           test "$(git rev-parse HEAD)" = "$INSTALLER_MAIN"
-          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
-          test "$(git diff --name-only "$EXPECTED_PARENT..$INSTALLER_MAIN")" = "$WRAPPER_PATH"
+          test "$(git show -s --format=%P HEAD | wc -w)" -eq 1
+          installer_parent="$(git rev-parse HEAD^)"
+          git merge-base --is-ancestor "$REVIEW_BASE" "$installer_parent"
+          test "$(git diff --name-only "$installer_parent..$INSTALLER_MAIN")" = "$WRAPPER_PATH"
           test "$(git hash-object .github/workflows/operational-evidence-second-desk-publisher.yml)" = "$V3_WORKFLOW_BLOB"
           test "$(git hash-object .github/workflows/operational-evidence-second-desk-workflow-run.yml)" = "$IGNITER_WORKFLOW_BLOB"
+          test "$(git rev-parse "$installer_parent:$WRAPPER_PATH")" = "$V6_WRAPPER_BLOB"
           test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$INSTALLER_MAIN"
+          printf 'INSTALLER_PARENT=%s\n' "$installer_parent" >> "$GITHUB_ENV"
 
-      - name: Recover and execute reviewed V3 publisher as V6
+      - name: Recover and execute reviewed V3 publisher as V8
         shell: bash
         run: |
           set -euo pipefail
@@ -77,6 +82,7 @@ jobs:
             (row) => row?.name === 'Publish the exact reviewed 27-path product',
           );
           if (!step || typeof step.run !== 'string') throw new Error('V3 publisher shell block is missing');
+          if (!/^[0-9a-f]{40}$/.test(process.env.INSTALLER_PARENT || '')) throw new Error('installer parent is missing');
           let source = step.run;
           const replaceOnce = (oldValue, newValue, label) => {
             const count = source.split(oldValue).length - 1;
@@ -85,8 +91,8 @@ jobs:
           };
           replaceOnce(
             "expected_parent='3228efd6ede786586352b1b990a94d16ab02d5f9'",
-            "expected_parent='489a09639c534688cf9feaf73687eee847d5141b'",
-            'wrapper parent',
+            `expected_parent='${process.env.INSTALLER_PARENT}'`,
+            'runtime wrapper parent',
           );
           replaceOnce(
             "workflow_path='.github/workflows/operational-evidence-second-desk-publisher.yml'",
@@ -130,23 +136,38 @@ jobs:
             "        target = payload / member.name",
           ].join('\n');
           replaceOnce(oldBlobCustody, reviewedBlobCustody, 'manifest Git-blob custody');
-          source = source.replaceAll('V3', 'V6');
-          writeFileSync('/tmp/operational-evidence-second-desk-publisher-v6.sh', `#!/usr/bin/env bash\n${source}`);
+          replaceOnce(
+            "assert stat.S_IMODE(member.mode) == int(row['mode'], 8)",
+            "assert stat.S_IMODE(member.mode) == (int(row['mode'], 8) & 0o7777)",
+            'Git-mode versus TAR-permission custody',
+          );
+          replaceOnce(
+            'git worktree add --detach "$root/review-worktree" "$review_base"',
+            [
+              'git diff --name-only "$review_base..$expected_parent" | LC_ALL=C sort -u > "$root/diagnostics/parent-delta-paths"',
+              'comm -12 "$root/diagnostics/parent-delta-paths" "$root/paths" > "$root/diagnostics/parent-product-overlap"',
+              "[[ ! -s \"$root/diagnostics/parent-product-overlap\" ]] || fail 'parent delta overlaps reviewed product paths'",
+              'git worktree add --detach "$root/review-worktree" "$review_base"',
+            ].join('\n'),
+            'reviewed-path overlap guard',
+          );
+          source = source.replaceAll('V3', 'V8');
+          writeFileSync('/tmp/operational-evidence-second-desk-publisher-v8.sh', `#!/usr/bin/env bash\n${source}`);
           NODE
-          bash -n /tmp/operational-evidence-second-desk-publisher-v6.sh
-          sha256sum /tmp/operational-evidence-second-desk-publisher-v6.sh | tee "$PUBLISH_ROOT/diagnostics/executed-script.sha256"
-          bash /tmp/operational-evidence-second-desk-publisher-v6.sh
+          bash -n /tmp/operational-evidence-second-desk-publisher-v8.sh
+          sha256sum /tmp/operational-evidence-second-desk-publisher-v8.sh | tee "$PUBLISH_ROOT/diagnostics/executed-script.sha256"
+          bash /tmp/operational-evidence-second-desk-publisher-v8.sh
 
-      - name: Upload exact V6 publication receipt
+      - name: Upload exact V8 publication receipt
         uses: actions/upload-artifact@v4
         with:
-          name: operational-evidence-second-desk-publication-v6-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: /tmp/undercast-operational-second-desk-publisher-v6/receipt
+          name: operational-evidence-second-desk-publication-v8-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/undercast-operational-second-desk-publisher-v8/receipt
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
 
-      - name: Remove partial V6 publication after any later failure
+      - name: Remove partial V8 publication after any later failure
         if: failure()
         shell: bash
         run: |
@@ -159,15 +180,15 @@ jobs:
           if [ -z "$pr" ]; then
             pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$PRODUCT_BRANCH" --state open --json number --jq '.[0].number // empty')"
           fi
-          [ -z "$pr" ] || gh pr close "$pr" --repo "$GITHUB_REPOSITORY" --comment 'Closed automatically because V6 publication did not reach terminal success.'
+          [ -z "$pr" ] || gh pr close "$pr" --repo "$GITHUB_REPOSITORY" --comment 'Closed automatically because V8 publication did not reach terminal success.'
           gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$PRODUCT_BRANCH" >/dev/null 2>&1 || true
 
-      - name: Upload V6 failure diagnostics
+      - name: Upload V8 failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: operational-evidence-second-desk-publication-v6-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: /tmp/undercast-operational-second-desk-publisher-v6
+          name: operational-evidence-second-desk-publication-v8-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/undercast-operational-second-desk-publisher-v8
           if-no-files-found: ignore
           retention-days: 14
           compression-level: 0
