@@ -1,0 +1,311 @@
+name: doctor-who-cycle-008-kreg-product-qualification-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-product-qualification-v1.yml"
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-product-qualification-v1
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-product-qualification-v1.yml
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-product-qualification-v1
+  PUBLISHER_BRANCH: agent/doctor-who-cycle-008-kreg-reviewed-product-publisher-v1
+  PUBLISHER_WORKFLOW: doctor-who-cycle-008-kreg-reviewed-product-publisher-v1.yml
+  PUBLISHER_ARTIFACT_PREFIX: doctor-who-cycle-008-kreg-reviewed-product-publisher-v1-
+  PRODUCT_BRANCH: agent/doctor-who-cycle-008-kreg-product-v1
+  CHECKER_PATH: scripts/doctor-who-cycle-008.mjs
+  OUT: /tmp/doctor-who-cycle-008-kreg-product-qualification-v1
+  ARTIFACT_DIR: /tmp/doctor-who-cycle-008-kreg-product-publication-artifact
+  PRODUCT_WORKTREE: /tmp/doctor-who-cycle-008-kreg-product-qualification-product
+  MERGE_WORKTREE: /tmp/doctor-who-cycle-008-kreg-product-qualification-merge
+
+jobs:
+  qualify:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-product-qualification-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 480
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact one-path read-only qualifier
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" "$ARTIFACT_DIR" "$PRODUCT_WORKTREE" "$MERGE_WORKTREE"
+          mkdir -p "$OUT" "$ARTIFACT_DIR"
+          test "$GITHUB_HEAD_REF" = "$AUTHORIZED_BRANCH"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = "1"
+          printf '%s\n' "$SELF" > "$OUT/expected-qualifier-paths.txt"
+          git diff --name-only "$BASE_SHA"...HEAD | LC_ALL=C sort > "$OUT/actual-qualifier-paths.txt"
+          diff -u "$OUT/expected-qualifier-paths.txt" "$OUT/actual-qualifier-paths.txt"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          qualifier_main="$(git rev-parse refs/remotes/origin/main)"
+          git merge-base --is-ancestor "$BASE_SHA" "$qualifier_main"
+          git diff --name-only "$BASE_SHA"..."$qualifier_main" | LC_ALL=C sort > "$OUT/base-to-qualifier-main-paths.txt"
+          if test -s "$OUT/base-to-qualifier-main-paths.txt"; then
+            awk '!/^\.github\/workflows\// { bad=1 } END { exit bad }' "$OUT/base-to-qualifier-main-paths.txt"
+          fi
+          printf '%s\n' "$qualifier_main" > "$OUT/qualifier-main.txt"
+          printf 'head=%s\nbase=%s\nqualifier_main=%s\nqualifier_tree=%s\n' "$HEAD_SHA" "$BASE_SHA" "$qualifier_main" "$(git rev-parse "$qualifier_main^{tree}")" > "$OUT/qualifier-identity.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Discover successful draft publication packet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls?state=all&head=BigBirdReturns:${PUBLISHER_BRANCH}&base=main&per_page=100" > "$OUT/publisher-prs.json"
+          test "$(jq length "$OUT/publisher-prs.json")" -ge 1
+          jq 'sort_by(.number) | last' "$OUT/publisher-prs.json" > "$OUT/publisher-pr.json"
+          publisher_head="$(jq -r .head.sha "$OUT/publisher-pr.json")"
+          test -n "$publisher_head"
+          printf '%s\n' "$publisher_head" > "$OUT/publisher-head.txt"
+
+          endpoint="/repos/${GITHUB_REPOSITORY}/actions/workflows/${PUBLISHER_WORKFLOW}/runs?event=pull_request&branch=${PUBLISHER_BRANCH}&per_page=100"
+          run_id=''
+          for _ in $(seq 1 2100); do
+            gh api "$endpoint" > "$OUT/publisher-runs.json"
+            run_id="$(jq -r --arg head "$publisher_head" --arg branch "$PUBLISHER_BRANCH" '[.workflow_runs[] | select(.head_sha == $head and .head_branch == $branch and .event == "pull_request")] | sort_by(.id) | last | .id // empty' "$OUT/publisher-runs.json")"
+            if test -n "$run_id"; then break; fi
+            sleep 10
+          done
+          test -n "$run_id"
+          printf '%s\n' "$run_id" > "$OUT/publisher-run-id.txt"
+          for _ in $(seq 1 2100); do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/publisher-run.json"
+            status="$(jq -r .status "$OUT/publisher-run.json")"
+            if test "$status" = completed; then break; fi
+            sleep 10
+          done
+          jq -e --arg head "$publisher_head" '.status == "completed" and .conclusion == "success" and .head_sha == $head' "$OUT/publisher-run.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "$OUT/publisher-jobs.json"
+          test "$(jq '[.jobs[] | select(.name == "publish")] | length' "$OUT/publisher-jobs.json")" = 1
+          jq '.jobs[] | select(.name == "publish")' "$OUT/publisher-jobs.json" > "$OUT/publisher-job.json"
+          jq -e '.status == "completed" and .conclusion == "success"' "$OUT/publisher-job.json" >/dev/null
+          jq -r .id "$OUT/publisher-job.json" > "$OUT/publisher-job-id.txt"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/publisher-artifacts.json"
+          expected_name="${PUBLISHER_ARTIFACT_PREFIX}${run_id}"
+          test "$(jq --arg name "$expected_name" '[.artifacts[] | select(.name == $name and (.expired | not))] | length' "$OUT/publisher-artifacts.json")" = 1
+          jq --arg name "$expected_name" '.artifacts[] | select(.name == $name and (.expired | not))' "$OUT/publisher-artifacts.json" > "$OUT/publisher-artifact.json"
+          artifact_id="$(jq -r .id "$OUT/publisher-artifact.json")"
+          printf '%s\n' "$artifact_id" > "$OUT/publisher-artifact-id.txt"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$OUT/publisher-artifact.zip"
+
+      - name: Safely extract and verify publication receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$OUT/publisher-artifact.zip" TARGET="$ARTIFACT_DIR" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib,stat,zipfile
+          archive=pathlib.Path(os.environ['ZIP']); target=pathlib.Path(os.environ['TARGET'])
+          seen=set(); expanded=0
+          with zipfile.ZipFile(archive) as zf:
+              infos=zf.infolist()
+              if not infos or len(infos)>8192: raise SystemExit(f'unsafe artifact denominator: {len(infos)}')
+              for info in infos:
+                  path=pathlib.PurePosixPath(info.filename); mode=(info.external_attr>>16)&0o170000
+                  if path.is_absolute() or '..' in path.parts or info.filename in seen or mode==stat.S_IFLNK:
+                      raise SystemExit(f'unsafe artifact member: {info.filename!r}')
+                  seen.add(info.filename)
+                  if info.is_dir(): continue
+                  expanded += info.file_size
+                  if expanded>4_000_000_000: raise SystemExit('artifact expansion ceiling exceeded')
+                  destination=target.joinpath(*path.parts); destination.parent.mkdir(parents=True,exist_ok=True)
+                  with zf.open(info) as src, destination.open('wb') as dst:
+                      while True:
+                          chunk=src.read(1024*1024)
+                          if not chunk: break
+                          dst.write(chunk)
+          required=['publication-receipt.json','product-paths.txt','publication-complete-gate.log','publication-checker.log','product-pr.json','product-pr-files.json','product-commit.json']
+          resolved={}
+          for name in required:
+              matches=[p for p in target.rglob(name) if p.is_file()]
+              if len(matches)!=1: raise SystemExit(f'{name} denominator: {len(matches)}')
+              resolved[name]=str(matches[0])
+          pathlib.Path(os.environ['OUT']).joinpath('resolved-publication-evidence.json').write_text(json.dumps(resolved,indent=2,sort_keys=True)+'\n')
+          pathlib.Path(os.environ['OUT']).joinpath('publisher-artifact-sha256.txt').write_text(hashlib.sha256(archive.read_bytes()).hexdigest()+'\n')
+          PY
+          receipt="$(jq -r '.["publication-receipt.json"]' "$OUT/resolved-publication-evidence.json")"
+          RECEIPT="$receipt" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          path=pathlib.Path(os.environ['RECEIPT']); data=json.loads(path.read_text()); claimed=data.pop('receipt_sha256')
+          actual=hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          assert actual==claimed and data['status']=='draft-product-published'
+          assert data['product_draft'] is True and data['product_merged'] is False and data['merge_authority'] is False
+          data['receipt_sha256']=claimed
+          pathlib.Path(os.environ['OUT']).joinpath('verified-publication-receipt.json').write_text(json.dumps(data,indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Re-fetch exact product PR, commit, paths, and checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          product_pr="$(jq -r .product_pr "$OUT/verified-publication-receipt.json")"
+          product="$(jq -r .product_commit "$OUT/verified-publication-receipt.json")"
+          tree="$(jq -r .product_tree "$OUT/verified-publication-receipt.json")"
+          parent="$(jq -r .publication_main "$OUT/verified-publication-receipt.json")"
+          paths="$(jq -r '.["product-paths.txt"]' "$OUT/resolved-publication-evidence.json")"
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${product_pr}" > "$OUT/live-product-pr.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${product_pr}/files?per_page=100" > "$OUT/live-product-pr-files.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/git/commits/${product}" > "$OUT/live-product-commit.json"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$parent"
+          PR="$OUT/live-product-pr.json" FILES="$OUT/live-product-pr-files.json" COMMIT="$OUT/live-product-commit.json" PATHS="$paths" PARENT="$parent" PRODUCT="$product" TREE="$tree" python3 - <<'PY'
+          import json,os,pathlib
+          pr=json.loads(pathlib.Path(os.environ['PR']).read_text()); files=json.loads(pathlib.Path(os.environ['FILES']).read_text()); commit=json.loads(pathlib.Path(os.environ['COMMIT']).read_text()); paths=pathlib.Path(os.environ['PATHS']).read_text().splitlines()
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['ref']=='main' and pr['base']['sha']==os.environ['PARENT']
+          assert pr['head']['ref']=='agent/doctor-who-cycle-008-kreg-product-v1' and pr['head']['sha']==os.environ['PRODUCT']
+          assert pr['commits']==1 and pr['changed_files']==len(paths)
+          assert sorted(row['filename'] for row in files)==paths
+          assert commit['sha']==os.environ['PRODUCT'] and commit['tree']['sha']==os.environ['TREE'] and [row['sha'] for row in commit['parents']]==[os.environ['PARENT']]
+          PY
+
+          for _ in $(seq 1 180); do
+            gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/commits/${product}/check-runs?per_page=100" > "$OUT/product-check-runs.json"
+            pending="$(jq '[.check_runs[] | select(.status != "completed")] | length' "$OUT/product-check-runs.json")"
+            if test "$pending" = 0; then break; fi
+            sleep 10
+          done
+          test "$(jq '[.check_runs[] | select(.status != "completed")] | length' "$OUT/product-check-runs.json")" = 0
+          jq -e '[.check_runs[] | select(.conclusion | IN("failure","cancelled","timed_out","action_required","startup_failure","stale"))] | length == 0' "$OUT/product-check-runs.json" >/dev/null
+          jq -r '.check_runs[] | [.name,.conclusion] | @tsv' "$OUT/product-check-runs.json" | LC_ALL=C sort > "$OUT/product-check-summary.tsv"
+          printf '%s\n' "$product_pr" > "$OUT/product-pr-number.txt"
+          printf '%s\n' "$parent" > "$OUT/product-parent.txt"
+          printf '%s\n' "$product" > "$OUT/product-commit.txt"
+          printf '%s\n' "$tree" > "$OUT/product-tree.txt"
+          cp "$paths" "$OUT/product-paths.txt"
+
+      - name: Run independent complete gate on exact product head
+        shell: bash
+        run: |
+          set -euo pipefail
+          product="$(cat "$OUT/product-commit.txt")"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/${PRODUCT_BRANCH}:refs/remotes/kreg-qualifier/product"
+          test "$(git rev-parse refs/remotes/kreg-qualifier/product)" = "$product"
+          git worktree add --detach "$PRODUCT_WORKTREE" "$product"
+          cd "$PRODUCT_WORKTREE"
+          test -z "$(git status --porcelain)"
+          node "$CHECKER_PATH" 2>&1 | tee "$OUT/product-head-checker.log"
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate 2>&1 | tee "$OUT/product-head-complete-gate.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Fetch and gate exact synthetic merge ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          product_pr="$(cat "$OUT/product-pr-number.txt")"
+          parent="$(cat "$OUT/product-parent.txt")"
+          product="$(cat "$OUT/product-commit.txt")"
+          tree="$(cat "$OUT/product-tree.txt")"
+          git fetch --no-tags --filter=blob:none origin "+refs/pull/${product_pr}/merge:refs/remotes/kreg-qualifier/merge"
+          merge="$(git rev-parse refs/remotes/kreg-qualifier/merge)"
+          parents="$(git show -s --format=%P "$merge")"
+          test "$parents" = "$parent $product" || test "$parents" = "$product $parent"
+          test "$(git rev-parse "$merge^{tree}")" = "$tree"
+          printf '%s\n' "$merge" > "$OUT/merge-commit.txt"
+          git worktree add --detach "$MERGE_WORKTREE" "$merge"
+          cd "$MERGE_WORKTREE"
+          test -z "$(git status --porcelain)"
+          node "$CHECKER_PATH" 2>&1 | tee "$OUT/merge-checker.log"
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate 2>&1 | tee "$OUT/merge-complete-gate.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Seal exact merge qualification receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          parent="$(cat "$OUT/product-parent.txt")"
+          product="$(cat "$OUT/product-commit.txt")"
+          tree="$(cat "$OUT/product-tree.txt")"
+          merge="$(cat "$OUT/merge-commit.txt")"
+          product_pr="$(cat "$OUT/product-pr-number.txt")"
+          PARENT="$parent" PRODUCT="$product" TREE="$tree" MERGE="$merge" PRODUCT_PR="$product_pr" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          out=pathlib.Path(os.environ['OUT']); publication=json.loads((out/'verified-publication-receipt.json').read_text())
+          receipt={'schema_version':1,'transaction':'DOCTOR-WHO-CYCLE-008-KREG-PRODUCT-QUALIFICATION-V1','status':'approved-for-exact-product-merge','publication_run':int((out/'publisher-run-id.txt').read_text()),'publication_job':int((out/'publisher-job-id.txt').read_text()),'publication_artifact':int((out/'publisher-artifact-id.txt').read_text()),'publication_artifact_sha256':(out/'publisher-artifact-sha256.txt').read_text().strip(),'publication_receipt_sha256':publication['receipt_sha256'],'product_pr':int(os.environ['PRODUCT_PR']),'product_parent':os.environ['PARENT'],'product_commit':os.environ['PRODUCT'],'product_tree':os.environ['TREE'],'merge_commit':os.environ['MERGE'],'product_path_count':len((out/'product-paths.txt').read_text().splitlines()),'cycle_id':publication['cycle_id'],'product_head_gate_sha256':hashlib.sha256((out/'product-head-complete-gate.log').read_bytes()).hexdigest(),'merge_gate_sha256':hashlib.sha256((out/'merge-complete-gate.log').read_bytes()).hexdigest(),'all_check_runs_terminal_nonfailing':True,'repository_write':False,'product_ready_changed':False,'merge_performed':False,'merge_authorized_separately_only':True}
+          receipt['receipt_sha256']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (out/'product-qualification-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          sha256sum "$OUT/product-qualification-receipt.json" "$OUT/product-head-complete-gate.log" "$OUT/merge-complete-gate.log" > "$OUT/qualification-evidence.sha256"
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main" "+refs/heads/${PRODUCT_BRANCH}:refs/remotes/kreg-qualifier/product-terminal"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$parent"
+          test "$(git rev-parse refs/remotes/kreg-qualifier/product-terminal)" = "$product"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload immutable exact-product qualification packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-product-qualification-v1-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Report exact product qualification boundary
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status='qualification-failed'; product_pr='unavailable'; product='unavailable'; merge='unavailable'; paths='unavailable'; receipt='unavailable'
+          if test -f "$OUT/product-qualification-receipt.json"; then
+            status="$(jq -r .status "$OUT/product-qualification-receipt.json")"
+            product_pr="$(jq -r .product_pr "$OUT/product-qualification-receipt.json")"
+            product="$(jq -r .product_commit "$OUT/product-qualification-receipt.json")"
+            merge="$(jq -r .merge_commit "$OUT/product-qualification-receipt.json")"
+            paths="$(jq -r .product_path_count "$OUT/product-qualification-receipt.json")"
+            receipt="$(jq -r .receipt_sha256 "$OUT/product-qualification-receipt.json")"
+          fi
+          checks='check summary unavailable'; gate='merge gate unavailable'
+          if test -f "$OUT/product-check-summary.tsv"; then checks="$(cat "$OUT/product-check-summary.tsv" | tail -c 12000)"; fi
+          if test -f "$OUT/merge-complete-gate.log"; then gate="$(tail -n 140 "$OUT/merge-complete-gate.log" | tail -c 16000)"; fi
+          body="$RUNNER_TEMP/kreg-product-qualification.md"
+          {
+            printf 'KREG_PRODUCT_QUALIFICATION_V1\n\n'
+            printf '```text\nstatus:     %s\nproduct PR: %s\nproduct:    %s\nmerge ref:  %s\npaths:      %s\nreceipt:    %s\nrun:        %s\n```\n\n' "$status" "$product_pr" "$product" "$merge" "$paths" "$receipt" "$GITHUB_RUN_ID"
+            printf '### Check runs\n\n```text\n%s\n```\n\n' "$checks"
+            printf '### Merge gate tail\n\n```text\n%s\n```\n' "$gate"
+          } > "$body"
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --raw-field body="$(cat "$body")" >/dev/null
