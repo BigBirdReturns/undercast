@@ -1,4 +1,4 @@
-name: operational-evidence-second-desk-publisher-v8-wrapper
+name: operational-evidence-second-desk-publisher-v9-wrapper
 
 "on":
   push:
@@ -9,7 +9,7 @@ name: operational-evidence-second-desk-publisher-v8-wrapper
 permissions: {}
 
 concurrency:
-  group: operational-evidence-second-desk-publisher-v8-wrapper
+  group: operational-evidence-second-desk-publisher-v9-wrapper
   cancel-in-progress: false
 
 jobs:
@@ -28,11 +28,11 @@ jobs:
       REVIEW_BASE: 37d681f419db5ef874b2cc41df1c631c047218d8
       V3_WORKFLOW_BLOB: c28876fda070c0da6df9acde7bf49a4e98d1bda7
       IGNITER_WORKFLOW_BLOB: cb1d999205d927120d7a7a4251621b47a67b31b7
-      V6_WRAPPER_BLOB: 758849be10b98e37e452f73e96157792f369876c
+      V9_WRAPPER_BLOB: f1607d686d6d7d8871de7dd68ec0aa12c40ad336
       WRAPPER_PATH: .github/workflows/operational-evidence-second-desk-publisher-v6-wrapper.yml
-      PRODUCT_BRANCH: agent/operational-evidence-second-desk-product-v8-20260806
-      PRODUCT_TITLE: "Operations: refresh reviewed exact-main reliability evidence (V8)"
-      PUBLISH_ROOT: /tmp/undercast-operational-second-desk-publisher-v8
+      PRODUCT_BRANCH: agent/operational-evidence-second-desk-product-v9-20260806
+      PRODUCT_TITLE: "Operations: refresh reviewed exact-main reliability evidence (V9)"
+      PUBLISH_ROOT: /tmp/undercast-operational-second-desk-publisher-v9
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,11 +61,11 @@ jobs:
           test "$(git diff --name-only "$installer_parent..$INSTALLER_MAIN")" = "$WRAPPER_PATH"
           test "$(git hash-object .github/workflows/operational-evidence-second-desk-publisher.yml)" = "$V3_WORKFLOW_BLOB"
           test "$(git hash-object .github/workflows/operational-evidence-second-desk-workflow-run.yml)" = "$IGNITER_WORKFLOW_BLOB"
-          test "$(git rev-parse "$installer_parent:$WRAPPER_PATH")" = "$V6_WRAPPER_BLOB"
+          test "$(git rev-parse "$installer_parent:$WRAPPER_PATH")" = "$V9_WRAPPER_BLOB"
           test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$INSTALLER_MAIN"
           printf 'INSTALLER_PARENT=%s\n' "$installer_parent" >> "$GITHUB_ENV"
 
-      - name: Recover and execute reviewed V3 publisher as V8
+      - name: Recover and execute reviewed V3 publisher as V9
         shell: bash
         run: |
           set -euo pipefail
@@ -151,23 +151,88 @@ jobs:
             ].join('\n'),
             'reviewed-path overlap guard',
           );
-          source = source.replaceAll('V3', 'V8');
-          writeFileSync('/tmp/operational-evidence-second-desk-publisher-v8.sh', `#!/usr/bin/env bash\n${source}`);
-          NODE
-          bash -n /tmp/operational-evidence-second-desk-publisher-v8.sh
-          sha256sum /tmp/operational-evidence-second-desk-publisher-v8.sh | tee "$PUBLISH_ROOT/diagnostics/executed-script.sha256"
-          bash /tmp/operational-evidence-second-desk-publisher-v8.sh
+          const flowStart = `[[ "$(main_sha)" == "$INSTALLER_MAIN" ]] || fail 'main advanced during artifact review'`;
+          const flowEnd = `[[ "$(main_sha)" == "$INSTALLER_MAIN" ]] || fail 'main advanced before branch publication'`;
+          const startIndex = source.indexOf(flowStart);
+          const endIndex = source.indexOf(flowEnd, startIndex);
+          if (startIndex < 0 || endIndex < 0 || source.indexOf(flowStart, startIndex + 1) >= 0) {
+            throw new Error('candidate publication flow markers drifted');
+          }
+          const committedGateFlow = String.raw`[[ "$(main_sha)" == "$INSTALLER_MAIN" ]] || fail 'main advanced during artifact review'
+          while IFS= read -r path; do
+            mkdir -p "$(dirname "$path")"
+            cp "$root/payload/$path" "$path"
+            cmp -s "$root/payload/$path" "$path" || fail "candidate byte drift: $path"
+          done < "$root/paths"
 
-      - name: Upload exact V8 publication receipt
+          git add --pathspec-from-file="$root/paths"
+          git diff --cached --name-only | LC_ALL=C sort > "$root/staged-paths"
+          diff -u "$root/paths" "$root/staged-paths"
+          staged_count="$(git diff --cached --name-only | wc -l | tr -d '[:space:]')"
+          status_count="$(git status --porcelain=v1 --untracked-files=all | wc -l | tr -d '[:space:]')"
+          [[ "$staged_count" == 27 && "$status_count" == 27 ]] || fail 'product worktree denominator drifted'
+          git diff --cached --check
+
+          ROOT="$root" python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          root = Path(os.environ["ROOT"])
+          manifest = json.loads((root / "artifact" / "manifest.json").read_text())
+          for row in manifest["files"]:
+              blob = subprocess.check_output(["git", "hash-object", row["path"]], text=True).strip()
+              assert blob == row["git_blob"], f"candidate custody blob drifted for {row['path']}"
+          PY
+
+          git config user.name undercast-operations
+          git config user.email undercast-operations@users.noreply.github.com
+          git commit -m 'Operations: refresh reviewed exact-main reliability evidence'
+          product_commit="$(git rev-parse HEAD)"
+          product_tree="$(git rev-parse 'HEAD^{tree}')"
+          [[ "$(git rev-parse HEAD^)" == "$INSTALLER_MAIN" ]] || fail 'product parent drifted'
+          [[ "$(git rev-list --count "$INSTALLER_MAIN..HEAD")" == 1 ]] || fail 'product commit count drifted'
+          [[ -z "$(git status --porcelain=v1 --untracked-files=all)" ]] || fail 'product commit worktree is dirty'
+
+          ROOT="$root" PRODUCT_COMMIT="$product_commit" python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          root = Path(os.environ["ROOT"])
+          commit = os.environ["PRODUCT_COMMIT"]
+          manifest = json.loads((root / "artifact" / "manifest.json").read_text())
+          for row in manifest["files"]:
+              blob = subprocess.check_output(["git", "rev-parse", f"{commit}:{row['path']}"], text=True).strip()
+              assert blob == row["git_blob"], f"product commit custody blob drifted for {row['path']}"
+          PY
+
+          npm ci
+          npx playwright install --with-deps chromium
+          set -o pipefail
+          npm run gate 2>&1 | tee "$root/diagnostics/complete-gate.log"
+          [[ "$(git rev-parse HEAD)" == "$product_commit" ]] || fail 'gate moved product head'
+          [[ -z "$(git status --porcelain=v1 --untracked-files=all)" ]] || fail 'gate left product worktree dirty'
+
+          `;
+          source = source.slice(0, startIndex) + committedGateFlow + source.slice(endIndex);
+          source = source.replaceAll('V3', 'V9');
+          writeFileSync('/tmp/operational-evidence-second-desk-publisher-v9.sh', `#!/usr/bin/env bash\n${source}`);
+          NODE
+          bash -n /tmp/operational-evidence-second-desk-publisher-v9.sh
+          sha256sum /tmp/operational-evidence-second-desk-publisher-v9.sh | tee "$PUBLISH_ROOT/diagnostics/executed-script.sha256"
+          bash /tmp/operational-evidence-second-desk-publisher-v9.sh
+
+      - name: Upload exact V9 publication receipt
         uses: actions/upload-artifact@v4
         with:
-          name: operational-evidence-second-desk-publication-v8-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: /tmp/undercast-operational-second-desk-publisher-v8/receipt
+          name: operational-evidence-second-desk-publication-v9-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/undercast-operational-second-desk-publisher-v9/receipt
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
 
-      - name: Remove partial V8 publication after any later failure
+      - name: Remove partial V9 publication after any later failure
         if: failure()
         shell: bash
         run: |
@@ -180,15 +245,15 @@ jobs:
           if [ -z "$pr" ]; then
             pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$PRODUCT_BRANCH" --state open --json number --jq '.[0].number // empty')"
           fi
-          [ -z "$pr" ] || gh pr close "$pr" --repo "$GITHUB_REPOSITORY" --comment 'Closed automatically because V8 publication did not reach terminal success.'
+          [ -z "$pr" ] || gh pr close "$pr" --repo "$GITHUB_REPOSITORY" --comment 'Closed automatically because V9 publication did not reach terminal success.'
           gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$PRODUCT_BRANCH" >/dev/null 2>&1 || true
 
-      - name: Upload V8 failure diagnostics
+      - name: Upload V9 failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: operational-evidence-second-desk-publication-v8-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: /tmp/undercast-operational-second-desk-publisher-v8
+          name: operational-evidence-second-desk-publication-v9-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/undercast-operational-second-desk-publisher-v9
           if-no-files-found: ignore
           retention-days: 14
           compression-level: 0
