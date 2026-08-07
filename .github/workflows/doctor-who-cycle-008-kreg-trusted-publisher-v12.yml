@@ -1,0 +1,461 @@
+name: doctor-who-cycle-008-kreg-trusted-publisher-v12
+
+"on":
+  workflow_run:
+    workflows: ["doctor-who-cycle-008-kreg-final-product-review-v11"]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-trusted-publisher-v12
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.name == 'doctor-who-cycle-008-kreg-final-product-review-v11' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_branch == 'agent/doctor-who-cycle-008-kreg-final-product-review-v11' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      handoff_id: ${{ steps.upload.outputs.artifact-id }}
+      handoff_digest: ${{ steps.upload.outputs.artifact-digest }}
+      publication_main: ${{ steps.settle.outputs.publication_main }}
+      publication_tree: ${{ steps.settle.outputs.publication_tree }}
+      source_run: ${{ steps.source.outputs.source_run }}
+      source_artifact: ${{ steps.source.outputs.source_artifact }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SELF: .github/workflows/doctor-who-cycle-008-kreg-trusted-publisher-v12.yml
+      OUT: /tmp/doctor-who-cycle-008-kreg-trusted-publisher-v12-verify
+      SOURCE_RUN: ${{ github.event.workflow_run.id }}
+      SOURCE_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      SOURCE_HEAD: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_BRANCH: agent/doctor-who-cycle-008-kreg-final-product-review-v11
+      SOURCE_WORKFLOW: doctor-who-cycle-008-kreg-final-product-review-v11
+      TASK_ID: ap_469d79ea29fd7f877395d20f
+      LEASE_ID: lease_e65f837070361eacbb1abd46
+      WALL_ID: UC-1353
+      EXPECTED_PATHS: "48"
+      MEDIA_SHA256: 5d19f72cbe08648568c84469287dfcd14a9c0789156cd3d740edf4c1c5bb0622
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact source run, review PR, and immutable artifact
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,source,handoff,work,diagnostics}
+          publication_main="$(git rev-parse HEAD)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$publication_main"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > "$OUT/api/source-run.json"
+          jq -e \
+            --argjson run "$SOURCE_RUN" --argjson attempt "$SOURCE_ATTEMPT" --arg head "$SOURCE_HEAD" --arg branch "$SOURCE_BRANCH" --arg workflow "$SOURCE_WORKFLOW" \
+            '.id==$run and .run_attempt==$attempt and .head_sha==$head and .head_branch==$branch and .name==$workflow and .event=="pull_request" and .status=="completed" and .conclusion=="success" and .repository.full_name==env.GITHUB_REPOSITORY' \
+            "$OUT/api/source-run.json" >/dev/null
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$SOURCE_BRANCH" --jq '.object.sha')" = "$SOURCE_HEAD"
+          gh api "/repos/$GITHUB_REPOSITORY/commits/$SOURCE_HEAD/pulls" -H 'Accept: application/vnd.github+json' > "$OUT/api/source-prs.json"
+          jq -e --arg branch "$SOURCE_BRANCH" '[.[] | select(.head.ref==$branch and .base.ref=="main" and .state=="open" and .draft==true and .merged_at==null)] | length==1' "$OUT/api/source-prs.json" >/dev/null
+          source_pr="$(jq -r --arg branch "$SOURCE_BRANCH" '.[] | select(.head.ref==$branch and .base.ref=="main" and .state=="open" and .draft==true and .merged_at==null) | .number' "$OUT/api/source-prs.json")"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/artifacts?per_page=100" > "$OUT/api/source-artifacts.json"
+          artifact="$(jq -c --arg name "doctor-who-cycle-008-kreg-final-product-review-v11-$SOURCE_RUN-attempt-$SOURCE_ATTEMPT" '[.artifacts[] | select(.name==$name and .expired==false)] | if length==1 then .[0] else empty end' "$OUT/api/source-artifacts.json")"
+          test -n "$artifact"
+          artifact_id="$(jq -r '.id' <<<"$artifact")"
+          artifact_digest="$(jq -r '.digest' <<<"$artifact")"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$OUT/source/review.zip"
+          test "$(sha256sum "$OUT/source/review.zip" | awk '{print $1}')" = "${artifact_digest#sha256:}"
+          ZIP="$OUT/source/review.zip" TARGET="$OUT/source/review" python3 - <<'PY'
+          import os,pathlib,zipfile
+          z=pathlib.Path(os.environ['ZIP']); target=pathlib.Path(os.environ['TARGET']); target.mkdir()
+          with zipfile.ZipFile(z) as f:
+              names=f.namelist(); assert len(names)==len(set(names))
+              for i in f.infolist():
+                  p=pathlib.PurePosixPath(i.filename)
+                  assert not p.is_absolute() and '..' not in p.parts and not i.is_dir()
+                  data=f.read(i); out=target/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(data)
+          PY
+          printf 'SOURCE_PR=%s\nSOURCE_ARTIFACT=%s\nSOURCE_ARTIFACT_DIGEST=%s\nPUBLICATION_MAIN=%s\n' \
+            "$source_pr" "$artifact_id" "$artifact_digest" "$publication_main" >> "$GITHUB_ENV"
+          printf 'source_run=%s\nsource_artifact=%s\n' "$SOURCE_RUN" "$artifact_id" >> "$GITHUB_OUTPUT"
+
+      - name: Verify reviewed product packet without executing artifact code
+        shell: bash
+        run: |
+          set -euo pipefail
+          review="$OUT/source/review/review"
+          receipt="$review/publication-review-receipt.json"
+          paths="$review/reviewed-final-paths.txt"
+          archive="$review/reviewed-final-product.tar.gz"
+          files="$review/reviewed-final-product-files.json"
+          for p in "$receipt" "$paths" "$archive" "$files" "$review/SHA256SUMS.pre" "$review/SHA256SUMS"; do test -f "$p"; done
+          REVIEW="$review" python3 - <<'PY'
+          import hashlib,json,os,tarfile
+          from pathlib import Path
+          root=Path(os.environ['REVIEW'])
+          for line in (root/'SHA256SUMS.pre').read_text().splitlines():
+              digest,original=line.split(None,1); rel=original.split('/review/',1)[-1]; p=root/rel
+              assert p.is_file(),rel
+              assert hashlib.sha256(p.read_bytes()).hexdigest()==digest,rel
+          assert hashlib.sha256((root/'SHA256SUMS.pre').read_bytes()).hexdigest()==(root/'SHA256SUMS').read_text().split()[0]
+          receipt=json.loads((root/'publication-review-receipt.json').read_text()); identity=receipt.pop('identity')
+          assert hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()==identity
+          assert receipt['status']=='approved-for-publication'
+          assert receipt['task']==os.environ['TASK_ID'] and receipt['lease']==os.environ['LEASE_ID'] and receipt['wall_id']==os.environ['WALL_ID']
+          assert receipt['path_count']==int(os.environ['EXPECTED_PATHS']) and receipt['independent_final_gate']=='pass'
+          assert receipt['repository_write'] is False and receipt['merge_authority'] is False and receipt['cycle_009_authorized'] is False and receipt['outside_human_dependency'] is False
+          paths=(root/'reviewed-final-paths.txt').read_text().splitlines(); rows=json.loads((root/'reviewed-final-product-files.json').read_text())
+          assert len(paths)==int(os.environ['EXPECTED_PATHS']) and [r['path'] for r in rows]==paths
+          assert paths==sorted(paths) and len(paths)==len(set(paths))
+          with tarfile.open(root/'reviewed-final-product.tar.gz','r:gz') as tf:
+              members=tf.getmembers(); names=[m.name for m in members]
+              assert names==paths and len(names)==len(set(names))
+              for m,r in zip(members,rows):
+                  p=Path(m.name); assert not p.is_absolute() and '..' not in p.parts and m.isfile() and not m.issym() and not m.islnk()
+                  data=tf.extractfile(m).read(); assert len(data)==r['bytes'] and hashlib.sha256(data).hexdigest()==r['sha256']
+                  assert (m.mode & 0o7777)==(int(r['git_mode'],8)&0o7777)
+          PY
+          cp "$paths" "$OUT/handoff/product-paths.txt"
+          cp "$archive" "$OUT/handoff/product.tar.gz"
+          cp "$files" "$OUT/handoff/product-files.json"
+          cp "$receipt" "$OUT/handoff/source-review-receipt.json"
+
+      - name: Recompose reviewed bytes over publication main and run complete gate
+        id: settle
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_main="$(jq -r '.review_main' "$OUT/handoff/source-review-receipt.json")"
+          git merge-base --is-ancestor "$source_main" "$PUBLICATION_MAIN"
+          git diff --name-only "$source_main".."$PUBLICATION_MAIN" | LC_ALL=C sort > "$OUT/diagnostics/source-to-publication-main-paths.txt"
+          comm -12 "$OUT/handoff/product-paths.txt" "$OUT/diagnostics/source-to-publication-main-paths.txt" > "$OUT/diagnostics/main-product-overlap.txt"
+          test ! -s "$OUT/diagnostics/main-product-overlap.txt"
+          work="$OUT/work/publication"
+          git worktree add --detach "$work" "$PUBLICATION_MAIN"
+          tar -xzf "$OUT/handoff/product.tar.gz" -C "$work"
+          git -C "$work" add --pathspec-from-file="$OUT/handoff/product-paths.txt"
+          git -C "$work" config user.name undercast-cycle-008-publisher-verifier
+          git -C "$work" config user.email cycle-008-publisher-verifier@users.noreply.github.com
+          git -C "$work" commit -m 'Doctor Who: verify cycle 008 Kreg publication tree' >/dev/null
+          verified="$(git -C "$work" rev-parse HEAD)"
+          publication_tree="$(git -C "$work" rev-parse 'HEAD^{tree}')"
+          test "$(git -C "$work" show -s --format=%P HEAD)" = "$PUBLICATION_MAIN"
+          git -C "$work" diff --name-only "$PUBLICATION_MAIN"..HEAD | LC_ALL=C sort > "$OUT/diagnostics/verified-product-paths.txt"
+          diff -u "$OUT/handoff/product-paths.txt" "$OUT/diagnostics/verified-product-paths.txt"
+          test "$(git -C "$work" show "$verified:images/uc-1353-still.jpg" | sha256sum | awk '{print $1}')" = "$MEDIA_SHA256"
+          test -z "$(git -C "$work" status --porcelain)"
+          cd "$work"
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate 2>&1 | tee "$OUT/diagnostics/publication-complete-gate.log"
+          test -z "$(git status --porcelain)"
+          ROOT="$OUT" REPO="$work" VERIFIED="$verified" TREE="$publication_tree" python3 - <<'PY'
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); repo=Path(os.environ['REPO']); verified=os.environ['VERIFIED']; rows=json.loads((root/'handoff/product-files.json').read_text())
+          for r in rows:
+              data=subprocess.check_output(['git','-C',str(repo),'show',f'{verified}:{r["path"]}'])
+              blob=subprocess.check_output(['git','-C',str(repo),'rev-parse',f'{verified}:{r["path"]}'],text=True).strip()
+              mode=subprocess.check_output(['git','-C',str(repo),'ls-tree',verified,'--',r['path']],text=True).split()[0]
+              assert len(data)==r['bytes'] and hashlib.sha256(data).hexdigest()==r['sha256'] and blob==r['git_blob'] and mode==r['git_mode']
+          review=json.loads((root/'handoff/source-review-receipt.json').read_text())
+          settlement={
+            'status':'verified-for-trusted-publication','publisher_run':int(os.environ['GITHUB_RUN_ID']),'publisher_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),
+            'source_run':int(os.environ['SOURCE_RUN']),'source_attempt':int(os.environ['SOURCE_ATTEMPT']),'source_head':os.environ['SOURCE_HEAD'],
+            'source_pr':int(os.environ['SOURCE_PR']),'source_artifact':int(os.environ['SOURCE_ARTIFACT']),'source_artifact_digest':os.environ['SOURCE_ARTIFACT_DIGEST'],
+            'publication_main':os.environ['PUBLICATION_MAIN'],'publication_tree':os.environ['TREE'],'path_count':len(rows),
+            'task':os.environ['TASK_ID'],'lease':os.environ['LEASE_ID'],'wall_id':os.environ['WALL_ID'],'cycle_id':review['cycle_id'],
+            'source_review_identity':review['identity'],'media_sha256':os.environ['MEDIA_SHA256'],
+            'product_branch':f"agent/doctor-who-cycle-008-kreg-product-v12-{os.environ['SOURCE_RUN']}",
+            'product_title':'Doctor Who: complete reviewed cycle 008 for Kreg',
+            'repository_write_authorized':True,'merge_authority':False,'cycle_009_authorized':False,'outside_human_dependency':False,
+          }
+          canonical=json.dumps(settlement,sort_keys=True,separators=(',',':')).encode(); settlement['identity']=hashlib.sha256(canonical).hexdigest()
+          (root/'handoff/settlement.json').write_text(json.dumps(settlement,indent=2,sort_keys=True)+'\n')
+          PY
+          find "$OUT/handoff" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/handoff/SHA256SUMS.pre"
+          sha256sum "$OUT/handoff/SHA256SUMS.pre" > "$OUT/handoff/SHA256SUMS"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$PUBLICATION_MAIN"
+          printf 'publication_main=%s\npublication_tree=%s\n' "$PUBLICATION_MAIN" "$publication_tree" >> "$GITHUB_OUTPUT"
+          git worktree remove --force "$work"
+
+      - name: Upload code-free trusted-publication handoff
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-publication-handoff-v12-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-trusted-publisher-v12-verify/handoff
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  publish:
+    needs: verify
+    if: needs.verify.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUT: /tmp/doctor-who-cycle-008-kreg-trusted-publisher-v12-publish
+      HANDOFF_ID: ${{ needs.verify.outputs.handoff_id }}
+      HANDOFF_DIGEST: ${{ needs.verify.outputs.handoff_digest }}
+      PUBLICATION_MAIN: ${{ needs.verify.outputs.publication_main }}
+      PUBLICATION_TREE: ${{ needs.verify.outputs.publication_tree }}
+      SOURCE_RUN: ${{ needs.verify.outputs.source_run }}
+      SOURCE_ARTIFACT: ${{ needs.verify.outputs.source_artifact }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.publication_main }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact same-attempt handoff and publication main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,handoff,diagnostics,receipt,product}
+          test "$(git rev-parse HEAD)" = "$PUBLICATION_MAIN"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$PUBLICATION_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$HANDOFF_ID" > "$OUT/api/handoff-metadata.json"
+          normalized="${HANDOFF_DIGEST#sha256:}"
+          jq -e --argjson id "$HANDOFF_ID" --arg digest "sha256:$normalized" --argjson run "$GITHUB_RUN_ID" '.id==$id and .expired==false and .digest==$digest and .workflow_run.id==$run' "$OUT/api/handoff-metadata.json" >/dev/null
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$HANDOFF_ID/zip" > "$OUT/handoff.zip"
+          test "$(sha256sum "$OUT/handoff.zip" | awk '{print $1}')" = "$normalized"
+          ZIP="$OUT/handoff.zip" TARGET="$OUT/handoff" python3 - <<'PY'
+          import os,pathlib,zipfile
+          z=pathlib.Path(os.environ['ZIP']); target=pathlib.Path(os.environ['TARGET']); target.mkdir()
+          with zipfile.ZipFile(z) as f:
+              names=f.namelist(); assert len(names)==len(set(names))
+              for i in f.infolist():
+                  p=pathlib.PurePosixPath(i.filename)
+                  assert not p.is_absolute() and '..' not in p.parts and not i.is_dir()
+                  data=f.read(i); out=target/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(data)
+          PY
+          ROOT="$OUT/handoff" python3 - <<'PY'
+          import hashlib,json,os,tarfile
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          expected={'settlement.json','product.tar.gz','product-files.json','product-paths.txt','source-review-receipt.json','SHA256SUMS.pre','SHA256SUMS'}
+          assert {p.name for p in root.iterdir() if p.is_file()}==expected
+          for line in (root/'SHA256SUMS.pre').read_text().splitlines():
+              digest,original=line.split(None,1); p=root/Path(original).name
+              assert p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==digest
+          assert hashlib.sha256((root/'SHA256SUMS.pre').read_bytes()).hexdigest()==(root/'SHA256SUMS').read_text().split()[0]
+          settlement=json.loads((root/'settlement.json').read_text()); identity=settlement.pop('identity')
+          assert hashlib.sha256(json.dumps(settlement,sort_keys=True,separators=(',',':')).encode()).hexdigest()==identity
+          assert settlement['status']=='verified-for-trusted-publication'
+          assert settlement['publisher_run']==int(os.environ['GITHUB_RUN_ID']) and settlement['publisher_attempt']==int(os.environ['GITHUB_RUN_ATTEMPT'])
+          assert settlement['publication_main']==os.environ['PUBLICATION_MAIN'] and settlement['publication_tree']==os.environ['PUBLICATION_TREE']
+          assert settlement['source_run']==int(os.environ['SOURCE_RUN']) and settlement['source_artifact']==int(os.environ['SOURCE_ARTIFACT'])
+          assert settlement['path_count']==48 and settlement['repository_write_authorized'] is True and settlement['merge_authority'] is False and settlement['cycle_009_authorized'] is False
+          paths=(root/'product-paths.txt').read_text().splitlines(); rows=json.loads((root/'product-files.json').read_text())
+          assert len(paths)==48 and [r['path'] for r in rows]==paths and paths==sorted(paths) and len(paths)==len(set(paths))
+          with tarfile.open(root/'product.tar.gz','r:gz') as tf:
+              members=tf.getmembers(); names=[m.name for m in members]
+              assert names==paths and len(names)==len(set(names))
+              for m,r in zip(members,rows):
+                  p=Path(m.name); assert not p.is_absolute() and '..' not in p.parts and m.isfile() and not m.issym() and not m.islnk()
+                  data=tf.extractfile(m).read(); assert len(data)==r['bytes'] and hashlib.sha256(data).hexdigest()==r['sha256']
+                  assert (m.mode&0o7777)==(int(r['git_mode'],8)&0o7777)
+          (root/'settlement.verified.json').write_text(json.dumps({**settlement,'identity':identity},indent=2,sort_keys=True)+'\n')
+          PY
+          cp "$OUT/handoff/settlement.verified.json" "$OUT/receipt/settlement.json"
+          jq -r '.product_branch' "$OUT/handoff/settlement.json" > "$OUT/product-branch.txt"
+          printf 'PRODUCT_BRANCH=%s\n' "$(cat "$OUT/product-branch.txt")" >> "$GITHUB_ENV"
+
+      - name: Rebind source review and absence of competing product ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$PUBLICATION_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > "$OUT/api/source-run.json"
+          jq -e '.status=="completed" and .conclusion=="success" and .event=="pull_request" and .name=="doctor-who-cycle-008-kreg-final-product-review-v11" and .head_branch=="agent/doctor-who-cycle-008-kreg-final-product-review-v11"' "$OUT/api/source-run.json" >/dev/null
+          if gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$PRODUCT_BRANCH" > "$OUT/api/preexisting-ref.json" 2>/dev/null; then
+            echo "product ref already exists" >&2
+            exit 1
+          fi
+          gh api "/repos/$GITHUB_REPOSITORY/pulls?state=all&head=BigBirdReturns:$PRODUCT_BRANCH&per_page=100" > "$OUT/api/preexisting-prs.json"
+          jq -e 'length==0' "$OUT/api/preexisting-prs.json" >/dev/null
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$PUBLICATION_MAIN"
+
+      - name: Publish exact verified blobs, tree, commit, and ref
+        id: gitdata
+        shell: bash
+        run: |
+          set -euo pipefail
+          main_tree="$(gh api "/repos/$GITHUB_REPOSITORY/git/commits/$PUBLICATION_MAIN" --jq '.tree.sha')"
+          printf '%s\n' "$main_tree" > "$OUT/main-tree.txt"
+          ROOT="$OUT" REPO="$GITHUB_REPOSITORY" MAIN="$PUBLICATION_MAIN" MAIN_TREE="$main_tree" python3 - <<'PY'
+          import base64,json,os,subprocess,tarfile
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); handoff=root/'handoff'; repo=os.environ['REPO']; main=os.environ['MAIN']
+          rows=json.loads((handoff/'product-files.json').read_text())
+          def live_main():
+              return subprocess.check_output(['gh','api',f'/repos/{repo}/git/ref/heads/main','--jq','.object.sha'],text=True).strip()
+          assert live_main()==main
+          blobs={}
+          with tarfile.open(handoff/'product.tar.gz','r:gz') as tf:
+              members={m.name:m for m in tf.getmembers()}
+              for index,r in enumerate(rows,1):
+                  assert live_main()==main
+                  data=tf.extractfile(members[r['path']]).read()
+                  payload=json.dumps({'content':base64.b64encode(data).decode(),'encoding':'base64'}).encode()
+                  raw=subprocess.check_output(['gh','api','--method','POST',f'/repos/{repo}/git/blobs','--input','-'],input=payload)
+                  sha=json.loads(raw)['sha']
+                  assert sha==r['git_blob'],(r['path'],sha,r['git_blob'])
+                  blobs[r['path']]=sha
+                  assert live_main()==main
+          tree={'base_tree':os.environ['MAIN_TREE'],'tree':[{'path':r['path'],'mode':r['git_mode'],'type':'blob','sha':blobs[r['path']]} for r in rows]}
+          (root/'tree-request.json').write_text(json.dumps(tree,indent=2)+'\n')
+          (root/'published-blobs.json').write_text(json.dumps(blobs,indent=2,sort_keys=True)+'\n')
+          PY
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$PUBLICATION_MAIN"
+          tree_sha="$(gh api --method POST "/repos/$GITHUB_REPOSITORY/git/trees" --input "$OUT/tree-request.json" --jq '.sha')"
+          test "$tree_sha" = "$PUBLICATION_TREE"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$PUBLICATION_MAIN"
+          jq -n --arg message 'Doctor Who: complete reviewed cycle 008 for Kreg' --arg tree "$tree_sha" --arg parent "$PUBLICATION_MAIN" \
+            '{message:$message,tree:$tree,parents:[$parent]}' > "$OUT/commit-request.json"
+          commit_sha="$(gh api --method POST "/repos/$GITHUB_REPOSITORY/git/commits" --input "$OUT/commit-request.json" --jq '.sha')"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$PUBLICATION_MAIN"
+          jq -n --arg ref "refs/heads/$PRODUCT_BRANCH" --arg sha "$commit_sha" '{ref:$ref,sha:$sha}' > "$OUT/ref-request.json"
+          gh api --method POST "/repos/$GITHUB_REPOSITORY/git/refs" --input "$OUT/ref-request.json" > "$OUT/api/created-ref.json"
+          printf '%s\n' "$commit_sha" > "$OUT/product-commit.txt"
+          printf '%s\n' "$tree_sha" > "$OUT/product-tree.txt"
+          touch "$OUT/ref-created"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$PUBLICATION_MAIN"
+          printf 'product_commit=%s\nproduct_tree=%s\n' "$commit_sha" "$tree_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Create and verify exact draft product PR
+        id: product_pr
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit='${{ steps.gitdata.outputs.product_commit }}'
+          tree='${{ steps.gitdata.outputs.product_tree }}'
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$PUBLICATION_MAIN"
+          body_file="$OUT/product-pr-body.md"
+          cat > "$body_file" <<'EOF'
+          ## Reviewed Doctor Who cycle 008 product
+
+          This draft contains the exact forty-eight-path Kreg final product approved by the read-only V11 final-product desk and recomposed over the publication main by the trusted V12 verifier.
+
+          ```text
+          task:       ap_469d79ea29fd7f877395d20f
+          lease:      lease_e65f837070361eacbb1abd46
+          wall ID:    UC-1353
+          performer:  Dan Starkey
+          role:       Kreg
+          mode:       voice
+
+          queue before: 309 queued / 7 resolved / 0 in flight
+          queue after:  308 queued / 8 resolved / 0 in flight
+          product paths: 48
+          ```
+
+          The trusted publisher verified every file digest and Git blob, reproduced the exact product tree over current main, and ran the complete repository and rendered Chromium gate before publication. This PR has one commit, no workflow or transport paths, no force update, and no merge authority. Merge only after terminal review of this exact head.
+          EOF
+          sed -i 's/^          //' "$body_file"
+          jq -n --arg title "$(jq -r '.product_title' "$OUT/handoff/settlement.json")" --arg head "$PRODUCT_BRANCH" --arg base main --rawfile body "$body_file" \
+            '{title:$title,head:$head,base:$base,body:$body,draft:true}' > "$OUT/pr-request.json"
+          gh api --method POST "/repos/$GITHUB_REPOSITORY/pulls" --input "$OUT/pr-request.json" > "$OUT/api/product-pr.json"
+          pr="$(jq -r '.number' "$OUT/api/product-pr.json")"
+          printf '%s\n' "$pr" > "$OUT/product-pr-number.txt"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/product-pr-terminal.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr/files?per_page=100" > "$OUT/api/product-pr-files.json"
+          gh api "/repos/$GITHUB_REPOSITORY/git/commits/$commit" > "$OUT/api/product-commit.json"
+          jq -e --arg branch "$PRODUCT_BRANCH" --arg main "$PUBLICATION_MAIN" --arg commit "$commit" \
+            '.state=="open" and .draft==true and .merged==false and .base.ref=="main" and .base.sha==$main and .head.ref==$branch and .head.sha==$commit and .commits==1 and .changed_files==48' \
+            "$OUT/api/product-pr-terminal.json" >/dev/null
+          jq -r '.[].filename' "$OUT/api/product-pr-files.json" | LC_ALL=C sort > "$OUT/product-pr-paths.txt"
+          diff -u "$OUT/handoff/product-paths.txt" "$OUT/product-pr-paths.txt"
+          jq -e --arg parent "$PUBLICATION_MAIN" --arg tree "$tree" '.parents|length==1 and .[0].sha==$parent' "$OUT/api/product-commit.json" >/dev/null
+          test "$(jq -r '.tree.sha' "$OUT/api/product-commit.json")" = "$tree"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$PRODUCT_BRANCH" --jq '.object.sha')" = "$commit"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$PUBLICATION_MAIN"
+          printf 'product_pr=%s\n' "$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Seal trusted publication receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" COMMIT='${{ steps.gitdata.outputs.product_commit }}' TREE='${{ steps.gitdata.outputs.product_tree }}' PR='${{ steps.product_pr.outputs.product_pr }}' python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); settlement=json.loads((root/'handoff/settlement.json').read_text())
+          receipt={
+            'status':'draft-product-published','publisher_run':int(os.environ['GITHUB_RUN_ID']),'publisher_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),
+            'source_run':int(os.environ['SOURCE_RUN']),'source_artifact':int(os.environ['SOURCE_ARTIFACT']),
+            'publication_main':os.environ['PUBLICATION_MAIN'],'product_branch':os.environ['PRODUCT_BRANCH'],
+            'product_commit':os.environ['COMMIT'],'product_tree':os.environ['TREE'],'product_pr':int(os.environ['PR']),
+            'path_count':48,'task':settlement['task'],'lease':settlement['lease'],'wall_id':settlement['wall_id'],'cycle_id':settlement['cycle_id'],
+            'queue_before':{'queued':309,'resolved':7,'in_flight':0},'queue_after':{'queued':308,'resolved':8,'in_flight':0},
+            'product_merge_authority':False,'force_update':False,'cycle_009_authorized':False,'outside_human_dependency':False,
+          }
+          canonical=json.dumps(receipt,sort_keys=True,separators=(',',':')).encode(); receipt['identity']=hashlib.sha256(canonical).hexdigest()
+          (root/'receipt/trusted-publication-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          cp "$OUT/handoff/settlement.json" "$OUT/receipt/settlement.json"
+          cp "$OUT/handoff/product-files.json" "$OUT/receipt/product-files.json"
+          cp "$OUT/handoff/product-paths.txt" "$OUT/receipt/product-paths.txt"
+          find "$OUT/receipt" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/receipt/SHA256SUMS.pre"
+          sha256sum "$OUT/receipt/SHA256SUMS.pre" > "$OUT/receipt/SHA256SUMS"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$PUBLICATION_MAIN"
+
+      - name: Upload trusted publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-trusted-publication-v12-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-trusted-publisher-v12-publish/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Remove partial product after any failure
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr=""
+          [ ! -f "$OUT/product-pr-number.txt" ] || pr="$(cat "$OUT/product-pr-number.txt")"
+          if [ -n "$pr" ]; then
+            gh api --method PATCH "/repos/$GITHUB_REPOSITORY/pulls/$pr" -f state=closed >/dev/null 2>&1 || true
+          fi
+          if [ -f "$OUT/ref-created" ] && [ -f "$OUT/product-commit.txt" ]; then
+            expected="$(cat "$OUT/product-commit.txt")"
+            observed="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$PRODUCT_BRANCH" --jq '.object.sha' 2>/dev/null || true)"
+            if [ "$observed" = "$expected" ]; then
+              gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$PRODUCT_BRANCH" >/dev/null 2>&1 || true
+            fi
+          fi
+
+      - name: Upload trusted-publisher failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-trusted-publisher-v12-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-trusted-publisher-v12-publish
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
