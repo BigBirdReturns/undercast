@@ -16,10 +16,11 @@ concurrency:
 
 env:
   SELF: .github/workflows/doctor-who-cycle-008-kreg-v2-payload-recovery.yml
-  EXPECTED_MAIN: a22fc2787686cb614e143c36d45f03f648329196
+  EXPECTED_FLOOR: a22fc2787686cb614e143c36d45f03f648329196
   FIRST_HEAD: 49396be81682fee5157729a1c5be48b0b75c6b81
   SECOND_HEAD: 1803becc38844a8703fa559e508369ccdba7ccc0
   THIRD_HEAD: 3ae0b3ecd8bec57a43626ca3e9288a2c111623bf
+  FOURTH_HEAD: 4a33d79d48fab49ef6073ae187b8052e8cb4a45f
   HEAD_SHA: ${{ github.event.pull_request.head.sha }}
   HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
   AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-v2-payload-recovery-pr
@@ -51,7 +52,7 @@ jobs:
           filter: blob:none
           persist-credentials: false
 
-      - name: Bind exact four-commit recovery carrier
+      - name: Bind exact five-commit carrier and descendant-safe main
         shell: bash
         run: |
           set -euo pipefail
@@ -59,24 +60,34 @@ jobs:
           mkdir -p "$OUT/shards" "$OUT/extracted"
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
           test "$HEAD_BRANCH" = "$AUTHORIZED_BRANCH"
-          test "$(git show -s --format=%P HEAD)" = "$THIRD_HEAD"
+          test "$(git show -s --format=%P HEAD)" = "$FOURTH_HEAD"
+          test "$(git show -s --format=%P "$FOURTH_HEAD")" = "$THIRD_HEAD"
           test "$(git show -s --format=%P "$THIRD_HEAD")" = "$SECOND_HEAD"
           test "$(git show -s --format=%P "$SECOND_HEAD")" = "$FIRST_HEAD"
-          test "$(git show -s --format=%P "$FIRST_HEAD")" = "$EXPECTED_MAIN"
-          test "$(git rev-list --count "$EXPECTED_MAIN"..HEAD)" = "4"
-          test "$(git merge-base "$EXPECTED_MAIN" HEAD)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%P "$FIRST_HEAD")" = "$EXPECTED_FLOOR"
+          test "$(git rev-list --count "$EXPECTED_FLOOR"..HEAD)" = "5"
+          test "$(git merge-base "$EXPECTED_FLOOR" HEAD)" = "$EXPECTED_FLOOR"
           printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
-          git diff --name-only "$EXPECTED_MAIN"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          git diff --name-only "$EXPECTED_FLOOR"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
           diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+
           git fetch --no-tags --filter=blob:none origin \
             "+refs/heads/main:refs/remotes/origin/main" \
             "+refs/heads/${V2_BRANCH}:refs/remotes/origin/${V2_BRANCH}"
-          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          live_main="$(git rev-parse refs/remotes/origin/main)"
+          test "$(git merge-base "$EXPECTED_FLOOR" "$live_main")" = "$EXPECTED_FLOOR"
+          successor_commits="$(git rev-list --count "$EXPECTED_FLOOR".."$live_main")"
+          test "$successor_commits" -le 16
+          git diff --name-only "$EXPECTED_FLOOR".."$live_main" | LC_ALL=C sort -u > "$OUT/main-successor-paths.txt"
+          if test -s "$OUT/main-successor-paths.txt"; then
+            test -z "$(grep -Ev '^\.github/workflows/operational-evidence-.*\.yml$' "$OUT/main-successor-paths.txt" || true)"
+          fi
           test "$(git rev-parse refs/remotes/origin/${V2_BRANCH})" = "$V2_HEAD"
           git diff --quiet
           git diff --cached --quiet
-          printf 'head=%s\nmain=%s\ncarrier_tree=%s\n' \
-            "$HEAD_SHA" "$EXPECTED_MAIN" "$(git rev-parse 'HEAD^{tree}')" \
+          printf '%s\n' "$live_main" > "$OUT/live-main.txt"
+          printf 'head=%s\nfloor=%s\nlive_main=%s\nsuccessor_commits=%s\ncarrier_tree=%s\n' \
+            "$HEAD_SHA" "$EXPECTED_FLOOR" "$live_main" "$successor_commits" "$(git rev-parse 'HEAD^{tree}')" \
             > "$OUT/carrier-identity.txt"
 
       - name: Bind and diagnose exact two-commit V2 shard carrier
@@ -176,12 +187,12 @@ jobs:
           sha256sum "$OUT/payload.b64" "$OUT/payload.tar.gz" > "$OUT/payload-sha256.txt"
           find "$OUT/extracted" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/extracted-sha256.txt"
 
-      - name: Rebind unchanged canonical main
+      - name: Rebind unchanged live main
         shell: bash
         run: |
           set -euo pipefail
           git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
-          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$(cat "$OUT/live-main.txt")"
           git diff --quiet
           git diff --cached --quiet
 
