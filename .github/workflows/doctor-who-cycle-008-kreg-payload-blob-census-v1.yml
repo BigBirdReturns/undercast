@@ -1,0 +1,195 @@
+name: doctor-who-cycle-008-kreg-payload-blob-census-v1
+
+"on":
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-payload-blob-census-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-payload-blob-census-v1-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  census:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-payload-blob-census-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SELF: .github/workflows/doctor-who-cycle-008-kreg-payload-blob-census-v1.yml
+      AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-payload-blob-census-v1
+      AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+      AUTHORIZED_PR: ${{ github.event.pull_request.number }}
+      OUT: /tmp/doctor-who-cycle-008-kreg-payload-blob-census-v1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: true
+
+      - name: Bind exact read-only census carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,receipt}
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test "$(git show -s --format=%P HEAD | wc -w | tr -d '[:space:]')" = 1
+          floor="$(git rev-parse HEAD^)"
+          test "$(git rev-list --count "$floor"..HEAD)" = 1
+          test "$(git diff --name-only "$floor"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$floor"...HEAD)" = $'A\t'"$SELF"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$AUTHORIZED_PR" > "$OUT/api/pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$AUTHORIZED_PR/files?per_page=100" > "$OUT/api/pr-files.json"
+          ROOT="$OUT" FLOOR="$floor" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])/'api'
+          pr=json.loads((root/'pr.json').read_text())
+          files=json.loads((root/'pr-files.json').read_text())
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['ref']=='main' and pr['base']['sha']==os.environ['FLOOR']
+          assert pr['head']['ref']==os.environ['AUTHORIZED_BRANCH'] and pr['head']['sha']==os.environ['AUTHORIZED_HEAD']
+          assert pr['commits']==1 and pr['changed_files']==1
+          assert len(files)==1 and files[0]['filename']==os.environ['SELF'] and files[0]['status']=='added'
+          PY
+          printf 'FLOOR_MAIN=%s\n' "$floor" >> "$GITHUB_ENV"
+
+      - name: Fetch preserved branch and pull-request object graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags --filter=blob:limit=100k origin \
+            '+refs/heads/*:refs/remotes/origin/*' \
+            '+refs/pull/*/head:refs/remotes/pull/*/head'
+          git for-each-ref --format='%(refname) %(objectname)' refs/remotes/origin refs/remotes/pull \
+            | LC_ALL=C sort > "$OUT/reachable-refs.txt"
+          test -s "$OUT/reachable-refs.txt"
+          git rev-list --objects --all > "$OUT/reachable-objects.txt"
+          test -s "$OUT/reachable-objects.txt"
+
+      - name: Locate exact materializer and checker custody hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from collections import defaultdict
+          from pathlib import Path
+
+          root=Path(os.environ['ROOT'])
+          targets={
+              'materializer_payload_text':'7f010128a811fa8022778ae4faa1934122d81b87f4f85ed34b367422bfaeece5',
+              'materializer_gzip':'916229ba540026af76e12d24cd754a90f51f91d214346c1f02c435381efb10f9',
+              'materializer_raw':'0299c18061a2a6c6bf3d4a68efd6cfe8291645fb717360109fc0c04d5cbb5a5e',
+              'checker_payload_text':'940fb1329a613ee8adb1464ea83b63f37ba7a9570309ef15c676747e6890ea29',
+              'checker_gzip':'1ade0c8d34f6930e6d00e26160cd2a04141a45b0f28fc14358fc108496cd817a',
+              'checker_raw':'9f91b36a47a96dab3dea3dc7829f83812cc1996c319a3a9baa33bdd3f7914f74',
+          }
+          target_by_hash={value:key for key,value in targets.items()}
+
+          path_hints=defaultdict(set)
+          ordered=[]
+          for line in (root/'reachable-objects.txt').read_text(errors='replace').splitlines():
+              parts=line.split(' ',1)
+              oid=parts[0]
+              if oid not in path_hints:
+                  ordered.append(oid)
+              if len(parts)==2 and parts[1]:
+                  path_hints[oid].add(parts[1])
+
+          check=subprocess.Popen(
+              ['git','cat-file','--batch-check=%(objectname) %(objecttype) %(objectsize)'],
+              stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True,
+          )
+          out,_=check.communicate('\n'.join(ordered)+'\n')
+          assert check.returncode==0
+          metadata={}
+          for line in out.splitlines():
+              parts=line.split()
+              if len(parts)==3 and parts[1]!='missing':
+                  metadata[parts[0]]=(parts[1],int(parts[2]))
+
+          matches=[]
+          named_candidates=[]
+          scanned=0
+          for oid in ordered:
+              kind_size=metadata.get(oid)
+              if not kind_size or kind_size[0]!='blob':
+                  continue
+              size=kind_size[1]
+              hints=sorted(path_hints.get(oid,()))
+              lower='\n'.join(hints).lower()
+              interesting_name=any(token in lower for token in ('kreg','cycle-008','materializ','checker','candidate'))
+              if not (512 <= size <= 100000):
+                  if interesting_name:
+                      named_candidates.append({'oid':oid,'bytes':size,'paths':hints[:20],'sha256':None})
+                  continue
+              data=subprocess.check_output(['git','cat-file','blob',oid])
+              scanned+=1
+              digest=hashlib.sha256(data).hexdigest()
+              label=target_by_hash.get(digest)
+              if label:
+                  refs=subprocess.run(
+                      ['git','log','--all','--format=%H%x09%D','--find-object='+oid],
+                      check=True,text=True,stdout=subprocess.PIPE,
+                  ).stdout.splitlines()
+                  matches.append({
+                      'label':label,
+                      'sha256':digest,
+                      'git_blob':oid,
+                      'bytes':size,
+                      'paths':hints,
+                      'introducing_or_removing_commits':refs[:100],
+                  })
+                  (root/f'match-{label}.bin').write_bytes(data)
+              elif interesting_name:
+                  named_candidates.append({'oid':oid,'bytes':size,'paths':hints[:20],'sha256':digest})
+
+          result={
+              'schema_version':1,
+              'targets':targets,
+              'reachable_object_rows':len(ordered),
+              'scanned_candidate_blobs':scanned,
+              'matches':sorted(matches,key=lambda row:row['label']),
+              'missing_labels':sorted(set(targets)-{row['label'] for row in matches}),
+          }
+          (root/'exact-hash-matches.json').write_text(json.dumps(result,indent=2,sort_keys=True)+'\n')
+          named_candidates=sorted(named_candidates,key=lambda row:(row['paths'],row['oid']))
+          (root/'named-candidates.json').write_text(json.dumps(named_candidates,indent=2,sort_keys=True)+'\n')
+          PY
+
+          jq -e '.schema_version==1 and (.targets|length)==6' "$OUT/exact-hash-matches.json" >/dev/null
+          jq -n \
+            --arg floor "$FLOOR_MAIN" \
+            --arg head "$AUTHORIZED_HEAD" \
+            --argjson matches "$(jq '.matches|length' "$OUT/exact-hash-matches.json")" \
+            '{status:"object-census-complete",floor_main:$floor,carrier_head:$head,exact_matches:$matches,executed:false,repository_write:false,merge_authority:false,cycle_009_authorized:false,outside_human_dependency:false}' \
+            > "$OUT/receipt/census.json"
+          find "$OUT" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/SHA256SUMS.pre"
+          sha256sum "$OUT/SHA256SUMS.pre" > "$OUT/SHA256SUMS"
+
+      - name: Upload exact payload-object census
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-payload-blob-census-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-payload-blob-census-v1
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
