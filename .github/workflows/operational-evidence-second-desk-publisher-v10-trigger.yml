@@ -1,21 +1,24 @@
-name: operational-evidence-second-desk-publisher-v10-trigger
-# exact rearm: V10 already existed on the parent main
+name: operational-evidence-second-desk-publisher-v11-pr-target
 
 "on":
-  push:
-    branches: [main]
+  pull_request_target:
+    types: [opened, reopened, synchronize]
     paths:
-      - ".github/workflows/operational-evidence-second-desk-publisher-v10-trigger.yml"
+      - ".github/operational-evidence-second-desk-v11-trigger.txt"
 
 permissions: {}
 
 concurrency:
-  group: operational-evidence-second-desk-publisher-v10-trigger
+  group: operational-evidence-second-desk-publisher-v11-pr-target
   cancel-in-progress: false
 
 jobs:
   publish:
-    if: github.repository == 'BigBirdReturns/undercast' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.ref == 'agent/operational-evidence-second-desk-v11-event'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -26,15 +29,19 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       INSTALLER_MAIN: ${{ github.sha }}
+      TRIGGER_PR: ${{ github.event.pull_request.number }}
+      TRIGGER_HEAD: ${{ github.event.pull_request.head.sha }}
       REVIEW_BASE: 37d681f419db5ef874b2cc41df1c631c047218d8
       V3_WORKFLOW_BLOB: c28876fda070c0da6df9acde7bf49a4e98d1bda7
       IGNITER_WORKFLOW_BLOB: cb1d999205d927120d7a7a4251621b47a67b31b7
       V9_WRAPPER_BLOB: 297e1819fef7a41038183b00e4eb9ce234980f44
+      V10_PARENT_BLOB: bfdd46f4db403dd40c02e049f29638cfe65ce070
       V9_WRAPPER_PATH: .github/workflows/operational-evidence-second-desk-publisher-v6-wrapper.yml
-      TRIGGER_PATH: .github/workflows/operational-evidence-second-desk-publisher-v10-trigger.yml
-      PRODUCT_BRANCH: agent/operational-evidence-second-desk-product-v10-20260806
-      PRODUCT_TITLE: "Operations: refresh reviewed exact-main reliability evidence (V10)"
-      PUBLISH_ROOT: /tmp/undercast-operational-second-desk-publisher-v10
+      WORKFLOW_PATH: .github/workflows/operational-evidence-second-desk-publisher-v10-trigger.yml
+      TRIGGER_MARKER: .github/operational-evidence-second-desk-v11-trigger.txt
+      PRODUCT_BRANCH: agent/operational-evidence-second-desk-product-v11-20260806
+      PRODUCT_TITLE: "Operations: refresh reviewed exact-main reliability evidence (V11)"
+      PUBLISH_ROOT: /tmp/undercast-operational-second-desk-publisher-v11
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,28 +53,44 @@ jobs:
           node-version: "24"
           cache: npm
 
-      - name: Bind exact V10 trusted-main trigger
+      - name: Bind exact trusted pull-request-target event
         shell: bash
         run: |
           set -euo pipefail
           root="$PUBLISH_ROOT"
           rm -rf "$root"
-          mkdir -p "$root"/{diagnostics,receipt}
+          mkdir -p "$root"/{api,diagnostics,receipt}
           test "$GITHUB_REPOSITORY" = 'BigBirdReturns/undercast'
-          test "$GITHUB_EVENT_NAME" = 'push'
-          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$GITHUB_EVENT_NAME" = 'pull_request_target'
           test "$(git rev-parse HEAD)" = "$INSTALLER_MAIN"
           test "$(git show -s --format=%P HEAD | wc -w)" -eq 1
           installer_parent="$(git rev-parse HEAD^)"
           git merge-base --is-ancestor "$REVIEW_BASE" "$installer_parent"
-          test "$(git diff --name-only "$installer_parent..$INSTALLER_MAIN")" = "$TRIGGER_PATH"
+          test "$(git diff --name-only "$installer_parent..$INSTALLER_MAIN")" = "$WORKFLOW_PATH"
+          test "$(git rev-parse "$installer_parent:$WORKFLOW_PATH")" = "$V10_PARENT_BLOB"
           test "$(git hash-object .github/workflows/operational-evidence-second-desk-publisher.yml)" = "$V3_WORKFLOW_BLOB"
           test "$(git hash-object .github/workflows/operational-evidence-second-desk-workflow-run.yml)" = "$IGNITER_WORKFLOW_BLOB"
           test "$(git rev-parse "$installer_parent:$V9_WRAPPER_PATH")" = "$V9_WRAPPER_BLOB"
           test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$INSTALLER_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$TRIGGER_PR" > "$root/api/trigger-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$TRIGGER_PR/files?per_page=100" > "$root/api/trigger-files.json"
+          ROOT="$root" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['ROOT'])
+          pr = json.loads((root / 'api' / 'trigger-pr.json').read_text())
+          files = json.loads((root / 'api' / 'trigger-files.json').read_text())
+          assert pr['number'] == int(os.environ['TRIGGER_PR'])
+          assert pr['base']['ref'] == 'main' and pr['base']['sha'] == os.environ['INSTALLER_MAIN']
+          assert pr['head']['ref'] == 'agent/operational-evidence-second-desk-v11-event'
+          assert pr['head']['sha'] == os.environ['TRIGGER_HEAD']
+          assert pr['state'] == 'open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['commits'] == 1 and pr['changed_files'] == 1
+          assert len(files) == 1 and files[0]['filename'] == os.environ['TRIGGER_MARKER'] and files[0]['status'] == 'added'
+          PY
           printf 'INSTALLER_PARENT=%s\n' "$installer_parent" >> "$GITHUB_ENV"
 
-      - name: Recover and execute exact V9 publisher as V10
+      - name: Recover and execute exact V9 publisher as V11
         shell: bash
         run: |
           set -euo pipefail
@@ -93,33 +116,41 @@ jobs:
           replaceOnce(
             "workflow_path='.github/workflows/operational-evidence-second-desk-publisher-v6-wrapper.yml'",
             "workflow_path='.github/workflows/operational-evidence-second-desk-publisher-v10-trigger.yml'",
-            'V10 trigger path',
+            'V11 workflow path',
           );
+          const v11Transform = [
+            '          replaceOnce(',
+            '            `[[ "$GITHUB_REPOSITORY" == "$repo" && "$GITHUB_EVENT_NAME" == \'push\' && "$GITHUB_REF_NAME" == \'main\' ]] || fail \'untrusted execution context\'`,',
+            '            `[[ "$GITHUB_REPOSITORY" == "$repo" && "$GITHUB_EVENT_NAME" == \'pull_request_target\' ]] || fail \'untrusted execution context\'`,',
+            "            'V11 event context',",
+            '          );',
+            "          source = source.replaceAll('V3', 'V11');",
+          ].join('\n');
           replaceOnce(
-            "source = source.replaceAll('V3', 'V9');",
-            "source = source.replaceAll('V3', 'V10');",
-            'V10 transaction labels',
+            "          source = source.replaceAll('V3', 'V9');",
+            v11Transform,
+            'V11 transaction and event transform',
           );
           source = source.replaceAll(
             '/tmp/operational-evidence-second-desk-publisher-v9.sh',
-            '/tmp/operational-evidence-second-desk-publisher-v10.sh',
+            '/tmp/operational-evidence-second-desk-publisher-v11.sh',
           );
-          writeFileSync('/tmp/operational-evidence-second-desk-v10-run.sh', `#!/usr/bin/env bash\n${source}`);
+          writeFileSync('/tmp/operational-evidence-second-desk-v11-run.sh', `#!/usr/bin/env bash\n${source}`);
           NODE
-          bash -n /tmp/operational-evidence-second-desk-v10-run.sh
-          sha256sum /tmp/operational-evidence-second-desk-v10-run.sh | tee "$PUBLISH_ROOT/diagnostics/v9-step-as-v10.sha256"
-          bash /tmp/operational-evidence-second-desk-v10-run.sh
+          bash -n /tmp/operational-evidence-second-desk-v11-run.sh
+          sha256sum /tmp/operational-evidence-second-desk-v11-run.sh | tee "$PUBLISH_ROOT/diagnostics/v9-step-as-v11.sha256"
+          bash /tmp/operational-evidence-second-desk-v11-run.sh
 
-      - name: Upload exact V10 publication receipt
+      - name: Upload exact V11 publication receipt
         uses: actions/upload-artifact@v4
         with:
-          name: operational-evidence-second-desk-publication-v10-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: /tmp/undercast-operational-second-desk-publisher-v10/receipt
+          name: operational-evidence-second-desk-publication-v11-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/undercast-operational-second-desk-publisher-v11/receipt
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
 
-      - name: Remove partial V10 publication after any later failure
+      - name: Remove partial V11 publication after any later failure
         if: failure()
         shell: bash
         run: |
@@ -132,15 +163,15 @@ jobs:
           if [ -z "$pr" ]; then
             pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$PRODUCT_BRANCH" --state open --json number --jq '.[0].number // empty')"
           fi
-          [ -z "$pr" ] || gh pr close "$pr" --repo "$GITHUB_REPOSITORY" --comment 'Closed automatically because V10 publication did not reach terminal success.'
+          [ -z "$pr" ] || gh pr close "$pr" --repo "$GITHUB_REPOSITORY" --comment 'Closed automatically because V11 publication did not reach terminal success.'
           gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$PRODUCT_BRANCH" >/dev/null 2>&1 || true
 
-      - name: Upload V10 failure diagnostics
+      - name: Upload V11 failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: operational-evidence-second-desk-publication-v10-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: /tmp/undercast-operational-second-desk-publisher-v10
+          name: operational-evidence-second-desk-publication-v11-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/undercast-operational-second-desk-publisher-v11
           if-no-files-found: ignore
           retention-days: 14
           compression-level: 0
