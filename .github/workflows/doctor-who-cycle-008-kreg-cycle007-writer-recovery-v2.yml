@@ -1,0 +1,276 @@
+name: doctor-who-cycle-008-kreg-cycle007-writer-recovery-v2
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v2.yml"
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-cycle007-writer-recovery-v2
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v2.yml
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v2
+  SOURCE_PR: "445"
+  SOURCE_HEAD: 76a224f0f8db154518f91bddc31574fac668bd8f
+  QUALIFIER_SHA256: f6247288c50da814856ec0cd7b5ed8e877bab85dc19c9407a48d0ca81c9a2c20
+  QUALIFIER_MANIFEST_SHA256: 0ba6c5a7853a602eeb437b5adf25b11354b3178f0290b7924fe03bb61f2f996d
+  WRITER_SHA256: d674b41cd76c393b62373eac8fe827f5ad4da42cc1793e3f86fbd8696c01e06e
+  WRITER_MANIFEST_SHA256: 9076a0ca6ec9ef8841f813835d13d0a3717e8744bf6d9e58d030a579dd48c006
+  OUT: /tmp/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v2
+
+jobs:
+  recover:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-path read-only carrier
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/qualifier" "$OUT/writer"
+          test "$GITHUB_HEAD_REF" = "$AUTHORIZED_BRANCH"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = "1"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$BASE_SHA"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          start_main="$(git rev-parse refs/remotes/origin/main)"
+          git merge-base --is-ancestor "$BASE_SHA" "$start_main"
+          git diff --name-only "$BASE_SHA"..."$start_main" | LC_ALL=C sort > "$OUT/base-to-live-main-paths.txt"
+          if test -s "$OUT/base-to-live-main-paths.txt"; then
+            awk '!/^\.github\/workflows\// { bad=1 } END { exit bad }' "$OUT/base-to-live-main-paths.txt"
+          fi
+          test -z "$(git status --porcelain)"
+          printf 'base=%s\nhead=%s\nhead_tree=%s\nstart_main=%s\n' \
+            "$BASE_SHA" "$HEAD_SHA" "$(git rev-parse 'HEAD^{tree}')" "$start_main" \
+            > "$OUT/carrier-identity.txt"
+          printf '%s\n' "$start_main" > "$OUT/start-main.txt"
+
+      - name: Recover exact qualifier archive from the five source comments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${SOURCE_PR}" > "$OUT/source-pr.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/issues/${SOURCE_PR}/comments?per_page=100" > "$OUT/source-comments.json"
+          SOURCE_PR="$SOURCE_PR" SOURCE_HEAD="$SOURCE_HEAD" QUALIFIER_SHA256="$QUALIFIER_SHA256" OUT="$OUT" python3 - <<'PY'
+          import base64
+          import hashlib
+          import itertools
+          import json
+          import os
+          import pathlib
+          import re
+
+          out = pathlib.Path(os.environ['OUT'])
+          pr = json.loads((out / 'source-pr.json').read_text())
+          comments = json.loads((out / 'source-comments.json').read_text())
+          assert pr['number'] == int(os.environ['SOURCE_PR'])
+          assert pr['head']['sha'] == os.environ['SOURCE_HEAD']
+          assert pr['state'] == 'closed' and pr['merged'] is False
+
+          candidates = {part: [] for part in range(1, 6)}
+          marker = re.compile(r'^CYCLE007_V9_QUALIFIER_PAYLOAD_PART\s+(\d{2})/(\d{2})\r?\n')
+          for comment in comments:
+              body = str(comment.get('body') or '')
+              match = marker.match(body)
+              if not match or int(match.group(2)) != 5:
+                  continue
+              part = int(match.group(1))
+              if part not in candidates:
+                  continue
+              tail = body[match.end():]
+              if re.sub(r'[A-Za-z0-9+/=\s]', '', tail):
+                  continue
+              payload = ''.join(re.findall(r'[A-Za-z0-9+/=]', tail))
+              if not payload:
+                  continue
+              candidates[part].append({
+                  'comment_id': comment['id'],
+                  'comment_url': comment['html_url'],
+                  'payload': payload,
+                  'length': len(payload),
+                  'sha256': hashlib.sha256(payload.encode()).hexdigest(),
+              })
+
+          if any(not candidates[part] for part in range(1, 6)):
+              raise SystemExit({part: len(rows) for part, rows in candidates.items()})
+
+          valid = []
+          for choice in itertools.product(*(candidates[part] for part in range(1, 6))):
+              joined = ''.join(row['payload'] for row in choice)
+              try:
+                  decoded = base64.b64decode(joined, validate=True)
+              except Exception:
+                  continue
+              if hashlib.sha256(decoded).hexdigest() == os.environ['QUALIFIER_SHA256']:
+                  valid.append((choice, joined, decoded))
+          if len(valid) != 1:
+              raise SystemExit(f'exact qualifier archive solutions: {len(valid)}')
+
+          choice, joined, decoded = valid[0]
+          (out / 'qualifier-payload.b64').write_text(joined)
+          (out / 'qualifier-payload.tgz').write_bytes(decoded)
+          custody = []
+          for part, row in enumerate(choice, 1):
+              payload = row.pop('payload')
+              path = out / f'qualifier-part-{part:02d}.b64'
+              path.write_text(payload)
+              custody.append({'part': part, **row})
+          (out / 'qualifier-comment-custody.json').write_text(json.dumps(custody, indent=2, sort_keys=True) + '\n')
+          PY
+          test "$(sha256sum "$OUT/qualifier-payload.tgz" | awk '{print $1}')" = "$QUALIFIER_SHA256"
+
+      - name: Safely extract qualifier and nested writer archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUALIFIER="$OUT/qualifier-payload.tgz" QUALIFIER_DIR="$OUT/qualifier" WRITER_DIR="$OUT/writer" \
+          QUALIFIER_MANIFEST_SHA256="$QUALIFIER_MANIFEST_SHA256" WRITER_SHA256="$WRITER_SHA256" \
+          WRITER_MANIFEST_SHA256="$WRITER_MANIFEST_SHA256" OUT="$OUT" python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import tarfile
+
+          out = pathlib.Path(os.environ['OUT'])
+          qualifier_archive = pathlib.Path(os.environ['QUALIFIER'])
+          qualifier_dir = pathlib.Path(os.environ['QUALIFIER_DIR'])
+          writer_dir = pathlib.Path(os.environ['WRITER_DIR'])
+
+          def extract_safe(archive, target, expected=None, max_members=128, max_bytes=50_000_000):
+              target.mkdir(parents=True, exist_ok=True)
+              with tarfile.open(archive, 'r:gz') as tf:
+                  members = tf.getmembers()
+                  names = [member.name for member in members]
+                  if not members or len(members) > max_members or len(names) != len(set(names)):
+                      raise SystemExit(f'unsafe member denominator for {archive}: {len(members)}')
+                  if expected is not None and names != expected:
+                      raise SystemExit(f'archive members drifted: {names!r}')
+                  total = 0
+                  for member in members:
+                      path = pathlib.PurePosixPath(member.name)
+                      if path.is_absolute() or '..' in path.parts or not member.isfile() or member.issym() or member.islnk():
+                          raise SystemExit(f'unsafe member: {member.name!r}')
+                      total += member.size
+                      if total > max_bytes:
+                          raise SystemExit(f'expanded archive exceeds ceiling: {archive}')
+                  for member in members:
+                      data = tf.extractfile(member).read()
+                      destination = target.joinpath(*pathlib.PurePosixPath(member.name).parts)
+                      destination.parent.mkdir(parents=True, exist_ok=True)
+                      destination.write_bytes(data)
+              return names
+
+          expected_qualifier = [
+              'candidate-phase.sh',
+              'cycle007-v8-transport.tgz',
+              'expected-candidate-paths.txt',
+              'expected-final-paths.txt',
+              'final-phase.sh',
+              'package-product.mjs',
+              'payload-manifest.json',
+          ]
+          extract_safe(qualifier_archive, qualifier_dir, expected_qualifier)
+          manifest_path = qualifier_dir / 'payload-manifest.json'
+          if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != os.environ['QUALIFIER_MANIFEST_SHA256']:
+              raise SystemExit('qualifier manifest digest drifted')
+          manifest = json.loads(manifest_path.read_text())
+          rows = manifest.get('files')
+          if not isinstance(rows, list) or not rows:
+              raise SystemExit('qualifier manifest files missing')
+          for row in rows:
+              path = qualifier_dir / row['path']
+              data = path.read_bytes()
+              if len(data) != row['bytes'] or hashlib.sha256(data).hexdigest() != row['sha256']:
+                  raise SystemExit(f'qualifier member drifted: {row["path"]}')
+
+          writer_archive = qualifier_dir / 'cycle007-v8-transport.tgz'
+          if hashlib.sha256(writer_archive.read_bytes()).hexdigest() != os.environ['WRITER_SHA256']:
+              raise SystemExit('nested writer archive digest drifted')
+          writer_names = extract_safe(writer_archive, writer_dir)
+          manifest_matches = [path for path in writer_dir.rglob('*') if path.is_file() and path.name == 'transport-manifest.json']
+          if len(manifest_matches) != 1:
+              raise SystemExit(f'writer manifest denominator: {len(manifest_matches)}')
+          writer_manifest_path = manifest_matches[0]
+          if hashlib.sha256(writer_manifest_path.read_bytes()).hexdigest() != os.environ['WRITER_MANIFEST_SHA256']:
+              raise SystemExit('writer manifest digest drifted')
+          writer_manifest = json.loads(writer_manifest_path.read_text())
+          writer_rows = writer_manifest.get('files')
+          if not isinstance(writer_rows, list) or not writer_rows:
+              raise SystemExit('writer manifest files missing')
+          for row in writer_rows:
+              path = writer_dir / row['path']
+              data = path.read_bytes()
+              if len(data) != row['bytes'] or hashlib.sha256(data).hexdigest() != row['sha256']:
+                  raise SystemExit(f'writer member drifted: {row["path"]}')
+
+          inventory = []
+          for path in sorted(writer_dir.rglob('*')):
+              if path.is_file():
+                  data = path.read_bytes()
+                  inventory.append({
+                      'path': path.relative_to(writer_dir).as_posix(),
+                      'bytes': len(data),
+                      'sha256': hashlib.sha256(data).hexdigest(),
+                  })
+          (out / 'writer-inventory.json').write_text(json.dumps({
+              'archive_sha256': os.environ['WRITER_SHA256'],
+              'manifest_sha256': os.environ['WRITER_MANIFEST_SHA256'],
+              'member_count': len(inventory),
+              'members': inventory,
+              'executed': False,
+          }, indent=2, sort_keys=True) + '\n')
+          (out / 'writer-archive-members.json').write_text(json.dumps(writer_names, indent=2) + '\n')
+          PY
+
+      - name: Rebind unchanged live main and seal packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$(cat "$OUT/start-main.txt")"
+          test -z "$(git status --porcelain)"
+          (
+            cd "$OUT"
+            find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
+          )
+
+      - name: Upload exact recovered writer packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-cycle007-writer-recovery-v2-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
