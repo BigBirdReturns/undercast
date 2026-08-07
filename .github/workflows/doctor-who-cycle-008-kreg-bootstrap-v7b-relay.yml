@@ -1,0 +1,257 @@
+name: doctor-who-cycle-008-kreg-bootstrap-v7b
+
+"on":
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-bootstrap-v7b-relay.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-bootstrap-v7b-relay-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  relay:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-bootstrap-v7b'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SELF: .github/workflows/doctor-who-cycle-008-kreg-bootstrap-v7b-relay.yml
+      AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-bootstrap-v7b
+      AUTHORIZED_HEAD: ${{ github.event.pull_request.head.sha }}
+      AUTHORIZED_PR: ${{ github.event.pull_request.number }}
+      EXACT_MAIN: 7ae6f5fde95b78caea03e1aafea618d3f05dfe32
+      SOURCE_BRANCH: agent/doctor-who-cycle-008-kreg-recovered-candidate-v1
+      SOURCE_HEAD: 405d0f8a8cb97f11559c59015e612906e9858e52
+      SOURCE_PR: "598"
+      SOURCE_WORKFLOW: doctor-who-cycle-008-kreg-recovered-candidate-v1
+      CANDIDATE_COMMIT: 7a6b85521c45ec45546ccab1ef2c0a28fff93687
+      CANDIDATE_TREE: 6a0a3e7043faf511974597b5670ccb8c688994f5
+      OUT: /tmp/doctor-who-cycle-008-kreg-bootstrap-v7b-relay
+      TASK_ID: ap_469d79ea29fd7f877395d20f
+      LEASE_ID: lease_e65f837070361eacbb1abd46
+      WALL_ID: UC-1353
+      MEDIA_SHA256: 5d19f72cbe08648568c84469287dfcd14a9c0789156cd3d740edf4c1c5bb0622
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: |
+            .github/workflows/doctor-who-cycle-008-kreg-bootstrap-v7b-relay.yml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Bind exact one-commit relay and source geometry
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,diagnostics,source}
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_HEAD"
+          test "$(git show -s --format=%P HEAD | wc -w | tr -d '[:space:]')" = 1
+          test "$(git rev-parse HEAD^)" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = 1
+          test "$(git diff --name-only "$EXACT_MAIN"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$EXACT_MAIN"...HEAD)" = $'A\t'"$SELF"
+
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$AUTHORIZED_PR" > "$OUT/api/relay-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$AUTHORIZED_PR/files?per_page=100" > "$OUT/api/relay-files.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$SOURCE_PR" > "$OUT/api/source-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$SOURCE_PR/files?per_page=100" > "$OUT/api/source-files.json"
+          ROOT="$OUT/api" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          relay=json.loads((root/'relay-pr.json').read_text())
+          relay_files=json.loads((root/'relay-files.json').read_text())
+          source=json.loads((root/'source-pr.json').read_text())
+          source_files=json.loads((root/'source-files.json').read_text())
+          assert relay['state']=='open' and relay['draft'] is True and relay['merged'] is False
+          assert relay['base']['ref']=='main' and relay['base']['sha']==os.environ['EXACT_MAIN']
+          assert relay['head']['ref']==os.environ['AUTHORIZED_BRANCH'] and relay['head']['sha']==os.environ['AUTHORIZED_HEAD']
+          assert relay['commits']==1 and relay['changed_files']==1
+          assert len(relay_files)==1 and relay_files[0]['filename']==os.environ['SELF'] and relay_files[0]['status']=='added'
+          assert source['number']==int(os.environ['SOURCE_PR'])
+          assert source['state']=='open' and source['draft'] is True and source['merged'] is False
+          assert source['base']['ref']=='main' and source['base']['sha']==os.environ['EXACT_MAIN']
+          assert source['head']['ref']==os.environ['SOURCE_BRANCH'] and source['head']['sha']==os.environ['SOURCE_HEAD']
+          assert source['commits']==1 and source['changed_files']==3
+          expected={
+              '.github/doctor-who-cycle-008/kreg-recovered-candidate-v1/delta.tar.xz.b64',
+              '.github/doctor-who-cycle-008/kreg-recovered-candidate-v1/runner.sh',
+              '.github/workflows/doctor-who-cycle-008-kreg-recovered-candidate-v1.yml',
+          }
+          assert {row['filename'] for row in source_files}==expected
+          assert all(row['status']=='added' for row in source_files)
+          PY
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXACT_MAIN"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$SOURCE_BRANCH" --jq '.object.sha')" = "$SOURCE_HEAD"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$AUTHORIZED_BRANCH" --jq '.object.sha')" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+
+      - name: Wait for exact successful source artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          for poll in $(seq 1 720); do
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs?branch=$SOURCE_BRANCH&event=pull_request&per_page=100" > "$OUT/api/source-runs.json"
+            row="$(jq -c --arg name "$SOURCE_WORKFLOW" --arg branch "$SOURCE_BRANCH" --arg head "$SOURCE_HEAD" '[.workflow_runs[] | select(.name==$name and .head_branch==$branch and .head_sha==$head)] | sort_by(.created_at) | last // empty' "$OUT/api/source-runs.json")"
+            if [ -n "$row" ] && [ "$(jq -r '.status' <<<"$row")" = completed ]; then
+              printf '%s\n' "$row" > "$OUT/source/run.json"
+              break
+            fi
+            sleep 20
+          done
+          test -s "$OUT/source/run.json"
+          run="$(jq -r '.id' "$OUT/source/run.json")"
+          attempt="$(jq -r '.run_attempt' "$OUT/source/run.json")"
+          test "$(jq -r '.conclusion' "$OUT/source/run.json")" = success
+          test "$(jq -r '.head_sha' "$OUT/source/run.json")" = "$SOURCE_HEAD"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?per_page=100" > "$OUT/source/jobs.json"
+          jq -e '([.jobs[] | select(.name=="qualify" and .status=="completed" and .conclusion=="success")] | length)==1' "$OUT/source/jobs.json" >/dev/null
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" > "$OUT/source/artifacts.json"
+          artifact="$(jq -c --arg name "doctor-who-cycle-008-kreg-recovered-candidate-v1-$run-attempt-$attempt" '[.artifacts[] | select(.name==$name and .expired==false)] | if length==1 then .[0] else empty end' "$OUT/source/artifacts.json")"
+          test -n "$artifact"
+          artifact_id="$(jq -r '.id' <<<"$artifact")"
+          artifact_digest="$(jq -r '.digest' <<<"$artifact")"
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --output "$OUT/source/source.zip" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip"
+          test "$(sha256sum "$OUT/source/source.zip" | awk '{print $1}')" = "${artifact_digest#sha256:}"
+          printf 'SOURCE_RUN=%s\nSOURCE_ATTEMPT=%s\nSOURCE_ARTIFACT=%s\nSOURCE_ARTIFACT_DIGEST=%s\n' \
+            "$run" "$attempt" "$artifact_id" "$artifact_digest" >> "$GITHUB_ENV"
+
+      - name: Verify and relay unchanged V7b packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$OUT/source/source.zip" TARGET="$OUT/source/extracted" python3 - <<'PY'
+          import os,pathlib,stat,zipfile
+          archive=pathlib.Path(os.environ['ZIP'])
+          target=pathlib.Path(os.environ['TARGET'])
+          target.mkdir()
+          with zipfile.ZipFile(archive) as zf:
+              infos=zf.infolist()
+              assert 1 <= len(infos) <= 300
+              assert sum(info.file_size for info in infos)<400_000_000
+              seen=set()
+              for info in infos:
+                  path=pathlib.PurePosixPath(info.filename)
+                  kind=(info.external_attr>>16)&0o170000
+                  if path.is_absolute() or '..' in path.parts or info.filename in seen or kind==stat.S_IFLNK:
+                      raise SystemExit(f'unsafe source artifact member: {info.filename!r}')
+                  seen.add(info.filename)
+                  if info.is_dir():
+                      continue
+                  out=target.joinpath(*path.parts)
+                  out.parent.mkdir(parents=True,exist_ok=True)
+                  out.write_bytes(zf.read(info))
+          PY
+          packet="$OUT/source/extracted/packet"
+          for member in qualification-receipt.json candidate.bundle candidate.patch candidate-product.tar.gz candidate-files.json candidate-paths.txt SHA256SUMS.pre SHA256SUMS; do
+            test -f "$packet/$member"
+          done
+          PACKET="$packet" python3 - <<'PY'
+          import hashlib,json,os,tarfile
+          from pathlib import Path
+          root=Path(os.environ['PACKET'])
+          for line in (root/'SHA256SUMS.pre').read_text().splitlines():
+              digest,original=line.split(None,1)
+              rel=original.split('/packet/',1)[-1]
+              path=root/rel
+              assert path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==digest
+          assert hashlib.sha256((root/'SHA256SUMS.pre').read_bytes()).hexdigest()==(root/'SHA256SUMS').read_text().split()[0]
+          receipt=json.loads((root/'qualification-receipt.json').read_text())
+          identity=receipt.pop('identity')
+          assert hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()==identity
+          assert receipt['status']=='qualified-candidate'
+          assert receipt['base_main']==os.environ['EXACT_MAIN']
+          assert receipt['candidate_commit']==os.environ['CANDIDATE_COMMIT']
+          assert receipt['candidate_tree']==os.environ['CANDIDATE_TREE']
+          assert receipt['path_count']==40
+          assert receipt['task']==os.environ['TASK_ID'] and receipt['lease']==os.environ['LEASE_ID'] and receipt['wall_id']==os.environ['WALL_ID']
+          assert receipt['repository_write'] is False and receipt['merge_authority'] is False
+          assert receipt['cycle_009_authorized'] is False and receipt['outside_human_dependency'] is False
+          paths=(root/'candidate-paths.txt').read_text().splitlines()
+          rows=json.loads((root/'candidate-files.json').read_text())
+          assert len(paths)==len(rows)==40 and paths==sorted(paths) and len(set(paths))==40
+          assert [row['path'] for row in rows]==paths
+          assert all(set(row)=={'path','bytes','sha256','git_blob','git_mode'} for row in rows)
+          assert any(row['path']=='images/uc-1353-still.jpg' and row['bytes']==67113 and row['sha256']==os.environ['MEDIA_SHA256'] for row in rows)
+          with tarfile.open(root/'candidate-product.tar.gz','r:gz') as tf:
+              members=tf.getmembers()
+              assert [member.name for member in members]==paths
+              for member,row in zip(members,rows):
+                  data=tf.extractfile(member).read()
+                  assert len(data)==row['bytes'] and hashlib.sha256(data).hexdigest()==row['sha256']
+                  assert (member.mode&0o7777)==(int(row['git_mode'],8)&0o7777)
+          PY
+
+          git bundle verify "$packet/candidate.bundle" > "$OUT/diagnostics/bundle-verify.txt"
+          test "$(git bundle list-heads "$packet/candidate.bundle" | awk '{print $1}')" = "$CANDIDATE_COMMIT"
+          test "$(git bundle list-heads "$packet/candidate.bundle" | awk '{print $2}')" = refs/heads/cycle008-kreg-candidate-v7b
+          git update-ref -d refs/heads/cycle008-kreg-relay-candidate >/dev/null 2>&1 || true
+          git fetch "$packet/candidate.bundle" cycle008-kreg-candidate-v7b:refs/heads/cycle008-kreg-relay-candidate
+          test "$(git rev-parse refs/heads/cycle008-kreg-relay-candidate)" = "$CANDIDATE_COMMIT"
+          test "$(git rev-parse "$CANDIDATE_COMMIT^")" = "$EXACT_MAIN"
+          test "$(git rev-parse "$CANDIDATE_COMMIT^{tree}")" = "$CANDIDATE_TREE"
+          test "$(git rev-list --count "$EXACT_MAIN".."$CANDIDATE_COMMIT")" = 1
+          git update-ref -d refs/heads/cycle008-kreg-relay-candidate
+
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_MAIN"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$SOURCE_BRANCH" --jq '.object.sha')" = "$SOURCE_HEAD"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$AUTHORIZED_BRANCH" --jq '.object.sha')" = "$AUTHORIZED_HEAD"
+          test -z "$(git status --porcelain)"
+
+          mkdir -p "$OUT/relay-artifact"
+          cp -a "$packet" "$OUT/relay-artifact/packet"
+          jq -n \
+            --arg status relayed-qualified-candidate \
+            --arg source_head "$SOURCE_HEAD" \
+            --argjson source_run "$SOURCE_RUN" \
+            --argjson source_attempt "$SOURCE_ATTEMPT" \
+            --argjson source_artifact "$SOURCE_ARTIFACT" \
+            --arg source_digest "$SOURCE_ARTIFACT_DIGEST" \
+            --arg relay_head "$AUTHORIZED_HEAD" \
+            --arg candidate_commit "$CANDIDATE_COMMIT" \
+            --arg candidate_tree "$CANDIDATE_TREE" \
+            '{status:$status,source_head:$source_head,source_run:$source_run,source_attempt:$source_attempt,source_artifact:$source_artifact,source_artifact_digest:$source_digest,relay_head:$relay_head,candidate_commit:$candidate_commit,candidate_tree:$candidate_tree,path_count:40,repository_write:false,merge_authority:false,cycle_009_authorized:false,outside_human_dependency:false}' \
+            > "$OUT/diagnostics/relay-receipt.json"
+          rm -rf "$OUT/source"
+
+      - name: Upload exact V7b artifact contract
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-bootstrap-v7b-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-bootstrap-v7b-relay/relay-artifact
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload relay diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-bootstrap-v7b-relay-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-bootstrap-v7b-relay
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
