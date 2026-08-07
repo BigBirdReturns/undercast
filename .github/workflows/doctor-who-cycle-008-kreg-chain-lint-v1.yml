@@ -1,0 +1,223 @@
+name: doctor-who-cycle-008-kreg-chain-lint-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-chain-lint-v1.yml"
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-chain-lint-v1
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-chain-lint-v1.yml
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-chain-lint-v1
+  OUT: /tmp/doctor-who-cycle-008-kreg-chain-lint-v1
+
+jobs:
+  lint:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-chain-lint-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact one-path lint carrier
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/workflows" "$OUT/run-blocks"
+          test "$GITHUB_HEAD_REF" = "$AUTHORIZED_BRANCH"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = "1"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$BASE_SHA"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Fetch every active chain branch and exact workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$OUT/lanes.tsv" <<'LANES'
+          agent/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v2	.github/workflows/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v2.yml	contents:read,issues:read,pull-requests:read
+          agent/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v3	.github/workflows/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v3.yml	contents:read,issues:write,pull-requests:read
+          agent/doctor-who-cycle-008-kreg-original-carrier-replay-v1	.github/workflows/doctor-who-cycle-008-kreg-original-carrier-replay-v1.yml	actions:read,contents:read,issues:write,pull-requests:read
+          agent/doctor-who-cycle-008-kreg-v1-materializer-current-main-v1	.github/workflows/doctor-who-cycle-008-kreg-v1-materializer-current-main-v1.yml	actions:read,contents:read,issues:write,pull-requests:read
+          agent/doctor-who-cycle-008-kreg-v1-candidate-review-v1	.github/workflows/doctor-who-cycle-008-kreg-v1-candidate-review-v1.yml	actions:read,contents:read,issues:write,pull-requests:read
+          agent/doctor-who-cycle-008-kreg-finalization-source-v1	.github/workflows/doctor-who-cycle-008-kreg-finalization-source-v1.yml	actions:read,contents:read,issues:read,pull-requests:read
+          agent/doctor-who-cycle-008-cycle007-finalization-delta-recovery-v2	.github/workflows/doctor-who-cycle-008-cycle007-finalization-delta-recovery-v2.yml	actions:read,contents:read,issues:write,pull-requests:read
+          agent/doctor-who-cycle-008-kreg-finalization-synthesizer-v1	.github/workflows/doctor-who-cycle-008-kreg-finalization-synthesizer-v1.yml	actions:read,contents:read,issues:write,pull-requests:read
+          agent/doctor-who-cycle-008-kreg-final-product-review-v1	.github/workflows/doctor-who-cycle-008-kreg-final-product-review-v1.yml	actions:read,contents:read,issues:write,pull-requests:read
+          agent/doctor-who-cycle-008-kreg-reviewed-product-publisher-v1	.github/workflows/doctor-who-cycle-008-kreg-reviewed-product-publisher-v1.yml	actions:read,contents:write,issues:write,pull-requests:write
+          agent/doctor-who-cycle-008-kreg-product-qualification-v1	.github/workflows/doctor-who-cycle-008-kreg-product-qualification-v1.yml	actions:read,checks:read,contents:read,issues:write,pull-requests:read
+          agent/doctor-who-cycle-008-kreg-merge-guardian-v1	.github/workflows/doctor-who-cycle-008-kreg-merge-guardian-v1.yml	actions:read,checks:read,contents:write,issues:write,pull-requests:write
+          agent/doctor-who-cycle-008-kreg-terminal-cleanup-v1	.github/workflows/doctor-who-cycle-008-kreg-terminal-cleanup-v1.yml	actions:read,checks:read,contents:write,issues:write,pull-requests:write
+          agent/doctor-who-cycle-008-kreg-status-observer-v1	.github/workflows/doctor-who-cycle-008-kreg-status-observer-v1.yml	actions:read,contents:write,pull-requests:read
+          LANES
+          while IFS=$'\t' read -r branch path permissions; do
+            ref="refs/remotes/kreg-lint/${branch#agent/}"
+            git fetch --no-tags --filter=blob:none origin "+refs/heads/${branch}:${ref}"
+            test "$(git rev-parse "$ref")" != ''
+            destination="$OUT/workflows/$(basename "$path")"
+            git show "$ref:$path" > "$destination"
+            printf '%s\t%s\t%s\t%s\n' "$branch" "$ref" "$path" "$permissions" >> "$OUT/resolved-lanes.tsv"
+          done < "$OUT/lanes.tsv"
+
+      - name: Parse YAML and verify trigger, permissions, carrier, and shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          OUT="$OUT" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+          import { basename, join } from 'node:path';
+          import { spawnSync } from 'node:child_process';
+          import YAML from 'yaml';
+
+          const out = process.env.OUT;
+          const rows = readFileSync(join(out, 'resolved-lanes.tsv'), 'utf8').trim().split('\n').map((line) => line.split('\t'));
+          const report = [];
+          let failures = 0;
+          const normalizePerms = (value) => Object.entries(value || {}).sort(([a],[b]) => a.localeCompare(b)).map(([key,val]) => `${key}:${String(val)}`).join(',');
+          for (const [branch, ref, path, expectedPermissions] of rows) {
+            const sourcePath = join(out, 'workflows', basename(path));
+            const source = readFileSync(sourcePath, 'utf8');
+            const lane = { branch, ref, path, expectedPermissions, checks: [], runBlocks: [] };
+            const check = (name, ok, detail = '') => { lane.checks.push({ name, ok, detail }); if (!ok) failures += 1; };
+            let doc;
+            try {
+              doc = YAML.parse(source, { schema: 'core', uniqueKeys: true, maxAliasCount: 100 });
+              check('yaml-parse', true);
+            } catch (error) {
+              check('yaml-parse', false, String(error));
+              report.push(lane);
+              continue;
+            }
+            check('name-present', typeof doc.name === 'string' && doc.name.length > 0, String(doc.name));
+            const trigger = doc.on;
+            check('pull-request-trigger', trigger && typeof trigger === 'object' && trigger.pull_request, JSON.stringify(trigger));
+            const prTrigger = trigger?.pull_request;
+            const branches = Array.isArray(prTrigger?.branches) ? prTrigger.branches : [];
+            const types = Array.isArray(prTrigger?.types) ? prTrigger.types : [];
+            const paths = Array.isArray(prTrigger?.paths) ? prTrigger.paths : [];
+            check('main-base-only', branches.length === 1 && branches[0] === 'main', JSON.stringify(branches));
+            check('bounded-pr-types', ['opened','synchronize','reopened'].every((value) => types.includes(value)), JSON.stringify(types));
+            check('self-path-trigger', paths.length === 1 && paths[0] === path, JSON.stringify(paths));
+            const actualPermissions = normalizePerms(doc.permissions);
+            check('permissions-exact', actualPermissions === expectedPermissions, `${actualPermissions} != ${expectedPermissions}`);
+            const jobs = doc.jobs && typeof doc.jobs === 'object' ? Object.values(doc.jobs) : [];
+            check('single-job', jobs.length === 1, String(jobs.length));
+            const job = jobs[0] || {};
+            const ifSource = String(job.if || '');
+            check('same-repository-guard', ifSource.includes("github.repository == 'BigBirdReturns/undercast'") && ifSource.includes('head.repo.full_name == github.repository'), ifSource);
+            check('exact-branch-guard', ifSource.includes(branch), ifSource);
+            check('ubuntu-pinned', job['runs-on'] === 'ubuntu-24.04', String(job['runs-on']));
+            const steps = Array.isArray(job.steps) ? job.steps : [];
+            check('checkout-present', steps.some((step) => step.uses === 'actions/checkout@v4'), '');
+            check('artifact-upload-present', steps.some((step) => step.uses === 'actions/upload-artifact@v4'), '');
+            let index = 0;
+            for (const step of steps) {
+              if (typeof step.run !== 'string') continue;
+              index += 1;
+              const runPath = join(out, 'run-blocks', `${basename(path, '.yml')}-${String(index).padStart(2,'0')}.sh`);
+              writeFileSync(runPath, step.run.endsWith('\n') ? step.run : `${step.run}\n`);
+              const parsed = spawnSync('bash', ['-n', runPath], { encoding: 'utf8' });
+              const result = { index, name: String(step.name || ''), path: runPath, ok: parsed.status === 0, stderr: parsed.stderr };
+              lane.runBlocks.push(result);
+              check(`bash-syntax-${index}`, parsed.status === 0, parsed.stderr);
+            }
+            check('run-blocks-present', index > 0, String(index));
+            report.push(lane);
+          }
+          const summary = { schema_version: 1, transaction: 'DOCTOR-WHO-CYCLE-008-KREG-CHAIN-LINT-V1', lanes: report.length, failures, status: failures === 0 ? 'passed' : 'failed', report };
+          writeFileSync(join(out, 'chain-lint.json'), `${JSON.stringify(summary, null, 2)}\n`);
+          if (failures !== 0) process.exitCode = 1;
+          NODE
+
+      - name: Verify branch geometry and forbidden authority patterns
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > "$OUT/geometry.tsv"
+          while IFS=$'\t' read -r branch ref path permissions; do
+            main="$(git rev-parse refs/remotes/origin/main 2>/dev/null || true)"
+            git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+            merge_base="$(git merge-base "$ref" refs/remotes/origin/main)"
+            git diff --name-only "$merge_base"..."$ref" | LC_ALL=C sort > "$OUT/${branch//\//__}-paths.txt"
+            count="$(wc -l < "$OUT/${branch//\//__}-paths.txt")"
+            test "$count" -ge 1
+            test "$count" -le 2
+            grep -Fx "$path" "$OUT/${branch//\//__}-paths.txt" >/dev/null
+            if test "$branch" != 'agent/doctor-who-cycle-008-kreg-status-observer-v1'; then
+              test "$count" = 1
+            fi
+            printf '%s\t%s\t%s\t%s\n' "$branch" "$merge_base" "$(git rev-parse "$ref")" "$count" >> "$OUT/geometry.tsv"
+          done < "$OUT/resolved-lanes.tsv"
+          grep -RInE 'gh pr merge|gh api .*/pulls/.*/merge|--method PUT .*/pulls/.*/merge' "$OUT/workflows" > "$OUT/merge-authority-lines.txt" || true
+          expected_mergers='doctor-who-cycle-008-kreg-merge-guardian-v1.yml
+doctor-who-cycle-008-kreg-terminal-cleanup-v1.yml'
+          actual_mergers="$(cut -d: -f1 "$OUT/merge-authority-lines.txt" | xargs -r -n1 basename | LC_ALL=C sort -u)"
+          test "$actual_mergers" = "$expected_mergers"
+          grep -RInE 'git push origin .*refs/heads' "$OUT/workflows" > "$OUT/push-authority-lines.txt" || true
+          sha256sum "$OUT"/workflows/*.yml > "$OUT/workflow-sha256.txt"
+
+      - name: Publish lint result to carrier PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status='failed-before-report'; lanes='unavailable'; failures='unavailable'; detail='lint report unavailable'
+          if test -f "$OUT/chain-lint.json"; then
+            status="$(jq -r .status "$OUT/chain-lint.json")"
+            lanes="$(jq -r .lanes "$OUT/chain-lint.json")"
+            failures="$(jq -r .failures "$OUT/chain-lint.json")"
+            detail="$(jq -r '.report[] | .branch as $b | .checks[] | select(.ok == false) | "\($b) :: \(.name) :: \(.detail)"' "$OUT/chain-lint.json" | tail -c 16000)"
+            test -n "$detail" || detail='all parsed checks passed'
+          fi
+          body="$RUNNER_TEMP/kreg-chain-lint.md"
+          {
+            printf 'KREG_CHAIN_LINT_V1\n\n'
+            printf '```text\nstatus:   %s\nlanes:    %s\nfailures: %s\nrun:      %s\n```\n\n' "$status" "$lanes" "$failures" "$GITHUB_RUN_ID"
+            printf '```text\n%s\n```\n' "$detail"
+          } > "$body"
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --raw-field body="$(cat "$body")" >/dev/null
+
+      - name: Upload complete chain lint packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-chain-lint-v1-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
