@@ -1,0 +1,367 @@
+name: doctor-who-cycle-008-kreg-v1-materializer-current-main-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-v1-materializer-current-main-v1.yml"
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-v1-materializer-current-main-v1
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-v1-materializer-current-main-v1.yml
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-v1-materializer-current-main-v1
+  OLD_BASE: 37d681f419db5ef874b2cc41df1c631c047218d8
+  ORIGINAL_HEAD: 7c7403c70ea4cc70169ef41129f1484a04475c2a
+  ORIGINAL_BRANCH: agent/doctor-who-cycle-008-kreg-candidate-v1
+  PAYLOAD_PATH: .github/doctor-who-cycle-008/kreg-candidate-v1-payload.tar.gz.b64
+  PAYLOAD_BLOB: 06d2eed93b9e2a03b4d23dcaf6f82e0c131df498
+  PAYLOAD_TEXT_SHA256: 614bda7dd19ad5934c773a607a7d0ceb674efff66a7ce8d62eb287e4156ed83d
+  PAYLOAD_GZIP_SHA256: 3a395fc2194fe207f32eb393b7680be6658875e8114aebb2c6210dd180b80504
+  OUT: /tmp/doctor-who-cycle-008-kreg-v1-materializer-current-main-v1
+  PAYLOAD_DIR: /tmp/doctor-who-cycle-008-kreg-v1-materializer-payload
+  OLD_WORKTREE: /tmp/doctor-who-cycle-008-kreg-v1-old-worktree
+  CURRENT_WORKTREE: /tmp/doctor-who-cycle-008-kreg-v1-current-worktree
+
+jobs:
+  qualify:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-v1-materializer-current-main-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind one-path carrier, old floor, and live main
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" "$PAYLOAD_DIR" "$OLD_WORKTREE" "$CURRENT_WORKTREE"
+          mkdir -p "$OUT" "$PAYLOAD_DIR"
+          test "$GITHUB_HEAD_REF" = "$AUTHORIZED_BRANCH"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = "1"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$BASE_SHA"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+
+          git fetch --no-tags --filter=blob:none origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+${OLD_BASE}:refs/remotes/kreg/old-base" \
+            "+${ORIGINAL_HEAD}:refs/remotes/kreg/original-head"
+          test "$(git show -s --format=%P "$ORIGINAL_HEAD")" = "$OLD_BASE"
+          test "$(git rev-parse "$ORIGINAL_HEAD:$PAYLOAD_PATH")" = "$PAYLOAD_BLOB"
+          start_main="$(git rev-parse refs/remotes/origin/main)"
+          git merge-base --is-ancestor "$OLD_BASE" "$start_main"
+          git merge-base --is-ancestor "$BASE_SHA" "$start_main"
+          git diff --name-only "$BASE_SHA"..."$start_main" | LC_ALL=C sort > "$OUT/base-to-live-main-paths.txt"
+          if test -s "$OUT/base-to-live-main-paths.txt"; then
+            awk '!/^\.github\/workflows\// { bad=1 } END { exit bad }' "$OUT/base-to-live-main-paths.txt"
+          fi
+          printf '%s\n' "$start_main" > "$OUT/start-main.txt"
+          printf 'carrier_head=%s\ncarrier_base=%s\nold_base=%s\nold_tree=%s\noriginal_head=%s\nstart_main=%s\nstart_main_tree=%s\n' \
+            "$HEAD_SHA" "$BASE_SHA" "$OLD_BASE" "$(git rev-parse "$OLD_BASE^{tree}")" \
+            "$ORIGINAL_HEAD" "$start_main" "$(git rev-parse "$start_main^{tree}")" \
+            > "$OUT/custody.txt"
+          git worktree add --detach "$OLD_WORKTREE" "$OLD_BASE"
+          test -z "$(git status --porcelain)"
+
+      - name: Recover exact V1 archive and actual members
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show "$ORIGINAL_HEAD:$PAYLOAD_PATH" > "$OUT/payload.b64"
+          test "$(sha256sum "$OUT/payload.b64" | awk '{print $1}')" = "$PAYLOAD_TEXT_SHA256"
+          base64 --decode "$OUT/payload.b64" > "$OUT/payload.tgz"
+          test "$(sha256sum "$OUT/payload.tgz" | awk '{print $1}')" = "$PAYLOAD_GZIP_SHA256"
+          PAYLOAD="$OUT/payload.tgz" TARGET="$PAYLOAD_DIR" OUT="$OUT" python3 - <<'PY'
+          import hashlib, json, os, pathlib, tarfile
+          archive = pathlib.Path(os.environ['PAYLOAD'])
+          target = pathlib.Path(os.environ['TARGET'])
+          expected = ['env.sh', 'manifest.json', 'materialize.py', 'runner.sh']
+          rows = []
+          with tarfile.open(archive, 'r:gz') as tf:
+              members = tf.getmembers()
+              names = [m.name for m in members]
+              if names != expected or len(names) != len(set(names)):
+                  raise SystemExit(f'payload member drift: {names!r}')
+              for member in members:
+                  path = pathlib.PurePosixPath(member.name)
+                  if path.is_absolute() or '..' in path.parts or not member.isfile() or member.issym() or member.islnk():
+                      raise SystemExit(f'unsafe payload member: {member.name!r}')
+              for member in members:
+                  data = tf.extractfile(member).read()
+                  (target / member.name).write_bytes(data)
+                  rows.append({'path': member.name, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
+          pathlib.Path(os.environ['OUT']).joinpath('payload-members.json').write_text(
+              json.dumps({'archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(), 'members': rows}, indent=2, sort_keys=True) + '\n'
+          )
+          PY
+          chmod 0555 "$PAYLOAD_DIR/env.sh" "$PAYLOAD_DIR/materialize.py" "$PAYLOAD_DIR/runner.sh"
+          bash -n "$PAYLOAD_DIR/runner.sh"
+          python3 -m py_compile "$PAYLOAD_DIR/materialize.py"
+          sha256sum "$PAYLOAD_DIR"/* > "$OUT/payload-members.sha256"
+
+      - name: Invoke the exact materializer through its declared interface
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PAYLOAD_DIR="$PAYLOAD_DIR" WORKTREE="$OLD_WORKTREE" OLD_BASE="$OLD_BASE" ORIGINAL_HEAD="$ORIGINAL_HEAD" \
+          ORIGINAL_BRANCH="$ORIGINAL_BRANCH" OUT="$OUT" GH_TOKEN="$GH_TOKEN" python3 - <<'PY'
+          import ast, json, os, pathlib, subprocess, sys
+
+          payload = pathlib.Path(os.environ['PAYLOAD_DIR'])
+          worktree = pathlib.Path(os.environ['WORKTREE'])
+          out = pathlib.Path(os.environ['OUT'])
+          source = (payload / 'materialize.py').read_text()
+          tree = ast.parse(source)
+          declared = []
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'add_argument':
+                  values = [arg.value for arg in node.args if isinstance(arg, ast.Constant) and isinstance(arg.value, str)]
+                  if values:
+                      declared.append(values)
+
+          env_probe = subprocess.run(
+              ['bash', '-c', 'set -a; source "$1"; env -0', '_', str(payload / 'env.sh')],
+              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+          )
+          if env_probe.returncode != 0:
+              raise SystemExit(env_probe.stderr.decode(errors='replace'))
+          env = os.environ.copy()
+          for item in env_probe.stdout.split(b'\0'):
+              if b'=' in item:
+                  key, value = item.split(b'=', 1)
+                  env[key.decode(errors='ignore')] = value.decode(errors='ignore')
+
+          old_tree = subprocess.check_output(['git', '-C', str(worktree), 'rev-parse', 'HEAD^{tree}'], text=True).strip()
+          explicit = {
+              'GH_TOKEN': os.environ.get('GH_TOKEN', ''),
+              'GITHUB_REPOSITORY': 'BigBirdReturns/undercast',
+              'GITHUB_EVENT_NAME': 'pull_request',
+              'GITHUB_HEAD_REF': os.environ['ORIGINAL_BRANCH'],
+              'GITHUB_BASE_REF': 'main',
+              'GITHUB_SHA': os.environ['ORIGINAL_HEAD'],
+              'HEAD_SHA': os.environ['ORIGINAL_HEAD'],
+              'HEAD_BRANCH': os.environ['ORIGINAL_BRANCH'],
+              'BASE_SHA': os.environ['OLD_BASE'],
+              'EXACT_MAIN': os.environ['OLD_BASE'],
+              'MAIN_SHA': os.environ['OLD_BASE'],
+              'MAIN_TREE': old_tree,
+              'BASE_TREE': old_tree,
+              'GITHUB_WORKSPACE': str(worktree),
+              'PWD': str(worktree),
+          }
+          env.update(explicit)
+          for key, value in list(env.items()):
+              upper = key.upper()
+              if any(token in upper for token in ('WORKTREE', 'REPO_ROOT', 'SOURCE_ROOT', 'TARGET_ROOT', 'CANDIDATE_ROOT', 'CHECKOUT_ROOT')):
+                  env[key] = str(worktree)
+          env['OUT'] = str(out / 'materializer-output')
+          pathlib.Path(env['OUT']).mkdir(parents=True, exist_ok=True)
+
+          options = {value for row in declared for value in row if value.startswith('--')}
+          positionals = [row[0] for row in declared if row and not row[0].startswith('-')]
+          base = [sys.executable, str(payload / 'materialize.py')]
+          candidates = []
+          for option in ('--root', '--repo', '--worktree', '--target', '--source'):
+              if option in options:
+                  candidates.append(base + [option, str(worktree)])
+          if positionals:
+              candidates.append(base + [str(worktree)] * len(positionals))
+          candidates.append(base)
+
+          results = []
+          success = None
+          for argv in candidates:
+              subprocess.run(['git', '-C', str(worktree), 'reset', '--hard', os.environ['OLD_BASE']], check=True, stdout=subprocess.DEVNULL)
+              subprocess.run(['git', '-C', str(worktree), 'clean', '-fdx'], check=True, stdout=subprocess.DEVNULL)
+              try:
+                  run = subprocess.run(argv, cwd=worktree, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=900)
+                  result = {
+                      'argv': argv,
+                      'returncode': run.returncode,
+                      'stdout': run.stdout,
+                      'stderr': run.stderr,
+                  }
+              except subprocess.TimeoutExpired as exc:
+                  result = {'argv': argv, 'returncode': 124, 'stdout': exc.stdout or '', 'stderr': exc.stderr or 'timeout'}
+              results.append({
+                  'argv': result['argv'], 'returncode': result['returncode'],
+                  'stdout_tail': result['stdout'][-20000:], 'stderr_tail': result['stderr'][-20000:],
+              })
+              if result['returncode'] == 0:
+                  success = result
+                  break
+          (out / 'materializer-attempts.json').write_text(json.dumps({'declared_arguments': declared, 'attempts': results}, indent=2) + '\n')
+          if success is None:
+              raise SystemExit('all schema-derived materializer invocations failed')
+          status = subprocess.check_output(['git', '-C', str(worktree), 'status', '--porcelain=v1'], text=True)
+          if not status.strip():
+              raise SystemExit('materializer succeeded without a candidate delta')
+          (out / 'materializer-success.json').write_text(json.dumps({'argv': success['argv'], 'status': status.splitlines()}, indent=2) + '\n')
+          PY
+
+      - name: Seal old-base candidate and prove bounded path surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C "$OLD_WORKTREE" config user.name undercast-cycle-replay
+          git -C "$OLD_WORKTREE" config user.email undercast-cycle-replay@users.noreply.github.com
+          git -C "$OLD_WORKTREE" add -A
+          git -C "$OLD_WORKTREE" diff --cached --check
+          git -C "$OLD_WORKTREE" diff --cached --name-only | LC_ALL=C sort > "$OUT/candidate-paths.txt"
+          test -s "$OUT/candidate-paths.txt"
+          test "$(wc -l < "$OUT/candidate-paths.txt")" -le 80
+          awk '/^(\.github\/|tmp\/|records\/)/ { bad=1 } END { exit bad }' "$OUT/candidate-paths.txt"
+          git -C "$OLD_WORKTREE" diff --cached --name-status > "$OUT/old-candidate-name-status.txt"
+          git -C "$OLD_WORKTREE" commit -m 'Doctor Who: materialize Kreg cycle 008 candidate'
+          old_candidate="$(git -C "$OLD_WORKTREE" rev-parse HEAD)"
+          printf '%s\n' "$old_candidate" > "$OUT/old-candidate-commit.txt"
+          git -C "$OLD_WORKTREE" rev-parse 'HEAD^{tree}' > "$OUT/old-candidate-tree.txt"
+          git -C "$OLD_WORKTREE" diff --binary "$OLD_BASE"..HEAD > "$OUT/candidate.patch"
+          git diff --name-only "$OLD_BASE"..."$(cat "$OUT/start-main.txt")" | LC_ALL=C sort > "$OUT/old-base-to-live-main-paths.txt"
+          comm -12 "$OUT/candidate-paths.txt" "$OUT/old-base-to-live-main-paths.txt" > "$OUT/overlap.txt"
+          test ! -s "$OUT/overlap.txt"
+
+      - name: Rebind exact candidate delta to live main
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_main="$(cat "$OUT/start-main.txt")"
+          git worktree add --detach "$CURRENT_WORKTREE" "$start_main"
+          git -C "$CURRENT_WORKTREE" apply --index --binary --3way "$OUT/candidate.patch"
+          git -C "$CURRENT_WORKTREE" diff --cached --check
+          git -C "$CURRENT_WORKTREE" diff --cached --name-only | LC_ALL=C sort > "$OUT/rebound-paths.txt"
+          diff -u "$OUT/candidate-paths.txt" "$OUT/rebound-paths.txt"
+          git -C "$CURRENT_WORKTREE" config user.name undercast-cycle-replay
+          git -C "$CURRENT_WORKTREE" config user.email undercast-cycle-replay@users.noreply.github.com
+          git -C "$CURRENT_WORKTREE" commit -m 'Doctor Who: materialize current-main Kreg cycle 008 candidate'
+          candidate="$(git -C "$CURRENT_WORKTREE" rev-parse HEAD)"
+          test "$(git -C "$CURRENT_WORKTREE" show -s --format=%P HEAD)" = "$start_main"
+          printf '%s\n' "$candidate" > "$OUT/candidate-commit.txt"
+          git -C "$CURRENT_WORKTREE" rev-parse 'HEAD^{tree}' > "$OUT/candidate-tree.txt"
+          git -C "$CURRENT_WORKTREE" diff --name-only HEAD^..HEAD | LC_ALL=C sort > "$OUT/committed-candidate-paths.txt"
+          diff -u "$OUT/candidate-paths.txt" "$OUT/committed-candidate-paths.txt"
+
+      - name: Run complete repository and rendered gate on clean candidate commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CURRENT_WORKTREE"
+          test -z "$(git status --porcelain)"
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate 2>&1 | tee "$OUT/complete-gate.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Package immutable candidate evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_main="$(cat "$OUT/start-main.txt")"
+          candidate="$(cat "$OUT/candidate-commit.txt")"
+          git -C "$CURRENT_WORKTREE" branch -f kreg-cycle008-candidate "$candidate"
+          git -C "$CURRENT_WORKTREE" bundle create "$OUT/candidate.bundle" kreg-cycle008-candidate "^$start_main"
+          git -C "$CURRENT_WORKTREE" diff --binary "$start_main".."$candidate" > "$OUT/current-main-candidate.patch"
+          git -C "$CURRENT_WORKTREE" archive --format=tar "$candidate" --pathspec-from-file="$OUT/candidate-paths.txt" > "$OUT/candidate-files.tar"
+          gzip -n -9 -c "$OUT/candidate-files.tar" > "$OUT/candidate-files.tar.gz"
+          START_MAIN="$start_main" CANDIDATE="$candidate" OUT="$OUT" python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          out = pathlib.Path(os.environ['OUT'])
+          paths = (out / 'candidate-paths.txt').read_text().splitlines()
+          receipt = {
+              'schema_version': 1,
+              'transaction': 'DOCTOR-WHO-CYCLE-008-KREG-V1-MATERIALIZER-CURRENT-MAIN-V1',
+              'status': 'candidate-qualified',
+              'start_main': os.environ['START_MAIN'],
+              'candidate_commit': os.environ['CANDIDATE'],
+              'candidate_tree': (out / 'candidate-tree.txt').read_text().strip(),
+              'candidate_path_count': len(paths),
+              'candidate_paths': paths,
+              'payload_text_sha256': '614bda7dd19ad5934c773a607a7d0ceb674efff66a7ce8d62eb287e4156ed83d',
+              'payload_gzip_sha256': '3a395fc2194fe207f32eb393b7680be6658875e8114aebb2c6210dd180b80504',
+              'old_base': '37d681f419db5ef874b2cc41df1c631c047218d8',
+              'repository_write': False,
+              'product_published': False,
+              'merge_performed': False,
+          }
+          canonical = json.dumps(receipt, sort_keys=True, separators=(',', ':')).encode()
+          receipt['receipt_sha256'] = hashlib.sha256(canonical).hexdigest()
+          (out / 'candidate-receipt.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
+          PY
+          sha256sum "$OUT/candidate.bundle" "$OUT/current-main-candidate.patch" "$OUT/candidate-files.tar.gz" "$OUT/candidate-receipt.json" > "$OUT/candidate-evidence.sha256"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$start_main"
+
+      - name: Upload immutable current-main candidate packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-v1-materializer-current-main-v1-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Report terminal candidate boundary
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status='failed-before-receipt'
+          candidate='unavailable'
+          tree='unavailable'
+          paths='unavailable'
+          receipt='unavailable'
+          if test -f "$OUT/candidate-receipt.json"; then
+            status="$(jq -r .status "$OUT/candidate-receipt.json")"
+            candidate="$(jq -r .candidate_commit "$OUT/candidate-receipt.json")"
+            tree="$(jq -r .candidate_tree "$OUT/candidate-receipt.json")"
+            paths="$(jq -r .candidate_path_count "$OUT/candidate-receipt.json")"
+            receipt="$(jq -r .receipt_sha256 "$OUT/candidate-receipt.json")"
+          fi
+          attempts='materializer diagnostics unavailable'
+          gate='gate log unavailable'
+          if test -f "$OUT/materializer-attempts.json"; then attempts="$(tail -c 12000 "$OUT/materializer-attempts.json")"; fi
+          if test -f "$OUT/complete-gate.log"; then gate="$(tail -n 120 "$OUT/complete-gate.log" | tail -c 12000)"; fi
+          body="$RUNNER_TEMP/kreg-v1-current-main-result.md"
+          {
+            printf 'KREG_V1_MATERIALIZER_CURRENT_MAIN_V1\n\n'
+            printf '```text\nstatus:    %s\ncandidate: %s\ntree:      %s\npaths:     %s\nreceipt:   %s\nrun:       %s\n```\n\n' "$status" "$candidate" "$tree" "$paths" "$receipt" "$GITHUB_RUN_ID"
+            printf '### Materializer attempts\n\n```json\n%s\n```\n\n' "$attempts"
+            printf '### Gate tail\n\n```text\n%s\n```\n' "$gate"
+          } > "$body"
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --raw-field body="$(cat "$body")" >/dev/null
