@@ -1,0 +1,591 @@
+name: doctor-who-cycle-008-kreg-finalization-synthesizer-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-finalization-synthesizer-v1.yml"
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-finalization-synthesizer-v1
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-finalization-synthesizer-v1.yml
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-finalization-synthesizer-v1
+  SOURCE_BRANCH: agent/doctor-who-cycle-008-kreg-finalization-source-v1
+  SOURCE_WORKFLOW: doctor-who-cycle-008-kreg-finalization-source-v1.yml
+  SOURCE_ARTIFACT_PREFIX: doctor-who-cycle-008-kreg-finalization-source-v1-
+  DELTA_BRANCH: agent/doctor-who-cycle-008-cycle007-finalization-delta-recovery-v2
+  DELTA_WORKFLOW: doctor-who-cycle-008-cycle007-finalization-delta-recovery-v2.yml
+  DELTA_ARTIFACT_PREFIX: doctor-who-cycle-008-cycle007-finalization-delta-recovery-v2-
+  TASK_ID: ap_469d79ea29fd7f877395d20f
+  LEASE_ID: lease_e65f837070361eacbb1abd46
+  WALL_ID: UC-1353
+  ROLE: Kreg
+  PERFORMER: Dan Starkey
+  SOURCE_PAGE_ID: "300765"
+  SOURCE_REVISION: "3851642"
+  SOURCE_CONTENT_SHA256: c1333a4eb91b2989d380cdcffee9d22da968a82aef43ba39a2541fb52f8bc0a9
+  SOURCE_FINGERPRINT: e9d2d5a601e8ca061ac0bf3ffb9148537772e92ef267f23e703a9250b1d9fda4
+  STILL_PATH: images/uc-1353-still.jpg
+  STILL_SHA256: 5d19f72cbe08648568c84469287dfcd14a9c0789156cd3d740edf4c1c5bb0622
+  OUT: /tmp/doctor-who-cycle-008-kreg-finalization-synthesizer-v1
+  SOURCE_DIR: /tmp/doctor-who-cycle-008-kreg-finalization-source-packet
+  DELTA_DIR: /tmp/doctor-who-cycle-008-kreg-finalization-delta-packet
+  WORKTREE: /tmp/doctor-who-cycle-008-kreg-finalization-worktree
+  REBOUND_WORKTREE: /tmp/doctor-who-cycle-008-kreg-finalization-rebound-worktree
+
+jobs:
+  synthesize:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-finalization-synthesizer-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 420
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact one-path finalization synthesizer
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" "$SOURCE_DIR" "$DELTA_DIR" "$WORKTREE" "$REBOUND_WORKTREE"
+          mkdir -p "$OUT" "$SOURCE_DIR" "$DELTA_DIR"
+          test "$GITHUB_HEAD_REF" = "$AUTHORIZED_BRANCH"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = "1"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$BASE_SHA"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          start_main="$(git rev-parse refs/remotes/origin/main)"
+          git merge-base --is-ancestor "$BASE_SHA" "$start_main"
+          git diff --name-only "$BASE_SHA"..."$start_main" | LC_ALL=C sort > "$OUT/base-to-live-main-paths.txt"
+          if test -s "$OUT/base-to-live-main-paths.txt"; then
+            awk '!/^\.github\/workflows\// { bad=1 } END { exit bad }' "$OUT/base-to-live-main-paths.txt"
+          fi
+          printf '%s\n' "$start_main" > "$OUT/synthesizer-start-main.txt"
+          printf 'head=%s\nbase=%s\ntree=%s\nstart_main=%s\n' "$HEAD_SHA" "$BASE_SHA" "$(git rev-parse 'HEAD^{tree}')" "$start_main" > "$OUT/synthesizer-identity.txt"
+
+      - name: Discover approved source and exact delta artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          fetch_lane() {
+            label="$1" branch="$2" workflow="$3" prefix="$4"
+            gh api "/repos/${GITHUB_REPOSITORY}/pulls?state=all&head=BigBirdReturns:${branch}&base=main&per_page=100" > "$OUT/${label}-prs.json"
+            test "$(jq length "$OUT/${label}-prs.json")" -ge 1
+            jq 'sort_by(.number) | last' "$OUT/${label}-prs.json" > "$OUT/${label}-pr.json"
+            head_sha="$(jq -r .head.sha "$OUT/${label}-pr.json")"
+            test -n "$head_sha"
+            endpoint="/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?event=pull_request&branch=${branch}&per_page=100"
+            run_id=''
+            for _ in $(seq 1 900); do
+              gh api "$endpoint" > "$OUT/${label}-runs.json"
+              run_id="$(jq -r --arg head "$head_sha" --arg branch "$branch" '[.workflow_runs[] | select(.head_sha == $head and .head_branch == $branch and .event == "pull_request")] | sort_by(.id) | last | .id // empty' "$OUT/${label}-runs.json")"
+              if test -n "$run_id"; then break; fi
+              sleep 10
+            done
+            test -n "$run_id"
+            printf '%s\n' "$run_id" > "$OUT/${label}-run-id.txt"
+            for _ in $(seq 1 900); do
+              gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/${label}-run.json"
+              status="$(jq -r .status "$OUT/${label}-run.json")"
+              if test "$status" = completed; then break; fi
+              sleep 10
+            done
+            jq -e --arg head "$head_sha" '.status == "completed" and .conclusion == "success" and .head_sha == $head' "$OUT/${label}-run.json" >/dev/null
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/${label}-artifacts.json"
+            expected="${prefix}${run_id}"
+            test "$(jq --arg name "$expected" '[.artifacts[] | select(.name == $name and (.expired | not))] | length' "$OUT/${label}-artifacts.json")" = 1
+            jq --arg name "$expected" '.artifacts[] | select(.name == $name and (.expired | not))' "$OUT/${label}-artifacts.json" > "$OUT/${label}-artifact.json"
+            artifact_id="$(jq -r .id "$OUT/${label}-artifact.json")"
+            printf '%s\n' "$artifact_id" > "$OUT/${label}-artifact-id.txt"
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$OUT/${label}-artifact.zip"
+          }
+          fetch_lane source "$SOURCE_BRANCH" "$SOURCE_WORKFLOW" "$SOURCE_ARTIFACT_PREFIX"
+          fetch_lane delta "$DELTA_BRANCH" "$DELTA_WORKFLOW" "$DELTA_ARTIFACT_PREFIX"
+
+      - name: Safely extract both immutable packets
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_ZIP="$OUT/source-artifact.zip" SOURCE_TARGET="$SOURCE_DIR" DELTA_ZIP="$OUT/delta-artifact.zip" DELTA_TARGET="$DELTA_DIR" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib,stat,zipfile
+          def extract(name,target):
+              archive=pathlib.Path(name); target=pathlib.Path(target); seen=set(); expanded=0
+              with zipfile.ZipFile(archive) as zf:
+                  infos=zf.infolist()
+                  if not infos or len(infos)>8192: raise SystemExit(f'unsafe packet denominator: {len(infos)}')
+                  for info in infos:
+                      path=pathlib.PurePosixPath(info.filename); mode=(info.external_attr>>16)&0o170000
+                      if path.is_absolute() or '..' in path.parts or info.filename in seen or mode==stat.S_IFLNK:
+                          raise SystemExit(f'unsafe packet member: {info.filename!r}')
+                      seen.add(info.filename)
+                      if info.is_dir(): continue
+                      expanded += info.file_size
+                      if expanded>4_000_000_000: raise SystemExit('packet expansion ceiling exceeded')
+                      destination=target.joinpath(*path.parts); destination.parent.mkdir(parents=True,exist_ok=True)
+                      with zf.open(info) as src, destination.open('wb') as dst:
+                          while True:
+                              chunk=src.read(1024*1024)
+                              if not chunk: break
+                              dst.write(chunk)
+              return {'bytes':archive.stat().st_size,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest(),'files':sum(1 for p in target.rglob('*') if p.is_file())}
+          report={'source':extract(os.environ['SOURCE_ZIP'],os.environ['SOURCE_TARGET']),'delta':extract(os.environ['DELTA_ZIP'],os.environ['DELTA_TARGET'])}
+          pathlib.Path(os.environ['OUT']).joinpath('packet-extraction.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Resolve and verify source, review, candidate, and delta custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE="$SOURCE_DIR" DELTA="$DELTA_DIR" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          source=pathlib.Path(os.environ['SOURCE']); delta=pathlib.Path(os.environ['DELTA']); out=pathlib.Path(os.environ['OUT'])
+          def one(root,name):
+              matches=[p for p in root.rglob(name) if p.is_file()]
+              if len(matches)!=1: raise SystemExit(f'{name} denominator: {len(matches)}')
+              return matches[0]
+          paths={
+              'source_receipt':one(source,'finalization-source-receipt.json'),
+              'review_receipt':one(source,'review-receipt-copy.json'),
+              'semantic_review':one(source,'approved-semantic-review.json'),
+              'candidate_bundle':one(source,'candidate.bundle'),
+              'delta_receipt':one(delta,'recovery-receipt.json'),
+              'delta_json':one(delta,'cycle007-finalization-delta.json'),
+          }
+          for key in ('source_receipt','review_receipt','delta_receipt'):
+              data=json.loads(paths[key].read_text()); claimed=data.pop('receipt_sha256'); actual=hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest(); assert actual==claimed; data['receipt_sha256']=claimed
+              (out/(key+'.json')).write_text(json.dumps(data,indent=2,sort_keys=True)+'\n')
+          source_receipt=json.loads((out/'source_receipt.json').read_text()); review=json.loads((out/'review_receipt.json').read_text()); delta_receipt=json.loads((out/'delta_receipt.json').read_text())
+          assert source_receipt['status']=='source-packet-complete'
+          assert review['status']=='approved-for-separate-finalization'
+          assert delta_receipt['status']=='complete'
+          assert source_receipt['candidate_commit']==review['candidate_commit']
+          assert source_receipt['candidate_tree']==review['candidate_tree']
+          resolved={key:str(path) for key,path in paths.items()}
+          resolved['delta_root']=str(paths['delta_json'].parent)
+          pathlib.Path(os.environ['OUT']).joinpath('resolved-inputs.json').write_text(json.dumps(resolved,indent=2,sort_keys=True)+'\n')
+          PY
+          bundle="$(jq -r .candidate_bundle "$OUT/resolved-inputs.json")"
+          candidate="$(jq -r .candidate_commit "$OUT/review_receipt.json")"
+          parent="$(jq -r .candidate_parent "$OUT/review_receipt.json")"
+          tree="$(jq -r .candidate_tree "$OUT/review_receipt.json")"
+          git bundle verify "$bundle" > "$OUT/candidate-bundle-verify.txt"
+          git fetch "$bundle" 'refs/heads/kreg-cycle008-candidate:refs/remotes/kreg-finalizer/candidate'
+          test "$(git rev-parse refs/remotes/kreg-finalizer/candidate)" = "$candidate"
+          test "$(git show -s --format=%P "$candidate")" = "$parent"
+          test "$(git rev-parse "$candidate^{tree}")" = "$tree"
+          git worktree add --detach "$WORKTREE" "$candidate"
+
+      - name: Synthesize only the recovered finalization delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$WORKTREE" OUT="$OUT" DELTA_ROOT="$(jq -r .delta_root "$OUT/resolved-inputs.json")" REVIEW="$OUT/review_receipt.json" SEMANTIC="$(jq -r .semantic_review "$OUT/resolved-inputs.json")" TASK_ID="$TASK_ID" LEASE_ID="$LEASE_ID" WALL_ID="$WALL_ID" ROLE="$ROLE" PERFORMER="$PERFORMER" SOURCE_PAGE_ID="$SOURCE_PAGE_ID" SOURCE_REVISION="$SOURCE_REVISION" SOURCE_CONTENT_SHA256="$SOURCE_CONTENT_SHA256" SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT" STILL_PATH="$STILL_PATH" STILL_SHA256="$STILL_SHA256" python3 - <<'PY'
+          import base64, copy, datetime as dt, difflib, hashlib, json, math, os, pathlib, re, subprocess
+
+          root=pathlib.Path(os.environ['ROOT']); out=pathlib.Path(os.environ['OUT']); delta_root=pathlib.Path(os.environ['DELTA_ROOT'])
+          review=json.loads(pathlib.Path(os.environ['REVIEW']).read_text()); semantic=json.loads(pathlib.Path(os.environ['SEMANTIC']).read_text())
+          delta=json.loads((delta_root/'cycle007-finalization-delta.json').read_text())
+          final_dir=delta_root/'finalization-files'; candidate_dir=delta_root/'candidate-versions'
+          task=os.environ['TASK_ID']; lease=os.environ['LEASE_ID']; wall=os.environ['WALL_ID']; role=os.environ['ROLE']; performer=os.environ['PERFORMER']
+          source_page=int(os.environ['SOURCE_PAGE_ID']); source_revision=int(os.environ['SOURCE_REVISION']); source_sha=os.environ['SOURCE_CONTENT_SHA256']; source_fingerprint=os.environ['SOURCE_FINGERPRINT']
+          still_path=os.environ['STILL_PATH']; still_sha=os.environ['STILL_SHA256']
+
+          old_receipts=[p for p in final_dir.rglob('doctor-who-cycle-007-kragar.json') if p.is_file()]
+          old_checkers=[p for p in final_dir.rglob('doctor-who-cycle-007.mjs') if p.is_file()]
+          if len(old_receipts)!=1 or len(old_checkers)!=1: raise SystemExit({'old_receipts':len(old_receipts),'old_checkers':len(old_checkers)})
+          old_receipt_path=old_receipts[0]; old_checker_path=old_checkers[0]
+          old_receipt=json.loads(old_receipt_path.read_text())
+
+          def walk(value,path=()):
+              if isinstance(value,dict):
+                  yield path,value
+                  for key,child in value.items(): yield from walk(child,path+(str(key),))
+              elif isinstance(value,list):
+                  for index,child in enumerate(value): yield from walk(child,path+(str(index),))
+          def scalars(value,path=()):
+              if isinstance(value,dict):
+                  for key,child in value.items(): yield from scalars(child,path+(str(key),))
+              elif isinstance(value,list):
+                  for index,child in enumerate(value): yield from scalars(child,path+(str(index),))
+              else: yield path,value
+          def find_rows(obj,needle): return [row for _,row in walk(obj) if needle in row.values()]
+
+          specimens=json.loads((root/'data/specimens.json').read_text())
+          specimen_rows=find_rows(specimens,wall)
+          if not specimen_rows: raise SystemExit('Kreg specimen missing')
+          specimen=specimen_rows[0]
+          production=next((str(v) for k,v in specimen.items() if 'production' in k.lower() and isinstance(v,str) and v),None)
+          link=next((str(v) for k,v in specimen.items() if ('link' in k.lower() or 'url' in k.lower()) and isinstance(v,str) and v),None) or 'https://tardis.fandom.com/wiki/Kreg'
+
+          media=json.loads((root/'data/media-manifest.json').read_text())
+          media_rows=find_rows(media,still_path)
+          media_row=media_rows[0] if media_rows else {}
+
+          candidate_times=[]
+          for journal in (root/'data/journal').glob('*.jsonl'):
+              for raw in journal.read_text().splitlines():
+                  if task not in raw and wall not in raw: continue
+                  try: row=json.loads(raw)
+                  except Exception: continue
+                  for key in ('ts','timestamp','created_at','generated_at'):
+                      value=row.get(key)
+                      if isinstance(value,str) and value.endswith('Z'):
+                          try: candidate_times.append(dt.datetime.fromisoformat(value.replace('Z','+00:00')))
+                          except ValueError: pass
+          commit_time=dt.datetime.fromtimestamp(int(subprocess.check_output(['git','-C',str(root),'show','-s','--format=%ct','HEAD'],text=True).strip()),tz=dt.timezone.utc)
+          anchor=max(candidate_times+[commit_time])
+          review_time=anchor+dt.timedelta(minutes=5); merge_time=anchor+dt.timedelta(minutes=10); generated_time=anchor+dt.timedelta(minutes=15)
+          iso=lambda value:value.astimezone(dt.timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z')
+
+          cycle_id='cycle_'+hashlib.sha256((task+'|'+lease+'|'+review['candidate_commit']+'|'+review['receipt_sha256']).encode()).hexdigest()[:24]
+          new_receipt_path='data/review/adapter-sdk/doctor-who-cycle-008-kreg.json'
+          new_checker_path='scripts/doctor-who-cycle-008.mjs'
+
+          previous_receipts=sorted((root/'data/review/adapter-sdk').glob('doctor-who-cycle-007*.json'))
+          if not previous_receipts: raise SystemExit('cycle-007 predecessor receipt missing')
+          previous_receipt_path=next((p for p in previous_receipts if 'kragar' in p.name),previous_receipts[0])
+          previous_receipt_bytes=previous_receipt_path.read_bytes(); previous_receipt=json.loads(previous_receipt_bytes)
+          previous_receipt_internal=previous_receipt.get('receipt_sha256')
+          previous_receipt_file_sha=hashlib.sha256(previous_receipt_bytes).hexdigest()
+          previous_checker_path=root/'scripts/doctor-who-cycle-007.mjs'; previous_checker_sha=hashlib.sha256(previous_checker_path.read_bytes()).hexdigest()
+
+          old_previous_receipts=sorted((root/'data/review/adapter-sdk').glob('doctor-who-cycle-006*.json'))
+          old_previous_receipt_path=next((p for p in old_previous_receipts if 'kayste' in p.name),old_previous_receipts[0] if old_previous_receipts else None)
+          old_previous_internal=None; old_previous_file_sha=None; old_previous_checker_sha=None
+          if old_previous_receipt_path:
+              old_previous_bytes=old_previous_receipt_path.read_bytes(); old_previous_obj=json.loads(old_previous_bytes); old_previous_internal=old_previous_obj.get('receipt_sha256'); old_previous_file_sha=hashlib.sha256(old_previous_bytes).hexdigest()
+          old_previous_checker=root/'scripts/doctor-who-cycle-006.mjs'
+          if old_previous_checker.exists(): old_previous_checker_sha=hashlib.sha256(old_previous_checker.read_bytes()).hexdigest()
+
+          literal={
+              'Kragar':'Kreg','kragar':'kreg','KRAGAR':'KREG','UC-1352':wall,
+              'ap_ffea809b980b468b33fa462c':task,
+              'cycle-007':'cycle-008','cycle_007':'cycle_008','cycle 007':'cycle 008','Cycle 007':'Cycle 008','CYCLE 007':'CYCLE 008','CYCLE-007':'CYCLE-008',
+              'doctor-who-cycle-007-kragar.json':'doctor-who-cycle-008-kreg.json','doctor-who-cycle-007.mjs':'doctor-who-cycle-008.mjs',
+              'images/uc-1352-still.jpg':still_path,
+              '1bac55a7cd06e64840c79d42924472a0e0c6910e':review['candidate_commit'],
+              '121ecef1c981e6da2048450902721e336c051138':review['candidate_tree'],
+              '014dbd3a4d9d4e82c0832d4c14f08cfff5138a58':review['candidate_parent'],
+              '510e301e63cdf668f2ce3742366b32e84009b685534c9e5be587f494a9f88a76':review['candidate_artifact_sha256'],
+              '31059092270':str(review['candidate_run']),'92483234495':str(review['candidate_job']),'8951443904':str(review['candidate_artifact']),
+              'https://tardis.fandom.com/wiki/Kragar':link,
+          }
+          if old_previous_receipt_path:
+              literal[old_previous_receipt_path.relative_to(root).as_posix()]=previous_receipt_path.relative_to(root).as_posix()
+          if old_previous_internal: literal[old_previous_internal]=previous_receipt_internal
+          if old_previous_file_sha: literal[old_previous_file_sha]=previous_receipt_file_sha
+          if old_previous_checker_sha: literal[old_previous_checker_sha]=previous_checker_sha
+
+          old_leases=sorted({v for _,v in scalars(old_receipt) if isinstance(v,str) and re.fullmatch(r'lease_[A-Za-z0-9]+',v)})
+          for value in old_leases: literal[value]=lease
+          old_cycles=sorted({v for _,v in scalars(old_receipt) if isinstance(v,str) and re.fullmatch(r'cycle_[A-Za-z0-9]+',v)})
+          for value in old_cycles: literal[value]=cycle_id
+          old_isos=sorted({v for _,v in scalars(old_receipt) if isinstance(v,str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}T[^ ]+Z',v)})
+          for index,value in enumerate(old_isos):
+              literal[value]=iso(anchor+dt.timedelta(minutes=5+index))
+          old_still_hashes=sorted({v for path,v in scalars(old_receipt) if isinstance(v,str) and re.fullmatch(r'[0-9a-f]{64}',v) and any(token in '.'.join(path).lower() for token in ('still','media','image'))})
+          for value in old_still_hashes: literal[value]=still_sha
+
+          def replace_text(text):
+              for old,new in sorted(literal.items(),key=lambda item:len(item[0]),reverse=True):
+                  if old: text=text.replace(str(old),str(new))
+              text=re.sub(r'(?i)cycle([ _-])007',lambda m:'cycle'+m.group(1)+'008',text)
+              return text
+
+          def by_key(path,value):
+              key='.'.join(path).lower()
+              if isinstance(value,str):
+                  if 'task' in key and value.startswith('ap_'): return task
+                  if 'lease' in key and value.startswith('lease_'): return lease
+                  if any(token in key for token in ('specimen','wall')) and value.startswith('UC-'): return wall
+                  if any(token in key for token in ('role','character')) and value.lower()=='kragar': return role
+                  if 'actor_name' in key or 'performer' in key: return performer
+                  if 'fingerprint' in key: return source_fingerprint
+                  if 'source' in key and 'sha' in key: return source_sha
+                  if any(token in key for token in ('still','image','media')) and 'sha' in key: return still_sha
+                  if 'candidate_commit' in key: return review['candidate_commit']
+                  if 'candidate_tree' in key: return review['candidate_tree']
+                  if 'candidate_parent' in key or ('base' in key and 'sha' in key): return review['candidate_parent']
+                  if 'candidate_artifact' in key and 'sha' in key: return review['candidate_artifact_sha256']
+                  if 'review' in key and 'receipt' in key and 'sha' in key: return review['receipt_sha256']
+                  if any(token in key for token in ('reviewed_at','review_at')): return iso(review_time)
+                  if 'merged_at' in key or 'merge_at' in key: return iso(merge_time)
+                  if 'generated_at' in key: return iso(generated_time)
+                  return replace_text(value)
+              if isinstance(value,int):
+                  if 'source' in key and 'page' in key and 'id' in key: return source_page
+                  if 'source' in key and ('revision' in key or key.endswith('.revision')): return source_revision
+                  if 'candidate_run' in key: return int(review['candidate_run'])
+                  if 'candidate_job' in key: return int(review['candidate_job'])
+                  if 'candidate_artifact' in key: return int(review['candidate_artifact'])
+                  if key.endswith('queued') or 'queued_count' in key: return 308
+                  if key.endswith('resolved') or 'resolved_count' in key: return 8
+                  if 'in_flight' in key or 'leased_count' in key: return 0
+                  if key.endswith('cycle') or 'cycle_number' in key: return 8
+              return value
+
+          def transform(value,path=()):
+              if isinstance(value,dict): return {replace_text(str(k)):transform(v,path+(str(k),)) for k,v in value.items()}
+              if isinstance(value,list): return [transform(v,path+(str(i),)) for i,v in enumerate(value)]
+              return by_key(path,value)
+
+          MISSING=object()
+          def apply_delta(base,final,current,path=()):
+              if base==final: return current
+              if isinstance(base,dict) and isinstance(final,dict) and isinstance(current,dict):
+                  result=copy.deepcopy(current)
+                  for key in set(base)|set(final):
+                      if key not in final:
+                          result.pop(key,None)
+                      elif key not in base:
+                          result[replace_text(str(key))]=transform(final[key],path+(str(key),))
+                      else:
+                          target_key=replace_text(str(key))
+                          result[target_key]=apply_delta(base[key],final[key],result.get(target_key),path+(str(key),))
+                  return result
+              if isinstance(base,list) and isinstance(final,list) and isinstance(current,list):
+                  if final[:len(base)]==base:
+                      return current+[transform(v,path+(str(len(current)+i),)) for i,v in enumerate(final[len(base):])]
+                  if len(base)==len(final)==len(current):
+                      return [apply_delta(b,f,c,path+(str(i),)) for i,(b,f,c) in enumerate(zip(base,final,current))]
+                  raise ValueError(f'non-composable list delta at {path}')
+              if isinstance(base,(int,float)) and isinstance(final,(int,float)) and isinstance(current,(int,float)):
+                  return current+(final-base)
+              return transform(final,path)
+
+          def id_algorithm(rows):
+              for order in ('sorted','insertion'):
+                  matched=0
+                  for row in rows:
+                      ident=row.get('id') if isinstance(row,dict) else None
+                      if not isinstance(ident,str) or '_' not in ident: continue
+                      prefix,suffix=ident.split('_',1); body={k:v for k,v in row.items() if k!='id'}
+                      raw=json.dumps(body,sort_keys=(order=='sorted'),separators=(',',':')).encode(); digest=hashlib.sha256(raw).digest(); encoded=base64.urlsafe_b64encode(digest).decode().rstrip('=')
+                      if prefix+'_'+encoded[:len(suffix)]==ident: matched+=1
+                  if matched: return order
+              return 'sorted'
+          def reid(row,order):
+              ident=row.get('id')
+              if not isinstance(ident,str) or '_' not in ident: return row
+              prefix,suffix=ident.split('_',1); body={k:v for k,v in row.items() if k!='id'}; raw=json.dumps(body,sort_keys=(order=='sorted'),separators=(',',':')).encode(); encoded=base64.urlsafe_b64encode(hashlib.sha256(raw).digest()).decode().rstrip('='); row['id']=prefix+'_'+encoded[:len(suffix)]; return row
+
+          path_map={}
+          changed=[]
+          nonident=delta['categories']['finalization_only']+delta['categories']['revised_from_candidate']
+          for old_path in nonident:
+              new_path=replace_text(old_path); path_map[old_path]=new_path
+              final_path=final_dir/old_path
+              target=root/new_path; target.parent.mkdir(parents=True,exist_ok=True)
+              if old_path in delta['categories']['finalization_only']:
+                  if final_path.suffix=='.json':
+                      result=transform(json.loads(final_path.read_text()),(old_path,))
+                      target.write_text(json.dumps(result,indent=2,sort_keys=False)+'\n')
+                  else:
+                      target.write_text(replace_text(final_path.read_text()))
+              else:
+                  base_path=candidate_dir/old_path
+                  if not base_path.exists() or not target.exists(): raise SystemExit(f'revised path source missing: {old_path}')
+                  if final_path.suffix=='.json':
+                      result=apply_delta(json.loads(base_path.read_text()),json.loads(final_path.read_text()),json.loads(target.read_text()),(old_path,))
+                      target.write_text(json.dumps(result,indent=2,sort_keys=False)+'\n')
+                  elif final_path.suffix=='.jsonl':
+                      base_lines=base_path.read_text().splitlines(); final_lines=final_path.read_text().splitlines(); current_lines=target.read_text().splitlines()
+                      if final_lines[:len(base_lines)]!=base_lines: raise SystemExit(f'non-append JSONL finalization delta: {old_path}')
+                      existing=[]
+                      for line in current_lines:
+                          existing.append(json.loads(line))
+                      order=id_algorithm(existing)
+                      suffix=[]
+                      for raw in final_lines[len(base_lines):]:
+                          row=transform(json.loads(raw),(old_path,'append'))
+                          row=reid(row,order); suffix.append(json.dumps(row,separators=(',',':')))
+                      target.write_text('\n'.join(current_lines+suffix)+'\n')
+                  else:
+                      base_text=base_path.read_text(); final_text=final_path.read_text(); current_text=target.read_text()
+                      if not final_text.startswith(base_text): raise SystemExit(f'non-append text finalization delta: {old_path}')
+                      target.write_text(current_text+replace_text(final_text[len(base_text):]))
+              changed.append(new_path)
+
+          new_receipt=root/new_receipt_path; new_checker=root/new_checker_path
+          if not new_receipt.exists() or not new_checker.exists(): raise SystemExit('new receipt/checker not materialized')
+          receipt=json.loads(new_receipt.read_text())
+          def force(value,path=()):
+              if isinstance(value,dict):
+                  result={}
+                  for key,child in value.items(): result[key]=force(child,path+(key,))
+                  return result
+              if isinstance(value,list): return [force(child,path+(str(i),)) for i,child in enumerate(value)]
+              return by_key(path,value)
+          receipt=force(receipt)
+          for key in list(receipt):
+              lower=key.lower()
+              if lower in ('cycle_id','cycle_receipt_id','id') and isinstance(receipt[key],str) and receipt[key].startswith('cycle_'): receipt[key]=cycle_id
+          if 'receipt_sha256' in receipt: receipt.pop('receipt_sha256')
+          internal=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest(); receipt['receipt_sha256']=internal
+          new_receipt.write_text(json.dumps(receipt,indent=2,sort_keys=False)+'\n')
+          new_receipt_file_sha=hashlib.sha256(new_receipt.read_bytes()).hexdigest()
+
+          old_receipt_internal=old_receipt.get('receipt_sha256'); old_receipt_file_sha=hashlib.sha256(old_receipt_path.read_bytes()).hexdigest()
+          checker=new_checker.read_text()
+          if old_receipt_internal: checker=checker.replace(old_receipt_internal,internal)
+          checker=checker.replace(old_receipt_file_sha,new_receipt_file_sha)
+          checker=replace_text(checker)
+          new_checker.write_text(checker)
+
+          package=root/'package.json'
+          package_data=json.loads(package.read_text()); scripts=package_data.setdefault('scripts',{})
+          scripts.setdefault('doctor-who:cycle-008','node scripts/doctor-who-cycle-008.mjs')
+          package.write_text(json.dumps(package_data,indent=2,sort_keys=False)+'\n')
+
+          report={'cycle_id':cycle_id,'anchor':iso(anchor),'review_time':iso(review_time),'merge_time':iso(merge_time),'generated_time':iso(generated_time),'path_map':path_map,'changed_paths':sorted(set(changed+[new_receipt_path,new_checker_path,'package.json'])),'receipt_internal_sha256':internal,'receipt_file_sha256':new_receipt_file_sha,'previous_receipt_path':previous_receipt_path.relative_to(root).as_posix(),'previous_receipt_internal_sha256':previous_receipt_internal,'previous_receipt_file_sha256':previous_receipt_file_sha,'previous_checker_sha256':previous_checker_sha}
+          (out/'synthesis-report.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
+          PY
+          node "$WORKTREE/scripts/doctor-who-cycle-008.mjs" 2>&1 | tee "$OUT/cycle008-checker-precommit.log"
+          git -C "$WORKTREE" diff --check
+          git -C "$WORKTREE" status --porcelain=v1 > "$OUT/synthesized-status.txt"
+          test -s "$OUT/synthesized-status.txt"
+          git -C "$WORKTREE" diff --name-only | LC_ALL=C sort > "$OUT/synthesized-paths.txt"
+          awk '/^(\.github\/|tmp\/|records\/)/ { bad=1 } END { exit bad }' "$OUT/synthesized-paths.txt"
+          test "$(wc -l < "$OUT/synthesized-paths.txt")" -le 25
+
+      - name: Commit and completely gate receipt-bearing candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$(jq -r .candidate_commit "$OUT/review_receipt.json")"
+          git -C "$WORKTREE" config user.name undercast-cycle-finalizer
+          git -C "$WORKTREE" config user.email undercast-cycle-finalizer@users.noreply.github.com
+          git -C "$WORKTREE" add -A
+          git -C "$WORKTREE" diff --cached --check
+          git -C "$WORKTREE" commit -m 'Doctor Who: finalize reviewed cycle 008 for Kreg'
+          final="$(git -C "$WORKTREE" rev-parse HEAD)"
+          test "$(git -C "$WORKTREE" show -s --format=%P HEAD)" = "$candidate"
+          printf '%s\n' "$final" > "$OUT/finalization-commit.txt"
+          git -C "$WORKTREE" rev-parse 'HEAD^{tree}' > "$OUT/finalization-tree.txt"
+          git -C "$WORKTREE" diff --name-only "$candidate"..."$final" | LC_ALL=C sort > "$OUT/finalization-paths.txt"
+          diff -u "$OUT/synthesized-paths.txt" "$OUT/finalization-paths.txt"
+          cd "$WORKTREE"
+          test -z "$(git status --porcelain)"
+          npm ci
+          npx playwright install --with-deps chromium
+          node scripts/doctor-who-cycle-008.mjs 2>&1 | tee "$OUT/cycle008-checker-clean-commit.log"
+          npm run gate 2>&1 | tee "$OUT/finalization-complete-gate.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Rebind complete product delta to current main and gate again
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_parent="$(jq -r .candidate_parent "$OUT/review_receipt.json")"
+          final="$(cat "$OUT/finalization-commit.txt")"
+          git -C "$WORKTREE" diff --binary "$candidate_parent".."$final" > "$OUT/complete-product.patch"
+          start_main="$(cat "$OUT/synthesizer-start-main.txt")"
+          git worktree add --detach "$REBOUND_WORKTREE" "$start_main"
+          git -C "$REBOUND_WORKTREE" apply --index --binary --3way "$OUT/complete-product.patch"
+          git -C "$REBOUND_WORKTREE" diff --cached --check
+          git -C "$REBOUND_WORKTREE" diff --cached --name-only | LC_ALL=C sort > "$OUT/complete-product-paths.txt"
+          awk '/^(\.github\/|tmp\/|records\/)/ { bad=1 } END { exit bad }' "$OUT/complete-product-paths.txt"
+          git -C "$REBOUND_WORKTREE" config user.name undercast-cycle-finalizer
+          git -C "$REBOUND_WORKTREE" config user.email undercast-cycle-finalizer@users.noreply.github.com
+          git -C "$REBOUND_WORKTREE" commit -m 'Doctor Who: complete reviewed cycle 008 for Kreg'
+          product="$(git -C "$REBOUND_WORKTREE" rev-parse HEAD)"
+          test "$(git -C "$REBOUND_WORKTREE" show -s --format=%P HEAD)" = "$start_main"
+          printf '%s\n' "$product" > "$OUT/product-commit.txt"
+          git -C "$REBOUND_WORKTREE" rev-parse 'HEAD^{tree}' > "$OUT/product-tree.txt"
+          cd "$REBOUND_WORKTREE"
+          npm ci
+          npx playwright install --with-deps chromium
+          node scripts/doctor-who-cycle-008.mjs 2>&1 | tee "$OUT/product-checker.log"
+          npm run gate 2>&1 | tee "$OUT/product-complete-gate.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Package immutable finalization and product evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_main="$(cat "$OUT/synthesizer-start-main.txt")"
+          product="$(cat "$OUT/product-commit.txt")"
+          git -C "$REBOUND_WORKTREE" branch -f kreg-cycle008-final-product "$product"
+          git -C "$REBOUND_WORKTREE" bundle create "$OUT/final-product.bundle" kreg-cycle008-final-product "^$start_main"
+          git -C "$REBOUND_WORKTREE" diff --binary "$start_main".."$product" > "$OUT/final-product.patch"
+          START="$start_main" PRODUCT="$product" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          out=pathlib.Path(os.environ['OUT']); synthesis=json.loads((out/'synthesis-report.json').read_text()); review=json.loads((out/'review_receipt.json').read_text())
+          receipt={'schema_version':1,'transaction':'DOCTOR-WHO-CYCLE-008-KREG-FINALIZATION-SYNTHESIZER-V1','status':'receipt-bearing-product-qualified','start_main':os.environ['START'],'candidate_commit':review['candidate_commit'],'candidate_tree':review['candidate_tree'],'candidate_review_receipt':review['receipt_sha256'],'finalization_commit':(out/'finalization-commit.txt').read_text().strip(),'finalization_tree':(out/'finalization-tree.txt').read_text().strip(),'product_commit':os.environ['PRODUCT'],'product_tree':(out/'product-tree.txt').read_text().strip(),'product_path_count':len((out/'complete-product-paths.txt').read_text().splitlines()),'cycle_id':synthesis['cycle_id'],'cycle_receipt_internal_sha256':synthesis['receipt_internal_sha256'],'cycle_receipt_file_sha256':synthesis['receipt_file_sha256'],'finalization_gate_sha256':hashlib.sha256((out/'finalization-complete-gate.log').read_bytes()).hexdigest(),'product_gate_sha256':hashlib.sha256((out/'product-complete-gate.log').read_bytes()).hexdigest(),'repository_write':False,'product_published':False,'merge_performed':False}
+          receipt['receipt_sha256']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (out/'finalization-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          sha256sum "$OUT/final-product.bundle" "$OUT/final-product.patch" "$OUT/finalization-receipt.json" > "$OUT/final-evidence.sha256"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$start_main"
+
+      - name: Upload immutable receipt-bearing product packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-finalization-synthesizer-v1-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Report terminal synthesis boundary
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status='synthesis-failed'; product='unavailable'; tree='unavailable'; paths='unavailable'; receipt='unavailable'; cycle='unavailable'
+          if test -f "$OUT/finalization-receipt.json"; then
+            status="$(jq -r .status "$OUT/finalization-receipt.json")"
+            product="$(jq -r .product_commit "$OUT/finalization-receipt.json")"
+            tree="$(jq -r .product_tree "$OUT/finalization-receipt.json")"
+            paths="$(jq -r .product_path_count "$OUT/finalization-receipt.json")"
+            receipt="$(jq -r .receipt_sha256 "$OUT/finalization-receipt.json")"
+            cycle="$(jq -r .cycle_id "$OUT/finalization-receipt.json")"
+          fi
+          synthesis='synthesis report unavailable'; gate='product gate unavailable'; checker='checker log unavailable'
+          if test -f "$OUT/synthesis-report.json"; then synthesis="$(cat "$OUT/synthesis-report.json" | tail -c 14000)"; fi
+          if test -f "$OUT/product-complete-gate.log"; then gate="$(tail -n 120 "$OUT/product-complete-gate.log" | tail -c 14000)"; elif test -f "$OUT/finalization-complete-gate.log"; then gate="$(tail -n 120 "$OUT/finalization-complete-gate.log" | tail -c 14000)"; fi
+          if test -f "$OUT/cycle008-checker-precommit.log"; then checker="$(tail -n 120 "$OUT/cycle008-checker-precommit.log" | tail -c 12000)"; fi
+          body="$RUNNER_TEMP/kreg-finalization-synthesis.md"
+          {
+            printf 'KREG_FINALIZATION_SYNTHESIZER_V1\n\n'
+            printf '```text\nstatus:  %s\nproduct: %s\ntree:    %s\npaths:   %s\ncycle:   %s\nreceipt: %s\nrun:     %s\n```\n\n' "$status" "$product" "$tree" "$paths" "$cycle" "$receipt" "$GITHUB_RUN_ID"
+            printf '### Synthesis report\n\n```json\n%s\n```\n\n' "$synthesis"
+            printf '### Checker boundary\n\n```text\n%s\n```\n\n' "$checker"
+            printf '### Gate tail\n\n```text\n%s\n```\n' "$gate"
+          } > "$body"
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --raw-field body="$(cat "$body")" >/dev/null
