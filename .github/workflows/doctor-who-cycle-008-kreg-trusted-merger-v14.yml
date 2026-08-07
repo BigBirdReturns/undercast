@@ -1,0 +1,324 @@
+name: doctor-who-cycle-008-kreg-trusted-merger-v14
+
+"on":
+  workflow_run:
+    workflows: ["doctor-who-cycle-008-kreg-trusted-publisher-v13"]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-trusted-merger-v14
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.name == 'doctor-who-cycle-008-kreg-trusted-publisher-v13' &&
+      github.event.workflow_run.event == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      handoff_id: ${{ steps.upload.outputs.artifact-id }}
+      handoff_digest: ${{ steps.upload.outputs.artifact-digest }}
+      canonical_parent: ${{ steps.settle.outputs.canonical_parent }}
+      product_commit: ${{ steps.settle.outputs.product_commit }}
+      product_tree: ${{ steps.settle.outputs.product_tree }}
+      product_pr: ${{ steps.settle.outputs.product_pr }}
+      product_branch: ${{ steps.settle.outputs.product_branch }}
+      source_run: ${{ steps.source.outputs.source_run }}
+      source_artifact: ${{ steps.source.outputs.source_artifact }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUT: /tmp/doctor-who-cycle-008-kreg-trusted-merger-v14-verify
+      SOURCE_RUN: ${{ github.event.workflow_run.id }}
+      SOURCE_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      SOURCE_HEAD: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_WORKFLOW: doctor-who-cycle-008-kreg-trusted-publisher-v13
+      TASK_ID: ap_469d79ea29fd7f877395d20f
+      LEASE_ID: lease_e65f837070361eacbb1abd46
+      WALL_ID: UC-1353
+      EXPECTED_PATHS: "48"
+      MEDIA_SHA256: 5d19f72cbe08648568c84469287dfcd14a9c0789156cd3d740edf4c1c5bb0622
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact successful V13 publisher run and receipt artifact
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,diagnostics,handoff,source,work}
+          trusted_main="$(git rev-parse HEAD)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$trusted_main"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > "$OUT/api/source-run.json"
+          jq -e --argjson run "$SOURCE_RUN" --argjson attempt "$SOURCE_ATTEMPT" --arg head "$SOURCE_HEAD" --arg workflow "$SOURCE_WORKFLOW" \
+            '.id==$run and .run_attempt==$attempt and .head_sha==$head and .name==$workflow and .event=="workflow_run" and .status=="completed" and .conclusion=="success" and .repository.full_name==env.GITHUB_REPOSITORY' "$OUT/api/source-run.json" >/dev/null
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/jobs?per_page=100" > "$OUT/api/source-jobs.json"
+          jq -e '[.jobs[] | select(.name=="verify" and .status=="completed" and .conclusion=="success")] | length==1' "$OUT/api/source-jobs.json" >/dev/null
+          jq -e '[.jobs[] | select(.name=="publish" and .status=="completed" and .conclusion=="success")] | length==1' "$OUT/api/source-jobs.json" >/dev/null
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/artifacts?per_page=100" > "$OUT/api/source-artifacts.json"
+          artifact="$(jq -c --arg name "doctor-who-cycle-008-kreg-trusted-publication-v13-$SOURCE_RUN-attempt-$SOURCE_ATTEMPT" '[.artifacts[] | select(.name==$name and .expired==false)] | if length==1 then .[0] else empty end' "$OUT/api/source-artifacts.json")"
+          test -n "$artifact"
+          artifact_id="$(jq -r '.id' <<<"$artifact")"
+          artifact_digest="$(jq -r '.digest' <<<"$artifact")"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$OUT/source/publication.zip"
+          test "$(sha256sum "$OUT/source/publication.zip" | awk '{print $1}')" = "${artifact_digest#sha256:}"
+          ZIP="$OUT/source/publication.zip" TARGET="$OUT/source/publication" python3 - <<'PY'
+          import os,pathlib,zipfile
+          z=pathlib.Path(os.environ['ZIP']); target=pathlib.Path(os.environ['TARGET']); target.mkdir()
+          with zipfile.ZipFile(z) as f:
+              names=f.namelist(); assert len(names)==len(set(names))
+              for i in f.infolist():
+                  p=pathlib.PurePosixPath(i.filename)
+                  assert not p.is_absolute() and '..' not in p.parts and not i.is_dir()
+                  data=f.read(i); out=target/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(data)
+          PY
+          printf 'SOURCE_ARTIFACT=%s\nSOURCE_ARTIFACT_DIGEST=%s\nTRUSTED_MAIN=%s\n' "$artifact_id" "$artifact_digest" "$trusted_main" >> "$GITHUB_ENV"
+          printf 'source_run=%s\nsource_artifact=%s\n' "$SOURCE_RUN" "$artifact_id" >> "$GITHUB_OUTPUT"
+
+      - name: Verify trusted publication receipt and exact product geometry
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$OUT/source/publication"
+          for p in trusted-publication-receipt.json settlement.json product-files.json product-paths.txt SHA256SUMS.pre SHA256SUMS; do test -f "$root/$p"; done
+          ROOT="$root" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          for line in (root/'SHA256SUMS.pre').read_text().splitlines():
+              digest,original=line.split(None,1); p=root/Path(original).name
+              assert p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==digest
+          assert hashlib.sha256((root/'SHA256SUMS.pre').read_bytes()).hexdigest()==(root/'SHA256SUMS').read_text().split()[0]
+          publication=json.loads((root/'trusted-publication-receipt.json').read_text()); pub_identity=publication.pop('identity')
+          assert hashlib.sha256(json.dumps(publication,sort_keys=True,separators=(',',':')).encode()).hexdigest()==pub_identity
+          settlement=json.loads((root/'settlement.json').read_text()); settlement_identity=settlement.pop('identity')
+          assert hashlib.sha256(json.dumps(settlement,sort_keys=True,separators=(',',':')).encode()).hexdigest()==settlement_identity
+          assert publication['status']=='draft-product-published' and settlement['status']=='verified-for-trusted-publication'
+          assert publication['task']==os.environ['TASK_ID'] and publication['lease']==os.environ['LEASE_ID'] and publication['wall_id']==os.environ['WALL_ID']
+          assert publication['path_count']==int(os.environ['EXPECTED_PATHS']) and publication['product_merge_authority'] is False and publication['force_update'] is False and publication['cycle_009_authorized'] is False
+          assert settlement['source_review_identity']==settlement.get('source_review_identity') and settlement['path_count']==int(os.environ['EXPECTED_PATHS'])
+          assert publication['publication_main']==settlement['publication_main']
+          paths=(root/'product-paths.txt').read_text().splitlines(); rows=json.loads((root/'product-files.json').read_text())
+          assert len(paths)==int(os.environ['EXPECTED_PATHS']) and paths==sorted(paths) and len(paths)==len(set(paths)) and [r['path'] for r in rows]==paths
+          assert all(not p.startswith('.github/workflows/') and not p.startswith('.github/doctor-who-cycle-008/') for p in paths)
+          (root/'trusted-publication-receipt.verified.json').write_text(json.dumps({**publication,'identity':pub_identity},indent=2,sort_keys=True)+'\n')
+          PY
+          publication_main="$(jq -r '.publication_main' "$root/trusted-publication-receipt.json")"
+          product_branch="$(jq -r '.product_branch' "$root/trusted-publication-receipt.json")"
+          product_commit="$(jq -r '.product_commit' "$root/trusted-publication-receipt.json")"
+          product_tree="$(jq -r '.product_tree' "$root/trusted-publication-receipt.json")"
+          product_pr="$(jq -r '.product_pr' "$root/trusted-publication-receipt.json")"
+          test "$TRUSTED_MAIN" = "$publication_main"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$publication_main"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$product_branch" --jq '.object.sha')" = "$product_commit"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$product_pr" > "$OUT/api/product-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$product_pr/files?per_page=100" > "$OUT/api/product-pr-files.json"
+          gh api "/repos/$GITHUB_REPOSITORY/git/commits/$product_commit" > "$OUT/api/product-commit.json"
+          jq -e --arg branch "$product_branch" --arg main "$publication_main" --arg commit "$product_commit" '.state=="open" and .draft==true and .merged==false and .base.ref=="main" and .base.sha==$main and .head.ref==$branch and .head.sha==$commit and .commits==1 and .changed_files==48' "$OUT/api/product-pr.json" >/dev/null
+          jq -r '.[].filename' "$OUT/api/product-pr-files.json" | LC_ALL=C sort > "$OUT/diagnostics/product-pr-paths.txt"
+          diff -u "$root/product-paths.txt" "$OUT/diagnostics/product-pr-paths.txt"
+          jq -e --arg parent "$publication_main" '.parents|length==1 and .[0].sha==$parent' "$OUT/api/product-commit.json" >/dev/null
+          test "$(jq -r '.tree.sha' "$OUT/api/product-commit.json")" = "$product_tree"
+          printf 'CANONICAL_PARENT=%s\nPRODUCT_BRANCH=%s\nPRODUCT_COMMIT=%s\nPRODUCT_TREE=%s\nPRODUCT_PR=%s\n' "$publication_main" "$product_branch" "$product_commit" "$product_tree" "$product_pr" >> "$GITHUB_ENV"
+
+      - name: Independently run permanent checks and complete rendered gate on exact product head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --filter=blob:none origin "$PRODUCT_COMMIT"
+          work="$OUT/work/product"
+          git worktree add --detach "$work" "$PRODUCT_COMMIT"
+          test "$(git -C "$work" show -s --format=%P HEAD)" = "$CANONICAL_PARENT"
+          test "$(git -C "$work" rev-parse 'HEAD^{tree}')" = "$PRODUCT_TREE"
+          test "$(git -C "$work" show "HEAD:images/uc-1353-still.jpg" | sha256sum | awk '{print $1}')" = "$MEDIA_SHA256"
+          git -C "$work" diff --name-only "$CANONICAL_PARENT"..HEAD | LC_ALL=C sort > "$OUT/diagnostics/product-head-paths.txt"
+          diff -u "$OUT/source/publication/product-paths.txt" "$OUT/diagnostics/product-head-paths.txt"
+          test -z "$(git -C "$work" status --porcelain)"
+          cd "$work"
+          node scripts/doctor-who-cycle-008.mjs
+          node scripts/doctor-who-cycle-007.mjs
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate 2>&1 | tee "$OUT/diagnostics/terminal-product-gate.log"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_PARENT"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$PRODUCT_BRANCH" --jq '.object.sha')" = "$PRODUCT_COMMIT"
+          git worktree remove --force "$work"
+
+      - name: Seal code-free fast-forward handoff
+        id: settle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); publication=json.loads((root/'source/publication/trusted-publication-receipt.json').read_text())
+          handoff={'status':'verified-for-canonical-fast-forward','merger_run':int(os.environ['GITHUB_RUN_ID']),'merger_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'source_run':int(os.environ['SOURCE_RUN']),'source_attempt':int(os.environ['SOURCE_ATTEMPT']),'source_head':os.environ['SOURCE_HEAD'],'source_artifact':int(os.environ['SOURCE_ARTIFACT']),'source_artifact_digest':os.environ['SOURCE_ARTIFACT_DIGEST'],'canonical_parent':os.environ['CANONICAL_PARENT'],'product_branch':os.environ['PRODUCT_BRANCH'],'product_commit':os.environ['PRODUCT_COMMIT'],'product_tree':os.environ['PRODUCT_TREE'],'product_pr':int(os.environ['PRODUCT_PR']),'path_count':48,'task':os.environ['TASK_ID'],'lease':os.environ['LEASE_ID'],'wall_id':os.environ['WALL_ID'],'cycle_id':publication['cycle_id'],'queue_before':{'queued':309,'resolved':7,'in_flight':0},'queue_after':{'queued':308,'resolved':8,'in_flight':0},'fast_forward_authorized':True,'force_update':False,'cycle_009_authorized':False,'outside_human_dependency':False}
+          canonical=json.dumps(handoff,sort_keys=True,separators=(',',':')).encode(); handoff['identity']=hashlib.sha256(canonical).hexdigest(); (root/'handoff/merge-settlement.json').write_text(json.dumps(handoff,indent=2,sort_keys=True)+'\n')
+          PY
+          cp "$OUT/source/publication/product-paths.txt" "$OUT/handoff/product-paths.txt"
+          cp "$OUT/source/publication/product-files.json" "$OUT/handoff/product-files.json"
+          cp "$OUT/source/publication/trusted-publication-receipt.json" "$OUT/handoff/trusted-publication-receipt.json"
+          find "$OUT/handoff" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/handoff/SHA256SUMS.pre"
+          sha256sum "$OUT/handoff/SHA256SUMS.pre" > "$OUT/handoff/SHA256SUMS"
+          printf 'canonical_parent=%s\nproduct_commit=%s\nproduct_tree=%s\nproduct_pr=%s\nproduct_branch=%s\n' "$CANONICAL_PARENT" "$PRODUCT_COMMIT" "$PRODUCT_TREE" "$PRODUCT_PR" "$PRODUCT_BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact V14 merge handoff
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-merge-handoff-v14-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-trusted-merger-v14-verify/handoff
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  merge:
+    needs: verify
+    if: needs.verify.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUT: /tmp/doctor-who-cycle-008-kreg-trusted-merger-v14-merge
+      HANDOFF_ID: ${{ needs.verify.outputs.handoff_id }}
+      HANDOFF_DIGEST: ${{ needs.verify.outputs.handoff_digest }}
+      CANONICAL_PARENT: ${{ needs.verify.outputs.canonical_parent }}
+      PRODUCT_COMMIT: ${{ needs.verify.outputs.product_commit }}
+      PRODUCT_TREE: ${{ needs.verify.outputs.product_tree }}
+      PRODUCT_PR: ${{ needs.verify.outputs.product_pr }}
+      PRODUCT_BRANCH: ${{ needs.verify.outputs.product_branch }}
+      SOURCE_RUN: ${{ needs.verify.outputs.source_run }}
+      SOURCE_ARTIFACT: ${{ needs.verify.outputs.source_artifact }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.canonical_parent }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact same-run merge handoff and terminal product refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,handoff,receipt,diagnostics}
+          test "$(git rev-parse HEAD)" = "$CANONICAL_PARENT"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_PARENT"
+          normalized="${HANDOFF_DIGEST#sha256:}"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$HANDOFF_ID" > "$OUT/api/handoff-metadata.json"
+          jq -e --argjson id "$HANDOFF_ID" --arg digest "sha256:$normalized" --argjson run "$GITHUB_RUN_ID" '.id==$id and .expired==false and .digest==$digest and .workflow_run.id==$run' "$OUT/api/handoff-metadata.json" >/dev/null
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$HANDOFF_ID/zip" > "$OUT/handoff.zip"
+          test "$(sha256sum "$OUT/handoff.zip" | awk '{print $1}')" = "$normalized"
+          ZIP="$OUT/handoff.zip" TARGET="$OUT/handoff" python3 - <<'PY'
+          import os,pathlib,zipfile
+          z=pathlib.Path(os.environ['ZIP']); target=pathlib.Path(os.environ['TARGET']); target.mkdir()
+          with zipfile.ZipFile(z) as f:
+              names=f.namelist(); assert len(names)==len(set(names))
+              for i in f.infolist():
+                  p=pathlib.PurePosixPath(i.filename)
+                  assert not p.is_absolute() and '..' not in p.parts and not i.is_dir()
+                  data=f.read(i); out=target/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(data)
+          PY
+          ROOT="$OUT/handoff" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); expected={'merge-settlement.json','product-paths.txt','product-files.json','trusted-publication-receipt.json','SHA256SUMS.pre','SHA256SUMS'}
+          assert {p.name for p in root.iterdir() if p.is_file()}==expected
+          for line in (root/'SHA256SUMS.pre').read_text().splitlines():
+              digest,original=line.split(None,1); p=root/Path(original).name
+              assert p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==digest
+          assert hashlib.sha256((root/'SHA256SUMS.pre').read_bytes()).hexdigest()==(root/'SHA256SUMS').read_text().split()[0]
+          settlement=json.loads((root/'merge-settlement.json').read_text()); identity=settlement.pop('identity')
+          assert hashlib.sha256(json.dumps(settlement,sort_keys=True,separators=(',',':')).encode()).hexdigest()==identity
+          assert settlement['status']=='verified-for-canonical-fast-forward' and settlement['merger_run']==int(os.environ['GITHUB_RUN_ID']) and settlement['merger_attempt']==int(os.environ['GITHUB_RUN_ATTEMPT'])
+          assert settlement['canonical_parent']==os.environ['CANONICAL_PARENT'] and settlement['product_commit']==os.environ['PRODUCT_COMMIT'] and settlement['product_tree']==os.environ['PRODUCT_TREE']
+          assert settlement['product_pr']==int(os.environ['PRODUCT_PR']) and settlement['product_branch']==os.environ['PRODUCT_BRANCH'] and settlement['path_count']==48
+          assert settlement['fast_forward_authorized'] is True and settlement['force_update'] is False and settlement['cycle_009_authorized'] is False
+          (root/'merge-settlement.verified.json').write_text(json.dumps({**settlement,'identity':identity},indent=2,sort_keys=True)+'\n')
+          PY
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$PRODUCT_BRANCH" --jq '.object.sha')" = "$PRODUCT_COMMIT"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$PRODUCT_PR" > "$OUT/api/product-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$PRODUCT_PR/files?per_page=100" > "$OUT/api/product-pr-files.json"
+          gh api "/repos/$GITHUB_REPOSITORY/git/commits/$PRODUCT_COMMIT" > "$OUT/api/product-commit.json"
+          jq -e --arg branch "$PRODUCT_BRANCH" --arg parent "$CANONICAL_PARENT" --arg commit "$PRODUCT_COMMIT" '.state=="open" and .draft==true and .merged==false and .base.ref=="main" and .base.sha==$parent and .head.ref==$branch and .head.sha==$commit and .commits==1 and .changed_files==48' "$OUT/api/product-pr.json" >/dev/null
+          jq -r '.[].filename' "$OUT/api/product-pr-files.json" | LC_ALL=C sort > "$OUT/diagnostics/product-pr-paths.txt"
+          diff -u "$OUT/handoff/product-paths.txt" "$OUT/diagnostics/product-pr-paths.txt"
+          jq -e --arg parent "$CANONICAL_PARENT" '.parents|length==1 and .[0].sha==$parent' "$OUT/api/product-commit.json" >/dev/null
+          test "$(jq -r '.tree.sha' "$OUT/api/product-commit.json")" = "$PRODUCT_TREE"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_PARENT"
+
+      - name: Fast-forward canonical main to the exact reviewed product commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n --arg sha "$PRODUCT_COMMIT" '{sha:$sha,force:false}' > "$OUT/ref-request.json"
+          gh api --method PATCH "/repos/$GITHUB_REPOSITORY/git/refs/heads/main" --input "$OUT/ref-request.json" > "$OUT/api/main-update.json"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$PRODUCT_COMMIT"
+          gh api "/repos/$GITHUB_REPOSITORY/compare/$CANONICAL_PARENT...$PRODUCT_COMMIT" > "$OUT/api/canonical-compare.json"
+          jq -e '.ahead_by==1 and .behind_by==0 and (.commits|length)==1 and (.files|length)==48' "$OUT/api/canonical-compare.json" >/dev/null
+          jq -r '.files[].filename' "$OUT/api/canonical-compare.json" | LC_ALL=C sort > "$OUT/diagnostics/canonical-product-paths.txt"
+          diff -u "$OUT/handoff/product-paths.txt" "$OUT/diagnostics/canonical-product-paths.txt"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/commits/$PRODUCT_COMMIT" --jq '.tree.sha')" = "$PRODUCT_TREE"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$PRODUCT_PR" > "$OUT/api/product-pr-after-fast-forward.json"
+          if [ "$(jq -r '.state' "$OUT/api/product-pr-after-fast-forward.json")" = open ]; then
+            gh api --method PATCH "/repos/$GITHUB_REPOSITORY/pulls/$PRODUCT_PR" -f state=closed > "$OUT/api/product-pr-closed.json"
+          fi
+
+      - name: Seal canonical cycle-008 merge receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); settlement=json.loads((root/'handoff/merge-settlement.json').read_text())
+          receipt={'status':'canonical-cycle-008-fast-forward-complete','merger_run':int(os.environ['GITHUB_RUN_ID']),'merger_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'source_run':int(os.environ['SOURCE_RUN']),'source_artifact':int(os.environ['SOURCE_ARTIFACT']),'canonical_parent':os.environ['CANONICAL_PARENT'],'canonical_main':os.environ['PRODUCT_COMMIT'],'canonical_tree':os.environ['PRODUCT_TREE'],'product_pr':int(os.environ['PRODUCT_PR']),'product_branch':os.environ['PRODUCT_BRANCH'],'path_count':48,'task':settlement['task'],'lease':settlement['lease'],'wall_id':settlement['wall_id'],'cycle_id':settlement['cycle_id'],'queue_before':{'queued':309,'resolved':7,'in_flight':0},'queue_after':{'queued':308,'resolved':8,'in_flight':0},'force_update':False,'cycle_009_authorized':False,'outside_human_dependency':False}
+          canonical=json.dumps(receipt,sort_keys=True,separators=(',',':')).encode(); receipt['identity']=hashlib.sha256(canonical).hexdigest(); (root/'receipt/canonical-merge-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          cp "$OUT/handoff/product-paths.txt" "$OUT/receipt/product-paths.txt"
+          cp "$OUT/handoff/product-files.json" "$OUT/receipt/product-files.json"
+          cp "$OUT/handoff/merge-settlement.json" "$OUT/receipt/merge-settlement.json"
+          find "$OUT/receipt" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/receipt/SHA256SUMS.pre"
+          sha256sum "$OUT/receipt/SHA256SUMS.pre" > "$OUT/receipt/SHA256SUMS"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$PRODUCT_COMMIT"
+
+      - name: Upload canonical cycle-008 merge receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-canonical-merge-v14-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-trusted-merger-v14-merge/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload merger diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-trusted-merger-v14-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-trusted-merger-v14-merge
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
