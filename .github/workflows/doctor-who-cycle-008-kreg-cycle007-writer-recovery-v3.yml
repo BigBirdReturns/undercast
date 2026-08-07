@@ -1,0 +1,282 @@
+name: doctor-who-cycle-008-kreg-cycle007-writer-recovery-v3
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v3.yml"
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-cycle007-writer-recovery-v3
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v3.yml
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v3
+  SOURCE_PR: "445"
+  SOURCE_HEAD: 76a224f0f8db154518f91bddc31574fac668bd8f
+  QUALIFIER_SHA256: f6247288c50da814856ec0cd7b5ed8e877bab85dc19c9407a48d0ca81c9a2c20
+  QUALIFIER_MANIFEST_SHA256: 0ba6c5a7853a602eeb437b5adf25b11354b3178f0290b7924fe03bb61f2f996d
+  WRITER_SHA256: d674b41cd76c393b62373eac8fe827f5ad4da42cc1793e3f86fbd8696c01e06e
+  WRITER_MANIFEST_SHA256: 9076a0ca6ec9ef8841f813835d13d0a3717e8744bf6d9e58d030a579dd48c006
+  COMMENT_MARKER: CYCLE008_KREG_RECOVERED_CYCLE007_WRITER_V3
+  OUT: /tmp/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v3
+
+jobs:
+  recover:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Recover and verify exact nested writer archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          RECOVERY_PR: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/qualifier" "$OUT/writer"
+
+          test "$GITHUB_HEAD_REF" = "$AUTHORIZED_BRANCH"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = "1"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$BASE_SHA"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          start_main="$(git rev-parse refs/remotes/origin/main)"
+          git merge-base --is-ancestor "$BASE_SHA" "$start_main"
+          git diff --name-only "$BASE_SHA"..."$start_main" | LC_ALL=C sort > "$OUT/base-to-live-main-paths.txt"
+          if test -s "$OUT/base-to-live-main-paths.txt"; then
+            awk '!/^\.github\/workflows\// { bad=1 } END { exit bad }' "$OUT/base-to-live-main-paths.txt"
+          fi
+          printf '%s\n' "$start_main" > "$OUT/start-main.txt"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${SOURCE_PR}" > "$OUT/source-pr.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/issues/${SOURCE_PR}/comments?per_page=100" > "$OUT/source-comments.json"
+
+          SOURCE_PR="$SOURCE_PR" SOURCE_HEAD="$SOURCE_HEAD" QUALIFIER_SHA256="$QUALIFIER_SHA256" \
+          QUALIFIER_MANIFEST_SHA256="$QUALIFIER_MANIFEST_SHA256" WRITER_SHA256="$WRITER_SHA256" \
+          WRITER_MANIFEST_SHA256="$WRITER_MANIFEST_SHA256" OUT="$OUT" python3 - <<'PY'
+          import base64, hashlib, itertools, json, os, pathlib, re, tarfile
+
+          out = pathlib.Path(os.environ['OUT'])
+          qdir = out / 'qualifier'
+          wdir = out / 'writer'
+          pr = json.loads((out / 'source-pr.json').read_text())
+          comments = json.loads((out / 'source-comments.json').read_text())
+          assert pr['number'] == int(os.environ['SOURCE_PR'])
+          assert pr['head']['sha'] == os.environ['SOURCE_HEAD']
+          assert pr['state'] == 'closed' and pr['merged'] is False
+
+          by_part = {n: [] for n in range(1, 6)}
+          marker = re.compile(r'^CYCLE007_V9_QUALIFIER_PAYLOAD_PART\s+(\d{2})/(\d{2})\r?\n')
+          for comment in comments:
+              body = str(comment.get('body') or '')
+              match = marker.match(body)
+              if not match or int(match.group(2)) != 5:
+                  continue
+              part = int(match.group(1))
+              if part not in by_part:
+                  continue
+              tail = body[match.end():]
+              if re.sub(r'[A-Za-z0-9+/=\s]', '', tail):
+                  continue
+              payload = ''.join(re.findall(r'[A-Za-z0-9+/=]', tail))
+              if payload:
+                  by_part[part].append({
+                      'comment_id': comment['id'],
+                      'comment_url': comment['html_url'],
+                      'payload': payload,
+                      'length': len(payload),
+                      'sha256': hashlib.sha256(payload.encode()).hexdigest(),
+                  })
+          if any(not by_part[n] for n in range(1, 6)):
+              raise SystemExit({n: len(v) for n, v in by_part.items()})
+
+          solutions = []
+          for choice in itertools.product(*(by_part[n] for n in range(1, 6))):
+              joined = ''.join(row['payload'] for row in choice)
+              try:
+                  decoded = base64.b64decode(joined, validate=True)
+              except Exception:
+                  continue
+              if hashlib.sha256(decoded).hexdigest() == os.environ['QUALIFIER_SHA256']:
+                  solutions.append((choice, joined, decoded))
+          if len(solutions) != 1:
+              raise SystemExit(f'exact qualifier solutions: {len(solutions)}')
+          choice, joined, qualifier_bytes = solutions[0]
+          (out / 'qualifier-payload.b64').write_text(joined)
+          (out / 'qualifier-payload.tgz').write_bytes(qualifier_bytes)
+          custody = []
+          for number, row in enumerate(choice, 1):
+              payload = row['payload']
+              (out / f'qualifier-part-{number:02d}.b64').write_text(payload)
+              custody.append({k: v for k, v in row.items() if k != 'payload'} | {'part': number})
+          (out / 'qualifier-comment-custody.json').write_text(json.dumps(custody, indent=2, sort_keys=True) + '\n')
+
+          def safe_extract(archive, target, expected=None, ceiling=50_000_000):
+              target.mkdir(parents=True, exist_ok=True)
+              with tarfile.open(archive, 'r:gz') as tf:
+                  members = tf.getmembers()
+                  names = [m.name for m in members]
+                  if not members or len(members) > 128 or len(names) != len(set(names)):
+                      raise SystemExit(f'unsafe member denominator: {len(members)}')
+                  if expected is not None and names != expected:
+                      raise SystemExit(f'archive member drift: {names!r}')
+                  total = 0
+                  for member in members:
+                      path = pathlib.PurePosixPath(member.name)
+                      if path.is_absolute() or '..' in path.parts or not member.isfile() or member.issym() or member.islnk():
+                          raise SystemExit(f'unsafe member: {member.name!r}')
+                      total += member.size
+                      if total > ceiling:
+                          raise SystemExit('archive expansion ceiling exceeded')
+                  for member in members:
+                      data = tf.extractfile(member).read()
+                      dest = target.joinpath(*pathlib.PurePosixPath(member.name).parts)
+                      dest.parent.mkdir(parents=True, exist_ok=True)
+                      dest.write_bytes(data)
+              return names
+
+          q_expected = [
+              'candidate-phase.sh', 'cycle007-v8-transport.tgz',
+              'expected-candidate-paths.txt', 'expected-final-paths.txt',
+              'final-phase.sh', 'package-product.mjs', 'payload-manifest.json',
+          ]
+          safe_extract(out / 'qualifier-payload.tgz', qdir, q_expected)
+          qmanifest_path = qdir / 'payload-manifest.json'
+          assert hashlib.sha256(qmanifest_path.read_bytes()).hexdigest() == os.environ['QUALIFIER_MANIFEST_SHA256']
+          qmanifest = json.loads(qmanifest_path.read_text())
+          qrows = qmanifest.get('files')
+          assert isinstance(qrows, list) and qrows
+          for row in qrows:
+              data = (qdir / row['path']).read_bytes()
+              assert len(data) == row['bytes']
+              assert hashlib.sha256(data).hexdigest() == row['sha256']
+
+          writer_archive = qdir / 'cycle007-v8-transport.tgz'
+          assert hashlib.sha256(writer_archive.read_bytes()).hexdigest() == os.environ['WRITER_SHA256']
+          writer_names = safe_extract(writer_archive, wdir)
+          manifests = [p for p in wdir.rglob('transport-manifest.json') if p.is_file()]
+          if len(manifests) != 1:
+              raise SystemExit(f'writer manifest denominator: {len(manifests)}')
+          wmanifest_path = manifests[0]
+          assert hashlib.sha256(wmanifest_path.read_bytes()).hexdigest() == os.environ['WRITER_MANIFEST_SHA256']
+          wmanifest = json.loads(wmanifest_path.read_text())
+          wrows = wmanifest.get('files')
+          assert isinstance(wrows, list) and wrows
+          for row in wrows:
+              data = (wdir / row['path']).read_bytes()
+              assert len(data) == row['bytes']
+              assert hashlib.sha256(data).hexdigest() == row['sha256']
+
+          inventory = []
+          for path in sorted(wdir.rglob('*')):
+              if path.is_file():
+                  data = path.read_bytes()
+                  inventory.append({
+                      'path': path.relative_to(wdir).as_posix(),
+                      'bytes': len(data),
+                      'sha256': hashlib.sha256(data).hexdigest(),
+                  })
+          report = {
+              'source_pr': int(os.environ['SOURCE_PR']),
+              'source_head': os.environ['SOURCE_HEAD'],
+              'qualifier_sha256': os.environ['QUALIFIER_SHA256'],
+              'qualifier_manifest_sha256': os.environ['QUALIFIER_MANIFEST_SHA256'],
+              'writer_sha256': os.environ['WRITER_SHA256'],
+              'writer_manifest_sha256': os.environ['WRITER_MANIFEST_SHA256'],
+              'writer_member_count': len(inventory),
+              'writer_members': inventory,
+              'executed': False,
+          }
+          (out / 'writer-inventory.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+          (out / 'writer-archive-members.json').write_text(json.dumps(writer_names, indent=2) + '\n')
+          (out / 'writer-payload.b64').write_text(base64.b64encode(writer_archive.read_bytes()).decode())
+          PY
+
+          test "$(sha256sum "$OUT/qualifier-payload.tgz" | awk '{print $1}')" = "$QUALIFIER_SHA256"
+          test "$(sha256sum "$OUT/qualifier/cycle007-v8-transport.tgz" | awk '{print $1}')" = "$WRITER_SHA256"
+
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$(cat "$OUT/start-main.txt")"
+          test -z "$(git status --porcelain)"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/issues/${RECOVERY_PR}/comments?per_page=100" > "$OUT/recovery-comments-before.json"
+          existing="$(jq --arg marker "$COMMENT_MARKER" '[.[] | select((.body // "") | startswith($marker))] | length' "$OUT/recovery-comments-before.json")"
+          if test "$existing" = "0"; then
+            INVENTORY="$OUT/writer-inventory.json" MARKER="$COMMENT_MARKER" python3 - <<'PY' > "$OUT/summary-comment.md"
+          import json, os, pathlib
+          report = json.loads(pathlib.Path(os.environ['INVENTORY']).read_text())
+          print(os.environ['MARKER'])
+          print()
+          print('## Exact cycle-007 writer archive recovered for cycle 008')
+          print()
+          print('```text')
+          for key in ('source_pr','source_head','qualifier_sha256','qualifier_manifest_sha256','writer_sha256','writer_manifest_sha256','writer_member_count','executed'):
+              print(f'{key}: {report[key]}')
+          print('```')
+          print()
+          print('Writer members:')
+          print()
+          print('```text')
+          for row in report['writer_members']:
+              print(f"{row['sha256']}  {row['bytes']:>8}  {row['path']}")
+          print('```')
+          PY
+            gh api --method POST "/repos/${GITHUB_REPOSITORY}/issues/${RECOVERY_PR}/comments" --raw-field body="$(cat "$OUT/summary-comment.md")" > "$OUT/summary-comment-response.json"
+
+            PAYLOAD="$OUT/writer-payload.b64" OUT="$OUT" python3 - <<'PY'
+          import json, math, os, pathlib
+          payload = pathlib.Path(os.environ['PAYLOAD']).read_text()
+          out = pathlib.Path(os.environ['OUT'])
+          size = 8000
+          parts = [payload[i:i+size] for i in range(0, len(payload), size)]
+          for index, part in enumerate(parts, 1):
+              body = f"{os.environ.get('COMMENT_MARKER','CYCLE008_KREG_RECOVERED_CYCLE007_WRITER_V3')}_PART {index:02d}/{len(parts):02d}\n{part}"
+              (out / f'writer-comment-{index:02d}.json').write_text(json.dumps({'body': body}))
+          (out / 'writer-comment-count.txt').write_text(str(len(parts)) + '\n')
+          PY
+            count="$(cat "$OUT/writer-comment-count.txt")"
+            for index in $(seq -w 1 "$count"); do
+              gh api --method POST "/repos/${GITHUB_REPOSITORY}/issues/${RECOVERY_PR}/comments" --input "$OUT/writer-comment-${index}.json" > "$OUT/writer-comment-response-${index}.json"
+            done
+          fi
+
+          (
+            cd "$OUT"
+            find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
+          )
+
+      - name: Upload exact recovered writer packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-cycle007-writer-recovery-v3-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
