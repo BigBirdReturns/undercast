@@ -1,0 +1,184 @@
+name: doctor-who-cycle-008-kreg-v14-installer
+
+"on":
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/doctor-who-cycle-008-kreg-v14-install-event.txt"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-v14-installer
+  cancel-in-progress: false
+
+jobs:
+  install:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-v14-install-event'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: write
+      pull-requests: read
+      checks: read
+      statuses: read
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MARKER_PATH: .github/doctor-who-cycle-008-kreg-v14-install-event.txt
+      MARKER_BRANCH: agent/doctor-who-cycle-008-kreg-v14-install-event
+      TARGET_BRANCH: agent/doctor-who-cycle-008-kreg-trusted-merger-v14-qualify
+      TARGET_PATH: .github/workflows/doctor-who-cycle-008-kreg-trusted-merger-v14.yml
+      SOURCE_BRANCH: agent/doctor-who-cycle-008-kreg-trusted-publisher-v13-qualify
+      SOURCE_WORKFLOW: doctor-who-cycle-008-kreg-trusted-publisher-v13
+      OUT: /tmp/doctor-who-cycle-008-kreg-v14-installer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-file marker and live main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,diagnostics,receipt,target,work}
+          live="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          test "$(git rev-parse HEAD)" = "$live"
+          marker_pr='${{ github.event.pull_request.number }}'
+          marker_head='${{ github.event.pull_request.head.sha }}'
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$marker_pr" > "$OUT/api/marker-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$marker_pr/files?per_page=100" > "$OUT/api/marker-files.json"
+          ROOT="$OUT" LIVE="$live" MARKER_PR="$marker_pr" MARKER_HEAD="$marker_head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); pr=json.loads((root/'api/marker-pr.json').read_text()); files=json.loads((root/'api/marker-files.json').read_text())
+          assert pr['number']==int(os.environ['MARKER_PR']) and pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['ref']=='main' and pr['base']['sha']==os.environ['LIVE']
+          assert pr['head']['ref']==os.environ['MARKER_BRANCH'] and pr['head']['sha']==os.environ['MARKER_HEAD']
+          assert pr['commits']==1 and pr['changed_files']==1
+          assert len(files)==1 and files[0]['filename']==os.environ['MARKER_PATH'] and files[0]['status']=='added'
+          PY
+          printf 'LIVE_MAIN=%s\nMARKER_PR=%s\nMARKER_HEAD=%s\n' "$live" "$marker_pr" "$marker_head" >> "$GITHUB_ENV"
+
+      - name: Discover exact V14 qualification and wait for green custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 540); do
+            gh api "/repos/$GITHUB_REPOSITORY/pulls?state=open&head=BigBirdReturns:$TARGET_BRANCH&per_page=100" > "$OUT/api/target-prs.json"
+            target="$(jq -c --arg branch "$TARGET_BRANCH" '[.[] | select(.head.ref==$branch and .base.ref=="main" and .state=="open" and .draft==true and .merged_at==null)] | if length==1 then .[0] else empty end' "$OUT/api/target-prs.json")"
+            if [ -n "$target" ]; then
+              head="$(jq -r '.head.sha' <<<"$target")"
+              gh api "/repos/$GITHUB_REPOSITORY/commits/$head/check-runs?per_page=100" > "$OUT/api/check-runs.json"
+              gh api "/repos/$GITHUB_REPOSITORY/commits/$head/status" > "$OUT/api/status.json"
+              if TARGET="$target" CHECKS="$OUT/api/check-runs.json" STATUSES="$OUT/api/status.json" python3 - <<'PY'
+          import json,os
+          target=json.loads(os.environ['TARGET']); checks=json.load(open(os.environ['CHECKS']))['check_runs']; statuses=json.load(open(os.environ['STATUSES']))['statuses']; by={}
+          for r in checks: by[r['name']]={'status':r['status'],'conclusion':r.get('conclusion')}
+          for r in statuses: by[r['context']]={'status':'completed','conclusion':'success' if r['state']=='success' else r['state']}
+          required={'publisher-custody','publisher-custody-or-guard','archive-contract'}
+          assert required<=set(by) and all(by[n]['status']=='completed' and by[n]['conclusion']=='success' for n in required)
+          assert target['commits']==1 and target['changed_files']==1
+          PY
+              then printf '%s\n' "$target" > "$OUT/target-pr.json"; break; fi
+            fi
+            sleep 20
+          done
+          test -s "$OUT/target-pr.json"
+          target_pr="$(jq -r '.number' "$OUT/target-pr.json")"; target_head="$(jq -r '.head.sha' "$OUT/target-pr.json")"; target_base="$(jq -r '.base.sha' "$OUT/target-pr.json")"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$target_pr/files?per_page=100" > "$OUT/api/target-files.json"
+          jq -e --arg path "$TARGET_PATH" 'length==1 and .[0].filename==$path and .[0].status=="added"' "$OUT/api/target-files.json" >/dev/null
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$TARGET_BRANCH" --jq '.object.sha')" = "$target_head"
+          printf 'TARGET_PR=%s\nTARGET_HEAD=%s\nTARGET_BASE=%s\n' "$target_pr" "$target_head" "$target_base" >> "$GITHUB_ENV"
+
+      - name: Prove workflow-only descendant safety and independently rescan V14
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --filter=blob:none origin "$TARGET_BASE" "$TARGET_HEAD" "$LIVE_MAIN"
+          test "$(git merge-base "$TARGET_BASE" "$LIVE_MAIN")" = "$TARGET_BASE"
+          gh api "/repos/$GITHUB_REPOSITORY/compare/$TARGET_BASE...$LIVE_MAIN" > "$OUT/api/base-to-live.json"
+          jq -e --arg base "$TARGET_BASE" --arg live "$LIVE_MAIN" --arg path "$TARGET_PATH" '.merge_base_commit.sha==$base and .head_commit.sha==$live and .behind_by==0 and ([.files[].filename] | all(startswith(".github/workflows/"))) and ([.files[].filename] | index($path) | not)' "$OUT/api/base-to-live.json" >/dev/null
+          gh api "/repos/$GITHUB_REPOSITORY/contents/$TARGET_PATH?ref=$TARGET_HEAD" > "$OUT/api/target-content.json"
+          jq -e '.type=="file" and .encoding=="base64"' "$OUT/api/target-content.json" >/dev/null
+          jq -r '.content' "$OUT/api/target-content.json" | tr -d '\n' | base64 --decode > "$OUT/target/merger.yml"
+          blob="$(jq -r '.sha' "$OUT/api/target-content.json")"; test "$(git hash-object "$OUT/target/merger.yml")" = "$blob"
+          python3 - <<'PY'
+          import yaml
+          d=yaml.safe_load(open('/tmp/doctor-who-cycle-008-kreg-v14-installer/target/merger.yml'))
+          assert isinstance(d,dict) and set(d.get('jobs',{}))=={'verify','merge'} and d.get('permissions')=={}
+          PY
+          ruby -e 'require "yaml"; d=YAML.safe_load(File.read(ARGV[0]), aliases: true); abort unless d.is_a?(Hash) && d["jobs"].is_a?(Hash)' "$OUT/target/merger.yml"
+          work="$OUT/work/scan"; git worktree add --detach "$work" "$LIVE_MAIN"; mkdir -p "$work/$(dirname "$TARGET_PATH")"; cp "$OUT/target/merger.yml" "$work/$TARGET_PATH"
+          cd "$work"; npm ci; node scripts/publisher-custody.mjs check-workflows; node scripts/publisher-condition-custody.mjs check-workflows; node scripts/gate-fixtures.mjs
+          test -z "$(git status --porcelain --untracked-files=no)"; git worktree remove --force "$work"
+          printf 'TARGET_BLOB=%s\n' "$blob" >> "$GITHUB_ENV"
+
+      - name: Fast-forward only the exact V14 workflow path
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$LIVE_MAIN"
+          base_tree="$(gh api "/repos/$GITHUB_REPOSITORY/git/commits/$LIVE_MAIN" --jq '.tree.sha')"
+          jq -n --arg base "$base_tree" --arg path "$TARGET_PATH" --arg sha "$TARGET_BLOB" '{base_tree:$base,tree:[{path:$path,mode:"100644",type:"blob",sha:$sha}]}' > "$OUT/tree.json"
+          tree="$(gh api --method POST "/repos/$GITHUB_REPOSITORY/git/trees" --input "$OUT/tree.json" --jq '.sha')"
+          jq -n --arg message 'CI: install trusted Doctor Who cycle 008 Kreg merger V14' --arg tree "$tree" --arg parent "$LIVE_MAIN" '{message:$message,tree:$tree,parents:[$parent]}' > "$OUT/commit.json"
+          commit="$(gh api --method POST "/repos/$GITHUB_REPOSITORY/git/commits" --input "$OUT/commit.json" --jq '.sha')"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$LIVE_MAIN"
+          jq -n --arg sha "$commit" '{sha:$sha,force:false}' > "$OUT/ref.json"
+          gh api --method PATCH "/repos/$GITHUB_REPOSITORY/git/refs/heads/main" --input "$OUT/ref.json" > "$OUT/api/ref-update.json"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$commit"
+          gh api "/repos/$GITHUB_REPOSITORY/compare/$LIVE_MAIN...$commit" > "$OUT/api/install-compare.json"
+          jq -e --arg path "$TARGET_PATH" '.ahead_by==1 and .behind_by==0 and (.files|length)==1 and .files[0].filename==$path and .files[0].status=="added"' "$OUT/api/install-compare.json" >/dev/null
+          printf 'INSTALLED_MAIN=%s\nINSTALLED_TREE=%s\n' "$commit" "$tree" >> "$GITHUB_ENV"
+
+      - name: Rearm successful V13 publisher only if it predated installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs?event=workflow_run&per_page=100" > "$OUT/api/source-runs.json"
+          row="$(jq -c --arg name "$SOURCE_WORKFLOW" '[.workflow_runs[] | select(.name==$name)] | sort_by(.created_at) | last // empty' "$OUT/api/source-runs.json")"
+          rearmed=false
+          if [ -n "$row" ] && [ "$(jq -r '.status' <<<"$row")" = completed ] && [ "$(jq -r '.conclusion' <<<"$row")" = success ]; then
+            run="$(jq -r '.id' <<<"$row")"; gh api --method POST "/repos/$GITHUB_REPOSITORY/actions/runs/$run/rerun" --input - <<<'{}' >/dev/null; rearmed=true; printf '%s\n' "$run" > "$OUT/rearmed-source-run.txt"
+          fi
+          printf '%s\n' "$rearmed" > "$OUT/source-rearmed.txt"
+
+      - name: Seal V14 installer receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); receipt={'status':'trusted-merger-v14-installed','installer_run':int(os.environ['GITHUB_RUN_ID']),'installer_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'marker_pr':int(os.environ['MARKER_PR']),'marker_head':os.environ['MARKER_HEAD'],'target_pr':int(os.environ['TARGET_PR']),'target_head':os.environ['TARGET_HEAD'],'target_blob':os.environ['TARGET_BLOB'],'previous_main':os.environ['LIVE_MAIN'],'installed_main':os.environ['INSTALLED_MAIN'],'installed_tree':os.environ['INSTALLED_TREE'],'installed_path':os.environ['TARGET_PATH'],'source_rearmed':(root/'source-rearmed.txt').read_text().strip()=='true','product_state_written':False,'queue_mutated':False,'cycle_009_authorized':False,'outside_human_dependency':False}
+          canonical=json.dumps(receipt,sort_keys=True,separators=(',',':')).encode(); receipt['identity']=hashlib.sha256(canonical).hexdigest(); (root/'receipt/installer-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          find "$OUT/receipt" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/receipt/SHA256SUMS.pre"; sha256sum "$OUT/receipt/SHA256SUMS.pre" > "$OUT/receipt/SHA256SUMS"
+
+      - name: Upload V14 installer receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-v14-installer-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-v14-installer/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload V14 installer diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-v14-installer-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-v14-installer
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
