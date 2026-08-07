@@ -1,0 +1,165 @@
+name: doctor-who-cycle-008-kreg-v9e-payload-inspector
+
+"on":
+  pull_request:
+    types: [opened, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-v9e-payload-inspector.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-v9e-payload-inspector-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  BASE: 7ae6f5fde95b78caea03e1aafea618d3f05dfe32
+  PAYLOAD_SHA: 36a16b313bf3cc8db20faa9e12a3cfdecad5f3af
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-v9e-payload-inspector
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-v9e-payload-inspector.yml
+  OUT: /tmp/doctor-who-cycle-008-kreg-v9e-payload-inspector
+
+jobs:
+  inspect:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-v9e-payload-inspector'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-path inspector and immutable payload branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git show -s --format=%P HEAD)" = "$BASE"
+          test "$(git rev-list --count "$BASE"..HEAD)" = 1
+          printf '%s\n' "$SELF" > /tmp/expected-inspector-paths.txt
+          git diff --name-only "$BASE"...HEAD | LC_ALL=C sort > /tmp/actual-inspector-paths.txt
+          diff -u /tmp/expected-inspector-paths.txt /tmp/actual-inspector-paths.txt
+          git fetch --no-tags --filter=blob:none origin "$PAYLOAD_SHA"
+          git merge-base --is-ancestor "$BASE" "$PAYLOAD_SHA"
+          test "$(git rev-list --count "$BASE".."$PAYLOAD_SHA")" = 5
+          for n in 00 01 02 03 04; do
+            printf '.github/doctor-who-cycle-008/kreg-final-product-v9e.part-%s.b64\n' "$n"
+          done > /tmp/expected-payload-paths.txt
+          git diff --name-only "$BASE"..."$PAYLOAD_SHA" | LC_ALL=C sort > /tmp/actual-payload-paths.txt
+          diff -u /tmp/expected-payload-paths.txt /tmp/actual-payload-paths.txt
+          test -z "$(git status --porcelain)"
+
+      - name: Reconstruct and statically inspect exact V9e payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{payload,extracted,result}
+          : > "$OUT/payload/joined.b64"
+          for n in 00 01 02 03 04; do
+            path=".github/doctor-who-cycle-008/kreg-final-product-v9e.part-$n.b64"
+            git show "$PAYLOAD_SHA:$path" > "$OUT/payload/part-$n.b64"
+            tr -d '[:space:]' < "$OUT/payload/part-$n.b64" >> "$OUT/payload/joined.b64"
+          done
+          base64 --decode "$OUT/payload/joined.b64" > "$OUT/payload/payload.tar.xz"
+          OUT="$OUT" python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, re, tarfile
+          out=pathlib.Path(os.environ["OUT"])
+          archive=out/"payload/payload.tar.xz"
+          target=out/"extracted"
+          members=[]
+          total=0
+          with tarfile.open(archive, "r:xz") as tf:
+              for m in tf.getmembers():
+                  p=pathlib.PurePosixPath(m.name)
+                  if p.is_absolute() or ".." in p.parts or not m.isfile() or m.issym() or m.islnk():
+                      raise SystemExit(f"unsafe payload member: {m.name!r}")
+                  total += m.size
+                  if total > 10_000_000:
+                      raise SystemExit("payload expansion ceiling exceeded")
+                  members.append(m.name)
+              if len(members) != len(set(members)):
+                  raise SystemExit("duplicate payload members")
+              tf.extractall(target)
+          expected_joined_sha="bf084419659110104b4b7b116b328d7907d6ed95b2996fb9375e10092cd68ff8"
+          expected_archive_sha="0fcf1de0881e4879505a9da28edc769915e496ffe325e06440f09ee7e8a05f4c"
+          b64_re=re.compile(rb"[A-Za-z0-9+/=\r\n\t ]{18000,19000}")
+          report={
+              "payload_archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+              "payload_members": [],
+              "matches": [],
+          }
+          exact=None
+          for path in sorted(target.rglob("*")):
+              if not path.is_file():
+                  continue
+              data=path.read_bytes()
+              rel=path.relative_to(target).as_posix()
+              report["payload_members"].append({
+                  "path": rel, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()
+              })
+              candidates=[data]
+              candidates.extend(m.group(0) for m in b64_re.finditer(data))
+              for candidate in candidates:
+                  compact=re.sub(rb"\s+", b"", candidate)
+                  if len(compact)==18320 and hashlib.sha256(compact).hexdigest()==expected_joined_sha:
+                      exact=compact.decode("ascii")
+                      report["matches"].append({"path": rel, "kind": "exact-joined-base64"})
+                  try:
+                      decoded=base64.b64decode(compact, validate=True)
+                  except Exception:
+                      continue
+                  if hashlib.sha256(decoded).hexdigest()==expected_archive_sha:
+                      exact=compact.decode("ascii")
+                      report["matches"].append({"path": rel, "kind": "base64-of-exact-code-archive"})
+          if exact is None:
+              for path in sorted(target.rglob("*")):
+                  if not path.is_file():
+                      continue
+                  data=path.read_bytes()
+                  if hashlib.sha256(data).hexdigest()==expected_archive_sha:
+                      exact=base64.b64encode(data).decode("ascii")
+                      report["matches"].append({
+                          "path": path.relative_to(target).as_posix(),
+                          "kind": "exact-code-archive"
+                      })
+                      break
+          (out/"result/report.json").write_text(json.dumps(report, indent=2, sort_keys=True)+"\n")
+          print(json.dumps(report, indent=2, sort_keys=True))
+          if exact is None:
+              raise SystemExit("exact 18,320-byte joined code Base64 not recovered")
+          if len(exact)!=18320 or hashlib.sha256(exact.encode()).hexdigest()!=expected_joined_sha:
+              raise SystemExit("recovered joined Base64 custody drift")
+          part5=exact[16000:]
+          if len(part5)!=2320:
+              raise SystemExit("recovered part 5 length drift")
+          digest=hashlib.sha256(part5.encode()).hexdigest()
+          if digest!="f4996984e07d1181c8c2ab08f6bb442b0337f06cbc599e2f81d1654cb405aa5a":
+              raise SystemExit("recovered part 5 digest drift")
+          body=(
+              "CYCLE008_KREG_V9E_CODE_PART 05/05 "
+              f"SHA256 {digest} LENGTH {len(part5)}\n{part5}"
+          )
+          (out/"result/exact-part-05-comment.txt").write_text(body)
+          print("RECOVERED_EXACT_PART_05_BEGIN")
+          print(body)
+          print("RECOVERED_EXACT_PART_05_END")
+          PY
+
+      - name: Upload exact static inspection packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-v9e-payload-inspection-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-v9e-payload-inspector
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
