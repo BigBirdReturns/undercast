@@ -1,0 +1,340 @@
+name: doctor-who-cycle-008-kreg-reviewed-product-publisher-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-reviewed-product-publisher-v1.yml"
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-reviewed-product-publisher-v1
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-reviewed-product-publisher-v1.yml
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-reviewed-product-publisher-v1
+  REVIEW_BRANCH: agent/doctor-who-cycle-008-kreg-final-product-review-v1
+  REVIEW_WORKFLOW: doctor-who-cycle-008-kreg-final-product-review-v1.yml
+  REVIEW_ARTIFACT_PREFIX: doctor-who-cycle-008-kreg-final-product-review-v1-
+  PRODUCT_BRANCH: agent/doctor-who-cycle-008-kreg-product-v1
+  PRODUCT_TITLE: Doctor Who: complete reviewed cycle 008 for Kreg
+  CHECKER_PATH: scripts/doctor-who-cycle-008.mjs
+  OUT: /tmp/doctor-who-cycle-008-kreg-reviewed-product-publisher-v1
+  ARTIFACT_DIR: /tmp/doctor-who-cycle-008-kreg-reviewed-product-review-artifact
+  WORKTREE: /tmp/doctor-who-cycle-008-kreg-reviewed-product-publication-worktree
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-reviewed-product-publisher-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 480
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact one-path same-repository publisher
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" "$ARTIFACT_DIR" "$WORKTREE"
+          mkdir -p "$OUT" "$ARTIFACT_DIR"
+          test "$GITHUB_HEAD_REF" = "$AUTHORIZED_BRANCH"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = "1"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          printf '%s\n' "$SELF" > "$OUT/expected-publisher-paths.txt"
+          git diff --name-only "$BASE_SHA"...HEAD | LC_ALL=C sort > "$OUT/actual-publisher-paths.txt"
+          diff -u "$OUT/expected-publisher-paths.txt" "$OUT/actual-publisher-paths.txt"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          publish_main="$(git rev-parse refs/remotes/origin/main)"
+          git merge-base --is-ancestor "$BASE_SHA" "$publish_main"
+          git diff --name-only "$BASE_SHA"..."$publish_main" | LC_ALL=C sort > "$OUT/base-to-publish-main-paths.txt"
+          if test -s "$OUT/base-to-publish-main-paths.txt"; then
+            awk '!/^\.github\/workflows\// { bad=1 } END { exit bad }' "$OUT/base-to-publish-main-paths.txt"
+          fi
+          printf '%s\n' "$publish_main" > "$OUT/publish-main.txt"
+          printf '%s\n' "$PRODUCT_BRANCH" > "$OUT/product-branch.txt"
+          printf 'head=%s\nbase=%s\npublish_main=%s\npublish_main_tree=%s\n' "$HEAD_SHA" "$BASE_SHA" "$publish_main" "$(git rev-parse "$publish_main^{tree}")" > "$OUT/publisher-identity.txt"
+          if git ls-remote --exit-code --heads origin "$PRODUCT_BRANCH" >/dev/null 2>&1; then
+            echo 'product branch already exists' >&2
+            exit 1
+          fi
+          test -z "$(git status --porcelain)"
+
+      - name: Discover successful independent final-product review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls?state=all&head=BigBirdReturns:${REVIEW_BRANCH}&base=main&per_page=100" > "$OUT/review-prs.json"
+          test "$(jq length "$OUT/review-prs.json")" -ge 1
+          jq 'sort_by(.number) | last' "$OUT/review-prs.json" > "$OUT/review-pr.json"
+          review_head="$(jq -r .head.sha "$OUT/review-pr.json")"
+          review_pr="$(jq -r .number "$OUT/review-pr.json")"
+          test -n "$review_head"
+          printf '%s\n' "$review_head" > "$OUT/review-head.txt"
+          printf '%s\n' "$review_pr" > "$OUT/review-pr-number.txt"
+
+          endpoint="/repos/${GITHUB_REPOSITORY}/actions/workflows/${REVIEW_WORKFLOW}/runs?event=pull_request&branch=${REVIEW_BRANCH}&per_page=100"
+          run_id=''
+          for _ in $(seq 1 1800); do
+            gh api "$endpoint" > "$OUT/review-runs.json"
+            run_id="$(jq -r --arg head "$review_head" --arg branch "$REVIEW_BRANCH" '[.workflow_runs[] | select(.head_sha == $head and .head_branch == $branch and .event == "pull_request")] | sort_by(.id) | last | .id // empty' "$OUT/review-runs.json")"
+            if test -n "$run_id"; then break; fi
+            sleep 10
+          done
+          test -n "$run_id"
+          printf '%s\n' "$run_id" > "$OUT/review-run-id.txt"
+          for _ in $(seq 1 1800); do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/review-run.json"
+            status="$(jq -r .status "$OUT/review-run.json")"
+            if test "$status" = completed; then break; fi
+            sleep 10
+          done
+          jq -e --arg head "$review_head" '.status == "completed" and .conclusion == "success" and .head_sha == $head and .event == "pull_request"' "$OUT/review-run.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "$OUT/review-jobs.json"
+          test "$(jq '[.jobs[] | select(.name == "review")] | length' "$OUT/review-jobs.json")" = 1
+          jq '.jobs[] | select(.name == "review")' "$OUT/review-jobs.json" > "$OUT/review-job.json"
+          jq -e '.status == "completed" and .conclusion == "success"' "$OUT/review-job.json" >/dev/null
+          jq -r .id "$OUT/review-job.json" > "$OUT/review-job-id.txt"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/review-artifacts.json"
+          expected_name="${REVIEW_ARTIFACT_PREFIX}${run_id}"
+          test "$(jq --arg name "$expected_name" '[.artifacts[] | select(.name == $name and (.expired | not))] | length' "$OUT/review-artifacts.json")" = 1
+          jq --arg name "$expected_name" '.artifacts[] | select(.name == $name and (.expired | not))' "$OUT/review-artifacts.json" > "$OUT/review-artifact.json"
+          artifact_id="$(jq -r .id "$OUT/review-artifact.json")"
+          printf '%s\n' "$artifact_id" > "$OUT/review-artifact-id.txt"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$OUT/review-artifact.zip"
+
+      - name: Safely extract and verify publication authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$OUT/review-artifact.zip" TARGET="$ARTIFACT_DIR" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib,stat,zipfile
+          archive=pathlib.Path(os.environ['ZIP']); target=pathlib.Path(os.environ['TARGET'])
+          seen=set(); expanded=0
+          with zipfile.ZipFile(archive) as zf:
+              infos=zf.infolist()
+              if not infos or len(infos)>8192: raise SystemExit(f'unsafe artifact denominator: {len(infos)}')
+              for info in infos:
+                  path=pathlib.PurePosixPath(info.filename); mode=(info.external_attr>>16)&0o170000
+                  if path.is_absolute() or '..' in path.parts or info.filename in seen or mode==stat.S_IFLNK:
+                      raise SystemExit(f'unsafe artifact member: {info.filename!r}')
+                  seen.add(info.filename)
+                  if info.is_dir(): continue
+                  expanded += info.file_size
+                  if expanded>4_000_000_000: raise SystemExit('artifact expansion ceiling exceeded')
+                  destination=target.joinpath(*path.parts); destination.parent.mkdir(parents=True,exist_ok=True)
+                  with zf.open(info) as src, destination.open('wb') as dst:
+                      while True:
+                          chunk=src.read(1024*1024)
+                          if not chunk: break
+                          dst.write(chunk)
+          required=['final-product-review-receipt.json','reviewed-product.bundle','reviewed-product.patch','verified-product-paths.txt','rebound-product-independent-gate.log','independent-semantic-review.json']
+          resolved={}
+          for name in required:
+              matches=[p for p in target.rglob(name) if p.is_file()]
+              if len(matches)!=1: raise SystemExit(f'{name} denominator: {len(matches)}')
+              resolved[name]=str(matches[0])
+          pathlib.Path(os.environ['OUT']).joinpath('resolved-review-evidence.json').write_text(json.dumps(resolved,indent=2,sort_keys=True)+'\n')
+          pathlib.Path(os.environ['OUT']).joinpath('review-artifact-sha256.txt').write_text(hashlib.sha256(archive.read_bytes()).hexdigest()+'\n')
+          PY
+          receipt="$(jq -r '.["final-product-review-receipt.json"]' "$OUT/resolved-review-evidence.json")"
+          RECEIPT="$receipt" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          path=pathlib.Path(os.environ['RECEIPT']); data=json.loads(path.read_text()); claimed=data.pop('receipt_sha256')
+          actual=hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          assert actual==claimed
+          assert data['status']=='approved-for-trusted-publication'
+          assert data['repository_write'] is False and data['product_published'] is False and data['merge_performed'] is False
+          assert data['publication_authorized_separately_only'] is True
+          data['receipt_sha256']=claimed
+          pathlib.Path(os.environ['OUT']).joinpath('verified-review-receipt.json').write_text(json.dumps(data,indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Import reviewed product and rebind to publication main
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$(jq -r '.["reviewed-product.bundle"]' "$OUT/resolved-review-evidence.json")"
+          patch="$(jq -r '.["reviewed-product.patch"]' "$OUT/resolved-review-evidence.json")"
+          paths="$(jq -r '.["verified-product-paths.txt"]' "$OUT/resolved-review-evidence.json")"
+          source_parent="$(jq -r .review_main "$OUT/verified-review-receipt.json")"
+          source_product="$(jq -r .reviewed_product_commit "$OUT/verified-review-receipt.json")"
+          source_tree="$(jq -r .reviewed_product_tree "$OUT/verified-review-receipt.json")"
+          publish_main="$(cat "$OUT/publish-main.txt")"
+          test "$(wc -l < "$paths")" = "$(jq -r .product_path_count "$OUT/verified-review-receipt.json")"
+          awk '/^(\.github\/|tmp\/|records\/)/ { bad=1 } END { exit bad }' "$paths"
+          git bundle verify "$bundle" > "$OUT/reviewed-product-bundle-verify.txt"
+          product_ref="$(git bundle list-heads "$bundle" | awk -v commit="$source_product" '$1 == commit {print $2; exit}')"
+          test -n "$product_ref"
+          git fetch "$bundle" "${product_ref}:refs/remotes/kreg-publisher/reviewed-product"
+          test "$(git rev-parse refs/remotes/kreg-publisher/reviewed-product)" = "$source_product"
+          test "$(git show -s --format=%P "$source_product")" = "$source_parent"
+          test "$(git rev-parse "$source_product^{tree}")" = "$source_tree"
+
+          git diff --name-only "$source_parent"..."$publish_main" | LC_ALL=C sort > "$OUT/review-parent-to-publish-main-paths.txt"
+          comm -12 "$paths" "$OUT/review-parent-to-publish-main-paths.txt" > "$OUT/product-main-overlap.txt"
+          test ! -s "$OUT/product-main-overlap.txt"
+          if test -s "$OUT/review-parent-to-publish-main-paths.txt"; then
+            awk '!/^\.github\/workflows\// { bad=1 } END { exit bad }' "$OUT/review-parent-to-publish-main-paths.txt"
+          fi
+
+          git worktree add --detach "$WORKTREE" "$publish_main"
+          git -C "$WORKTREE" apply --index --binary --3way "$patch"
+          git -C "$WORKTREE" diff --cached --check
+          git -C "$WORKTREE" diff --cached --name-only | LC_ALL=C sort > "$OUT/publication-product-paths.txt"
+          diff -u "$paths" "$OUT/publication-product-paths.txt"
+          git -C "$WORKTREE" config user.name undercast-cycle-publisher
+          git -C "$WORKTREE" config user.email undercast-cycle-publisher@users.noreply.github.com
+          git -C "$WORKTREE" commit -m 'Doctor Who: complete reviewed cycle 008 for Kreg'
+          product_commit="$(git -C "$WORKTREE" rev-parse HEAD)"
+          test "$(git -C "$WORKTREE" show -s --format=%P HEAD)" = "$publish_main"
+          printf '%s\n' "$product_commit" > "$OUT/product-commit.txt"
+          git -C "$WORKTREE" rev-parse 'HEAD^{tree}' > "$OUT/product-tree.txt"
+          cp "$paths" "$OUT/product-paths.txt"
+
+      - name: Run final clean-commit checker and complete gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORKTREE"
+          test -z "$(git status --porcelain)"
+          node "$CHECKER_PATH" 2>&1 | tee "$OUT/publication-checker.log"
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate 2>&1 | tee "$OUT/publication-complete-gate.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Publish one workflow-free draft product PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          publish_main="$(cat "$OUT/publish-main.txt")"
+          product_commit="$(cat "$OUT/product-commit.txt")"
+          product_tree="$(cat "$OUT/product-tree.txt")"
+          product_pr=''
+          pushed=0
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if (( status != 0 )); then
+              if test -n "$product_pr"; then gh pr close "$product_pr" --repo "$GITHUB_REPOSITORY" --comment 'Closed automatically because Kreg product publication did not reach terminal success.' >/dev/null 2>&1 || true; fi
+              if (( pushed != 0 )); then git push origin --delete "$PRODUCT_BRANCH" >/dev/null 2>&1 || true; fi
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$publish_main"
+          if git ls-remote --exit-code --heads origin "$PRODUCT_BRANCH" >/dev/null 2>&1; then exit 1; fi
+          git -C "$WORKTREE" push origin "HEAD:refs/heads/$PRODUCT_BRANCH"
+          pushed=1
+          body="$OUT/product-pr-body.md"
+          {
+            printf '## Reviewed workflow-free Doctor Who cycle 008 product\n\n'
+            printf 'This draft contains the independently reviewed receipt-bearing Kreg product. It is one commit over exact publication main and contains no workflow, transport, `tmp/`, or generated `records/` path.\n\n'
+            printf '```text\nparent:  %s\ncommit:  %s\ntree:    %s\npaths:   %s\ntask:    ap_469d79ea29fd7f877395d20f\nlease:   lease_e65f837070361eacbb1abd46\nwall:    UC-1353\nrole:    Kreg\nqueue:   308 queued / 8 resolved / 0 in flight\n```\n\n' "$publish_main" "$product_commit" "$product_tree" "$(wc -l < "$OUT/product-paths.txt")"
+            printf 'Publication is draft-only. Merge remains separately gated.\n'
+          } > "$body"
+          product_url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$PRODUCT_BRANCH" --draft --title "$PRODUCT_TITLE" --body-file "$body")"
+          product_pr="${product_url##*/}"
+          printf '%s\n' "$product_pr" > "$OUT/product-pr-number.txt"
+          printf '%s\n' "$product_url" > "$OUT/product-pr-url.txt"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${product_pr}" > "$OUT/product-pr.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${product_pr}/files?per_page=100" > "$OUT/product-pr-files.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/git/commits/${product_commit}" > "$OUT/product-commit.json"
+          PATHS="$OUT/product-paths.txt" PR="$OUT/product-pr.json" FILES="$OUT/product-pr-files.json" COMMIT="$OUT/product-commit.json" PARENT="$publish_main" PRODUCT="$product_commit" TREE="$product_tree" python3 - <<'PY'
+          import json,os,pathlib
+          paths=pathlib.Path(os.environ['PATHS']).read_text().splitlines()
+          pr=json.loads(pathlib.Path(os.environ['PR']).read_text()); files=json.loads(pathlib.Path(os.environ['FILES']).read_text()); commit=json.loads(pathlib.Path(os.environ['COMMIT']).read_text())
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['ref']=='main' and pr['base']['sha']==os.environ['PARENT']
+          assert pr['head']['sha']==os.environ['PRODUCT'] and pr['commits']==1 and pr['changed_files']==len(paths)
+          assert sorted(row['filename'] for row in files)==paths
+          assert commit['sha']==os.environ['PRODUCT'] and commit['tree']['sha']==os.environ['TREE'] and [row['sha'] for row in commit['parents']]==[os.environ['PARENT']]
+          PY
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$publish_main"
+          trap - EXIT
+
+      - name: Seal publication receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          PUBLISH_MAIN="$(cat "$OUT/publish-main.txt")" PRODUCT="$(cat "$OUT/product-commit.txt")" TREE="$(cat "$OUT/product-tree.txt")" PRODUCT_PR="$(cat "$OUT/product-pr-number.txt")" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          out=pathlib.Path(os.environ['OUT']); review=json.loads((out/'verified-review-receipt.json').read_text())
+          receipt={'schema_version':1,'transaction':'DOCTOR-WHO-CYCLE-008-KREG-REVIEWED-PRODUCT-PUBLISHER-V1','status':'draft-product-published','review_run':int((out/'review-run-id.txt').read_text()),'review_job':int((out/'review-job-id.txt').read_text()),'review_artifact':int((out/'review-artifact-id.txt').read_text()),'review_artifact_sha256':(out/'review-artifact-sha256.txt').read_text().strip(),'review_receipt_sha256':review['receipt_sha256'],'publication_main':os.environ['PUBLISH_MAIN'],'product_pr':int(os.environ['PRODUCT_PR']),'product_branch':'agent/doctor-who-cycle-008-kreg-product-v1','product_commit':os.environ['PRODUCT'],'product_tree':os.environ['TREE'],'product_path_count':len((out/'product-paths.txt').read_text().splitlines()),'cycle_id':review['cycle_id'],'checker_sha256':hashlib.sha256((out/'publication-checker.log').read_bytes()).hexdigest(),'complete_gate_sha256':hashlib.sha256((out/'publication-complete-gate.log').read_bytes()).hexdigest(),'product_draft':True,'product_merged':False,'merge_authority':False,'outside_human_dependency':False}
+          receipt['receipt_sha256']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (out/'publication-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          sha256sum "$OUT/publication-receipt.json" "$OUT/publication-checker.log" "$OUT/publication-complete-gate.log" > "$OUT/publication-evidence.sha256"
+
+      - name: Upload immutable draft publication packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-reviewed-product-publisher-v1-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Report publication boundary
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status='publication-failed'; product_pr='unavailable'; product='unavailable'; tree='unavailable'; paths='unavailable'; receipt='unavailable'
+          if test -f "$OUT/publication-receipt.json"; then
+            status="$(jq -r .status "$OUT/publication-receipt.json")"
+            product_pr="$(jq -r .product_pr "$OUT/publication-receipt.json")"
+            product="$(jq -r .product_commit "$OUT/publication-receipt.json")"
+            tree="$(jq -r .product_tree "$OUT/publication-receipt.json")"
+            paths="$(jq -r .product_path_count "$OUT/publication-receipt.json")"
+            receipt="$(jq -r .receipt_sha256 "$OUT/publication-receipt.json")"
+          fi
+          gate='publication gate unavailable'
+          if test -f "$OUT/publication-complete-gate.log"; then gate="$(tail -n 140 "$OUT/publication-complete-gate.log" | tail -c 16000)"; fi
+          body="$RUNNER_TEMP/kreg-publication.md"
+          {
+            printf 'KREG_REVIEWED_PRODUCT_PUBLISHER_V1\n\n'
+            printf '```text\nstatus:     %s\nproduct PR: %s\nproduct:    %s\ntree:       %s\npaths:      %s\nreceipt:    %s\nrun:        %s\n```\n\n' "$status" "$product_pr" "$product" "$tree" "$paths" "$receipt" "$GITHUB_RUN_ID"
+            printf '### Publication gate tail\n\n```text\n%s\n```\n' "$gate"
+          } > "$body"
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --raw-field body="$(cat "$body")" >/dev/null
