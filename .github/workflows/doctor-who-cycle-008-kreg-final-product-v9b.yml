@@ -2,6 +2,7 @@ name: doctor-who-cycle-008-kreg-final-product-v9b
 
 "on":
   pull_request:
+    branches: [main]
     types: [opened, reopened, synchronize]
     paths:
       - ".github/workflows/doctor-who-cycle-008-kreg-final-product-v9b.yml"
@@ -13,6 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  WRAPPER_BLOB: ebf348c4fc17a9ae1f420b113d661f0611c490ec
   OLD_WORKFLOW_BLOB: 1fb8af74baef0f1a92bafcdc316df371038dfc4d
   V8B_BRANCH: agent/doctor-who-cycle-008-kreg-independent-review-v8b
   V8B_WORKFLOW: doctor-who-cycle-008-kreg-independent-review-v8b
@@ -78,86 +80,60 @@ jobs:
           filter: blob:none
           persist-credentials: false
 
-      - name: Recover and patch immutable finalizer scripts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Recover qualified finalizer scripts and pay exact assignment and ledger defects
         shell: bash
         run: |
           set -euo pipefail
           rm -rf "$SCRIPT_ROOT"
           mkdir -p "$SCRIPT_ROOT"/{api,finalize}
-          gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$OLD_WORKFLOW_BLOB" > "$SCRIPT_ROOT/api/blob.json"
-          jq -e --arg sha "$OLD_WORKFLOW_BLOB" '.sha==$sha and .encoding=="base64"' "$SCRIPT_ROOT/api/blob.json" >/dev/null
-          jq -r '.content' "$SCRIPT_ROOT/api/blob.json" | tr -d '\n' | base64 --decode > "$SCRIPT_ROOT/source.yml"
-          test "$(git hash-object "$SCRIPT_ROOT/source.yml")" = "$OLD_WORKFLOW_BLOB"
-          SOURCE="$SCRIPT_ROOT/source.yml" TARGET="$SCRIPT_ROOT/finalize" python3 - <<'PY'
+          gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$WRAPPER_BLOB" > "$SCRIPT_ROOT/api/wrapper.json"
+          jq -e --arg sha "$WRAPPER_BLOB" '.sha==$sha and .encoding=="base64"' "$SCRIPT_ROOT/api/wrapper.json" >/dev/null
+          jq -r '.content' "$SCRIPT_ROOT/api/wrapper.json" | tr -d '\n' | base64 --decode > "$SCRIPT_ROOT/wrapper.yml"
+          test "$(git hash-object "$SCRIPT_ROOT/wrapper.yml")" = "$WRAPPER_BLOB"
+          SOURCE="$SCRIPT_ROOT/wrapper.yml" TARGET="$SCRIPT_ROOT/recover-finalizer.sh" python3 - <<'PY'
           import os
           from pathlib import Path
           import yaml
+          source=Path(os.environ['SOURCE'])
+          target=Path(os.environ['TARGET'])
+          doc=yaml.safe_load(source.read_text())
+          steps=doc['jobs']['finalize']['steps']
+          matches=[s.get('run') for s in steps if s.get('name')=='Recover and patch immutable finalizer scripts']
+          assert len(matches)==1 and isinstance(matches[0],str)
+          target.write_text(matches[0])
+          target.chmod(0o755)
+          PY
+          bash -n "$SCRIPT_ROOT/recover-finalizer.sh"
+          bash "$SCRIPT_ROOT/recover-finalizer.sh"
 
-          source_path = Path(os.environ['SOURCE'])
-          target = Path(os.environ['TARGET'])
-          doc = yaml.safe_load(source_path.read_text())
-          wanted = [
-              ('Bind exact one-file finalizer and observed live main', None),
-              ('Retain exact successful V8b review packet', None),
-              ('Verify approved V8b authority and candidate bytes', None),
-              ('Recompose exact candidate over finalization main', 'candidate'),
-              ('Recover exact cycle-007 finalization templates', None),
-              ('Derive deterministic eight-path cycle-008 finalization', 'finalize_product'),
-              ('Run permanent checkers and complete rendered gate', None),
-              ('Seal code-free forty-eight-path prototype packet', 'seal'),
-              ('Retain finalize diagnostics and remove worktree', None),
-          ]
-          steps = doc['jobs']['finalize']['steps']
-          found = {s.get('name'): (s.get('id'), s.get('run')) for s in steps if s.get('name') in {n for n, _ in wanted}}
-          assert list(found) == [n for n, _ in wanted]
+          ROOT="$SCRIPT_ROOT/finalize" python3 - <<'PY'
+          import os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
 
-          def replace_assignment(text, variable, replacement):
-              lines = text.splitlines()
-              hits = [i for i, line in enumerate(lines) if line.startswith(variable + '=')]
-              assert hits and hits[0] < 10, (variable, hits)
-              lines[hits[0]] = replacement
-              return '\n'.join(lines) + '\n'
+          derive=root/'06.sh'
+          lines=derive.read_text().splitlines()
+          hits=[i for i,line in enumerate(lines) if line.startswith('candidate=')]
+          assert len(hits)==2, hits
+          for i in hits:
+              lines[i]='candidate="$CANDIDATE_COMMIT"'
+          derive.write_text('\n'.join(lines)+'\n')
 
-          for index, (name, step_id) in enumerate(wanted, 1):
-              actual_id, text = found[name]
-              assert actual_id == step_id and text
-              if name == 'Derive deterministic eight-path cycle-008 finalization':
-                  text = replace_assignment(text, 'candidate', 'candidate="$CANDIDATE_COMMIT"')
-              if name in ('Run permanent checkers and complete rendered gate', 'Seal code-free forty-eight-path prototype packet'):
-                  text = replace_assignment(text, 'final', 'final="$FINAL_COMMIT"')
-              if name == 'Recover exact cycle-007 finalization templates':
-                  loop = "while IFS=$'\\t' read -r old new; do"
-                  before = "  git show \"$cycle007_parent:$old\" > \"$OUT/templates/$(echo \"$old\" | sed 's#/#__#g').before\""
-                  done = 'done < "$OUT/templates/finalization-path-map.tsv"'
-                  assert text.count(loop) == 1 and text.count(before) == 1 and text.count(done) == 1
-                  text = text.replace(loop, ': > "$OUT/templates/added-zero-baseline-paths.txt"\n' + loop)
-                  replacement = '\n'.join([
-                      '  if git cat-file -e "$cycle007_parent:$old" 2>/dev/null; then',
-                      '    git show "$cycle007_parent:$old" > "$OUT/templates/$(echo "$old" | sed \'s#/#__#g\').before"',
-                      '  else',
-                      '    case "$old" in',
-                      '      data/review/adapter-sdk/doctor-who-cycle-007-kragar.json|scripts/doctor-who-cycle-007.mjs)',
-                      '        : > "$OUT/templates/$(echo "$old" | sed \'s#/#__#g\').before"',
-                      '        printf \'%s\\n\' "$old" >> "$OUT/templates/added-zero-baseline-paths.txt"',
-                      '        ;;',
-                      '      *) printf \'unexpected zero-baseline cycle-007 template: %s\\n\' "$old" >&2; exit 1 ;;',
-                      '    esac',
-                      '  fi',
-                  ])
-                  text = text.replace(before, replacement)
-                  audit = '\n'.join([
-                      done,
-                      "printf '%s\\n' \\",
-                      "  'data/review/adapter-sdk/doctor-who-cycle-007-kragar.json' \\",
-                      "  'scripts/doctor-who-cycle-007.mjs' \\",
-                      '  > "$OUT/templates/expected-zero-baseline-paths.txt"',
-                      'LC_ALL=C sort -u "$OUT/templates/added-zero-baseline-paths.txt" > "$OUT/templates/actual-zero-baseline-paths.txt"',
-                      'diff -u "$OUT/templates/expected-zero-baseline-paths.txt" "$OUT/templates/actual-zero-baseline-paths.txt"',
-                  ])
-                  text = text.replace(done, audit)
-              path = target / f'{index:02d}.sh'
-              path.write_text(text)
-              path.chmod(0o755)
+          seal=root/'08.sh'
+          text=seal.read_text()
+          old='''find "$OUT/product" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/product/SHA256SUMS.pre"
+          sha256sum "$OUT/product/SHA256SUMS.pre" > "$OUT/product/SHA256SUMS"'''
+          new='''rm -f "$OUT/product/SHA256SUMS.pre" "$OUT/product/SHA256SUMS"
+          find "$OUT/product" -type f ! -name 'SHA256SUMS.pre' ! -name 'SHA256SUMS' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/product/SHA256SUMS.pre"
+          sha256sum "$OUT/product/SHA256SUMS.pre" > "$OUT/product/SHA256SUMS"
+          ! grep -Fq "$OUT/product/SHA256SUMS.pre" "$OUT/product/SHA256SUMS.pre"'''
+          assert text.count(old)==1, text.count(old)
+          seal.write_text(text.replace(old,new))
           PY
           test "$(find "$SCRIPT_ROOT/finalize" -type f -name '*.sh' | wc -l)" = 9
           for script in "$SCRIPT_ROOT/finalize"/*.sh; do bash -n "$script"; done
@@ -248,44 +224,51 @@ jobs:
           filter: blob:none
           persist-credentials: false
 
-      - name: Recover and patch immutable review scripts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Recover qualified review scripts and pay exact ledger defect
         shell: bash
         run: |
           set -euo pipefail
           rm -rf "$SCRIPT_ROOT"
           mkdir -p "$SCRIPT_ROOT"/{api,review}
-          gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$OLD_WORKFLOW_BLOB" > "$SCRIPT_ROOT/api/blob.json"
-          jq -r '.content' "$SCRIPT_ROOT/api/blob.json" | tr -d '\n' | base64 --decode > "$SCRIPT_ROOT/source.yml"
-          test "$(git hash-object "$SCRIPT_ROOT/source.yml")" = "$OLD_WORKFLOW_BLOB"
-          SOURCE="$SCRIPT_ROOT/source.yml" TARGET="$SCRIPT_ROOT/review" python3 - <<'PY'
+          gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$WRAPPER_BLOB" > "$SCRIPT_ROOT/api/wrapper.json"
+          jq -e --arg sha "$WRAPPER_BLOB" '.sha==$sha and .encoding=="base64"' "$SCRIPT_ROOT/api/wrapper.json" >/dev/null
+          jq -r '.content' "$SCRIPT_ROOT/api/wrapper.json" | tr -d '\n' | base64 --decode > "$SCRIPT_ROOT/wrapper.yml"
+          test "$(git hash-object "$SCRIPT_ROOT/wrapper.yml")" = "$WRAPPER_BLOB"
+          SOURCE="$SCRIPT_ROOT/wrapper.yml" TARGET="$SCRIPT_ROOT/recover-review.sh" python3 - <<'PY'
           import os
           from pathlib import Path
           import yaml
+          source=Path(os.environ['SOURCE'])
+          target=Path(os.environ['TARGET'])
+          doc=yaml.safe_load(source.read_text())
+          steps=doc['jobs']['review']['steps']
+          matches=[s.get('run') for s in steps if s.get('name')=='Recover and patch immutable review scripts']
+          assert len(matches)==1 and isinstance(matches[0],str)
+          target.write_text(matches[0])
+          target.chmod(0o755)
+          PY
+          bash -n "$SCRIPT_ROOT/recover-review.sh"
+          bash "$SCRIPT_ROOT/recover-review.sh"
 
-          doc = yaml.safe_load(Path(os.environ['SOURCE']).read_text())
-          target = Path(os.environ['TARGET'])
-          wanted = [
-              ('Bind exact same-run prototype artifact and live review main', None),
-              ('Verify prototype checksums, receipt, archive, bundle, and patch', None),
-              ('Independently recompose exact forty-eight paths and run complete gate', 'review_product'),
-              ('Seal approved-for-publication product packet', None),
-              ('Retain review diagnostics and remove worktrees', None),
-          ]
-          steps = doc['jobs']['review']['steps']
-          found = {s.get('name'): (s.get('id'), s.get('run')) for s in steps if s.get('name') in {n for n, _ in wanted}}
-          assert list(found) == [n for n, _ in wanted]
-          for index, (name, step_id) in enumerate(wanted, 1):
-              actual_id, text = found[name]
-              assert actual_id == step_id and text
-              if name == 'Seal approved-for-publication product packet':
-                  lines = text.splitlines()
-                  hits = [i for i, line in enumerate(lines) if line.startswith('reviewed=')]
-                  assert hits and hits[0] < 10, hits
-                  lines[hits[0]] = 'reviewed="$REVIEWED_COMMIT"'
-                  text = '\n'.join(lines) + '\n'
-              path = target / f'{index:02d}.sh'
-              path.write_text(text)
-              path.chmod(0o755)
+          ROOT="$SCRIPT_ROOT/review" python3 - <<'PY'
+          import os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          seal=root/'04.sh'
+          text=seal.read_text()
+          old='''find "$OUT/review" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/review/SHA256SUMS.pre"
+          sha256sum "$OUT/review/SHA256SUMS.pre" > "$OUT/review/SHA256SUMS"'''
+          new='''rm -f "$OUT/review/SHA256SUMS.pre" "$OUT/review/SHA256SUMS"
+          find "$OUT/review" -type f ! -name 'SHA256SUMS.pre' ! -name 'SHA256SUMS' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/review/SHA256SUMS.pre"
+          sha256sum "$OUT/review/SHA256SUMS.pre" > "$OUT/review/SHA256SUMS"
+          ! grep -Fq "$OUT/review/SHA256SUMS.pre" "$OUT/review/SHA256SUMS.pre"'''
+          assert text.count(old)==1, text.count(old)
+          seal.write_text(text.replace(old,new))
           PY
           test "$(find "$SCRIPT_ROOT/review" -type f -name '*.sh' | wc -l)" = 5
           for script in "$SCRIPT_ROOT/review"/*.sh; do bash -n "$script"; done
