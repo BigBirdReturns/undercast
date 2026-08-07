@@ -1,0 +1,129 @@
+name: doctor-who-cycle-008-kreg-status-observer-v2
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-status-observer-v2.yml"
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-status-observer-v2
+  cancel-in-progress: true
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-status-observer-v2.yml
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-status-observer-v2
+  STATUS_PATH: status/doctor-who-cycle-008-kreg-chain-v2.json
+  OUT: /tmp/doctor-who-cycle-008-kreg-status-observer-v2
+
+jobs:
+  observe:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-status-observer-v2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: true
+
+      - name: Bind exact one-path observer carrier
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          test "$GITHUB_HEAD_REF" = "$AUTHORIZED_BRANCH"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = "1"
+          printf '%s\n' "$SELF" > "$OUT/expected-paths.txt"
+          git diff --name-only "$BASE_SHA"...HEAD | LC_ALL=C sort > "$OUT/actual-paths.txt"
+          diff -u "$OUT/expected-paths.txt" "$OUT/actual-paths.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Capture complete repaired-chain status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" > "$OUT/main-ref.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls?state=all&per_page=100" > "$OUT/pulls.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100" > "$OUT/runs.json"
+          REPO="$GITHUB_REPOSITORY" OUT="$OUT" python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          out=pathlib.Path(os.environ['OUT'])
+          pulls=json.loads((out/'pulls.json').read_text())
+          runs=json.loads((out/'runs.json').read_text()).get('workflow_runs',[])
+          branches=[
+            'agent/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v2',
+            'agent/doctor-who-cycle-008-kreg-cycle007-writer-recovery-v3',
+            'agent/doctor-who-cycle-008-kreg-original-carrier-replay-v1',
+            'agent/doctor-who-cycle-008-kreg-v1-materializer-current-main-v1',
+            'agent/doctor-who-cycle-008-kreg-v1-candidate-review-v1',
+            'agent/doctor-who-cycle-008-kreg-finalization-source-v1',
+            'agent/doctor-who-cycle-008-cycle007-finalization-delta-recovery-v2',
+            'agent/doctor-who-cycle-008-kreg-finalization-synthesizer-v1',
+            'agent/doctor-who-cycle-008-kreg-final-product-review-v1',
+            'agent/doctor-who-cycle-008-kreg-reviewed-product-publisher-v1',
+            'agent/doctor-who-cycle-008-kreg-product-v1',
+            'agent/doctor-who-cycle-008-kreg-product-qualification-v1',
+            'agent/doctor-who-cycle-008-kreg-merge-guardian-v1',
+            'agent/doctor-who-cycle-008-kreg-terminal-cleanup-v1',
+            'agent/doctor-who-cycle-008-kreg-terminal-cleanup-product-v1',
+            'agent/doctor-who-cycle-008-kreg-chain-lint-v1',
+          ]
+          rows=[]
+          for branch in branches:
+              prs=sorted((p for p in pulls if p.get('head',{}).get('ref')==branch),key=lambda p:p['number'])
+              lane_runs=sorted((r for r in runs if r.get('head_branch')==branch),key=lambda r:r['id'])
+              latest=lane_runs[-1] if lane_runs else None
+              jobs=[]; artifacts=[]
+              if latest:
+                  jobs_doc=json.loads(subprocess.check_output(['gh','api',f"/repos/{os.environ['REPO']}/actions/runs/{latest['id']}/jobs?per_page=100"],text=True))
+                  artifacts_doc=json.loads(subprocess.check_output(['gh','api',f"/repos/{os.environ['REPO']}/actions/runs/{latest['id']}/artifacts?per_page=100"],text=True))
+                  jobs=[{'id':row['id'],'name':row['name'],'status':row['status'],'conclusion':row.get('conclusion'),'started_at':row.get('started_at'),'completed_at':row.get('completed_at')} for row in jobs_doc.get('jobs',[])]
+                  artifacts=[{'id':row['id'],'name':row['name'],'expired':row['expired'],'digest':row.get('digest'),'size_in_bytes':row['size_in_bytes']} for row in artifacts_doc.get('artifacts',[])]
+              rows.append({'branch':branch,'prs':[{'number':p['number'],'state':p['state'],'draft':p['draft'],'merged':p.get('merged_at') is not None,'base_sha':p['base']['sha'],'head_sha':p['head']['sha'],'updated_at':p['updated_at']} for p in prs],'latest_run':None if latest is None else {'id':latest['id'],'name':latest['name'],'event':latest['event'],'head_sha':latest['head_sha'],'status':latest['status'],'conclusion':latest.get('conclusion'),'run_attempt':latest['run_attempt'],'created_at':latest['created_at'],'updated_at':latest['updated_at']},'jobs':jobs,'artifacts':artifacts})
+          main=json.loads((out/'main-ref.json').read_text())['object']['sha']
+          result={'schema_version':2,'transaction':'DOCTOR-WHO-CYCLE-008-KREG-CHAIN-STATUS-OBSERVER-V2','main':main,'lanes':rows}
+          (out/'chain-status-v2.json').write_text(json.dumps(result,indent=2,sort_keys=True)+'\n')
+          PY
+          cat "$OUT/chain-status-v2.json"
+
+      - name: Publish durable single-shot snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$STATUS_PATH")"
+          cp "$OUT/chain-status-v2.json" "$STATUS_PATH"
+          git add "$STATUS_PATH"
+          git config user.name undercast-status-observer
+          git config user.email undercast-status-observer@users.noreply.github.com
+          git commit -m 'Status: snapshot repaired Doctor Who cycle 008 Kreg chain'
+          git push origin "HEAD:refs/heads/$AUTHORIZED_BRANCH"
+
+      - name: Upload exact V2 status packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-status-observer-v2-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
