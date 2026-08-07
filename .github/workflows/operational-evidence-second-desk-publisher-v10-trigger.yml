@@ -1,0 +1,145 @@
+name: operational-evidence-second-desk-publisher-v10-trigger
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/operational-evidence-second-desk-publisher-v10-trigger.yml"
+
+permissions: {}
+
+concurrency:
+  group: operational-evidence-second-desk-publisher-v10-trigger
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'BigBirdReturns/undercast' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INSTALLER_MAIN: ${{ github.sha }}
+      REVIEW_BASE: 37d681f419db5ef874b2cc41df1c631c047218d8
+      V3_WORKFLOW_BLOB: c28876fda070c0da6df9acde7bf49a4e98d1bda7
+      IGNITER_WORKFLOW_BLOB: cb1d999205d927120d7a7a4251621b47a67b31b7
+      V9_WRAPPER_BLOB: 297e1819fef7a41038183b00e4eb9ce234980f44
+      V9_WRAPPER_PATH: .github/workflows/operational-evidence-second-desk-publisher-v6-wrapper.yml
+      TRIGGER_PATH: .github/workflows/operational-evidence-second-desk-publisher-v10-trigger.yml
+      PRODUCT_BRANCH: agent/operational-evidence-second-desk-product-v10-20260806
+      PRODUCT_TITLE: "Operations: refresh reviewed exact-main reliability evidence (V10)"
+      PUBLISH_ROOT: /tmp/undercast-operational-second-desk-publisher-v10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact V10 trusted-main trigger
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$PUBLISH_ROOT"
+          rm -rf "$root"
+          mkdir -p "$root"/{diagnostics,receipt}
+          test "$GITHUB_REPOSITORY" = 'BigBirdReturns/undercast'
+          test "$GITHUB_EVENT_NAME" = 'push'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$(git rev-parse HEAD)" = "$INSTALLER_MAIN"
+          test "$(git show -s --format=%P HEAD | wc -w)" -eq 1
+          installer_parent="$(git rev-parse HEAD^)"
+          git merge-base --is-ancestor "$REVIEW_BASE" "$installer_parent"
+          test "$(git diff --name-only "$installer_parent..$INSTALLER_MAIN")" = "$TRIGGER_PATH"
+          test "$(git hash-object .github/workflows/operational-evidence-second-desk-publisher.yml)" = "$V3_WORKFLOW_BLOB"
+          test "$(git hash-object .github/workflows/operational-evidence-second-desk-workflow-run.yml)" = "$IGNITER_WORKFLOW_BLOB"
+          test "$(git rev-parse "$installer_parent:$V9_WRAPPER_PATH")" = "$V9_WRAPPER_BLOB"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$INSTALLER_MAIN"
+          printf 'INSTALLER_PARENT=%s\n' "$installer_parent" >> "$GITHUB_ENV"
+
+      - name: Recover and execute exact V9 publisher as V10
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          node --input-type=module - <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import YAML from 'yaml';
+
+          const wrapper = YAML.parse(
+            readFileSync('.github/workflows/operational-evidence-second-desk-publisher-v6-wrapper.yml', 'utf8'),
+            { schema: 'core', uniqueKeys: true, maxAliasCount: 100 },
+          );
+          const step = wrapper.jobs?.publish?.steps?.find(
+            (row) => row?.name === 'Recover and execute reviewed V3 publisher as V9',
+          );
+          if (!step || typeof step.run !== 'string') throw new Error('V9 publisher execution step is missing');
+          let source = step.run;
+          const replaceOnce = (oldValue, newValue, label) => {
+            const count = source.split(oldValue).length - 1;
+            if (count !== 1) throw new Error(`${label} replacement count ${count}`);
+            source = source.replace(oldValue, newValue);
+          };
+          replaceOnce(
+            "workflow_path='.github/workflows/operational-evidence-second-desk-publisher-v6-wrapper.yml'",
+            "workflow_path='.github/workflows/operational-evidence-second-desk-publisher-v10-trigger.yml'",
+            'V10 trigger path',
+          );
+          replaceOnce(
+            "source = source.replaceAll('V3', 'V9');",
+            "source = source.replaceAll('V3', 'V10');",
+            'V10 transaction labels',
+          );
+          source = source.replaceAll(
+            '/tmp/operational-evidence-second-desk-publisher-v9.sh',
+            '/tmp/operational-evidence-second-desk-publisher-v10.sh',
+          );
+          writeFileSync('/tmp/operational-evidence-second-desk-v10-run.sh', `#!/usr/bin/env bash\n${source}`);
+          NODE
+          bash -n /tmp/operational-evidence-second-desk-v10-run.sh
+          sha256sum /tmp/operational-evidence-second-desk-v10-run.sh | tee "$PUBLISH_ROOT/diagnostics/v9-step-as-v10.sha256"
+          bash /tmp/operational-evidence-second-desk-v10-run.sh
+
+      - name: Upload exact V10 publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-evidence-second-desk-publication-v10-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/undercast-operational-second-desk-publisher-v10/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Remove partial V10 publication after any later failure
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          root="$PUBLISH_ROOT"
+          pr=""
+          if [ -f "$root/product-pr.txt" ]; then
+            pr="$(cat "$root/product-pr.txt")"
+          fi
+          if [ -z "$pr" ]; then
+            pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$PRODUCT_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          fi
+          [ -z "$pr" ] || gh pr close "$pr" --repo "$GITHUB_REPOSITORY" --comment 'Closed automatically because V10 publication did not reach terminal success.'
+          gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$PRODUCT_BRANCH" >/dev/null 2>&1 || true
+
+      - name: Upload V10 failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-evidence-second-desk-publication-v10-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/undercast-operational-second-desk-publisher-v10
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
