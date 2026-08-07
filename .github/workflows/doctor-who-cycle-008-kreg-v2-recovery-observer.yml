@@ -1,0 +1,248 @@
+name: doctor-who-cycle-008-kreg-v2-recovery-observer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-v2-recovery-observer
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-v2-recovery-observer.yml
+  OBSERVER_BRANCH: agent/doctor-who-cycle-008-kreg-v2-recovery-observer
+  EXPECTED_BASE: a22fc2787686cb614e143c36d45f03f648329196
+  RECOVERY_SHA: a22fc2787686cb614e143c36d45f03f648329196
+  RECOVERY_WORKFLOW: doctor-who-cycle-008-kreg-v2-payload-recovery.yml
+  RECOVERY_WORKFLOW_PATH: .github/workflows/doctor-who-cycle-008-kreg-v2-payload-recovery.yml
+  OUT: /tmp/doctor-who-cycle-008-kreg-v2-recovery-observer
+
+jobs:
+  observe:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'agent/doctor-who-cycle-008-kreg-v2-recovery-observer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-path observer carrier
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/recovery"
+          test "$BASE_SHA" = "$EXPECTED_BASE"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_BASE"
+          test "$(git rev-list --count "$EXPECTED_BASE"..HEAD)" = "1"
+          test "$(git merge-base "$EXPECTED_BASE" HEAD)" = "$EXPECTED_BASE"
+          printf '%s\n' "$SELF" > "$OUT/expected-observer-paths.txt"
+          git diff --name-only "$EXPECTED_BASE"...HEAD | LC_ALL=C sort > "$OUT/actual-observer-paths.txt"
+          diff -u "$OUT/expected-observer-paths.txt" "$OUT/actual-observer-paths.txt"
+          git fetch --no-tags --filter=blob:none origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${OBSERVER_BRANCH}:refs/remotes/origin/${OBSERVER_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_BASE"
+          test "$(git rev-parse refs/remotes/origin/${OBSERVER_BRANCH})" = "$HEAD_SHA"
+          test -z "$(git status --porcelain)"
+          printf 'base=%s\nhead=%s\ntree=%s\n' \
+            "$EXPECTED_BASE" "$HEAD_SHA" "$(git rev-parse 'HEAD^{tree}')" \
+            > "$OUT/observer-identity.txt"
+
+      - name: Discover and bind the exact trusted-main recovery run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="/repos/${GITHUB_REPOSITORY}/actions/workflows/${RECOVERY_WORKFLOW}/runs?event=push&branch=main&per_page=100"
+          run_id=""
+          for _ in $(seq 1 60); do
+            gh api "$endpoint" > "$OUT/recovery-runs.json"
+            run_id="$(jq -r \
+              --arg sha "$RECOVERY_SHA" \
+              --arg path "$RECOVERY_WORKFLOW_PATH" \
+              '[.workflow_runs[] | select(.head_sha == $sha and .event == "push" and .head_branch == "main" and .path == $path)] | sort_by(.id) | last | .id // empty' \
+              "$OUT/recovery-runs.json")"
+            if [ -n "$run_id" ]; then
+              break
+            fi
+            sleep 5
+          done
+          test -n "$run_id"
+          printf '%s\n' "$run_id" > "$OUT/recovery-run-id.txt"
+
+          for _ in $(seq 1 60); do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/recovery-run.json"
+            status="$(jq -r '.status' "$OUT/recovery-run.json")"
+            if [ "$status" = "completed" ]; then
+              break
+            fi
+            sleep 5
+          done
+
+          jq -e \
+            --arg sha "$RECOVERY_SHA" \
+            --arg path "$RECOVERY_WORKFLOW_PATH" \
+            '.status == "completed" and .conclusion == "success" and .head_sha == $sha and .event == "push" and .head_branch == "main" and .path == $path and .run_attempt == 1' \
+            "$OUT/recovery-run.json" >/dev/null
+
+      - name: Bind successful recovery job and unique artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id="$(cat "$OUT/recovery-run-id.txt")"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "$OUT/recovery-jobs.json"
+          test "$(jq '[.jobs[] | select(.name == "recover")] | length' "$OUT/recovery-jobs.json")" = "1"
+          jq -e '.jobs[] | select(.name == "recover") | .status == "completed" and .conclusion == "success"' \
+            "$OUT/recovery-jobs.json" >/dev/null
+          jq -r '.jobs[] | select(.name == "recover") | .id' "$OUT/recovery-jobs.json" \
+            > "$OUT/recovery-job-id.txt"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/recovery-artifacts.json"
+          expected_name="doctor-who-cycle-008-kreg-v2-payload-recovery-${run_id}"
+          test "$(jq --arg name "$expected_name" '[.artifacts[] | select(.name == $name and (.expired | not))] | length' "$OUT/recovery-artifacts.json")" = "1"
+          jq --arg name "$expected_name" -r '.artifacts[] | select(.name == $name and (.expired | not)) | .id' \
+            "$OUT/recovery-artifacts.json" > "$OUT/recovery-artifact-id.txt"
+          jq --arg name "$expected_name" '.artifacts[] | select(.name == $name and (.expired | not))' \
+            "$OUT/recovery-artifacts.json" > "$OUT/recovery-artifact.json"
+
+      - name: Download and safely inspect the recovery packet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_id="$(cat "$OUT/recovery-artifact-id.txt")"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$OUT/recovery.zip"
+
+          ZIP="$OUT/recovery.zip" TARGET="$OUT/recovery" python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import stat
+          import zipfile
+
+          archive = pathlib.Path(os.environ['ZIP'])
+          target = pathlib.Path(os.environ['TARGET'])
+          seen = set()
+          expanded = 0
+
+          with zipfile.ZipFile(archive) as zf:
+              infos = zf.infolist()
+              if not infos or len(infos) > 256:
+                  raise SystemExit(f'unsafe ZIP member denominator: {len(infos)}')
+              for info in infos:
+                  path = pathlib.PurePosixPath(info.filename)
+                  mode = (info.external_attr >> 16) & 0o170000
+                  if (
+                      path.is_absolute()
+                      or '..' in path.parts
+                      or info.filename in seen
+                      or mode == stat.S_IFLNK
+                  ):
+                      raise SystemExit(f'unsafe ZIP member: {info.filename!r}')
+                  seen.add(info.filename)
+                  if info.is_dir():
+                      continue
+                  expanded += info.file_size
+                  if expanded > 25_000_000:
+                      raise SystemExit('recovery packet expands beyond 25 MB')
+                  destination = target.joinpath(*path.parts)
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  with zf.open(info) as source, destination.open('wb') as sink:
+                      while True:
+                          chunk = source.read(1024 * 1024)
+                          if not chunk:
+                              break
+                          sink.write(chunk)
+
+          matches = list(target.rglob('payload-inspection.json'))
+          if len(matches) != 1:
+              raise SystemExit(f'payload inspection denominator: {len(matches)}')
+          inspection_path = matches[0]
+          inspection = json.loads(inspection_path.read_text())
+          members = inspection.get('members')
+          if inspection.get('executed') is not False or not isinstance(members, list) or not members:
+              raise SystemExit('invalid recovery inspection semantics')
+          if inspection.get('member_count') != len(members):
+              raise SystemExit('recovery member denominator mismatch')
+
+          extracted_root = inspection_path.parent / 'extracted'
+          for row in members:
+              rel = pathlib.PurePosixPath(row['path'])
+              if rel.is_absolute() or '..' in rel.parts:
+                  raise SystemExit(f'unsafe extracted member path: {row["path"]!r}')
+              member = extracted_root.joinpath(*rel.parts)
+              data = member.read_bytes()
+              if len(data) != row['bytes']:
+                  raise SystemExit(f'byte mismatch: {row["path"]}')
+              if hashlib.sha256(data).hexdigest() != row['sha256']:
+                  raise SystemExit(f'hash mismatch: {row["path"]}')
+
+          summary = {
+              'recovery_zip_bytes': archive.stat().st_size,
+              'recovery_zip_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
+              'recovery_packet_files': sum(1 for path in target.rglob('*') if path.is_file()),
+              'recovery_packet_bytes': sum(path.stat().st_size for path in target.rglob('*') if path.is_file()),
+              'payload_archive_bytes': inspection['archive_bytes'],
+              'payload_archive_sha256': inspection['archive_sha256'],
+              'payload_member_count': inspection['member_count'],
+              'payload_expanded_bytes': inspection['expanded_bytes'],
+              'payload_executed': inspection['executed'],
+              'payload_members': members,
+          }
+          target.parent.joinpath('observer-summary.json').write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + '\n'
+          )
+          PY
+
+          cat "$OUT/observer-summary.json"
+
+      - name: Rebind unchanged live refs and seal observer packet
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --filter=blob:none origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${OBSERVER_BRANCH}:refs/remotes/origin/${OBSERVER_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_BASE"
+          test "$(git rev-parse refs/remotes/origin/${OBSERVER_BRANCH})" = "$HEAD_SHA"
+          test -z "$(git status --porcelain)"
+          (
+            cd "$OUT"
+            find . -type f ! -name observer-sha256.txt -print0 \
+              | LC_ALL=C sort -z \
+              | xargs -0 sha256sum \
+              > observer-sha256.txt
+          )
+
+      - name: Upload bound Kreg V2 recovery observation
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-v2-recovery-observer-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
