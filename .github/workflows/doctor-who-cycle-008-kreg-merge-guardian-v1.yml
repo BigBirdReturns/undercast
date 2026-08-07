@@ -1,0 +1,322 @@
+name: doctor-who-cycle-008-kreg-merge-guardian-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-merge-guardian-v1.yml"
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-merge-guardian-v1
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-kreg-merge-guardian-v1.yml
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-kreg-merge-guardian-v1
+  QUALIFIER_BRANCH: agent/doctor-who-cycle-008-kreg-product-qualification-v1
+  QUALIFIER_WORKFLOW: doctor-who-cycle-008-kreg-product-qualification-v1.yml
+  QUALIFIER_ARTIFACT_PREFIX: doctor-who-cycle-008-kreg-product-qualification-v1-
+  PRODUCT_BRANCH: agent/doctor-who-cycle-008-kreg-product-v1
+  CHECKER_PATH: scripts/doctor-who-cycle-008.mjs
+  OUT: /tmp/doctor-who-cycle-008-kreg-merge-guardian-v1
+  ARTIFACT_DIR: /tmp/doctor-who-cycle-008-kreg-qualification-artifact
+  MAIN_WORKTREE: /tmp/doctor-who-cycle-008-kreg-postmerge-main
+
+jobs:
+  merge:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-merge-guardian-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 540
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact one-path same-repository merge guardian
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" "$ARTIFACT_DIR" "$MAIN_WORKTREE"
+          mkdir -p "$OUT" "$ARTIFACT_DIR"
+          test "$GITHUB_HEAD_REF" = "$AUTHORIZED_BRANCH"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = "1"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          printf '%s\n' "$SELF" > "$OUT/expected-guardian-paths.txt"
+          git diff --name-only "$BASE_SHA"...HEAD | LC_ALL=C sort > "$OUT/actual-guardian-paths.txt"
+          diff -u "$OUT/expected-guardian-paths.txt" "$OUT/actual-guardian-paths.txt"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          guard_main="$(git rev-parse refs/remotes/origin/main)"
+          git merge-base --is-ancestor "$BASE_SHA" "$guard_main"
+          git diff --name-only "$BASE_SHA"..."$guard_main" | LC_ALL=C sort > "$OUT/base-to-guard-main-paths.txt"
+          if test -s "$OUT/base-to-guard-main-paths.txt"; then
+            awk '!/^\.github\/workflows\// { bad=1 } END { exit bad }' "$OUT/base-to-guard-main-paths.txt"
+          fi
+          printf '%s\n' "$guard_main" > "$OUT/guard-main.txt"
+          printf 'head=%s\nbase=%s\nguard_main=%s\nguard_main_tree=%s\n' "$HEAD_SHA" "$BASE_SHA" "$guard_main" "$(git rev-parse "$guard_main^{tree}")" > "$OUT/guardian-identity.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Discover successful exact-product qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls?state=all&head=BigBirdReturns:${QUALIFIER_BRANCH}&base=main&per_page=100" > "$OUT/qualifier-prs.json"
+          test "$(jq length "$OUT/qualifier-prs.json")" -ge 1
+          jq 'sort_by(.number) | last' "$OUT/qualifier-prs.json" > "$OUT/qualifier-pr.json"
+          qualifier_head="$(jq -r .head.sha "$OUT/qualifier-pr.json")"
+          test -n "$qualifier_head"
+          printf '%s\n' "$qualifier_head" > "$OUT/qualifier-head.txt"
+
+          endpoint="/repos/${GITHUB_REPOSITORY}/actions/workflows/${QUALIFIER_WORKFLOW}/runs?event=pull_request&branch=${QUALIFIER_BRANCH}&per_page=100"
+          run_id=''
+          for _ in $(seq 1 2400); do
+            gh api "$endpoint" > "$OUT/qualifier-runs.json"
+            run_id="$(jq -r --arg head "$qualifier_head" --arg branch "$QUALIFIER_BRANCH" '[.workflow_runs[] | select(.head_sha == $head and .head_branch == $branch and .event == "pull_request")] | sort_by(.id) | last | .id // empty' "$OUT/qualifier-runs.json")"
+            if test -n "$run_id"; then break; fi
+            sleep 10
+          done
+          test -n "$run_id"
+          printf '%s\n' "$run_id" > "$OUT/qualifier-run-id.txt"
+          for _ in $(seq 1 2400); do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/qualifier-run.json"
+            status="$(jq -r .status "$OUT/qualifier-run.json")"
+            if test "$status" = completed; then break; fi
+            sleep 10
+          done
+          jq -e --arg head "$qualifier_head" '.status == "completed" and .conclusion == "success" and .head_sha == $head' "$OUT/qualifier-run.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "$OUT/qualifier-jobs.json"
+          test "$(jq '[.jobs[] | select(.name == "qualify")] | length' "$OUT/qualifier-jobs.json")" = 1
+          jq '.jobs[] | select(.name == "qualify")' "$OUT/qualifier-jobs.json" > "$OUT/qualifier-job.json"
+          jq -e '.status == "completed" and .conclusion == "success"' "$OUT/qualifier-job.json" >/dev/null
+          jq -r .id "$OUT/qualifier-job.json" > "$OUT/qualifier-job-id.txt"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/qualifier-artifacts.json"
+          expected_name="${QUALIFIER_ARTIFACT_PREFIX}${run_id}"
+          test "$(jq --arg name "$expected_name" '[.artifacts[] | select(.name == $name and (.expired | not))] | length' "$OUT/qualifier-artifacts.json")" = 1
+          jq --arg name "$expected_name" '.artifacts[] | select(.name == $name and (.expired | not))' "$OUT/qualifier-artifacts.json" > "$OUT/qualifier-artifact.json"
+          artifact_id="$(jq -r .id "$OUT/qualifier-artifact.json")"
+          printf '%s\n' "$artifact_id" > "$OUT/qualifier-artifact-id.txt"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$OUT/qualifier-artifact.zip"
+
+      - name: Safely extract and verify merge authority receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$OUT/qualifier-artifact.zip" TARGET="$ARTIFACT_DIR" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib,stat,zipfile
+          archive=pathlib.Path(os.environ['ZIP']); target=pathlib.Path(os.environ['TARGET'])
+          seen=set(); expanded=0
+          with zipfile.ZipFile(archive) as zf:
+              infos=zf.infolist()
+              if not infos or len(infos)>8192: raise SystemExit(f'unsafe artifact denominator: {len(infos)}')
+              for info in infos:
+                  path=pathlib.PurePosixPath(info.filename); mode=(info.external_attr>>16)&0o170000
+                  if path.is_absolute() or '..' in path.parts or info.filename in seen or mode==stat.S_IFLNK:
+                      raise SystemExit(f'unsafe artifact member: {info.filename!r}')
+                  seen.add(info.filename)
+                  if info.is_dir(): continue
+                  expanded += info.file_size
+                  if expanded>4_000_000_000: raise SystemExit('artifact expansion ceiling exceeded')
+                  destination=target.joinpath(*path.parts); destination.parent.mkdir(parents=True,exist_ok=True)
+                  with zf.open(info) as src, destination.open('wb') as dst:
+                      while True:
+                          chunk=src.read(1024*1024)
+                          if not chunk: break
+                          dst.write(chunk)
+          required=['product-qualification-receipt.json','product-paths.txt','product-check-summary.tsv','product-head-complete-gate.log','merge-complete-gate.log']
+          resolved={}
+          for name in required:
+              matches=[p for p in target.rglob(name) if p.is_file()]
+              if len(matches)!=1: raise SystemExit(f'{name} denominator: {len(matches)}')
+              resolved[name]=str(matches[0])
+          pathlib.Path(os.environ['OUT']).joinpath('resolved-qualification-evidence.json').write_text(json.dumps(resolved,indent=2,sort_keys=True)+'\n')
+          pathlib.Path(os.environ['OUT']).joinpath('qualifier-artifact-sha256.txt').write_text(hashlib.sha256(archive.read_bytes()).hexdigest()+'\n')
+          PY
+          receipt="$(jq -r '.["product-qualification-receipt.json"]' "$OUT/resolved-qualification-evidence.json")"
+          RECEIPT="$receipt" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          path=pathlib.Path(os.environ['RECEIPT']); data=json.loads(path.read_text()); claimed=data.pop('receipt_sha256')
+          actual=hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          assert actual==claimed and data['status']=='approved-for-exact-product-merge'
+          assert data['all_check_runs_terminal_nonfailing'] is True
+          assert data['repository_write'] is False and data['product_ready_changed'] is False and data['merge_performed'] is False
+          assert data['merge_authorized_separately_only'] is True
+          data['receipt_sha256']=claimed
+          pathlib.Path(os.environ['OUT']).joinpath('verified-qualification-receipt.json').write_text(json.dumps(data,indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Re-fetch exact product PR, reviews, threads, and checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          product_pr="$(jq -r .product_pr "$OUT/verified-qualification-receipt.json")"
+          parent="$(jq -r .product_parent "$OUT/verified-qualification-receipt.json")"
+          product="$(jq -r .product_commit "$OUT/verified-qualification-receipt.json")"
+          tree="$(jq -r .product_tree "$OUT/verified-qualification-receipt.json")"
+          paths="$(jq -r '.["product-paths.txt"]' "$OUT/resolved-qualification-evidence.json")"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$parent"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/${PRODUCT_BRANCH}" --jq .object.sha)" = "$product"
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${product_pr}" > "$OUT/premerge-product-pr.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${product_pr}/files?per_page=100" > "$OUT/premerge-product-files.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${product_pr}/reviews?per_page=100" > "$OUT/premerge-product-reviews.json"
+          PR="$OUT/premerge-product-pr.json" FILES="$OUT/premerge-product-files.json" PATHS="$paths" PARENT="$parent" PRODUCT="$product" TREE="$tree" python3 - <<'PY'
+          import json,os,pathlib
+          pr=json.loads(pathlib.Path(os.environ['PR']).read_text()); files=json.loads(pathlib.Path(os.environ['FILES']).read_text()); paths=pathlib.Path(os.environ['PATHS']).read_text().splitlines()
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False and pr['mergeable'] is not False
+          assert pr['base']['sha']==os.environ['PARENT'] and pr['head']['sha']==os.environ['PRODUCT']
+          assert pr['commits']==1 and pr['changed_files']==len(paths)
+          assert sorted(row['filename'] for row in files)==paths
+          assert all(not path.startswith(('.github/','tmp/','records/')) for path in paths)
+          PY
+          test "$(jq '[.[] | select(.state == "CHANGES_REQUESTED")] | length' "$OUT/premerge-product-reviews.json")" = 0
+          owner="${GITHUB_REPOSITORY%%/*}"; name="${GITHUB_REPOSITORY##*/}"
+          gh api graphql -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}' -F owner="$owner" -F name="$name" -F number="$product_pr" > "$OUT/premerge-review-threads.json"
+          test "$(jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' "$OUT/premerge-review-threads.json")" = 0
+          gh pr ready "$product_pr" --repo "$GITHUB_REPOSITORY"
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${product_pr}" > "$OUT/ready-product-pr.json"
+          jq -e '.state == "open" and .draft == false and .merged == false' "$OUT/ready-product-pr.json" >/dev/null
+          for _ in $(seq 1 180); do
+            gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/commits/${product}/check-runs?per_page=100" > "$OUT/ready-product-check-runs.json"
+            pending="$(jq '[.check_runs[] | select(.status != "completed")] | length' "$OUT/ready-product-check-runs.json")"
+            if test "$pending" = 0; then break; fi
+            sleep 10
+          done
+          test "$(jq '[.check_runs[] | select(.status != "completed")] | length' "$OUT/ready-product-check-runs.json")" = 0
+          jq -e '[.check_runs[] | select(.conclusion | IN("failure","cancelled","timed_out","action_required","startup_failure","stale"))] | length == 0' "$OUT/ready-product-check-runs.json" >/dev/null
+          printf '%s\n' "$product_pr" > "$OUT/product-pr-number.txt"
+          printf '%s\n' "$parent" > "$OUT/product-parent.txt"
+          printf '%s\n' "$product" > "$OUT/product-commit.txt"
+          printf '%s\n' "$tree" > "$OUT/product-tree.txt"
+          cp "$paths" "$OUT/product-paths.txt"
+
+      - name: Execute one exact squash merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          product_pr="$(cat "$OUT/product-pr-number.txt")"
+          parent="$(cat "$OUT/product-parent.txt")"
+          product="$(cat "$OUT/product-commit.txt")"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$parent"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/${PRODUCT_BRANCH}" --jq .object.sha)" = "$product"
+          gh api --method PUT "/repos/${GITHUB_REPOSITORY}/pulls/${product_pr}/merge" \
+            -f merge_method=squash \
+            -f sha="$product" \
+            -f commit_title='Doctor Who: complete reviewed cycle 008 for Kreg' \
+            -f commit_message='Resolve the exact Dan Starkey / Kreg voice obligation as UC-1353 with the revision-bound Kree.jpg still, an honest performer-portrait absence, a reviewed cycle-008 receipt and permanent checker, and terminal queue state 308 queued / 8 resolved / 0 in flight. Preserve all seven prior Doctor Who cycles, cycle-006 chronology composability, cycle-007 Kragar custody, Star Trek custody, unrelated scopes, and the no-outside-human-dependency boundary.' \
+            > "$OUT/merge-response.json"
+          jq -e '.merged == true and .sha != null' "$OUT/merge-response.json" >/dev/null
+          merge_sha="$(jq -r .sha "$OUT/merge-response.json")"
+          printf '%s\n' "$merge_sha" > "$OUT/merge-sha.txt"
+
+      - name: Verify canonical merge commit and run post-merge checker and complete gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          parent="$(cat "$OUT/product-parent.txt")"
+          product_tree="$(cat "$OUT/product-tree.txt")"
+          merge_sha="$(cat "$OUT/merge-sha.txt")"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main" "+${merge_sha}:refs/remotes/kreg-guardian/merge"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$merge_sha"
+          test "$(git show -s --format=%P "$merge_sha")" = "$parent"
+          test "$(git rev-parse "$merge_sha^{tree}")" = "$product_tree"
+          git diff --name-only "$parent"..."$merge_sha" | LC_ALL=C sort > "$OUT/merged-paths.txt"
+          diff -u "$OUT/product-paths.txt" "$OUT/merged-paths.txt"
+          git worktree add --detach "$MAIN_WORKTREE" "$merge_sha"
+          cd "$MAIN_WORKTREE"
+          test -z "$(git status --porcelain)"
+          node "$CHECKER_PATH" 2>&1 | tee "$OUT/postmerge-checker.log"
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run gate 2>&1 | tee "$OUT/postmerge-complete-gate.log"
+          test -z "$(git status --porcelain)"
+
+      - name: Seal canonical merge receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          PARENT="$(cat "$OUT/product-parent.txt")" PRODUCT="$(cat "$OUT/product-commit.txt")" TREE="$(cat "$OUT/product-tree.txt")" MERGE="$(cat "$OUT/merge-sha.txt")" PRODUCT_PR="$(cat "$OUT/product-pr-number.txt")" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          out=pathlib.Path(os.environ['OUT']); qualification=json.loads((out/'verified-qualification-receipt.json').read_text())
+          receipt={'schema_version':1,'transaction':'DOCTOR-WHO-CYCLE-008-KREG-MERGE-GUARDIAN-V1','status':'canonical-product-merged-and-gated','qualification_run':int((out/'qualifier-run-id.txt').read_text()),'qualification_job':int((out/'qualifier-job-id.txt').read_text()),'qualification_artifact':int((out/'qualifier-artifact-id.txt').read_text()),'qualification_artifact_sha256':(out/'qualifier-artifact-sha256.txt').read_text().strip(),'qualification_receipt_sha256':qualification['receipt_sha256'],'product_pr':int(os.environ['PRODUCT_PR']),'product_parent':os.environ['PARENT'],'product_commit':os.environ['PRODUCT'],'product_tree':os.environ['TREE'],'canonical_merge':os.environ['MERGE'],'canonical_tree':os.environ['TREE'],'product_path_count':len((out/'product-paths.txt').read_text().splitlines()),'cycle_id':qualification['cycle_id'],'postmerge_checker_sha256':hashlib.sha256((out/'postmerge-checker.log').read_bytes()).hexdigest(),'postmerge_gate_sha256':hashlib.sha256((out/'postmerge-complete-gate.log').read_bytes()).hexdigest(),'merge_method':'squash','product_branch_cleanup_pending':True,'cycle009_lease_issued':False,'outside_human_dependency':False}
+          receipt['receipt_sha256']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (out/'canonical-merge-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          sha256sum "$OUT/canonical-merge-receipt.json" "$OUT/postmerge-checker.log" "$OUT/postmerge-complete-gate.log" > "$OUT/merge-evidence.sha256"
+
+      - name: Upload immutable canonical merge packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-merge-guardian-v1-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Delete merged product branch after terminal proof
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/git/refs/heads/${PRODUCT_BRANCH}" >/dev/null
+          if git ls-remote --exit-code --heads origin "$PRODUCT_BRANCH" >/dev/null 2>&1; then exit 1; fi
+          printf 'true\n' > "$OUT/product-branch-deleted.txt"
+
+      - name: Report canonical merge boundary
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status='merge-not-complete'; product_pr='unavailable'; merge_sha='unavailable'; tree='unavailable'; paths='unavailable'; receipt='unavailable'
+          if test -f "$OUT/canonical-merge-receipt.json"; then
+            status="$(jq -r .status "$OUT/canonical-merge-receipt.json")"
+            product_pr="$(jq -r .product_pr "$OUT/canonical-merge-receipt.json")"
+            merge_sha="$(jq -r .canonical_merge "$OUT/canonical-merge-receipt.json")"
+            tree="$(jq -r .canonical_tree "$OUT/canonical-merge-receipt.json")"
+            paths="$(jq -r .product_path_count "$OUT/canonical-merge-receipt.json")"
+            receipt="$(jq -r .receipt_sha256 "$OUT/canonical-merge-receipt.json")"
+          fi
+          gate='post-merge gate unavailable'
+          if test -f "$OUT/postmerge-complete-gate.log"; then gate="$(tail -n 160 "$OUT/postmerge-complete-gate.log" | tail -c 18000)"; fi
+          body="$RUNNER_TEMP/kreg-canonical-merge.md"
+          {
+            printf 'KREG_CANONICAL_MERGE_GUARDIAN_V1\n\n'
+            printf '```text\nstatus:     %s\nproduct PR: %s\nmain:       %s\ntree:       %s\npaths:      %s\nreceipt:    %s\nrun:        %s\n```\n\n' "$status" "$product_pr" "$merge_sha" "$tree" "$paths" "$receipt" "$GITHUB_RUN_ID"
+            printf '### Post-merge gate tail\n\n```text\n%s\n```\n' "$gate"
+          } > "$body"
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --raw-field body="$(cat "$body")" >/dev/null
