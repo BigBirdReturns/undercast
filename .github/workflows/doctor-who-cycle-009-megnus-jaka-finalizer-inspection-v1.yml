@@ -1,4 +1,4 @@
-name: doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1
+name: doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v2
 
 "on":
   pull_request:
@@ -10,7 +10,7 @@ name: doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1
 permissions: {}
 
 concurrency:
-  group: doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1
+  group: doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v2
   cancel-in-progress: true
 
 jobs:
@@ -27,12 +27,12 @@ jobs:
       contents: read
       pull-requests: read
     env:
-      SOURCE_COMMIT: "4092ef83a46e281cd878ac821dcfc343262901d1"
-      SOURCE_RUNNER_GZIP_SHA256: "f5cc713026b7a73685e964dc774918ad4b2de25c967bb0d68e3b3c187dd071aa"
-      SOURCE_RUNNER_SHA256: "d9ac4dd21978d3e08b37d607ce5c8c70e34ae7f603e89d2e5c97879f03bfd6c1"
+      SOURCE_COMMIT: "181f821f2348a3cb47ca75c52cd42c9b030ef3ca"
+      SOURCE_RUNNER_GZIP_SHA256: "d07fd349cf8e95571d516074c9c9618050e31242a5e112ca2b6bb78649a1cd19"
+      SOURCE_RUNNER_SHA256: "878acf29393fabc86f3250649a56f2fde01a9058c7674466f656e30419a92a8c"
       EXACT_MAIN: "707f2c14c4dc183afceb732c2b56124ed3a37c93"
       SELF: ".github/workflows/doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1.yml"
-      OUT: "/tmp/doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1"
+      OUT: "/tmp/doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v2"
       PR_HEAD: ${{ github.event.pull_request.head.sha }}
       PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
 
@@ -44,7 +44,7 @@ jobs:
           filter: blob:none
           persist-credentials: false
 
-      - name: Extract and seal immutable finalizer source
+      - name: Extract and inspect immutable UTF-8 finalizer source
         shell: bash
         run: |
           set -euo pipefail
@@ -52,8 +52,8 @@ jobs:
           mkdir -p "$OUT"
           test "$(git rev-parse HEAD)" = "$PR_HEAD"
           test "$PR_BASE_SHA" = "$EXACT_MAIN"
-          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
-          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = 1
+          test "$(git merge-base HEAD "$EXACT_MAIN")" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = 2
           test "$(git diff --name-only "$EXACT_MAIN"...HEAD)" = "$SELF"
           test "$(git rev-parse origin/main)" = "$EXACT_MAIN"
 
@@ -78,49 +78,61 @@ jobs:
           bash -n "$runner"
 
           RUNNER="$runner" OUT="$OUT" python3 - <<'PY'
-          import hashlib, json, os
+          import hashlib, json, os, re
           from pathlib import Path
           runner=Path(os.environ['RUNNER'])
           out=Path(os.environ['OUT'])
           lines=runner.read_text().splitlines()
-          marker='Materialize exact eight-path cycle closure'
-          marker_rows=[i for i,line in enumerate(lines) if marker in line]
-          assert len(marker_rows)==1
-          marker_i=marker_rows[0]
-          starts=[i for i in range(marker_i+1,len(lines)) if "python3 - <<'PY'" in lines[i]]
-          assert starts
-          start=starts[0]
-          ends=[i for i in range(start+1,len(lines)) if lines[i].strip()=='PY']
-          assert ends
-          end=ends[0]
-          block=lines[start+1:end]
-          assert len(block)>=30
-          (out/'finalizer.numbered.txt').write_text(''.join(f'{i+1:5d}  {line}\n' for i,line in enumerate(lines)))
-          (out/'closure-section.txt').write_text(''.join(f'{i+1:5d}  {lines[i]}\n' for i in range(max(0,marker_i-10),min(len(lines),end+20))))
-          (out/'closure-python.py').write_text('\n'.join(block)+'\n')
-          (out/'closure-python.numbered.txt').write_text(''.join(f'{i+1:5d}  {line}\n' for i,line in enumerate(block)))
+          numbered=''.join(f'{i+1:5d}  {line}\n' for i,line in enumerate(lines))
+          (out/'finalizer.numbered.txt').write_text(numbered)
+
+          facts_rows=[i for i,line in enumerate(lines) if "finalization-facts.json" in line]
+          assert facts_rows
+          first_facts=min(facts_rows)
+          section_start=max(0,first_facts-25)
+          section_end=min(len(lines),first_facts+90)
+          (out/'post-finalization-facts-section.txt').write_text(
+              ''.join(f'{i+1:5d}  {lines[i]}\n' for i in range(section_start,section_end))
+          )
+
+          risky=[]
+          for i,line in enumerate(lines):
+              reasons=[]
+              if '|' in line: reasons.append('pipeline')
+              if re.search(r'\b(head|tail|grep)\b', line): reasons.append('early-reader')
+              if 'while IFS=' in line: reasons.append('while-pipeline')
+              if 'set -euo pipefail' in line: reasons.append('pipefail')
+              if reasons:
+                  risky.append({'line':i+1,'text':line,'reasons':reasons,'after_facts':i>first_facts})
+          (out/'pipeline-candidates.json').write_text(json.dumps(risky,indent=2,sort_keys=True)+'\n')
+          (out/'pipeline-candidates.txt').write_text(
+              ''.join(f"{row['line']:5d}  {','.join(row['reasons'])}: {row['text']}\n" for row in risky)
+          )
+
           meta={
             'source_commit':os.environ['SOURCE_COMMIT'],
             'runner_sha256':hashlib.sha256(runner.read_bytes()).hexdigest(),
             'runner_lines':len(lines),
-            'marker_line':marker_i+1,
-            'python_shell_line':start+1,
-            'python_end_shell_line':end+1,
-            'python_lines':len(block),
-            'failed_python_line_30':block[29],
+            'first_finalization_facts_line':first_facts+1,
+            'risky_pipeline_count':len(risky),
+            'risky_after_facts_count':sum(1 for row in risky if row['after_facts']),
             'canonical_main':os.environ['EXACT_MAIN'],
             'repository_write':False,
             'cycle_state_write':False,
           }
           (out/'inspection.json').write_text(json.dumps(meta,indent=2,sort_keys=True)+'\n')
           PY
-          sha256sum "$OUT"/finalizer.sh "$OUT"/closure-python.py "$OUT"/closure-section.txt "$OUT"/inspection.json > "$OUT/SHA256SUMS"
+          sha256sum \
+            "$OUT/finalizer.sh" \
+            "$OUT/post-finalization-facts-section.txt" \
+            "$OUT/pipeline-candidates.json" \
+            "$OUT/inspection.json" > "$OUT/SHA256SUMS"
 
-      - name: Upload exact finalizer inspection
+      - name: Upload exact UTF-8 finalizer inspection
         uses: actions/upload-artifact@v4
         with:
-          name: doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: /tmp/doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1
+          name: doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v2-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v2
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
