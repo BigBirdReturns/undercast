@@ -1,0 +1,257 @@
+name: doctor-who-cycle-009-megnus-jaka-candidate-review-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-009-megnus-jaka-candidate-review-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-009-megnus-jaka-candidate-review-v1
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-009-megnus-jaka-candidate-review-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_MAIN: ${{ github.event.pull_request.base.sha }}
+      SELF: .github/workflows/doctor-who-cycle-009-megnus-jaka-candidate-review-v1.yml
+      BRANCH: agent/doctor-who-cycle-009-megnus-jaka-candidate-review-v1
+      PUBLISHER_BRANCH: agent/doctor-who-cycle-009-megnus-jaka-candidate-publisher-v1
+      PUBLISHER_WORKFLOW: doctor-who-cycle-009-megnus-jaka-candidate-publisher-v1
+      PRODUCT_BRANCH: agent/doctor-who-cycle-009-megnus-jaka-candidate-product-v1
+      OUT: /tmp/doctor-who-cycle-009-megnus-jaka-candidate-review-v1
+      TASK_ID: ap_45bb5fdcdf4aff65aa7a87c3
+      WALL_ID: UC-1354
+      PERFORMER: Dan Starkey
+      ROLE: Megnus Jaka
+      SOURCE_URL: https://tardis.fandom.com/wiki/Megnus_Jaka
+      SOURCE_FINGERPRINT: 799004715f79b976ef967f63bfd4a085be22683047d87fcdf1dbc73968e50b35
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact one-commit review carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" && mkdir -p "$OUT"/{api,handoff,publication,review,diagnostics}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test '${{ github.event.pull_request.base.sha }}' = "$BASE_MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_MAIN"
+          test "$(git rev-list --count "$BASE_MAIN"..HEAD)" = 1
+          test "$(git diff --name-only "$BASE_MAIN"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$BASE_MAIN"...HEAD)" = $'A\t'"$SELF"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr/files?per_page=100" > "$OUT/api/carrier-files.json"
+          ROOT="$OUT" PR="$pr" HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); pr=json.loads((root/'api/carrier-pr.json').read_text()); files=json.loads((root/'api/carrier-files.json').read_text())
+          assert pr['number']==int(os.environ['PR']) and pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['ref']=='main' and pr['base']['sha']==os.environ['BASE_MAIN']
+          assert pr['head']['ref']==os.environ['BRANCH'] and pr['head']['sha']==os.environ['HEAD']
+          assert pr['commits']==1 and pr['changed_files']==1
+          assert len(files)==1 and files[0]['filename']==os.environ['SELF'] and files[0]['status']=='added'
+          PY
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\n' "$pr" "$head" >> "$GITHUB_ENV"
+          git checkout --detach "$BASE_MAIN"
+
+      - name: Wait for exact publisher run and product ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=false
+          for _ in $(seq 1 480); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f branch="$PUBLISHER_BRANCH" -f event=pull_request -F per_page=20 > "$OUT/api/publisher-runs.json"
+            run_id="$(jq -r --arg name "$PUBLISHER_WORKFLOW" '[.workflow_runs[] | select(.name==$name and .head_branch==env.PUBLISHER_BRANCH)] | sort_by(.id) | last | if .status=="completed" then .id else empty end' "$OUT/api/publisher-runs.json")"
+            if [ -n "$run_id" ] && gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$PRODUCT_BRANCH" > "$OUT/api/product-ref.json" 2>/dev/null; then ready=true; break; fi
+            sleep 15
+          done
+          test "$ready" = true
+          printf 'PUBLISHER_RUN=%s\n' "$run_id" >> "$GITHUB_ENV"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$OUT/api/publisher-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$OUT/api/publisher-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$OUT/api/publisher-artifacts.json"
+          ROOT="$OUT" RUN="$run_id" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); run=json.loads((root/'api/publisher-run.json').read_text()); jobs=json.loads((root/'api/publisher-jobs.json').read_text())['jobs']
+          assert run['id']==int(os.environ['RUN']) and run['name']==os.environ['PUBLISHER_WORKFLOW'] and run['head_branch']==os.environ['PUBLISHER_BRANCH']
+          assert run['event']=='pull_request' and run['status']=='completed' and run['conclusion']=='success'
+          by={j['name']:j for j in jobs}; assert set(by)=={'qualify','publish'} and all(j['conclusion']=='success' for j in by.values())
+          (root/'review/publisher-run.json').write_text(json.dumps({'run':run['id'],'head_sha':run['head_sha'],'jobs':{k:v['id'] for k,v in by.items()}},indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Rehydrate and verify exact publisher artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t handoffs < <(jq -r '.artifacts[] | select(.expired==false and (.name|contains("-handoff-")) and (.name|contains("diagnostics")|not)) | [.id,.name,.digest] | @tsv' "$OUT/api/publisher-artifacts.json")
+          mapfile -t publications < <(jq -r '.artifacts[] | select(.expired==false and (.name|contains("-publication-")) and (.name|contains("diagnostics")|not)) | [.id,.name,.digest] | @tsv' "$OUT/api/publisher-artifacts.json")
+          test "${#handoffs[@]}" = 1
+          test "${#publications[@]}" = 1
+          IFS=$'\t' read -r handoff_id handoff_name handoff_digest <<<"${handoffs[0]}"
+          IFS=$'\t' read -r publication_id publication_name publication_digest <<<"${publications[0]}"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$handoff_id/zip" > "$OUT/handoff.zip"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$publication_id/zip" > "$OUT/publication.zip"
+          test "$(sha256sum "$OUT/handoff.zip" | awk '{print $1}')" = "${handoff_digest#sha256:}"
+          test "$(sha256sum "$OUT/publication.zip" | awk '{print $1}')" = "${publication_digest#sha256:}"
+          ROOT="$OUT" HANDOFF_ID="$handoff_id" HANDOFF_DIGEST="$handoff_digest" PUBLICATION_ID="$publication_id" PUBLICATION_DIGEST="$publication_digest" python3 - <<'PY'
+          import hashlib,json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['ROOT'])
+          for name in ('handoff','publication'):
+              target=root/name
+              with zipfile.ZipFile(root/f'{name}.zip') as z:
+                  names=z.namelist(); assert len(names)==len(set(names))
+                  for info in z.infolist():
+                      p=PurePosixPath(info.filename); assert not p.is_absolute() and '..' not in p.parts and not info.is_dir()
+                      out=target/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(z.read(info))
+              ledger=target/'SHA256SUMS.pre'; sealed=target/'SHA256SUMS'; assert ledger.is_file() and sealed.is_file()
+              assert hashlib.sha256(ledger.read_bytes()).hexdigest()==sealed.read_text().split()[0]
+              for raw in ledger.read_text().splitlines():
+                  if not raw.strip(): continue
+                  digest,file=raw.split(None,1); p=target/file.lstrip('*'); assert p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==digest
+          meta={'handoff':{'id':int(os.environ['HANDOFF_ID']),'digest':os.environ['HANDOFF_DIGEST']},'publication':{'id':int(os.environ['PUBLICATION_ID']),'digest':os.environ['PUBLICATION_DIGEST']}}
+          (root/'review/artifacts.json').write_text(json.dumps(meta,indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Bind published tree, parent, and path denominator
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); q=json.loads((root/'handoff/qualification.json').read_text()); p=json.loads((root/'publication/publication.json').read_text()); hm=json.loads((root/'handoff/file-manifest.json').read_text()); pm=json.loads((root/'publication/file-manifest.json').read_text())
+          assert q['status']=='cycle-009-megnus-jaka-candidate-approved-for-exact-publication'
+          assert p['status']=='cycle-009-megnus-jaka-candidate-product-ref-published'
+          assert p['workflow_run']==int(os.environ['PUBLISHER_RUN']) and p['qualification_identity']==q['identity']
+          assert q['canonical_parent']==p['canonical_parent']==os.environ['BASE_MAIN']==hm['base_main']==pm['base_main']
+          assert q['candidate_tree']==p['product_tree']==hm['candidate_tree']==pm['candidate_tree']
+          assert hm==pm and len(hm['paths'])==q['candidate_path_count']==p['product_path_count']
+          assert p['product_branch']==os.environ['PRODUCT_BRANCH'] and p['main_unchanged'] is True and p['force_update'] is False
+          (root/'review/bound-publication.json').write_text(json.dumps({'qualification':q,'publication':p,'manifest':hm},indent=2,sort_keys=True)+'\n')
+          PY
+          product_commit="$(jq -r '.product_commit' "$OUT/publication/publication.json")"
+          product_tree="$(jq -r '.product_tree' "$OUT/publication/publication.json")"
+          test "$(jq -r '.object.sha' "$OUT/api/product-ref.json")" = "$product_commit"
+          gh api "/repos/$GITHUB_REPOSITORY/git/commits/$product_commit" > "$OUT/api/product-commit.json"
+          test "$(jq -r '.tree.sha' "$OUT/api/product-commit.json")" = "$product_tree"
+          test "$(jq -r '.parents | length' "$OUT/api/product-commit.json")" = 1
+          test "$(jq -r '.parents[0].sha' "$OUT/api/product-commit.json")" = "$BASE_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/compare/$BASE_MAIN...$product_commit" > "$OUT/api/product-compare.json"
+          ROOT="$OUT" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); compare=json.loads((root/'api/product-compare.json').read_text()); manifest=json.loads((root/'handoff/file-manifest.json').read_text())
+          assert compare['status']=='ahead' and compare['ahead_by']==1 and compare['behind_by']==0 and compare['total_commits']==1
+          assert sorted(f['filename'] for f in compare['files'])==sorted(r['path'] for r in manifest['paths'])
+          PY
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+          printf 'PRODUCT_COMMIT=%s\nPRODUCT_TREE=%s\n' "$product_commit" "$product_tree" >> "$GITHUB_ENV"
+
+      - name: Independently check exact product and complete gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/$PRODUCT_BRANCH:refs/remotes/origin/$PRODUCT_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/$PRODUCT_BRANCH)" = "$PRODUCT_COMMIT"
+          git checkout --detach "$PRODUCT_COMMIT"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_MAIN"
+          test "$(git show -s --format=%T HEAD)" = "$PRODUCT_TREE"
+          npm ci
+          node scripts/doctor-who-cycle-008.mjs | tee "$OUT/review/cycle-008.log"
+          node scripts/autopilot.mjs validate | tee "$OUT/review/autopilot-validate.log"
+          node scripts/autopilot.mjs status --scope doctor-who --json > "$OUT/review/autopilot-status.json"
+          node scripts/media-audit.mjs validate | tee "$OUT/review/media-validate.log"
+          node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/review/media-gate.log"
+          node scripts/waterline.mjs status --scope doctor-who --requested 1 --json > "$OUT/review/waterline-status.json"
+          ROOT="$OUT" node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const root=process.env.ROOT, state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const jobs=state.jobs.filter(x=>x.scope==='doctor-who'), task=jobs.find(x=>x.id===process.env.TASK_ID);
+          if(!task||task.status!=='resolved'||task.performer!==process.env.PERFORMER||task.character!==process.env.ROLE||task.source_fingerprint!==process.env.SOURCE_FINGERPRINT||JSON.stringify(task.wall_ids)!==JSON.stringify([process.env.WALL_ID])) throw new Error('task drift');
+          const counts={total:jobs.length,queued:jobs.filter(x=>x.status==='queued').length,resolved:jobs.filter(x=>x.status==='resolved').length,in_flight:jobs.filter(x=>['leased','drafted','merged'].includes(x.status)).length};
+          if(JSON.stringify(counts)!==JSON.stringify({total:316,queued:307,resolved:9,in_flight:0})) throw new Error('queue drift');
+          const wall=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(x=>x.id===process.env.WALL_ID);
+          if(!wall||wall.actor!==process.env.PERFORMER||wall.character!==process.env.ROLE||wall.production!=='The First Sontarans'||wall.kind!=='voice'||wall.link!==process.env.SOURCE_URL||wall.still!==undefined||wall.portrait!==undefined) throw new Error('wall drift');
+          const source=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8')).find(x=>x.id===process.env.WALL_ID);
+          if(!source||source.still!==null||source.portrait!==null) throw new Error('source drift');
+          const facets=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.filter(x=>x.wall_id===process.env.WALL_ID).sort((a,b)=>a.side.localeCompare(b.side));
+          if(facets.length!==2||facets.some(x=>x.status!=='absent'||x.asset!==null)||JSON.stringify(facets.map(x=>x.side))!==JSON.stringify(['portrait','still'])) throw new Error('facet drift');
+          const waterline=JSON.parse(fs.readFileSync(`${root}/review/waterline-status.json`,'utf8'));
+          if(waterline.claim_allowed!==false||waterline.jobs.in_flight!==0||waterline.media.debt!==0) throw new Error('waterline boundary drift');
+          fs.writeFileSync(`${root}/review/semantic-proof.json`,JSON.stringify({task,wall,source,facets,counts,waterline:{claim_allowed:waterline.claim_allowed,claim_reasons:waterline.claim_reasons,unreceipted:waterline.cycles?.unreceipted||[]}},null,2)+'\n');
+          NODE
+          node scripts/gate.mjs | tee "$OUT/review/complete-gate.log"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+
+      - name: Seal independent candidate review
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); bound=json.loads((root/'review/bound-publication.json').read_text()); proof=json.loads((root/'review/semantic-proof.json').read_text()); artifacts=json.loads((root/'review/artifacts.json').read_text())
+          receipt={'status':'cycle-009-megnus-jaka-candidate-independently-approved','review_run':int(os.environ['GITHUB_RUN_ID']),'review_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'carrier_pr':int(os.environ['CARRIER_PR']),'carrier_head':os.environ['CARRIER_HEAD'],'publisher_run':int(os.environ['PUBLISHER_RUN']),'publisher_artifacts':artifacts,'canonical_parent':os.environ['BASE_MAIN'],'product_branch':os.environ['PRODUCT_BRANCH'],'product_commit':os.environ['PRODUCT_COMMIT'],'product_tree':os.environ['PRODUCT_TREE'],'product_path_count':bound['publication']['product_path_count'],'qualification_identity':bound['qualification']['identity'],'publication_identity':bound['publication']['identity'],'task_id':os.environ['TASK_ID'],'wall_id':os.environ['WALL_ID'],'queue_after':proof['counts'],'media':{'still':'absent','portrait':'absent','cover_adopted':False,'generic_substitute':False,'duplicate_portrait':False},'cycle_receipt_written':False,'product_merged':False,'main_mutated':False,'outside_human_dependency':False,'owner_physical_action_required':False,'next_gate':'receipt-bearing cycle-009 finalization over the exact approved product tree'}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (root/'review/review.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          cp "$OUT/handoff/qualification.json" "$OUT/review/qualification.bound.json"
+          cp "$OUT/publication/publication.json" "$OUT/review/publication.bound.json"
+          cp "$OUT/handoff/file-manifest.json" "$OUT/review/file-manifest.bound.json"
+          find "$OUT/review" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/review/$rel" | sed "s#  $OUT/review/#  #"; done > "$OUT/review/SHA256SUMS.pre"
+          sha256sum "$OUT/review/SHA256SUMS.pre" | sed "s#  $OUT/review/#  #" > "$OUT/review/SHA256SUMS"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+
+      - name: Upload independent review packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-candidate-review-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-candidate-review-v1/review
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload review diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-candidate-review-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-candidate-review-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
