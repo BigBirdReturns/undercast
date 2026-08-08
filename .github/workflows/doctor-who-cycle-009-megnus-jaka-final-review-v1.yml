@@ -1,0 +1,286 @@
+name: doctor-who-cycle-009-megnus-jaka-final-review-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-009-megnus-jaka-final-review-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-009-megnus-jaka-final-review-v1
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-009-megnus-jaka-final-review-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_MAIN: ${{ github.event.pull_request.base.sha }}
+      SELF: .github/workflows/doctor-who-cycle-009-megnus-jaka-final-review-v1.yml
+      BRANCH: agent/doctor-who-cycle-009-megnus-jaka-final-review-v1
+      FINALIZER_BRANCH: agent/doctor-who-cycle-009-megnus-jaka-final-product-v1
+      FINALIZER_WORKFLOW: doctor-who-cycle-009-megnus-jaka-final-product-v1
+      OUT: /tmp/doctor-who-cycle-009-megnus-jaka-final-review-v1
+      TASK_ID: ap_45bb5fdcdf4aff65aa7a87c3
+      WALL_ID: UC-1354
+      PERFORMER: Dan Starkey
+      ROLE: Megnus Jaka
+      RECEIPT_PATH: data/review/adapter-sdk/doctor-who-cycle-009-megnus-jaka.json
+      CHECKER_PATH: scripts/doctor-who-cycle-009.mjs
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact one-commit review carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" && mkdir -p "$OUT"/{api,source,work,review,diagnostics}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test '${{ github.event.pull_request.base.sha }}' = "$BASE_MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_MAIN"
+          test "$(git rev-list --count "$BASE_MAIN"..HEAD)" = 1
+          test "$(git diff --name-only "$BASE_MAIN"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$BASE_MAIN"...HEAD)" = $'A\t'"$SELF"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr/files?per_page=100" > "$OUT/api/carrier-files.json"
+          ROOT="$OUT" PR="$pr" HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); pr=json.loads((root/'api/carrier-pr.json').read_text()); files=json.loads((root/'api/carrier-files.json').read_text())
+          assert pr['number']==int(os.environ['PR']) and pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['ref']=='main' and pr['base']['sha']==os.environ['BASE_MAIN']
+          assert pr['head']['ref']==os.environ['BRANCH'] and pr['head']['sha']==os.environ['HEAD']
+          assert pr['commits']==1 and pr['changed_files']==1
+          assert len(files)==1 and files[0]['filename']==os.environ['SELF'] and files[0]['status']=='added'
+          PY
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\n' "$pr" "$head" >> "$GITHUB_ENV"
+          git checkout --detach "$BASE_MAIN"
+          test -z "$(git status --porcelain)"
+
+      - name: Wait for exact terminal finalizer run
+        shell: bash
+        run: |
+          set -euo pipefail
+          terminal=false
+          for _ in $(seq 1 900); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f branch="$FINALIZER_BRANCH" -f event=pull_request -F per_page=30 > "$OUT/api/finalizer-runs.json"
+            run_id="$(jq -r --arg name "$FINALIZER_WORKFLOW" --arg branch "$FINALIZER_BRANCH" '[.workflow_runs[] | select(.name==$name and .head_branch==$branch)] | sort_by(.id) | last | if .status=="completed" then .id else empty end' "$OUT/api/finalizer-runs.json")"
+            if [ -n "$run_id" ]; then terminal=true; break; fi
+            sleep 15
+          done
+          test "$terminal" = true
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$OUT/api/finalizer-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$OUT/api/finalizer-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$OUT/api/finalizer-artifacts.json"
+          ROOT="$OUT" RUN="$run_id" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); run=json.loads((root/'api/finalizer-run.json').read_text()); jobs=json.loads((root/'api/finalizer-jobs.json').read_text())['jobs']
+          assert run['id']==int(os.environ['RUN']) and run['name']==os.environ['FINALIZER_WORKFLOW'] and run['head_branch']==os.environ['FINALIZER_BRANCH']
+          assert run['event']=='pull_request' and run['status']=='completed'
+          assert len(jobs)==1 and jobs[0]['name']=='finalize'
+          terminal={'run':run['id'],'head_sha':run['head_sha'],'conclusion':run['conclusion'],'job':jobs[0]['id'],'job_conclusion':jobs[0]['conclusion']}
+          (root/'review/finalizer-terminal.json').write_text(json.dumps(terminal,indent=2,sort_keys=True)+'\n')
+          PY
+          printf 'FINALIZER_RUN=%s\nFINALIZER_CONCLUSION=%s\n' "$run_id" "$(jq -r '.conclusion' "$OUT/api/finalizer-run.json")" >> "$GITHUB_ENV"
+          if [ "$(jq -r '.conclusion' "$OUT/api/finalizer-run.json")" != success ]; then
+            jq -r '.jobs[].id' "$OUT/api/finalizer-jobs.json" | while read -r job; do gh api "/repos/$GITHUB_REPOSITORY/actions/jobs/$job/logs" > "$OUT/diagnostics/job-$job.txt" || true; done
+            jq -r '.artifacts[] | select(.expired==false) | .id' "$OUT/api/finalizer-artifacts.json" | while read -r id; do gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > "$OUT/diagnostics/artifact-$id.zip" || true; done
+            ROOT="$OUT" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); jobs=json.loads((root/'api/finalizer-jobs.json').read_text())['jobs']
+          failed=[{'job_id':j['id'],'step':s.get('name'),'number':s.get('number')} for j in jobs for s in j.get('steps',[]) if s.get('conclusion')=='failure']
+          receipt={'status':'cycle-009-final-product-prototype-failed','finalizer_run':int(os.environ['FINALIZER_RUN']),'failed_steps':failed,'canonical_main':os.environ['BASE_MAIN'],'repository_write':False,'main_mutated':False,'outside_human_dependency':False,'owner_physical_action_required':False}
+          (root/'review/failure.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+            exit 0
+          fi
+          mapfile -t artifacts < <(jq -r '.artifacts[] | select(.expired==false and (.name|contains("diagnostics")|not)) | [.id,.name,.digest] | @tsv' "$OUT/api/finalizer-artifacts.json")
+          test "${#artifacts[@]}" = 1
+          IFS=$'\t' read -r artifact_id artifact_name artifact_digest <<<"${artifacts[0]}"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$OUT/source.zip"
+          test "$(sha256sum "$OUT/source.zip" | awk '{print $1}')" = "${artifact_digest#sha256:}"
+          ROOT="$OUT" ARTIFACT_ID="$artifact_id" ARTIFACT_NAME="$artifact_name" ARTIFACT_DIGEST="$artifact_digest" python3 - <<'PY'
+          import json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['ROOT']); target=root/'source'
+          with zipfile.ZipFile(root/'source.zip') as z:
+              names=z.namelist(); assert len(names)==len(set(names))
+              for info in z.infolist():
+                  p=PurePosixPath(info.filename); assert not p.is_absolute() and '..' not in p.parts and not info.is_dir()
+                  out=target/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(z.read(info))
+          meta={'artifact_id':int(os.environ['ARTIFACT_ID']),'artifact_name':os.environ['ARTIFACT_NAME'],'artifact_digest':os.environ['ARTIFACT_DIGEST']}
+          (root/'review/finalizer-artifact.json').write_text(json.dumps(meta,indent=2,sort_keys=True)+'\n')
+          PY
+          printf 'FINALIZER_ARTIFACT=%s\nFINALIZER_ARTIFACT_NAME=%s\nFINALIZER_ARTIFACT_DIGEST=%s\n' "$artifact_id" "$artifact_name" "$artifact_digest" >> "$GITHUB_ENV"
+
+      - name: Verify artifact checksum and qualification custody
+        if: env.FINALIZER_CONCLUSION == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT/source" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); ledger=root/'SHA256SUMS.pre'; sealed=root/'SHA256SUMS'
+          assert ledger.is_file() and sealed.is_file() and hashlib.sha256(ledger.read_bytes()).hexdigest()==sealed.read_text().split()[0]
+          for raw in ledger.read_text().splitlines():
+              if not raw.strip(): continue
+              digest,name=raw.split(None,1); p=root/name.lstrip('*'); assert p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==digest
+          q=json.loads((root/'qualification.json').read_text()); m=json.loads((root/'file-manifest.json').read_text())
+          assert q['status']=='cycle-009-megnus-jaka-receipt-bearing-product-qualified'
+          assert q['qualification_run']==int(os.environ['FINALIZER_RUN']) and q['canonical_parent']==os.environ['BASE_MAIN']
+          assert q['final_commit']==m['final_commit'] and q['final_tree']==m['final_tree'] and q['final_path_count']==len(m['paths'])
+          assert hashlib.sha256((root/'product.bundle').read_bytes()).hexdigest()==q['product_bundle_sha256']
+          assert hashlib.sha256((root/'product.tar').read_bytes()).hexdigest()==q['product_tar_sha256']
+          assert hashlib.sha256((root/'file-manifest.json').read_bytes()).hexdigest()==q['file_manifest_sha256']
+          assert hashlib.sha256((root/'product.patch').read_bytes()).hexdigest()==q['product_patch_sha256']
+          (root.parent/'review/source-custody.json').write_text(json.dumps({'qualification_identity':q['identity'],'final_commit':q['final_commit'],'final_tree':q['final_tree'],'final_path_count':q['final_path_count']},indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Reconstruct exact final commit from bundle
+        if: env.FINALIZER_CONCLUSION == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          final_commit="$(jq -r '.final_commit' "$OUT/source/qualification.json")"
+          final_tree="$(jq -r '.final_tree' "$OUT/source/qualification.json")"
+          git init "$OUT/work/repo"
+          git -C "$OUT/work/repo" remote add origin "https://github.com/$GITHUB_REPOSITORY"
+          git -C "$OUT/work/repo" fetch --no-tags --filter=blob:none origin "$BASE_MAIN:refs/remotes/origin/base"
+          git -C "$OUT/work/repo" fetch "$OUT/source/product.bundle" "HEAD:refs/remotes/bundle/final"
+          test "$(git -C "$OUT/work/repo" rev-parse refs/remotes/bundle/final)" = "$final_commit"
+          git -C "$OUT/work/repo" checkout --detach "$final_commit"
+          test "$(git -C "$OUT/work/repo" show -s --format=%P HEAD)" = "$BASE_MAIN"
+          test "$(git -C "$OUT/work/repo" show -s --format=%T HEAD)" = "$final_tree"
+          git -C "$OUT/work/repo" diff --name-only "$BASE_MAIN"...HEAD | LC_ALL=C sort > "$OUT/review/actual-paths.txt"
+          ROOT="$OUT" REPO="$OUT/work/repo" python3 - <<'PY'
+          import hashlib,json,os,subprocess,tarfile
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); repo=Path(os.environ['REPO']); manifest=json.loads((root/'source/file-manifest.json').read_text()); final=manifest['final_commit']
+          actual=(root/'review/actual-paths.txt').read_text().splitlines(); expected=sorted(r['path'] for r in manifest['paths']); assert actual==expected
+          with tarfile.open(root/'source/product.tar','r') as tar:
+              members=tar.getmembers(); expected_members=[r for r in manifest['paths'] if r['status']!='D']; assert [m.name for m in members]==[r['path'] for r in expected_members]
+              for member,row in zip(members,expected_members):
+                  assert member.isfile(); data=tar.extractfile(member).read(); assert len(data)==row['bytes'] and hashlib.sha256(data).hexdigest()==row['sha256']
+                  live=(repo/row['path']).read_bytes(); assert live==data
+                  tree_line=subprocess.check_output(['git','-C',str(repo),'ls-tree',final,'--',row['path']],text=True).strip(); mode,kind,blob,_=tree_line.split(None,3); assert kind=='blob' and mode==row['mode'] and blob==row['git_blob']
+          PY
+          printf 'FINAL_COMMIT=%s\nFINAL_TREE=%s\n' "$final_commit" "$final_tree" >> "$GITHUB_ENV"
+
+      - name: Independently prove receipt-bearing semantics and complete gate
+        if: env.FINALIZER_CONCLUSION == 'success'
+        shell: bash
+        working-directory: /tmp/doctor-who-cycle-009-megnus-jaka-final-review-v1/work/repo
+        run: |
+          set -euo pipefail
+          npm ci
+          node scripts/doctor-who-cycle-008.mjs | tee "$OUT/review/cycle-008.log"
+          node scripts/doctor-who-cycle-009.mjs | tee "$OUT/review/cycle-009.log"
+          node scripts/autopilot.mjs validate | tee "$OUT/review/autopilot-validate.log"
+          node scripts/autopilot.mjs status --scope doctor-who --json > "$OUT/review/autopilot-status.json"
+          node scripts/media-audit.mjs validate | tee "$OUT/review/media-validate.log"
+          node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/review/media-gate.log"
+          node scripts/waterline.mjs validate | tee "$OUT/review/waterline-validate.log"
+          node scripts/waterline.mjs status --scope doctor-who --requested 1 --json > "$OUT/review/waterline-status.json"
+          node scripts/waterline.mjs gate --scope doctor-who --requested 1 | tee "$OUT/review/waterline-gate.log"
+          ROOT="$OUT" node --input-type=module <<'NODE'
+          import fs from 'node:fs'; import crypto from 'node:crypto';
+          const root=process.env.ROOT, sha=b=>crypto.createHash('sha256').update(b).digest('hex');
+          const receipt=JSON.parse(fs.readFileSync(process.env.RECEIPT_PATH,'utf8')), body=structuredClone(receipt); delete body.receipt_sha256;
+          const stable=v=>Array.isArray(v)?v.map(stable):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,stable(v[k])])):v;
+          const pretty=v=>JSON.stringify(stable(v),null,2)+'\n';
+          if(receipt.receipt_sha256!==sha(Buffer.from(pretty(body)))) throw new Error('receipt self-hash drift');
+          if(receipt.qualification.checker_sha256!==sha(fs.readFileSync(process.env.CHECKER_PATH))) throw new Error('checker hash drift');
+          const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8')), jobs=state.jobs.filter(x=>x.scope==='doctor-who'), task=jobs.find(x=>x.id===process.env.TASK_ID);
+          const counts={total:jobs.length,queued:jobs.filter(x=>x.status==='queued').length,resolved:jobs.filter(x=>x.status==='resolved').length,in_flight:jobs.filter(x=>['leased','drafted','merged'].includes(x.status)).length};
+          if(JSON.stringify(counts)!==JSON.stringify({total:316,queued:307,resolved:9,in_flight:0})) throw new Error('queue drift');
+          if(!task||task.status!=='resolved'||task.performer!==process.env.PERFORMER||task.character!==process.env.ROLE||JSON.stringify(task.wall_ids)!==JSON.stringify([process.env.WALL_ID])) throw new Error('task drift');
+          const wall=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(x=>x.id===process.env.WALL_ID);
+          if(!wall||wall.still!==undefined||wall.portrait!==undefined) throw new Error('refused media adopted');
+          const facets=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.filter(x=>x.wall_id===process.env.WALL_ID);
+          if(facets.length!==2||facets.some(x=>x.status!=='absent'||x.asset!==null)) throw new Error('media facets drift');
+          const waterline=JSON.parse(fs.readFileSync(`${root}/review/waterline-status.json`,'utf8'));
+          if(waterline.claim_allowed!==true||waterline.claim_reasons.length||waterline.jobs.in_flight!==0||waterline.media.debt!==0||(waterline.cycles.unreceipted||[]).length) throw new Error('waterline not reopened');
+          fs.writeFileSync(`${root}/review/semantic-proof.json`,JSON.stringify({receipt,task,wall,facets,counts,waterline},null,2)+'\n');
+          NODE
+          node scripts/gate.mjs | tee "$OUT/review/complete-gate.log"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+
+      - name: Seal independent final-product review
+        if: env.FINALIZER_CONCLUSION == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$OUT/source/product.tar" "$OUT/review/"
+          cp "$OUT/source/file-manifest.json" "$OUT/review/"
+          cp "$OUT/source/qualification.json" "$OUT/review/qualification.bound.json"
+          cp "$OUT/review/finalizer-terminal.json" "$OUT/review/finalizer-terminal.bound.json"
+          cp "$OUT/review/finalizer-artifact.json" "$OUT/review/finalizer-artifact.bound.json"
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); source=json.loads((root/'source/qualification.json').read_text()); proof=json.loads((root/'review/semantic-proof.json').read_text()); artifact=json.loads((root/'review/finalizer-artifact.json').read_text())
+          receipt={'status':'cycle-009-megnus-jaka-final-product-independently-approved','review_run':int(os.environ['GITHUB_RUN_ID']),'review_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'carrier_pr':int(os.environ['CARRIER_PR']),'carrier_head':os.environ['CARRIER_HEAD'],'canonical_parent':os.environ['BASE_MAIN'],'finalizer_run':int(os.environ['FINALIZER_RUN']),'finalizer_artifact':artifact,'source_qualification_identity':source['identity'],'final_commit':os.environ['FINAL_COMMIT'],'final_tree':os.environ['FINAL_TREE'],'final_path_count':source['final_path_count'],'task_id':os.environ['TASK_ID'],'wall_id':os.environ['WALL_ID'],'cycle_id':source['cycle_id'],'queue_after':proof['counts'],'receipt_sha256':source['receipt_sha256'],'checker_sha256':source['checker_sha256'],'media':{'still':'absent','portrait':'absent','cover_adopted':False,'generic_substitute':False,'duplicate_portrait':False},'waterline_reopened':True,'repository_write':False,'product_published':False,'main_mutated':False,'outside_human_dependency':False,'owner_physical_action_required':False,'next_gate':'trusted exact-tree publication and canonical fast-forward'}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest(); (root/'review/review.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          find "$OUT/review" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/review/$rel" | sed "s#  $OUT/review/#  #"; done > "$OUT/review/SHA256SUMS.pre"
+          sha256sum "$OUT/review/SHA256SUMS.pre" | sed "s#  $OUT/review/#  #" > "$OUT/review/SHA256SUMS"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+
+      - name: Upload final-product review packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-final-review-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-final-review-v1/review
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Refuse a failed finalizer after retaining diagnostics
+        if: env.FINALIZER_CONCLUSION != 'success'
+        shell: bash
+        run: |
+          echo "exact finalizer concluded $FINALIZER_CONCLUSION" >&2
+          exit 1
+
+      - name: Upload review diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-final-review-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-final-review-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
