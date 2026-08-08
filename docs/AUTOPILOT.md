@@ -395,3 +395,10 @@ The seventh bounded Doctor Who cycle is receipted by `data/review/adapter-sdk/do
 ## Doctor Who cycle 008 — Kreg
 
 The eighth bounded Doctor Who cycle is receipted by `data/review/adapter-sdk/doctor-who-cycle-008-kreg.json`. It claims exactly one revision-bound voice task for Dan Starkey as Major Kreg in the 2021 Torchwood audio drama *The Great Sontaran War*, adopts the source-assigned `Kree.jpg` public representation only as Kreg character evidence, keeps the Dan Starkey portrait facet honestly absent, preserves the 316-role denominator and exact cycle-007 custody, and leaves 308 obligations queued. Its reviewed waterline receipt is `cycle_89daa03cca72b8522c76725c`; run `npm run doctor-who:cycle-008:check` to recompute the exact claim, source revision, canonical voice record, media facets, content-addressed cycle and journal identities, candidate and independent-review custody, prior cycle-007 receipt/checker custody, deterministic claim/acceptance/review chronology, and the no-ninth-lease boundary.
+
+## Doctor Who cycle 009 — Megnus Jaka
+
+- Task `ap_45bb5fdcdf4aff65aa7a87c3` is resolved as Dan Starkey’s voice performance as Megnus Jaka in *The First Sontarans*.
+- Queue: 307 queued / 9 resolved / 0 in flight.
+- The Dan Starkey portrait is verified at `images/uc-1354-portrait.jpg`; the Megnus Jaka character still remains honestly absent.
+- Reviewed cycle: `cycle_42b1d086ae8eab34f09827dc` at `2026-08-08T19:58:14Z`; cycle 010 remains unauthorized.
