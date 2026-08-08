@@ -1,0 +1,319 @@
+name: doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v4
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v4.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v4
+  cancel-in-progress: true
+
+jobs:
+  settle:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v4'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_MAIN: ${{ github.event.pull_request.base.sha }}
+      SELF: .github/workflows/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v4.yml
+      BRANCH: agent/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v4
+      OUT: /tmp/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v4
+      UPSTREAM_PR: "637"
+      UPSTREAM_RUN: "31240027076"
+      UPSTREAM_WORKFLOW: doctor-who-cycle-009-megnus-jaka-candidate-materializer-v1
+      TASK_ID: ap_45bb5fdcdf4aff65aa7a87c3
+      WALL_ID: UC-1354
+      PERFORMER: Dan Starkey
+      ROLE: Megnus Jaka
+      SOURCE_URL: https://tardis.fandom.com/wiki/Megnus_Jaka
+      SOURCE_FINGERPRINT: 799004715f79b976ef967f63bfd4a085be22683047d87fcdf1dbc73968e50b35
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact one-commit one-path supervisor
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,upstream,qualified,receipt,diagnostics}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test '${{ github.event.pull_request.base.sha }}' = "$BASE_MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_MAIN"
+          test "$(git rev-list --count "$BASE_MAIN"..HEAD)" = 1
+          test "$(git diff --name-only "$BASE_MAIN"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$BASE_MAIN"...HEAD)" = $'A\t'"$SELF"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr/files?per_page=100" > "$OUT/api/carrier-files.json"
+          ROOT="$OUT" PR="$pr" HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          pr=json.loads((root/'api/carrier-pr.json').read_text())
+          files=json.loads((root/'api/carrier-files.json').read_text())
+          assert pr['number']==int(os.environ['PR'])
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['ref']=='main' and pr['base']['sha']==os.environ['BASE_MAIN']
+          assert pr['head']['ref']==os.environ['BRANCH'] and pr['head']['sha']==os.environ['HEAD']
+          assert pr['commits']==1 and pr['changed_files']==1
+          assert len(files)==1 and files[0]['filename']==os.environ['SELF'] and files[0]['status']=='added'
+          PY
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\n' "$pr" "$head" >> "$GITHUB_ENV"
+          git checkout --detach "$BASE_MAIN"
+          test -z "$(git status --porcelain)"
+
+      - name: Wait for exact upstream terminal state
+        shell: bash
+        run: |
+          set -euo pipefail
+          terminal=false
+          for _ in $(seq 1 480); do
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$UPSTREAM_RUN" > "$OUT/api/upstream-run.json"
+            if [ "$(jq -r '.status' "$OUT/api/upstream-run.json")" = completed ]; then terminal=true; break; fi
+            sleep 15
+          done
+          test "$terminal" = true
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$UPSTREAM_PR" > "$OUT/api/upstream-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$UPSTREAM_RUN/jobs?per_page=100" > "$OUT/api/upstream-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$UPSTREAM_RUN/artifacts?per_page=100" > "$OUT/api/upstream-artifacts.json"
+          ROOT="$OUT" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          run=json.loads((root/'api/upstream-run.json').read_text())
+          pr=json.loads((root/'api/upstream-pr.json').read_text())
+          jobs=json.loads((root/'api/upstream-jobs.json').read_text())['jobs']
+          assert run['id']==int(os.environ['UPSTREAM_RUN'])
+          assert run['name']==os.environ['UPSTREAM_WORKFLOW']
+          assert run['event']=='pull_request' and run['status']=='completed'
+          assert pr['number']==int(os.environ['UPSTREAM_PR'])
+          assert run['head_sha']==pr['head']['sha'] and run['head_branch']==pr['head']['ref']
+          assert len(jobs)==1 and jobs[0]['name']=='materialize'
+          row={'run':run['id'],'head_sha':run['head_sha'],'head_branch':run['head_branch'],'base_sha':pr['base']['sha'],'conclusion':run['conclusion'],'job_id':jobs[0]['id'],'job_conclusion':jobs[0]['conclusion']}
+          (root/'receipt/upstream-terminal.json').write_text(json.dumps(row,indent=2,sort_keys=True)+'\n')
+          PY
+          conclusion="$(jq -r '.conclusion' "$OUT/api/upstream-run.json")"
+          printf 'UPSTREAM_CONCLUSION=%s\n' "$conclusion" >> "$GITHUB_ENV"
+          if [ "$conclusion" != success ]; then
+            jq -r '.jobs[].id' "$OUT/api/upstream-jobs.json" | while read -r job; do
+              gh api "/repos/$GITHUB_REPOSITORY/actions/jobs/$job/logs" > "$OUT/diagnostics/job-$job.txt" || true
+            done
+            jq -r '.artifacts[] | select(.expired==false) | .id' "$OUT/api/upstream-artifacts.json" | while read -r id; do
+              gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > "$OUT/diagnostics/artifact-$id.zip" || true
+            done
+            ROOT="$OUT" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          jobs=json.loads((root/'api/upstream-jobs.json').read_text())['jobs']
+          failed=[{'job_id':job['id'],'step':step.get('name'),'number':step.get('number')} for job in jobs for step in job.get('steps',[]) if step.get('conclusion')=='failure']
+          tails={p.name:'\n'.join(p.read_text(errors='replace').splitlines()[-200:]) for p in (root/'diagnostics').glob('job-*.txt')}
+          receipt={'status':'cycle-009-candidate-materializer-failed','upstream_run':int(os.environ['UPSTREAM_RUN']),'upstream_pr':int(os.environ['UPSTREAM_PR']),'failed_steps':failed,'log_tails':tails,'canonical_main':os.environ['BASE_MAIN'],'repository_write':False,'main_mutated':False,'outside_human_dependency':False,'owner_physical_action_required':False}
+          (root/'receipt/failure.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+            exit 0
+          fi
+          mapfile -t artifacts < <(jq -r '.artifacts[] | select(.expired==false and (.name|contains("diagnostics")|not)) | [.id,.name,.digest] | @tsv' "$OUT/api/upstream-artifacts.json")
+          test "${#artifacts[@]}" = 1
+          IFS=$'\t' read -r artifact_id artifact_name artifact_digest <<<"${artifacts[0]}"
+          test "$artifact_digest" != null
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$OUT/upstream.zip"
+          test "$(sha256sum "$OUT/upstream.zip" | awk '{print $1}')" = "${artifact_digest#sha256:}"
+          ROOT="$OUT" ARTIFACT_ID="$artifact_id" ARTIFACT_NAME="$artifact_name" ARTIFACT_DIGEST="$artifact_digest" python3 - <<'PY'
+          import json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['ROOT']); target=root/'upstream'
+          with zipfile.ZipFile(root/'upstream.zip') as z:
+              names=z.namelist(); assert len(names)==len(set(names))
+              for info in z.infolist():
+                  p=PurePosixPath(info.filename)
+                  assert not p.is_absolute() and '..' not in p.parts and not info.is_dir()
+                  out=target/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(z.read(info))
+          meta={'artifact_id':int(os.environ['ARTIFACT_ID']),'artifact_name':os.environ['ARTIFACT_NAME'],'artifact_digest':os.environ['ARTIFACT_DIGEST']}
+          (root/'receipt/upstream-artifact.json').write_text(json.dumps(meta,indent=2,sort_keys=True)+'\n')
+          PY
+          printf 'UPSTREAM_ARTIFACT_ID=%s\nUPSTREAM_ARTIFACT_NAME=%s\nUPSTREAM_ARTIFACT_DIGEST=%s\n' "$artifact_id" "$artifact_name" "$artifact_digest" >> "$GITHUB_ENV"
+
+      - name: Verify upstream checksum custody
+        if: env.UPSTREAM_CONCLUSION == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT/upstream" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); ledgers=list(root.rglob('SHA256SUMS.pre'))
+          assert ledgers
+          report=[]
+          for ledger in ledgers:
+              members=[]
+              for raw in ledger.read_text().splitlines():
+                  if not raw.strip(): continue
+                  digest,name=raw.split(None,1); name=name.lstrip('*')
+                  p=Path(name)
+                  if not p.is_absolute(): p=ledger.parent/name
+                  if not p.exists():
+                      suffix=name.split('/receipt/')[-1]
+                      matches=[q for q in root.rglob(Path(name).name) if str(q).endswith(suffix)]
+                      assert len(matches)==1,(name,matches)
+                      p=matches[0]
+                  assert hashlib.sha256(p.read_bytes()).hexdigest()==digest,p
+                  members.append(str(p.relative_to(root)))
+              sealed=ledger.with_name('SHA256SUMS')
+              if sealed.exists(): assert hashlib.sha256(ledger.read_bytes()).hexdigest()==sealed.read_text().split()[0]
+              report.append({'ledger':str(ledger.relative_to(root)),'members':members})
+          (root.parent/'receipt/checksum-verification.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Reconstruct exact candidate from its Git bundle
+        if: env.UPSTREAM_CONCLUSION == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t bundles < <(find "$OUT/upstream" -type f -name '*.bundle' -print)
+          test "${#bundles[@]}" = 1
+          bundle="${bundles[0]}"
+          git bundle verify "$bundle" > "$OUT/qualified/bundle-verify.log"
+          git clone --no-checkout "$bundle" "$OUT/candidate-repo"
+          git -C "$OUT/candidate-repo" remote add source "$GITHUB_WORKSPACE"
+          git -C "$OUT/candidate-repo" fetch source "$BASE_MAIN"
+          mapfile -t heads < <(git bundle list-heads "$bundle" | awk '{print $1}' | LC_ALL=C sort -u)
+          candidates=()
+          for sha in "${heads[@]}"; do
+            [ "$(git -C "$OUT/candidate-repo" show -s --format=%P "$sha")" = "$BASE_MAIN" ] && candidates+=("$sha")
+          done
+          test "${#candidates[@]}" = 1
+          candidate="${candidates[0]}"
+          git -C "$OUT/candidate-repo" checkout --detach "$candidate"
+          tree="$(git -C "$OUT/candidate-repo" show -s --format=%T "$candidate")"
+          git -C "$OUT/candidate-repo" diff --name-only "$BASE_MAIN"..."$candidate" | LC_ALL=C sort > "$OUT/qualified/changed-paths.txt"
+          test -s "$OUT/qualified/changed-paths.txt"
+          ! grep -Eq '(^|/)\.github/workflows/|(^|/)(\.tmp|tmp|transport)(/|$)' "$OUT/qualified/changed-paths.txt"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+          printf 'CANDIDATE_COMMIT=%s\nCANDIDATE_TREE=%s\n' "$candidate" "$tree" >> "$GITHUB_ENV"
+
+      - name: Prove candidate semantics and complete gate
+        if: env.UPSTREAM_CONCLUSION == 'success'
+        shell: bash
+        working-directory: /tmp/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v4/candidate-repo
+        run: |
+          set -euo pipefail
+          npm ci
+          node scripts/doctor-who-cycle-008.mjs | tee "$OUT/qualified/cycle-008.log"
+          node scripts/autopilot.mjs validate | tee "$OUT/qualified/autopilot-validate.log"
+          node scripts/autopilot.mjs status --scope doctor-who --json > "$OUT/qualified/autopilot-status.json"
+          node scripts/media-audit.mjs validate | tee "$OUT/qualified/media-validate.log"
+          node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/qualified/media-gate.log"
+          node scripts/waterline.mjs status --scope doctor-who --requested 1 --json > "$OUT/qualified/waterline-status.json"
+          ROOT="$OUT" node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const root=process.env.ROOT;
+          const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const jobs=state.jobs.filter(x=>x.scope==='doctor-who');
+          const task=jobs.find(x=>x.id===process.env.TASK_ID);
+          if(!task||task.status!=='resolved'||task.performer!==process.env.PERFORMER||task.character!==process.env.ROLE) throw new Error('task state drift');
+          if(JSON.stringify(task.performance_modes)!==JSON.stringify(['voice'])||task.source_fingerprint!==process.env.SOURCE_FINGERPRINT||JSON.stringify(task.wall_ids)!==JSON.stringify([process.env.WALL_ID])) throw new Error('task custody drift');
+          const counts={total:jobs.length,queued:jobs.filter(x=>x.status==='queued').length,resolved:jobs.filter(x=>x.status==='resolved').length,in_flight:jobs.filter(x=>['leased','drafted','merged'].includes(x.status)).length};
+          if(JSON.stringify(counts)!==JSON.stringify({total:316,queued:307,resolved:9,in_flight:0})) throw new Error('queue drift '+JSON.stringify(counts));
+          const specimens=JSON.parse(fs.readFileSync('data/specimens.json','utf8'));
+          const wall=specimens.find(x=>x.id===process.env.WALL_ID);
+          if(!wall||wall.actor!==process.env.PERFORMER||wall.character!==process.env.ROLE||wall.production!=='The First Sontarans'||wall.kind!=='voice'||wall.link!==process.env.SOURCE_URL) throw new Error('wall drift');
+          if(wall.still!==undefined||wall.portrait!==undefined) throw new Error('refused media adopted');
+          const sources=JSON.parse(fs.readFileSync('data/SOURCES.json','utf8'));
+          const source=sources.find(x=>x.id===process.env.WALL_ID);
+          if(!source||source.still!==null||source.portrait!==null) throw new Error('source media drift');
+          const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8'));
+          const facets=audit.items.filter(x=>x.wall_id===process.env.WALL_ID).sort((a,b)=>a.side.localeCompare(b.side));
+          if(facets.length!==2||facets.some(x=>x.status!=='absent'||x.asset!==null)||JSON.stringify(facets.map(x=>x.side))!==JSON.stringify(['portrait','still'])) throw new Error('media facets drift');
+          const status=JSON.parse(fs.readFileSync(`${root}/qualified/autopilot-status.json`,'utf8'));
+          if(status.total!==316||status.statuses.queued!==307||status.statuses.resolved!==9||status.in_flight!==0) throw new Error('status drift');
+          const waterline=JSON.parse(fs.readFileSync(`${root}/qualified/waterline-status.json`,'utf8'));
+          if(waterline.jobs.in_flight!==0||waterline.media.debt!==0||waterline.claim_allowed!==false) throw new Error('waterline must close pending cycle receipt');
+          fs.writeFileSync(`${root}/qualified/semantic-proof.json`,JSON.stringify({task,wall,source,facets,counts,waterline:{claim_allowed:waterline.claim_allowed,claim_reasons:waterline.claim_reasons,unreceipted:waterline.cycles?.unreceipted||[]}},null,2)+'\n');
+          NODE
+          node scripts/gate.mjs | tee "$OUT/qualified/complete-gate.log"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+
+      - name: Seal independently qualified packet
+        if: env.UPSTREAM_CONCLUSION == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$OUT/qualified/changed-paths.txt" "$OUT/receipt/"
+          cp "$OUT/qualified/semantic-proof.json" "$OUT/receipt/"
+          cp "$OUT/qualified/cycle-008.log" "$OUT/receipt/"
+          cp "$OUT/qualified/autopilot-validate.log" "$OUT/receipt/"
+          cp "$OUT/qualified/media-gate.log" "$OUT/receipt/"
+          cp "$OUT/qualified/waterline-status.json" "$OUT/receipt/"
+          cp "$OUT/qualified/complete-gate.log" "$OUT/receipt/"
+          cp "$OUT/receipt/upstream-terminal.json" "$OUT/receipt/upstream-terminal.bound.json"
+          cp "$OUT/receipt/upstream-artifact.json" "$OUT/receipt/upstream-artifact.bound.json"
+          cp "$OUT/receipt/checksum-verification.json" "$OUT/receipt/checksum-verification.bound.json"
+          cp "$(find "$OUT/upstream" -type f -name '*.bundle' -print -quit)" "$OUT/receipt/candidate.bundle"
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); changed=(root/'qualified/changed-paths.txt').read_text().splitlines(); proof=json.loads((root/'qualified/semantic-proof.json').read_text())
+          receipt={'status':'cycle-009-megnus-jaka-candidate-independently-qualified','canonical_parent':os.environ['BASE_MAIN'],'candidate_commit':os.environ['CANDIDATE_COMMIT'],'candidate_tree':os.environ['CANDIDATE_TREE'],'candidate_path_count':len(changed),'candidate_paths_sha256':hashlib.sha256(('\n'.join(changed)+'\n').encode()).hexdigest(),'upstream_pr':int(os.environ['UPSTREAM_PR']),'upstream_run':int(os.environ['UPSTREAM_RUN']),'upstream_artifact':int(os.environ['UPSTREAM_ARTIFACT_ID']),'upstream_artifact_digest':os.environ['UPSTREAM_ARTIFACT_DIGEST'],'task_id':os.environ['TASK_ID'],'wall_id':os.environ['WALL_ID'],'performer':os.environ['PERFORMER'],'role':os.environ['ROLE'],'performance_mode':'voice','queue_after':proof['counts'],'media':{'still':'absent','portrait':'absent','cover_adopted':False,'duplicate_portrait_adopted':False},'cycle_receipt_written':False,'product_published':False,'repository_write':False,'main_mutated':False,'outside_human_dependency':False,'owner_physical_action_required':False,'next_gate':'trusted code-free publication and receipt-bearing cycle finalization'}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (root/'receipt/qualification.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          find "$OUT/receipt" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/receipt/SHA256SUMS.pre"
+          sha256sum "$OUT/receipt/SHA256SUMS.pre" > "$OUT/receipt/SHA256SUMS"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+
+      - name: Upload settlement packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v4-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v4/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Refuse an upstream failure after retention
+        if: env.UPSTREAM_CONCLUSION != 'success'
+        shell: bash
+        run: |
+          echo "exact upstream materializer concluded $UPSTREAM_CONCLUSION" >&2
+          exit 1
+
+      - name: Upload supervisor diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v4-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v4
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
