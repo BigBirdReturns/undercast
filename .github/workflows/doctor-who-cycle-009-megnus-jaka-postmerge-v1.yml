@@ -1,0 +1,245 @@
+name: doctor-who-cycle-009-megnus-jaka-postmerge-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-009-megnus-jaka-postmerge-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-009-megnus-jaka-postmerge-v1
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-009-megnus-jaka-postmerge-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PREMERGE_MAIN: ${{ github.event.pull_request.base.sha }}
+      SELF: .github/workflows/doctor-who-cycle-009-megnus-jaka-postmerge-v1.yml
+      BRANCH: agent/doctor-who-cycle-009-megnus-jaka-postmerge-v1
+      MERGER_BRANCH: agent/doctor-who-cycle-009-megnus-jaka-merger-v1
+      MERGER_WORKFLOW: doctor-who-cycle-009-megnus-jaka-merger-v1
+      OUT: /tmp/doctor-who-cycle-009-megnus-jaka-postmerge-v1
+      TASK_ID: ap_45bb5fdcdf4aff65aa7a87c3
+      WALL_ID: UC-1354
+      PERFORMER: Dan Starkey
+      ROLE: Megnus Jaka
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact one-commit proof carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" && mkdir -p "$OUT"/{api,settlement,merge,proof,diagnostics}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test '${{ github.event.pull_request.base.sha }}' = "$PREMERGE_MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$PREMERGE_MAIN"
+          test "$(git rev-list --count "$PREMERGE_MAIN"..HEAD)" = 1
+          test "$(git diff --name-only "$PREMERGE_MAIN"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$PREMERGE_MAIN"...HEAD)" = $'A\t'"$SELF"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr/files?per_page=100" > "$OUT/api/carrier-files.json"
+          ROOT="$OUT" PR="$pr" HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); pr=json.loads((root/'api/carrier-pr.json').read_text()); files=json.loads((root/'api/carrier-files.json').read_text())
+          assert pr['number']==int(os.environ['PR']) and pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['ref']=='main' and pr['head']['ref']==os.environ['BRANCH'] and pr['head']['sha']==os.environ['HEAD']
+          assert pr['commits']==1 and pr['changed_files']==1
+          assert len(files)==1 and files[0]['filename']==os.environ['SELF'] and files[0]['status']=='added'
+          PY
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\n' "$pr" "$head" >> "$GITHUB_ENV"
+
+      - name: Wait for exact successful canonical fast-forward
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=false
+          for _ in $(seq 1 1280); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f branch="$MERGER_BRANCH" -f event=pull_request -F per_page=30 > "$OUT/api/merger-runs.json"
+            run_id="$(jq -r --arg name "$MERGER_WORKFLOW" --arg branch "$MERGER_BRANCH" '[.workflow_runs[] | select(.name==$name and .head_branch==$branch)] | sort_by(.id) | last | if .status=="completed" and .conclusion=="success" then .id else empty end' "$OUT/api/merger-runs.json")"
+            if [ -n "$run_id" ]; then ready=true; break; fi
+            sleep 15
+          done
+          test "$ready" = true
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$OUT/api/merger-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$OUT/api/merger-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$OUT/api/merger-artifacts.json"
+          ROOT="$OUT" RUN="$run_id" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); run=json.loads((root/'api/merger-run.json').read_text()); jobs=json.loads((root/'api/merger-jobs.json').read_text())['jobs']
+          assert run['id']==int(os.environ['RUN']) and run['name']==os.environ['MERGER_WORKFLOW'] and run['head_branch']==os.environ['MERGER_BRANCH'] and run['status']=='completed' and run['conclusion']=='success'
+          by={j['name']:j for j in jobs}; assert set(by)=={'verify','fast_forward'} and all(j['conclusion']=='success' for j in by.values())
+          (root/'proof/merger-terminal.json').write_text(json.dumps({'run':run['id'],'head_sha':run['head_sha'],'jobs':{k:v['id'] for k,v in by.items()}},indent=2,sort_keys=True)+'\n')
+          PY
+          printf 'MERGER_RUN=%s\n' "$run_id" >> "$GITHUB_ENV"
+
+      - name: Rehydrate exact settlement and merge artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t settlements < <(jq -r '.artifacts[] | select(.expired==false and (.name|contains("-settlement-")) and (.name|contains("diagnostics")|not)) | [.id,.name,.digest] | @tsv' "$OUT/api/merger-artifacts.json")
+          mapfile -t merges < <(jq -r '.artifacts[] | select(.expired==false and (.name|contains("-merge-")) and (.name|contains("diagnostics")|not)) | [.id,.name,.digest] | @tsv' "$OUT/api/merger-artifacts.json")
+          test "${#settlements[@]}" = 1
+          test "${#merges[@]}" = 1
+          IFS=$'\t' read -r settlement_id settlement_name settlement_digest <<<"${settlements[0]}"
+          IFS=$'\t' read -r merge_id merge_name merge_digest <<<"${merges[0]}"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$settlement_id/zip" > "$OUT/settlement.zip"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$merge_id/zip" > "$OUT/merge.zip"
+          test "$(sha256sum "$OUT/settlement.zip" | awk '{print $1}')" = "${settlement_digest#sha256:}"
+          test "$(sha256sum "$OUT/merge.zip" | awk '{print $1}')" = "${merge_digest#sha256:}"
+          ROOT="$OUT" SETTLEMENT_ID="$settlement_id" SETTLEMENT_DIGEST="$settlement_digest" MERGE_ID="$merge_id" MERGE_DIGEST="$merge_digest" python3 - <<'PY'
+          import hashlib,json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['ROOT'])
+          for name in ('settlement','merge'):
+              target=root/name
+              with zipfile.ZipFile(root/f'{name}.zip') as z:
+                  names=z.namelist(); assert len(names)==len(set(names))
+                  for info in z.infolist():
+                      p=PurePosixPath(info.filename); assert not p.is_absolute() and '..' not in p.parts and not info.is_dir()
+                      out=target/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(z.read(info))
+              ledger=target/'SHA256SUMS.pre'; sealed=target/'SHA256SUMS'; assert hashlib.sha256(ledger.read_bytes()).hexdigest()==sealed.read_text().split()[0]
+              for raw in ledger.read_text().splitlines():
+                  if not raw.strip(): continue
+                  digest,file=raw.split(None,1); p=target/file.lstrip('*'); assert p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==digest
+          settlement=json.loads((root/'settlement/settlement.json').read_text()); merge=json.loads((root/'merge/merge.json').read_text()); manifest=json.loads((root/'settlement/file-manifest.bound.json').read_text())
+          assert settlement['status']=='cycle-009-megnus-jaka-exact-fast-forward-approved'
+          assert merge['status']=='cycle-009-megnus-jaka-canonically-fast-forwarded'
+          assert merge['merge_run']==int(os.environ['MERGER_RUN']) and merge['settlement_identity']==settlement['identity']
+          assert merge['canonical_parent']==settlement['canonical_parent']==os.environ['PREMERGE_MAIN']
+          assert merge['canonical_main']==settlement['product_commit'] and merge['canonical_tree']==settlement['product_tree']==manifest['final_tree']
+          assert merge['canonical_path_count']==settlement['product_path_count']==len(manifest['paths']) and merge['force_update'] is False
+          custody={'settlement':{'id':int(os.environ['SETTLEMENT_ID']),'digest':os.environ['SETTLEMENT_DIGEST']},'merge':{'id':int(os.environ['MERGE_ID']),'digest':os.environ['MERGE_DIGEST']}}
+          (root/'proof/artifact-custody.json').write_text(json.dumps(custody,indent=2,sort_keys=True)+'\n')
+          PY
+          printf 'CANONICAL_MAIN=%s\nCANONICAL_TREE=%s\nCANONICAL_PATH_COUNT=%s\nPRODUCT_PR=%s\n' "$(jq -r '.canonical_main' "$OUT/merge/merge.json")" "$(jq -r '.canonical_tree' "$OUT/merge/merge.json")" "$(jq -r '.canonical_path_count' "$OUT/merge/merge.json")" "$(jq -r '.product_pr' "$OUT/merge/merge.json")" >> "$GITHUB_ENV"
+
+      - name: Prove canonical ancestry, tree, and exact path set
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_main=''
+          for _ in $(seq 1 120); do
+            actual_main="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+            [ "$actual_main" = "$CANONICAL_MAIN" ] && break
+            sleep 2
+          done
+          test "$actual_main" = "$CANONICAL_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/git/commits/$CANONICAL_MAIN" > "$OUT/api/canonical-commit.json"
+          test "$(jq -r '.parents|length' "$OUT/api/canonical-commit.json")" = 1
+          test "$(jq -r '.parents[0].sha' "$OUT/api/canonical-commit.json")" = "$PREMERGE_MAIN"
+          test "$(jq -r '.tree.sha' "$OUT/api/canonical-commit.json")" = "$CANONICAL_TREE"
+          gh api "/repos/$GITHUB_REPOSITORY/compare/$PREMERGE_MAIN...$CANONICAL_MAIN" > "$OUT/api/canonical-compare.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$PRODUCT_PR" > "$OUT/api/product-pr.json"
+          ROOT="$OUT" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); compare=json.loads((root/'api/canonical-compare.json').read_text()); manifest=json.loads((root/'settlement/file-manifest.bound.json').read_text()); pr=json.loads((root/'api/product-pr.json').read_text())
+          assert compare['status']=='ahead' and compare['ahead_by']==1 and compare['behind_by']==0 and compare['total_commits']==1
+          expected=sorted(r['path'] for r in manifest['paths']); actual=sorted(f['filename'] for f in compare['files'])
+          assert len(expected)==int(os.environ['CANONICAL_PATH_COUNT']) and actual==expected
+          assert not any(p.startswith('.github/workflows/') or '/.tmp/' in '/'+p or p.startswith('tmp/') or p.startswith('transport/') for p in expected)
+          assert pr['number']==int(os.environ['PRODUCT_PR']) and pr['head']['sha']==os.environ['CANONICAL_MAIN'] and pr['base']['ref']=='main'
+          assert pr['merged'] is True or pr['state']=='closed'
+          (root/'proof/canonical-geometry.json').write_text(json.dumps({'parent':os.environ['PREMERGE_MAIN'],'main':os.environ['CANONICAL_MAIN'],'tree':os.environ['CANONICAL_TREE'],'path_count':len(expected),'product_pr':pr['number'],'product_pr_state':pr['state'],'product_pr_merged':pr['merged']},indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Check out canonical main and rerun terminal gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$CANONICAL_MAIN"
+          git checkout --detach "$CANONICAL_MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$PREMERGE_MAIN"
+          test "$(git show -s --format=%T HEAD)" = "$CANONICAL_TREE"
+          npm ci
+          node scripts/doctor-who-cycle-008.mjs | tee "$OUT/proof/cycle-008.log"
+          node scripts/doctor-who-cycle-009.mjs | tee "$OUT/proof/cycle-009.log"
+          node scripts/autopilot.mjs validate | tee "$OUT/proof/autopilot-validate.log"
+          node scripts/autopilot.mjs status --scope doctor-who --json > "$OUT/proof/autopilot-status.json"
+          node scripts/media-audit.mjs validate | tee "$OUT/proof/media-validate.log"
+          node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/proof/media-gate.log"
+          node scripts/waterline.mjs validate | tee "$OUT/proof/waterline-validate.log"
+          node scripts/waterline.mjs status --scope doctor-who --requested 1 --json > "$OUT/proof/waterline-status.json"
+          node scripts/waterline.mjs gate --scope doctor-who --requested 1 | tee "$OUT/proof/waterline-gate.log"
+          jq -e '.total==316 and .statuses.queued==307 and .statuses.resolved==9 and .in_flight==0' "$OUT/proof/autopilot-status.json" >/dev/null
+          jq -e '.claim_allowed==true and .claim_reasons==[] and .jobs.in_flight==0 and .media.debt==0 and .cycles.unreceipted==[]' "$OUT/proof/waterline-status.json" >/dev/null
+          ROOT="$OUT" node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const root=process.env.ROOT, state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const task=state.jobs.find(x=>x.id===process.env.TASK_ID); if(!task||task.status!=='resolved'||task.performer!==process.env.PERFORMER||task.character!==process.env.ROLE||JSON.stringify(task.wall_ids)!==JSON.stringify([process.env.WALL_ID])) throw new Error('canonical task drift');
+          const wall=JSON.parse(fs.readFileSync('data/specimens.json','utf8')).find(x=>x.id===process.env.WALL_ID); if(!wall||wall.still!==undefined||wall.portrait!==undefined) throw new Error('canonical refused media drift');
+          const facets=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json','utf8')).items.filter(x=>x.wall_id===process.env.WALL_ID); if(facets.length!==2||facets.some(x=>x.status!=='absent'||x.asset!==null)) throw new Error('canonical facets drift');
+          fs.writeFileSync(`${root}/proof/semantic-proof.json`,JSON.stringify({task,wall,facets},null,2)+'\n');
+          NODE
+          node scripts/gate.mjs | tee "$OUT/proof/complete-gate.log"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+
+      - name: Seal terminal canonical proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$OUT/merge/merge.json" "$OUT/proof/merge.bound.json"
+          cp "$OUT/settlement/settlement.json" "$OUT/proof/settlement.bound.json"
+          cp "$OUT/settlement/file-manifest.bound.json" "$OUT/proof/file-manifest.bound.json"
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); merge=json.loads((root/'merge/merge.json').read_text()); settlement=json.loads((root/'settlement/settlement.json').read_text()); geometry=json.loads((root/'proof/canonical-geometry.json').read_text())
+          receipt={'status':'cycle-009-megnus-jaka-terminal-canonical-proof','proof_run':int(os.environ['GITHUB_RUN_ID']),'proof_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'carrier_pr':int(os.environ['CARRIER_PR']),'carrier_head':os.environ['CARRIER_HEAD'],'merger_run':int(os.environ['MERGER_RUN']),'canonical_parent':os.environ['PREMERGE_MAIN'],'canonical_main':os.environ['CANONICAL_MAIN'],'canonical_tree':os.environ['CANONICAL_TREE'],'canonical_path_count':int(os.environ['CANONICAL_PATH_COUNT']),'product_pr':int(os.environ['PRODUCT_PR']),'product_pr_state':geometry['product_pr_state'],'product_pr_merged':geometry['product_pr_merged'],'merge_identity':merge['identity'],'settlement_identity':settlement['identity'],'task_id':os.environ['TASK_ID'],'wall_id':os.environ['WALL_ID'],'queue':{'total':316,'queued':307,'resolved':9,'in_flight':0},'media':{'still':'absent','portrait':'absent','cover_adopted':False,'generic_substitute':False,'duplicate_portrait':False},'waterline_claim_allowed':True,'tenth_lease_issued':False,'outside_human_dependency':False,'owner_physical_action_required':False,'next_gate':'retire temporary cycle-009 transport refs and select the bounded cycle-010 obligation'}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest(); (root/'proof/proof.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          find "$OUT/proof" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/proof/$rel" | sed "s#  $OUT/proof/#  #"; done > "$OUT/proof/SHA256SUMS.pre"
+          sha256sum "$OUT/proof/SHA256SUMS.pre" | sed "s#  $OUT/proof/#  #" > "$OUT/proof/SHA256SUMS"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-postmerge-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-postmerge-v1/proof
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-postmerge-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-postmerge-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
