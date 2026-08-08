@@ -1,0 +1,252 @@
+name: doctor-who-cycle-009-finalization-template-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-009-finalization-template-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-009-finalization-template-v1
+  cancel-in-progress: true
+
+jobs:
+  recover:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-009-finalization-template-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_MAIN: ${{ github.event.pull_request.base.sha }}
+      SELF: .github/workflows/doctor-who-cycle-009-finalization-template-v1.yml
+      BRANCH: agent/doctor-who-cycle-009-finalization-template-v1
+      REVIEW_BRANCH: agent/doctor-who-cycle-009-megnus-jaka-candidate-review-v1
+      REVIEW_WORKFLOW: doctor-who-cycle-009-megnus-jaka-candidate-review-v1
+      PRODUCT_BRANCH: agent/doctor-who-cycle-009-megnus-jaka-candidate-product-v1
+      OUT: /tmp/doctor-who-cycle-009-finalization-template-v1
+      HISTORICAL_ARTIFACT: "9005339156"
+      HISTORICAL_ARTIFACT_SHA256: 980c5a30833fc60040c1fd607953ae0348429ced969edd408850db907f81ae71
+      HISTORICAL_CANDIDATE: 7a6b85521c45ec45546ccab1ef2c0a28fff93687
+      HISTORICAL_CANDIDATE_PATHS: "40"
+      HISTORICAL_FINAL_PARENT: 951fb9e6b47f54075b5843a8e9ed007767fb6bca
+      HISTORICAL_FINAL: 47ccb38eab6a4b6e2a16ed92b04f1259b95de783
+      HISTORICAL_FINAL_PATHS: "48"
+      HISTORICAL_FINALIZATION_PATHS: "8"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-path recovery carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" && mkdir -p "$OUT"/{api,review,historical,template,receipt,diagnostics}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_MAIN"
+          test "$(git rev-list --count "$BASE_MAIN"..HEAD)" = 1
+          test "$(git diff --name-only "$BASE_MAIN"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$BASE_MAIN"...HEAD)" = $'A\t'"$SELF"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr/files?per_page=100" > "$OUT/api/carrier-files.json"
+          ROOT="$OUT" PR="$pr" HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); pr=json.loads((root/'api/carrier-pr.json').read_text()); files=json.loads((root/'api/carrier-files.json').read_text())
+          assert pr['number']==int(os.environ['PR']) and pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['sha']==os.environ['BASE_MAIN'] and pr['head']['sha']==os.environ['HEAD'] and pr['head']['ref']==os.environ['BRANCH']
+          assert pr['commits']==1 and pr['changed_files']==1 and len(files)==1 and files[0]['filename']==os.environ['SELF'] and files[0]['status']=='added'
+          PY
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\n' "$pr" "$head" >> "$GITHUB_ENV"
+          git checkout --detach "$BASE_MAIN"
+
+      - name: Wait for exact successful cycle-009 candidate review
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=false
+          for _ in $(seq 1 480); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f branch="$REVIEW_BRANCH" -f event=pull_request -F per_page=20 > "$OUT/api/review-runs.json"
+            run_id="$(jq -r --arg name "$REVIEW_WORKFLOW" '[.workflow_runs[] | select(.name==$name and .head_branch==env.REVIEW_BRANCH)] | sort_by(.id) | last | if .status=="completed" then .id else empty end' "$OUT/api/review-runs.json")"
+            if [ -n "$run_id" ]; then ready=true; break; fi
+            sleep 15
+          done
+          test "$ready" = true
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$OUT/api/review-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$OUT/api/review-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$OUT/api/review-artifacts.json"
+          jq -e --arg name "$REVIEW_WORKFLOW" --arg branch "$REVIEW_BRANCH" '.name==$name and .head_branch==$branch and .event=="pull_request" and .status=="completed" and .conclusion=="success"' "$OUT/api/review-run.json" >/dev/null
+          jq -e '.jobs|length==1 and .[0].name=="review" and .[0].conclusion=="success"' "$OUT/api/review-jobs.json" >/dev/null
+          mapfile -t artifacts < <(jq -r '.artifacts[] | select(.expired==false and (.name|contains("diagnostics")|not)) | [.id,.name,.digest] | @tsv' "$OUT/api/review-artifacts.json")
+          test "${#artifacts[@]}" = 1
+          IFS=$'\t' read -r artifact_id artifact_name artifact_digest <<<"${artifacts[0]}"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$OUT/review.zip"
+          test "$(sha256sum "$OUT/review.zip" | awk '{print $1}')" = "${artifact_digest#sha256:}"
+          ROOT="$OUT" ARTIFACT_ID="$artifact_id" ARTIFACT_DIGEST="$artifact_digest" REVIEW_RUN="$run_id" python3 - <<'PY'
+          import hashlib,json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['ROOT']); target=root/'review'
+          with zipfile.ZipFile(root/'review.zip') as z:
+              for info in z.infolist():
+                  p=PurePosixPath(info.filename); assert not p.is_absolute() and '..' not in p.parts and not info.is_dir()
+                  out=target/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(z.read(info))
+          ledger=target/'SHA256SUMS.pre'; sealed=target/'SHA256SUMS'; assert hashlib.sha256(ledger.read_bytes()).hexdigest()==sealed.read_text().split()[0]
+          for raw in ledger.read_text().splitlines():
+              if not raw.strip(): continue
+              digest,name=raw.split(None,1); p=target/name.lstrip('*'); assert p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==digest
+          review=json.loads((target/'review.json').read_text()); assert review['status']=='cycle-009-megnus-jaka-candidate-independently-approved' and review['review_run']==int(os.environ['REVIEW_RUN'])
+          meta={'run':int(os.environ['REVIEW_RUN']),'artifact':int(os.environ['ARTIFACT_ID']),'artifact_digest':os.environ['ARTIFACT_DIGEST'],'review_identity':review['identity'],'product_commit':review['product_commit'],'product_tree':review['product_tree']}
+          (root/'receipt/cycle-009-review.json').write_text(json.dumps(meta,indent=2,sort_keys=True)+'\n')
+          PY
+          printf 'REVIEW_RUN=%s\nREVIEW_ARTIFACT=%s\nREVIEW_ARTIFACT_DIGEST=%s\n' "$run_id" "$artifact_id" "$artifact_digest" >> "$GITHUB_ENV"
+
+      - name: Rehydrate exact historical cycle-008 candidate packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$HISTORICAL_ARTIFACT" > "$OUT/api/historical-artifact.json"
+          jq -e --argjson id "$HISTORICAL_ARTIFACT" '.id==$id and .expired==false' "$OUT/api/historical-artifact.json" >/dev/null
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$HISTORICAL_ARTIFACT/zip" > "$OUT/historical.zip"
+          test "$(sha256sum "$OUT/historical.zip" | awk '{print $1}')" = "$HISTORICAL_ARTIFACT_SHA256"
+          ROOT="$OUT" python3 - <<'PY'
+          import os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['ROOT']); target=root/'historical'
+          with zipfile.ZipFile(root/'historical.zip') as z:
+              names=z.namelist(); assert len(names)==len(set(names))
+              for info in z.infolist():
+                  p=PurePosixPath(info.filename); assert not p.is_absolute() and '..' not in p.parts and not info.is_dir()
+                  out=target/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(z.read(info))
+          PY
+          chosen=''
+          while IFS= read -r bundle; do
+            if git bundle list-heads "$bundle" | awk '{print $1}' | grep -Fxq "$HISTORICAL_CANDIDATE"; then
+              test -z "$chosen"
+              chosen="$bundle"
+            fi
+          done < <(find "$OUT/historical" -type f -name '*.bundle' -print)
+          test -n "$chosen"
+          printf '%s\n' "$chosen" > "$OUT/historical/candidate-bundle-path.txt"
+          git bundle verify "$chosen" > "$OUT/template/historical-bundle-verify.log"
+          git clone --no-checkout "$chosen" "$OUT/historical-candidate-repo"
+          git -C "$OUT/historical-candidate-repo" checkout --detach "$HISTORICAL_CANDIDATE"
+          test "$(git -C "$OUT/historical-candidate-repo" rev-parse HEAD)" = "$HISTORICAL_CANDIDATE"
+
+      - name: Recover exact eight-path finalization denominator and transformations
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git show -s --format=%P "$HISTORICAL_FINAL")" = "$HISTORICAL_FINAL_PARENT"
+          git -C "$OUT/historical-candidate-repo" diff --name-only "$(git -C "$OUT/historical-candidate-repo" show -s --format=%P "$HISTORICAL_CANDIDATE")"..."$HISTORICAL_CANDIDATE" | LC_ALL=C sort > "$OUT/template/candidate-paths.txt"
+          git diff --name-only "$HISTORICAL_FINAL_PARENT"..."$HISTORICAL_FINAL" | LC_ALL=C sort > "$OUT/template/final-product-paths.txt"
+          test "$(wc -l < "$OUT/template/candidate-paths.txt")" = "$HISTORICAL_CANDIDATE_PATHS"
+          test "$(wc -l < "$OUT/template/final-product-paths.txt")" = "$HISTORICAL_FINAL_PATHS"
+          comm -23 "$OUT/template/final-product-paths.txt" "$OUT/template/candidate-paths.txt" > "$OUT/template/finalization-paths.txt"
+          comm -13 "$OUT/template/final-product-paths.txt" "$OUT/template/candidate-paths.txt" > "$OUT/template/candidate-only-paths.txt"
+          test ! -s "$OUT/template/candidate-only-paths.txt"
+          test "$(wc -l < "$OUT/template/finalization-paths.txt")" = "$HISTORICAL_FINALIZATION_PATHS"
+          ROOT="$OUT" python3 - <<'PY'
+          import difflib,hashlib,json,os,subprocess
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); candidate_repo=root/'historical-candidate-repo'; candidate=os.environ['HISTORICAL_CANDIDATE']; final=os.environ['HISTORICAL_FINAL']
+          paths=(root/'template/finalization-paths.txt').read_text().splitlines(); before_root=root/'template/before'; after_root=root/'template/after'; diff_root=root/'template/diffs'
+          def git_bytes(repo,commit,path):
+              p=subprocess.run(['git','-C',str(repo),'show',f'{commit}:{path}'],capture_output=True)
+              return None if p.returncode else p.stdout
+          def mode(repo,commit,path):
+              p=subprocess.run(['git','-C',str(repo),'ls-tree',commit,'--',path],capture_output=True,text=True)
+              return None if p.returncode or not p.stdout.strip() else p.stdout.split()[0]
+          def json_changes(a,b,prefix='$'):
+              rows=[]
+              if type(a)!=type(b): return [{'path':prefix,'before':a,'after':b,'op':'replace'}]
+              if isinstance(a,dict):
+                  for k in sorted(set(a)|set(b)):
+                      q=f'{prefix}.{k}'
+                      if k not in a: rows.append({'path':q,'before_absent':True,'after':b[k],'op':'add'})
+                      elif k not in b: rows.append({'path':q,'before':a[k],'after_absent':True,'op':'remove'})
+                      else: rows.extend(json_changes(a[k],b[k],q))
+              elif isinstance(a,list):
+                  if a!=b: rows.append({'path':prefix,'before':a,'after':b,'op':'replace-list'})
+              elif a!=b: rows.append({'path':prefix,'before':a,'after':b,'op':'replace'})
+              return rows
+          manifest=[]
+          for path in paths:
+              before=git_bytes(candidate_repo,candidate,path); after=git_bytes(Path.cwd(),final,path); assert after is not None
+              row={'path':path,'before_exists':before is not None,'after_exists':True,'before_mode':mode(candidate_repo,candidate,path),'after_mode':mode(Path.cwd(),final,path),'after_bytes':len(after),'after_sha256':hashlib.sha256(after).hexdigest()}
+              if before is not None: row.update({'before_bytes':len(before),'before_sha256':hashlib.sha256(before).hexdigest()})
+              bp=before_root/path; ap=after_root/path; ap.parent.mkdir(parents=True,exist_ok=True); ap.write_bytes(after)
+              if before is not None: bp.parent.mkdir(parents=True,exist_ok=True); bp.write_bytes(before)
+              dp=diff_root/(path+'.diff'); dp.parent.mkdir(parents=True,exist_ok=True)
+              try:
+                  bt='' if before is None else before.decode(); at=after.decode(); dp.write_text(''.join(difflib.unified_diff(bt.splitlines(True),at.splitlines(True),fromfile='before/'+path,tofile='after/'+path)))
+              except UnicodeDecodeError: dp.write_text('binary\n')
+              if path.endswith('.json'):
+                  a=None if before is None else json.loads(before); b=json.loads(after); jp=diff_root/(path+'.json-diff.json'); jp.parent.mkdir(parents=True,exist_ok=True); jp.write_text(json.dumps(json_changes(a,b),indent=2,sort_keys=True)+'\n')
+              manifest.append(row)
+          (root/'template/finalization-manifest.json').write_text(json.dumps({'version':1,'candidate_commit':candidate,'final_commit':final,'paths':manifest},indent=2,sort_keys=True)+'\n')
+          PY
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+
+      - name: Bind cycle-009 product inputs and seal template packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$PRODUCT_BRANCH" > "$OUT/api/cycle-009-product-ref.json"
+          product_commit="$(jq -r '.object.sha' "$OUT/api/cycle-009-product-ref.json")"
+          review_commit="$(jq -r '.product_commit' "$OUT/review/review.json")"
+          test "$product_commit" = "$review_commit"
+          gh api "/repos/$GITHUB_REPOSITORY/git/commits/$product_commit" > "$OUT/api/cycle-009-product-commit.json"
+          test "$(jq -r '.parents|length' "$OUT/api/cycle-009-product-commit.json")" = 1
+          test "$(jq -r '.parents[0].sha' "$OUT/api/cycle-009-product-commit.json")" = "$BASE_MAIN"
+          ROOT="$OUT" PRODUCT_COMMIT="$product_commit" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); review=json.loads((root/'review/review.json').read_text()); manifest=json.loads((root/'template/finalization-manifest.json').read_text()); paths=(root/'template/finalization-paths.txt').read_text().splitlines()
+          receipt={'status':'cycle-009-finalization-template-recovered','recovery_run':int(os.environ['GITHUB_RUN_ID']),'recovery_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'carrier_pr':int(os.environ['CARRIER_PR']),'carrier_head':os.environ['CARRIER_HEAD'],'canonical_main':os.environ['BASE_MAIN'],'cycle_009_review_run':int(os.environ['REVIEW_RUN']),'cycle_009_review_artifact':int(os.environ['REVIEW_ARTIFACT']),'cycle_009_review_identity':review['identity'],'cycle_009_product_commit':os.environ['PRODUCT_COMMIT'],'cycle_009_product_tree':review['product_tree'],'historical_candidate_artifact':int(os.environ['HISTORICAL_ARTIFACT']),'historical_candidate_artifact_sha256':os.environ['HISTORICAL_ARTIFACT_SHA256'],'historical_candidate_commit':os.environ['HISTORICAL_CANDIDATE'],'historical_final_commit':os.environ['HISTORICAL_FINAL'],'historical_candidate_path_count':int(os.environ['HISTORICAL_CANDIDATE_PATHS']),'historical_final_path_count':int(os.environ['HISTORICAL_FINAL_PATHS']),'historical_finalization_path_count':len(paths),'historical_finalization_paths_sha256':hashlib.sha256(('\n'.join(paths)+'\n').encode()).hexdigest(),'template_manifest_sha256':hashlib.sha256((root/'template/finalization-manifest.json').read_bytes()).hexdigest(),'cycle_receipt_written':False,'product_mutated':False,'repository_write':False,'main_mutated':False,'outside_human_dependency':False,'owner_physical_action_required':False,'next_gate':'adapt exact eight-path template to cycle-009 identities, timestamps, hashes, and reviewed waterline state'}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (root/'receipt/template-recovery.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          cp -a "$OUT/template/." "$OUT/receipt/template/"
+          cp "$OUT/review/review.json" "$OUT/receipt/cycle-009-review.bound.json"
+          cp "$OUT/review/qualification.bound.json" "$OUT/receipt/cycle-009-qualification.bound.json"
+          cp "$OUT/review/publication.bound.json" "$OUT/receipt/cycle-009-publication.bound.json"
+          find "$OUT/receipt" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/receipt/$rel" | sed "s#  $OUT/receipt/#  #"; done > "$OUT/receipt/SHA256SUMS.pre"
+          sha256sum "$OUT/receipt/SHA256SUMS.pre" | sed "s#  $OUT/receipt/#  #" > "$OUT/receipt/SHA256SUMS"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-finalization-template-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-finalization-template-v1/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-finalization-template-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-finalization-template-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
