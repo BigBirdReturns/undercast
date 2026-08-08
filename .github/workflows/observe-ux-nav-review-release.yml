@@ -1,0 +1,70 @@
+name: observe-ux-nav-review-release
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/observe-ux-nav-review-release.yml"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  observe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUT: /tmp/observe-ux-nav-review-release
+      QUALIFIED: e6cdd7266464758756591d2d2aedd0c643f5c1ee
+      LIVE_HEAD: 936aca32ed6821d1c944743f0edcd0ea019b9e5a
+      PRODUCT_ROOT: be5db794b9aca7bd74e2a9e6a3d64cb6b3072a17
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind one-file observer and compare exact product trees
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          printf '%s\n' .github/workflows/observe-ux-nav-review-release.yml > /tmp/expected
+          git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | LC_ALL=C sort > /tmp/actual
+          diff -u /tmp/expected /tmp/actual
+          qualified_parent="$(git show -s --format=%P "$QUALIFIED")"
+          live_parent="$(git show -s --format=%P "$LIVE_HEAD")"
+          qualified_tree="$(git rev-parse "$QUALIFIED^{tree}")"
+          live_tree="$(git rev-parse "$LIVE_HEAD^{tree}")"
+          test "$qualified_parent" = "$PRODUCT_ROOT"
+          test "$live_parent" = "$PRODUCT_ROOT"
+          git diff --exit-code "$QUALIFIED" "$LIVE_HEAD" > "$OUT/tree-diff.txt"
+          test "$qualified_tree" = "$live_tree"
+          mapfile -t paths < <(git diff-tree --no-commit-id --name-only -r "$QUALIFIED" | LC_ALL=C sort)
+          test "${#paths[@]}" -eq 15
+          printf '%s\n' "${paths[@]}" > "$OUT/product-paths.txt"
+          jq -n \
+            --arg qualified "$QUALIFIED" \
+            --arg live "$LIVE_HEAD" \
+            --arg parent "$PRODUCT_ROOT" \
+            --arg qualified_tree "$qualified_tree" \
+            --arg live_tree "$live_tree" \
+            --argjson paths "${#paths[@]}" \
+            '{qualified:$qualified,live_head:$live,parent:$parent,qualified_tree:$qualified_tree,live_tree:$live_tree,trees_identical:($qualified_tree==$live_tree),changed_paths:$paths}' \
+            > "$OUT/summary.json"
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/346" > "$OUT/pr-346.json"
+          gh api "repos/${GITHUB_REPOSITORY}/commits/main" > "$OUT/main.json"
+          cat "$OUT/summary.json"
+
+      - name: Upload exact tree-equivalence receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: observe-ux-nav-tree-equivalence-${{ github.run_id }}
+          path: /tmp/observe-ux-nav-review-release
+          if-no-files-found: error
+          retention-days: 30
