@@ -1,0 +1,311 @@
+name: doctor-who-cycle-009-megnus-jaka-final-publisher-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-009-megnus-jaka-final-publisher-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-009-megnus-jaka-final-publisher-v1
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-009-megnus-jaka-final-publisher-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_MAIN: ${{ github.event.pull_request.base.sha }}
+      SELF: .github/workflows/doctor-who-cycle-009-megnus-jaka-final-publisher-v1.yml
+      BRANCH: agent/doctor-who-cycle-009-megnus-jaka-final-publisher-v1
+      REVIEW_BRANCH: agent/doctor-who-cycle-009-megnus-jaka-final-review-v1
+      REVIEW_WORKFLOW: doctor-who-cycle-009-megnus-jaka-final-review-v1
+      PRODUCT_BRANCH: agent/doctor-who-cycle-009-megnus-jaka-reviewed-product-v1
+      OUT: /tmp/doctor-who-cycle-009-megnus-jaka-final-publisher-v1
+      TASK_ID: ap_45bb5fdcdf4aff65aa7a87c3
+      WALL_ID: UC-1354
+      RECEIPT_PATH: data/review/adapter-sdk/doctor-who-cycle-009-megnus-jaka.json
+      CHECKER_PATH: scripts/doctor-who-cycle-009.mjs
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact publisher carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" && mkdir -p "$OUT"/{api,source,work,handoff,diagnostics}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test '${{ github.event.pull_request.base.sha }}' = "$BASE_MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_MAIN"
+          test "$(git rev-list --count "$BASE_MAIN"..HEAD)" = 1
+          test "$(git diff --name-only "$BASE_MAIN"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$BASE_MAIN"...HEAD)" = $'A\t'"$SELF"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr/files?per_page=100" > "$OUT/api/carrier-files.json"
+          ROOT="$OUT" PR="$pr" HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); pr=json.loads((root/'api/carrier-pr.json').read_text()); files=json.loads((root/'api/carrier-files.json').read_text())
+          assert pr['number']==int(os.environ['PR']) and pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['ref']=='main' and pr['base']['sha']==os.environ['BASE_MAIN']
+          assert pr['head']['ref']==os.environ['BRANCH'] and pr['head']['sha']==os.environ['HEAD']
+          assert pr['commits']==1 and pr['changed_files']==1
+          assert len(files)==1 and files[0]['filename']==os.environ['SELF'] and files[0]['status']=='added'
+          PY
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\n' "$pr" "$head" >> "$GITHUB_ENV"
+          git checkout --detach "$BASE_MAIN"
+
+      - name: Wait for exact independent final review
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=false
+          for _ in $(seq 1 960); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f branch="$REVIEW_BRANCH" -f event=pull_request -F per_page=30 > "$OUT/api/review-runs.json"
+            run_id="$(jq -r --arg name "$REVIEW_WORKFLOW" --arg branch "$REVIEW_BRANCH" '[.workflow_runs[] | select(.name==$name and .head_branch==$branch)] | sort_by(.id) | last | if .status=="completed" then .id else empty end' "$OUT/api/review-runs.json")"
+            if [ -n "$run_id" ]; then ready=true; break; fi
+            sleep 15
+          done
+          test "$ready" = true
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$OUT/api/review-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$OUT/api/review-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$OUT/api/review-artifacts.json"
+          jq -e --arg name "$REVIEW_WORKFLOW" --arg branch "$REVIEW_BRANCH" '.name==$name and .head_branch==$branch and .event=="pull_request" and .status=="completed" and .conclusion=="success"' "$OUT/api/review-run.json" >/dev/null
+          jq -e '.jobs|length==1 and .[0].name=="review" and .[0].conclusion=="success"' "$OUT/api/review-jobs.json" >/dev/null
+          mapfile -t artifacts < <(jq -r '.artifacts[] | select(.expired==false and (.name|contains("diagnostics")|not)) | [.id,.name,.digest] | @tsv' "$OUT/api/review-artifacts.json")
+          test "${#artifacts[@]}" = 1
+          IFS=$'\t' read -r artifact_id artifact_name artifact_digest <<<"${artifacts[0]}"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$OUT/source.zip"
+          test "$(sha256sum "$OUT/source.zip" | awk '{print $1}')" = "${artifact_digest#sha256:}"
+          ROOT="$OUT" ARTIFACT_ID="$artifact_id" ARTIFACT_NAME="$artifact_name" ARTIFACT_DIGEST="$artifact_digest" REVIEW_RUN="$run_id" python3 - <<'PY'
+          import hashlib,json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['ROOT']); target=root/'source'
+          with zipfile.ZipFile(root/'source.zip') as z:
+              names=z.namelist(); assert len(names)==len(set(names))
+              for info in z.infolist():
+                  p=PurePosixPath(info.filename); assert not p.is_absolute() and '..' not in p.parts and not info.is_dir()
+                  out=target/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(z.read(info))
+          ledger=target/'SHA256SUMS.pre'; sealed=target/'SHA256SUMS'; assert ledger.is_file() and sealed.is_file() and hashlib.sha256(ledger.read_bytes()).hexdigest()==sealed.read_text().split()[0]
+          for raw in ledger.read_text().splitlines():
+              if not raw.strip(): continue
+              digest,name=raw.split(None,1); p=target/name.lstrip('*'); assert p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==digest
+          review=json.loads((target/'review.json').read_text()); manifest=json.loads((target/'file-manifest.json').read_text()); qualification=json.loads((target/'qualification.bound.json').read_text())
+          assert review['status']=='cycle-009-megnus-jaka-final-product-independently-approved' and review['review_run']==int(os.environ['REVIEW_RUN'])
+          assert review['canonical_parent']==os.environ['BASE_MAIN'] and review['final_tree']==manifest['final_tree']==qualification['final_tree']
+          assert review['final_path_count']==len(manifest['paths'])==qualification['final_path_count']
+          assert review['source_qualification_identity']==qualification['identity'] and review['waterline_reopened'] is True
+          meta={'review_run':int(os.environ['REVIEW_RUN']),'artifact_id':int(os.environ['ARTIFACT_ID']),'artifact_name':os.environ['ARTIFACT_NAME'],'artifact_digest':os.environ['ARTIFACT_DIGEST'],'review_identity':review['identity']}
+          (root/'handoff/review-custody.json').write_text(json.dumps(meta,indent=2,sort_keys=True)+'\n')
+          PY
+          printf 'REVIEW_RUN=%s\nREVIEW_ARTIFACT=%s\nREVIEW_ARTIFACT_DIGEST=%s\n' "$run_id" "$artifact_id" "$artifact_digest" >> "$GITHUB_ENV"
+
+      - name: Recompose exact approved tree locally and rerun gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --no-checkout "https://github.com/$GITHUB_REPOSITORY" "$OUT/work/repo"
+          git -C "$OUT/work/repo" checkout --detach "$BASE_MAIN"
+          ROOT="$OUT" REPO="$OUT/work/repo" python3 - <<'PY'
+          import hashlib,json,os,shutil,tarfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['ROOT']); repo=Path(os.environ['REPO']); manifest=json.loads((root/'source/file-manifest.json').read_text()); rows=manifest['paths']
+          assert manifest['base_main']==os.environ['BASE_MAIN'] and 1<=len(rows)<=200 and len({r['path'] for r in rows})==len(rows)
+          for row in rows:
+              p=PurePosixPath(row['path']); assert not p.is_absolute() and '..' not in p.parts
+              assert not row['path'].startswith('.github/workflows/') and '/.tmp/' not in '/'+row['path'] and not row['path'].startswith('tmp/') and not row['path'].startswith('transport/')
+              if row['status']=='D': (repo/row['path']).unlink(missing_ok=True)
+          with tarfile.open(root/'source/product.tar','r') as tar:
+              members=tar.getmembers(); expected=[r for r in rows if r['status']!='D']; assert [m.name for m in members]==[r['path'] for r in expected]
+              for member,row in zip(members,expected):
+                  p=PurePosixPath(member.name); assert member.isfile() and not p.is_absolute() and '..' not in p.parts
+                  data=tar.extractfile(member).read(); assert len(data)==row['bytes'] and hashlib.sha256(data).hexdigest()==row['sha256']
+                  out=repo/row['path']; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(data); out.chmod(int(row['mode'],8)&0o777)
+          PY
+          cd "$OUT/work/repo"
+          git config user.name 'Undercast Final Publisher Qualifier'
+          git config user.email 'final-publisher@users.noreply.github.com'
+          git add --all
+          tree="$(git write-tree)"
+          expected_tree="$(jq -r '.final_tree' "$OUT/source/review.json")"
+          test "$tree" = "$expected_tree"
+          git commit -m 'Doctor Who: complete reviewed cycle 009 for Megnus Jaka'
+          local_commit="$(git rev-parse HEAD)"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_MAIN"
+          test "$(git show -s --format=%T HEAD)" = "$expected_tree"
+          git diff --name-only "$BASE_MAIN"...HEAD | LC_ALL=C sort > "$OUT/handoff/changed-paths.txt"
+          test "$(wc -l < "$OUT/handoff/changed-paths.txt")" = "$(jq '.paths|length' "$OUT/source/file-manifest.json")"
+          node scripts/doctor-who-cycle-008.mjs | tee "$OUT/handoff/cycle-008.log"
+          node scripts/doctor-who-cycle-009.mjs | tee "$OUT/handoff/cycle-009.log"
+          node scripts/autopilot.mjs validate | tee "$OUT/handoff/autopilot-validate.log"
+          node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/handoff/media-gate.log"
+          node scripts/waterline.mjs validate | tee "$OUT/handoff/waterline-validate.log"
+          node scripts/waterline.mjs status --scope doctor-who --requested 1 --json > "$OUT/handoff/waterline-status.json"
+          node scripts/waterline.mjs gate --scope doctor-who --requested 1 | tee "$OUT/handoff/waterline-gate.log"
+          jq -e '.claim_allowed==true and .claim_reasons==[] and .jobs.in_flight==0 and .media.debt==0 and .cycles.unreceipted==[]' "$OUT/handoff/waterline-status.json" >/dev/null
+          node scripts/gate.mjs | tee "$OUT/handoff/complete-gate.log"
+          test -z "$(git status --porcelain)"
+          printf 'APPROVED_TREE=%s\nLOCAL_COMMIT=%s\n' "$expected_tree" "$local_commit" >> "$GITHUB_ENV"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+
+      - name: Seal same-run code-free publication handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$OUT/source/product.tar" "$OUT/handoff/"
+          cp "$OUT/source/file-manifest.json" "$OUT/handoff/"
+          cp "$OUT/source/review.json" "$OUT/handoff/review.bound.json"
+          cp "$OUT/source/qualification.bound.json" "$OUT/handoff/qualification.bound.json"
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); review=json.loads((root/'source/review.json').read_text()); manifest=json.loads((root/'source/file-manifest.json').read_text()); custody=json.loads((root/'handoff/review-custody.json').read_text())
+          receipt={'status':'cycle-009-megnus-jaka-final-product-approved-for-exact-publication','publisher_run':int(os.environ['GITHUB_RUN_ID']),'publisher_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'carrier_pr':int(os.environ['CARRIER_PR']),'carrier_head':os.environ['CARRIER_HEAD'],'canonical_parent':os.environ['BASE_MAIN'],'approved_tree':os.environ['APPROVED_TREE'],'local_qualification_commit':os.environ['LOCAL_COMMIT'],'product_path_count':len(manifest['paths']),'source_review_identity':review['identity'],'source_review_custody':custody,'task_id':os.environ['TASK_ID'],'wall_id':os.environ['WALL_ID'],'cycle_id':review['cycle_id'],'receipt_sha256':review['receipt_sha256'],'checker_sha256':review['checker_sha256'],'product_tar_sha256':hashlib.sha256((root/'handoff/product.tar').read_bytes()).hexdigest(),'file_manifest_sha256':hashlib.sha256((root/'handoff/file-manifest.json').read_bytes()).hexdigest(),'product_published':False,'main_mutated':False,'repository_write':False,'outside_human_dependency':False,'owner_physical_action_required':False}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest(); (root/'handoff/publication-handoff.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          find "$OUT/handoff" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/handoff/$rel" | sed "s#  $OUT/handoff/#  #"; done > "$OUT/handoff/SHA256SUMS.pre"
+          sha256sum "$OUT/handoff/SHA256SUMS.pre" | sed "s#  $OUT/handoff/#  #" > "$OUT/handoff/SHA256SUMS"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+
+      - name: Upload exact same-run handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-final-publisher-v1-handoff-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-final-publisher-v1/handoff
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload qualification diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-final-publisher-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-final-publisher-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
+
+  publish:
+    needs: qualify
+    if: needs.qualify.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_MAIN: ${{ github.event.pull_request.base.sha }}
+      PRODUCT_BRANCH: agent/doctor-who-cycle-009-megnus-jaka-reviewed-product-v1
+      HANDOFF: /tmp/doctor-who-cycle-009-megnus-jaka-final-publisher-v1-handoff
+      OUT: /tmp/doctor-who-cycle-009-megnus-jaka-final-publisher-v1-publication
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-final-publisher-v1-handoff-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-final-publisher-v1-handoff
+
+      - name: Verify code-free handoff and publish exact approved tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" && mkdir -p "$OUT"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+          if gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$PRODUCT_BRANCH" >/dev/null 2>&1; then echo "reviewed product ref already exists" >&2; exit 1; fi
+          HANDOFF="$HANDOFF" OUT="$OUT" python3 - <<'PY'
+          import base64,hashlib,json,os,subprocess,tarfile
+          from pathlib import Path,PurePosixPath
+          handoff=Path(os.environ['HANDOFF']); out=Path(os.environ['OUT']); repo=os.environ['GITHUB_REPOSITORY']; base=os.environ['BASE_MAIN']; branch=os.environ['PRODUCT_BRANCH']
+          def gh(method,path,payload=None):
+              cmd=['gh','api']
+              if method!='GET': cmd+=['--method',method]
+              cmd.append(path)
+              if payload is None: p=subprocess.run(cmd,check=True,capture_output=True,text=True)
+              else: p=subprocess.run(cmd+['--input','-'],input=json.dumps(payload),check=True,capture_output=True,text=True)
+              return json.loads(p.stdout) if p.stdout.strip() else None
+          ledger=handoff/'SHA256SUMS.pre'; sealed=handoff/'SHA256SUMS'; assert hashlib.sha256(ledger.read_bytes()).hexdigest()==sealed.read_text().split()[0]
+          for raw in ledger.read_text().splitlines():
+              if not raw.strip(): continue
+              digest,name=raw.split(None,1); p=handoff/name.lstrip('*'); assert p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==digest
+          approval=json.loads((handoff/'publication-handoff.json').read_text()); review=json.loads((handoff/'review.bound.json').read_text()); manifest=json.loads((handoff/'file-manifest.json').read_text())
+          assert approval['status']=='cycle-009-megnus-jaka-final-product-approved-for-exact-publication'
+          assert approval['publisher_run']==int(os.environ['GITHUB_RUN_ID']) and approval['publisher_attempt']==int(os.environ['GITHUB_RUN_ATTEMPT'])
+          assert approval['canonical_parent']==base==manifest['base_main'] and approval['approved_tree']==manifest['final_tree']==review['final_tree']
+          assert approval['source_review_identity']==review['identity'] and approval['product_path_count']==len(manifest['paths'])
+          assert hashlib.sha256((handoff/'product.tar').read_bytes()).hexdigest()==approval['product_tar_sha256']
+          assert hashlib.sha256((handoff/'file-manifest.json').read_bytes()).hexdigest()==approval['file_manifest_sha256']
+          rows=manifest['paths']; payloads={}
+          with tarfile.open(handoff/'product.tar','r') as tar:
+              members=tar.getmembers(); expected=[r for r in rows if r['status']!='D']; assert [m.name for m in members]==[r['path'] for r in expected]
+              for member,row in zip(members,expected):
+                  p=PurePosixPath(member.name); assert member.isfile() and not p.is_absolute() and '..' not in p.parts
+                  data=tar.extractfile(member).read(); assert len(data)==row['bytes'] and hashlib.sha256(data).hexdigest()==row['sha256']; payloads[row['path']]=data
+          main=gh('GET',f'/repos/{repo}/git/ref/heads/main'); assert main['object']['sha']==base
+          base_commit=gh('GET',f'/repos/{repo}/git/commits/{base}'); entries=[]; blobs=[]
+          for row in rows:
+              path=row['path']; assert not path.startswith('.github/workflows/') and '/.tmp/' not in '/'+path and not path.startswith('tmp/') and not path.startswith('transport/')
+              if row['status']=='D': entries.append({'path':path,'mode':'100644','type':'blob','sha':None}); continue
+              blob=gh('POST',f'/repos/{repo}/git/blobs',{'content':base64.b64encode(payloads[path]).decode(),'encoding':'base64'}); assert blob['sha']==row['git_blob']
+              entries.append({'path':path,'mode':row['mode'],'type':'blob','sha':blob['sha']}); blobs.append({'path':path,'sha':blob['sha']})
+          tree=gh('POST',f'/repos/{repo}/git/trees',{'base_tree':base_commit['tree']['sha'],'tree':entries}); assert tree['sha']==approval['approved_tree']
+          assert gh('GET',f'/repos/{repo}/git/ref/heads/main')['object']['sha']==base
+          commit=gh('POST',f'/repos/{repo}/git/commits',{'message':'Doctor Who: complete reviewed cycle 009 for Megnus Jaka','tree':tree['sha'],'parents':[base]}); assert commit['tree']['sha']==tree['sha'] and [p['sha'] for p in commit['parents']]==[base]
+          gh('POST',f'/repos/{repo}/git/refs',{'ref':'refs/heads/'+branch,'sha':commit['sha']})
+          assert gh('GET',f'/repos/{repo}/git/ref/heads/{branch}')['object']['sha']==commit['sha']
+          compare=gh('GET',f'/repos/{repo}/compare/{base}...{commit["sha"]}'); assert compare['status']=='ahead' and compare['ahead_by']==1 and compare['behind_by']==0 and compare['total_commits']==1
+          assert sorted(f['filename'] for f in compare['files'])==sorted(r['path'] for r in rows)
+          assert gh('GET',f'/repos/{repo}/git/ref/heads/main')['object']['sha']==base
+          receipt={'status':'cycle-009-megnus-jaka-reviewed-product-ref-published','workflow_run':int(os.environ['GITHUB_RUN_ID']),'workflow_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'canonical_parent':base,'product_branch':branch,'product_commit':commit['sha'],'product_tree':tree['sha'],'product_path_count':len(rows),'approved_tree_preserved':True,'main_unchanged':True,'force_update':False,'pull_request_created':False,'cycle_id':review['cycle_id'],'receipt_sha256':review['receipt_sha256'],'review_identity':review['identity'],'publication_handoff_identity':approval['identity'],'outside_human_dependency':False,'owner_physical_action_required':False,'blobs':blobs}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest(); (out/'publication.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n'); (out/'file-manifest.json').write_bytes((handoff/'file-manifest.json').read_bytes())
+          PY
+          find "$OUT" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/$rel" | sed "s#  $OUT/#  #"; done > "$OUT/SHA256SUMS.pre"
+          sha256sum "$OUT/SHA256SUMS.pre" | sed "s#  $OUT/#  #" > "$OUT/SHA256SUMS"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-final-publisher-v1-publication-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-final-publisher-v1-publication
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-final-publisher-v1-publication-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-final-publisher-v1-publication
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
