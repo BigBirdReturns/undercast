@@ -1,0 +1,234 @@
+name: retire-completed-doctor-who-cycle-008-kreg-refs-v3
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/retire-completed-doctor-who-cycle-008-kreg-refs-v3.yml"
+
+permissions: {}
+
+concurrency:
+  group: retire-completed-doctor-who-cycle-008-kreg-refs-v3
+  cancel-in-progress: true
+
+jobs:
+  retire:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/retire-completed-doctor-who-cycle-008-refs-v3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANONICAL_MAIN: 47ccb38eab6a4b6e2a16ed92b04f1259b95de783
+      AUTHORIZED_BRANCH: agent/retire-completed-doctor-who-cycle-008-refs-v3
+      SELF: .github/workflows/retire-completed-doctor-who-cycle-008-kreg-refs-v3.yml
+      TARGET_PREFIX: agent/doctor-who-cycle-008-kreg-
+      ORIGINAL_REF_DENOMINATOR: "114"
+      PREVIOUSLY_RETIRED: "16"
+      EXPECTED_REMAINING: "98"
+      OUT: /tmp/retire-completed-doctor-who-cycle-008-kreg-refs-v3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact final cleanup carrier and canonical main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,receipt}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test '${{ github.event.pull_request.base.sha }}' = "$CANONICAL_MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$CANONICAL_MAIN"
+          test "$(git rev-list --count "$CANONICAL_MAIN"..HEAD)" = 1
+          test "$(git diff --name-only "$CANONICAL_MAIN"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$CANONICAL_MAIN"...HEAD)" = $'A\t'"$SELF"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr/files?per_page=100" > "$OUT/api/carrier-files.json"
+          ROOT="$OUT" PR="$pr" HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          pr=json.loads((root/'api/carrier-pr.json').read_text())
+          files=json.loads((root/'api/carrier-files.json').read_text())
+          assert pr['number']==int(os.environ['PR']) and pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['ref']=='main' and pr['base']['sha']==os.environ['CANONICAL_MAIN']
+          assert pr['head']['ref']==os.environ['AUTHORIZED_BRANCH'] and pr['head']['sha']==os.environ['HEAD']
+          assert pr['commits']==1 and pr['changed_files']==1
+          assert len(files)==1 and files[0]['filename']==os.environ['SELF'] and files[0]['status']=='added'
+          PY
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\n' "$pr" "$head" >> "$GITHUB_ENV"
+
+      - name: Prove exact 98-ref remainder and zero open product or recovery PRs
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$TARGET_PREFIX" --jq '.[]' | jq -s '.' > "$OUT/api/refs-before.json"
+          jq -r '.[].ref | sub("^refs/heads/";"")' "$OUT/api/refs-before.json" | LC_ALL=C sort -u > "$OUT/receipt/refs-before.txt"
+          remaining="$(wc -l < "$OUT/receipt/refs-before.txt")"
+          test "$remaining" = "$EXPECTED_REMAINING"
+          test "$((remaining + PREVIOUSLY_RETIRED))" = "$ORIGINAL_REF_DENOMINATOR"
+          python3 - "$OUT/receipt/refs-before.txt" <<'PY'
+          import os,sys
+          rows=open(sys.argv[1]).read().splitlines(); prefix=os.environ['TARGET_PREFIX']
+          assert rows==sorted(set(rows)) and len(rows)==int(os.environ['EXPECTED_REMAINING'])
+          assert all(row.startswith(prefix) for row in rows)
+          assert 'main' not in rows and os.environ['AUTHORIZED_BRANCH'] not in rows
+          PY
+          : > "$OUT/receipt/open-pr-census.jsonl"
+          while IFS= read -r branch; do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/pulls" -f state=open -f head="BigBirdReturns:$branch" -F per_page=100 > "$OUT/api/open-prs.json"
+            count="$(jq 'length' "$OUT/api/open-prs.json")"
+            test "$count" = 0
+            jq -cn --arg branch "$branch" --argjson open_prs "$count" '{branch:$branch,open_prs:$open_prs}' >> "$OUT/receipt/open-pr-census.jsonl"
+          done < "$OUT/receipt/refs-before.txt"
+          test "$(wc -l < "$OUT/receipt/open-pr-census.jsonl")" = "$remaining"
+          printf 'REF_COUNT_BEFORE=%s\n' "$remaining" >> "$GITHUB_ENV"
+
+      - name: Delete and poll every exact remaining Kreg-cycle ref to absence
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > "$OUT/receipt/deleted-kreg-refs.jsonl"
+          while IFS= read -r branch; do
+            test "${branch#"$TARGET_PREFIX"}" != "$branch"
+            test "$branch" != main
+            test "$branch" != "$AUTHORIZED_BRANCH"
+            expected_ref="refs/heads/$branch"
+            gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$branch" > "$OUT/api/ref-before.json"
+            before="$(jq -r --arg ref "$expected_ref" '[.[] | select(.ref==$ref)] | if length==1 then .[0].object.sha else empty end' "$OUT/api/ref-before.json")"
+            test -n "$before"
+            gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$branch"
+            gone=false
+            for attempt in $(seq 1 30); do
+              gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$branch" > "$OUT/api/ref-after.json"
+              if jq -e --arg ref "$expected_ref" '[.[] | select(.ref==$ref)] | length==0' "$OUT/api/ref-after.json" >/dev/null; then gone=true; break; fi
+              sleep 2
+            done
+            test "$gone" = true
+            jq -cn --arg branch "$branch" --arg prior_sha "$before" '{branch:$branch,prior_sha:$prior_sha,deleted:true}' >> "$OUT/receipt/deleted-kreg-refs.jsonl"
+          done < "$OUT/receipt/refs-before.txt"
+          test "$(wc -l < "$OUT/receipt/deleted-kreg-refs.jsonl")" = "$REF_COUNT_BEFORE"
+          zero=false
+          for attempt in $(seq 1 30); do
+            gh api --paginate "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$TARGET_PREFIX" --jq '.[]' | jq -s '.' > "$OUT/api/refs-after.json"
+            if jq -e 'length==0' "$OUT/api/refs-after.json" >/dev/null; then zero=true; break; fi
+            sleep 2
+          done
+          test "$zero" = true
+          test "$((REF_COUNT_BEFORE + PREVIOUSLY_RETIRED))" = "$ORIGINAL_REF_DENOMINATOR"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+
+      - name: Retire all temporary cleanup refs, including this carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$OUT/receipt/cleanup-refs-before.txt" <<'EOF'
+          agent/retire-completed-doctor-who-cycle-008-refs
+          agent/retire-completed-doctor-who-cycle-008-refs-v2
+          agent/retire-completed-doctor-who-cycle-008-refs-v3
+          EOF
+          sed -i 's/^          //' "$OUT/receipt/cleanup-refs-before.txt"
+          test "$(wc -l < "$OUT/receipt/cleanup-refs-before.txt")" = 3
+          : > "$OUT/receipt/deleted-cleanup-refs.jsonl"
+          while IFS= read -r branch; do
+            expected_ref="refs/heads/$branch"
+            gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$branch" > "$OUT/api/cleanup-ref-before.json"
+            before="$(jq -r --arg ref "$expected_ref" '[.[] | select(.ref==$ref)] | if length==1 then .[0].object.sha else empty end' "$OUT/api/cleanup-ref-before.json")"
+            test -n "$before"
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/pulls" -f state=open -f head="BigBirdReturns:$branch" -F per_page=100 > "$OUT/api/cleanup-open-prs.json"
+            if [ "$branch" = "$AUTHORIZED_BRANCH" ]; then
+              test "$before" = "$CARRIER_HEAD"
+              jq -e --argjson pr "$CARRIER_PR" 'length==1 and .[0].number==$pr and .[0].draft==true' "$OUT/api/cleanup-open-prs.json" >/dev/null
+            else
+              jq -e 'length==0' "$OUT/api/cleanup-open-prs.json" >/dev/null
+            fi
+            gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$branch"
+            gone=false
+            for attempt in $(seq 1 30); do
+              gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$branch" > "$OUT/api/cleanup-ref-after.json"
+              if jq -e --arg ref "$expected_ref" '[.[] | select(.ref==$ref)] | length==0' "$OUT/api/cleanup-ref-after.json" >/dev/null; then gone=true; break; fi
+              sleep 2
+            done
+            test "$gone" = true
+            jq -cn --arg branch "$branch" --arg prior_sha "$before" '{branch:$branch,prior_sha:$prior_sha,deleted:true}' >> "$OUT/receipt/deleted-cleanup-refs.jsonl"
+          done < "$OUT/receipt/cleanup-refs-before.txt"
+          test "$(wc -l < "$OUT/receipt/deleted-cleanup-refs.jsonl")" = 3
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+
+      - name: Seal cumulative zero-authority branch-retirement receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          remaining=(root/'receipt/refs-before.txt').read_text().splitlines()
+          cleanup=(root/'receipt/cleanup-refs-before.txt').read_text().splitlines()
+          receipt={
+            'status':'completed-kreg-cycle-008-refs-retired',
+            'cleanup_run':int(os.environ['GITHUB_RUN_ID']),
+            'cleanup_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),
+            'carrier_pr':int(os.environ['CARRIER_PR']),
+            'carrier_head':os.environ['CARRIER_HEAD'],
+            'canonical_main':os.environ['CANONICAL_MAIN'],
+            'target_prefix':os.environ['TARGET_PREFIX'],
+            'original_ref_denominator':int(os.environ['ORIGINAL_REF_DENOMINATOR']),
+            'previously_retired':int(os.environ['PREVIOUSLY_RETIRED']),
+            'retired_this_run':len(remaining),
+            'kreg_refs_after':0,
+            'cleanup_refs_retired':len(cleanup),
+            'cleanup_refs_after':0,
+            'remaining_branch_name_digest':hashlib.sha256(('\n'.join(remaining)+'\n').encode()).hexdigest(),
+            'cleanup_branch_name_digest':hashlib.sha256(('\n'.join(cleanup)+'\n').encode()).hexdigest(),
+            'all_kreg_prs_closed':True,
+            'main_mutated':False,
+            'product_state_mutated':False,
+            'queue_mutated':False,
+            'cycle_009_authorized':False,
+            'outside_human_dependency':False,
+            'owner_physical_action_required':False,
+          }
+          assert receipt['previously_retired']+receipt['retired_this_run']==receipt['original_ref_denominator']
+          canonical=json.dumps(receipt,sort_keys=True,separators=(',',':')).encode(); receipt['identity']=hashlib.sha256(canonical).hexdigest()
+          (root/'receipt/ref-retirement-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          find "$OUT/receipt" -type f ! -name 'SHA256SUMS.pre' ! -name 'SHA256SUMS' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/receipt/SHA256SUMS.pre"
+          sha256sum "$OUT/receipt/SHA256SUMS.pre" > "$OUT/receipt/SHA256SUMS"
+          ! grep -Fq "$OUT/receipt/SHA256SUMS.pre" "$OUT/receipt/SHA256SUMS.pre"
+
+      - name: Upload cumulative zero-authority branch-retirement receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: retire-completed-doctor-who-cycle-008-kreg-refs-v3-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/retire-completed-doctor-who-cycle-008-kreg-refs-v3/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload final branch-retirement diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retire-completed-doctor-who-cycle-008-kreg-refs-v3-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/retire-completed-doctor-who-cycle-008-kreg-refs-v3
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
