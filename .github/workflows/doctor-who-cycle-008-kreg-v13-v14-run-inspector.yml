@@ -1,0 +1,128 @@
+name: doctor-who-cycle-008-kreg-v13-v14-run-inspector
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-kreg-v13-v14-run-inspector.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-008-kreg-v13-v14-run-inspector-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-kreg-v13-v14-run-inspector'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE: 951fb9e6b47f54075b5843a8e9ed007767fb6bca
+      SELF: .github/workflows/doctor-who-cycle-008-kreg-v13-v14-run-inspector.yml
+      V13_PATH: .github/workflows/doctor-who-cycle-008-kreg-trusted-publisher-v13.yml
+      V13_BLOB: dccf7f6bc5945920ac41cac41d28ec6c524ce572
+      OUT: /tmp/doctor-who-cycle-008-kreg-v13-ledger-repair
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact current-main read-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          test '${{ github.event.pull_request.base.sha }}' = "$BASE"
+          test "$(git show -s --format=%P HEAD)" = "$BASE"
+          test "$(git rev-list --count "$BASE"..HEAD)" = 1
+          test "$(git diff --name-only "$BASE"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$BASE"...HEAD)" = $'A\t'"$SELF"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$BASE"
+          test -z "$(git status --porcelain)"
+
+      - name: Derive exact V13 producer-ledger repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,product}
+          gh api "/repos/$GITHUB_REPOSITORY/contents/$V13_PATH?ref=$BASE" > "$OUT/api/v13-content.json"
+          jq -e --arg sha "$V13_BLOB" '.type=="file" and .encoding=="base64" and .sha==$sha' "$OUT/api/v13-content.json" >/dev/null
+          jq -r '.content' "$OUT/api/v13-content.json" | tr -d '\n' | base64 --decode > "$OUT/product/v13-before.yml"
+          test "$(git hash-object "$OUT/product/v13-before.yml")" = "$V13_BLOB"
+          ROOT="$OUT/product" python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+
+          root=Path(os.environ['ROOT'])
+          before=root/'v13-before.yml'
+          after=root/'v13-patched.yml'
+          text=before.read_text()
+          lines=text.splitlines()
+          target=[
+              '          find "$OUT/handoff" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/handoff/SHA256SUMS.pre"',
+              '          sha256sum "$OUT/handoff/SHA256SUMS.pre" > "$OUT/handoff/SHA256SUMS"',
+          ]
+          hits=[i for i in range(len(lines)-1) if lines[i:i+2]==target]
+          assert len(hits)==1, hits
+          replacement=[
+              '          rm -f "$OUT/handoff/SHA256SUMS.pre" "$OUT/handoff/SHA256SUMS"',
+              "          find \"$OUT/handoff\" -type f ! -name 'SHA256SUMS.pre' ! -name 'SHA256SUMS' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > \"$OUT/handoff/SHA256SUMS.pre\"",
+              '          sha256sum "$OUT/handoff/SHA256SUMS.pre" > "$OUT/handoff/SHA256SUMS"',
+              '          ! grep -Fq "$OUT/handoff/SHA256SUMS.pre" "$OUT/handoff/SHA256SUMS.pre"',
+          ]
+          index=hits[0]
+          lines[index:index+2]=replacement
+          patched='\n'.join(lines)+'\n'
+          assert patched.count("! -name 'SHA256SUMS.pre' ! -name 'SHA256SUMS'")==1
+          assert '\n'.join(target) not in patched
+          after.write_text(patched)
+          report={
+              'status':'exact-v13-producer-ledger-repair-derived',
+              'before_sha256':hashlib.sha256(text.encode()).hexdigest(),
+              'after_sha256':hashlib.sha256(patched.encode()).hexdigest(),
+              'replacement_count':1,
+              'product_bytes_changed':False,
+              'queue_state_changed':False,
+              'merge_authority_changed':False,
+              'cycle_009_authorized':False,
+              'outside_human_dependency':False,
+          }
+          (root/'repair-report.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
+          PY
+          diff -u "$OUT/product/v13-before.yml" "$OUT/product/v13-patched.yml" > "$OUT/product/v13.patch" || test "$?" = 1
+          test "$(grep -Fc "! -name 'SHA256SUMS.pre' ! -name 'SHA256SUMS'" "$OUT/product/v13-patched.yml")" = 1
+          python3 - <<'PY'
+          import yaml
+          from pathlib import Path
+          doc=yaml.safe_load(Path('/tmp/doctor-who-cycle-008-kreg-v13-ledger-repair/product/v13-patched.yml').read_text())
+          assert set(doc['jobs'])=={'verify','publish'} and doc['permissions']=={}
+          PY
+          ruby -e 'require "yaml"; d=YAML.safe_load(File.read(ARGV[0]), aliases: true); abort unless d.is_a?(Hash) && d["jobs"].keys.sort==["publish","verify"]' "$OUT/product/v13-patched.yml"
+          sha256sum "$OUT/product/v13-before.yml" "$OUT/product/v13-patched.yml" "$OUT/product/v13.patch" > "$OUT/product/SHA256SUMS"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload exact V13 ledger repair
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-kreg-v13-ledger-repair-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-kreg-v13-ledger-repair/product
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
