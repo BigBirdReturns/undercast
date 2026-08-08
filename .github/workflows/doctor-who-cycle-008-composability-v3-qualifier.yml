@@ -1,0 +1,152 @@
+name: doctor-who-cycle-008-composability-v3-qualifier
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-composability-v3-qualifier.yml"
+      - "data/review/adapter-sdk/doctor-who-cycle-008-composability-v3.json"
+      - "scripts/doctor-who-cycle-008.mjs"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-008-composability-v3-qualifier
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-composability-v3-qualifier'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXACT_MAIN: a9b1a29098e36f03340ff6678b3edd06f1d1d3e2
+      BRANCH: agent/doctor-who-cycle-008-composability-v3-qualifier
+      SELF: .github/workflows/doctor-who-cycle-008-composability-v3-qualifier.yml
+      CHECKER: scripts/doctor-who-cycle-008.mjs
+      RECEIPT: data/review/adapter-sdk/doctor-who-cycle-008-composability-v3.json
+      CHECKER_SHA256: 25fecfd8da86f6c6f20fb95f46bcc850ba257ae4705f1547c334453fc3ca48ba
+      RECEIPT_SHA256: 63176bb056bd5519c45453dfbff3ebe4305c48cc4989f839e1ebaee1b2fbaf7f
+      OUT: /tmp/doctor-who-cycle-008-composability-v3-qualifier
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact three-path read-only qualification carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,receipt}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test '${{ github.event.pull_request.base.sha }}' = "$EXACT_MAIN"
+          test "$(git merge-base "$EXACT_MAIN" HEAD)" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = 3
+          test -z "$(git rev-list --merges "$EXACT_MAIN"..HEAD)"
+          printf '%s\n%s\n%s\n' "$SELF" "$RECEIPT" "$CHECKER" | LC_ALL=C sort > "$OUT/receipt/expected-paths.txt"
+          git diff --name-only "$EXACT_MAIN"...HEAD | LC_ALL=C sort > "$OUT/receipt/actual-paths.txt"
+          cmp "$OUT/receipt/expected-paths.txt" "$OUT/receipt/actual-paths.txt"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr/files?per_page=100" > "$OUT/api/files.json"
+          ROOT="$OUT" PR="$pr" HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          pr=json.loads((root/'api/pr.json').read_text())
+          files=json.loads((root/'api/files.json').read_text())
+          expected=(root/'receipt/expected-paths.txt').read_text().splitlines()
+          assert pr['number']==int(os.environ['PR'])
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['ref']=='main' and pr['base']['sha']==os.environ['EXACT_MAIN']
+          assert pr['head']['ref']==os.environ['BRANCH'] and pr['head']['sha']==os.environ['HEAD']
+          assert sorted(x['filename'] for x in files)==expected
+          assert all(x['status'] in {'added','modified'} for x in files)
+          PY
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\n' "$pr" "$head" >> "$GITHUB_ENV"
+
+      - name: Verify product bytes, receipt identity, and syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(sha256sum "$CHECKER" | cut -d' ' -f1)" = "$CHECKER_SHA256"
+          test "$(sha256sum "$RECEIPT" | cut -d' ' -f1)" = "$RECEIPT_SHA256"
+          node --check "$CHECKER"
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          path=Path(os.environ['RECEIPT'])
+          receipt=json.loads(path.read_text())
+          identity=receipt.pop('receipt_sha256')
+          canonical=json.dumps(receipt,sort_keys=True,indent=2)+'\n'
+          assert hashlib.sha256(canonical.encode()).hexdigest()==identity
+          assert receipt['base_main']==os.environ['EXACT_MAIN']
+          assert receipt['qualification']['checker_sha256']==os.environ['CHECKER_SHA256']
+          assert receipt['boundary']['later_pending_states']==['leased','drafted','merged','resolved']
+          assert receipt['boundary']['resolved_pending_requires_audited_wall'] is True
+          PY
+          git diff --check "$EXACT_MAIN"...HEAD
+
+      - name: Run permanent checker and complete rendered repository gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+          node "$CHECKER" | tee "$OUT/receipt/cycle-008-v3.log"
+          npm run gate 2>&1 | tee "$OUT/receipt/complete-gate.log"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_MAIN"
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          rows=[]
+          for path in (root/'receipt/expected-paths.txt').read_text().splitlines():
+              data=Path(path).read_bytes()
+              rows.append({'path':path,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),'git_blob':subprocess.check_output(['git','hash-object',path],text=True).strip()})
+          receipt={'status':'cycle-008-composability-v3-qualified','base_main':os.environ['EXACT_MAIN'],'carrier_pr':int(os.environ['CARRIER_PR']),'carrier_head':os.environ['CARRIER_HEAD'],'workflow_run':int(os.environ['GITHUB_RUN_ID']),'workflow_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'files':rows,'product_paths':[os.environ['RECEIPT'],os.environ['CHECKER']],'complete_gate':'pass','queue_mutated':False,'cycle_009_lease_issued':False,'outside_human_dependency':False,'owner_physical_action_required':False}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (root/'receipt/qualification.json').write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n')
+          PY
+          find "$OUT/receipt" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/receipt/SHA256SUMS.pre"
+          sha256sum "$OUT/receipt/SHA256SUMS.pre" > "$OUT/receipt/SHA256SUMS"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-composability-v3-qualification-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-composability-v3-qualifier/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-composability-v3-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-008-composability-v3-qualifier
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
