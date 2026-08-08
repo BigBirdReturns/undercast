@@ -1,0 +1,258 @@
+name: doctor-who-cycle-009-cleanup-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-009-cleanup-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-009-cleanup-v1
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-009-cleanup-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PREMERGE_MAIN: ${{ github.event.pull_request.base.sha }}
+      SELF: .github/workflows/doctor-who-cycle-009-cleanup-v1.yml
+      BRANCH: agent/doctor-who-cycle-009-cleanup-v1
+      PROOF_BRANCH: agent/doctor-who-cycle-009-megnus-jaka-postmerge-v1
+      PROOF_WORKFLOW: doctor-who-cycle-009-megnus-jaka-postmerge-v1
+      OUT: /tmp/doctor-who-cycle-009-cleanup-v1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact cleanup carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" && mkdir -p "$OUT"/{api,proof,receipt,diagnostics}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test '${{ github.event.pull_request.base.sha }}' = "$PREMERGE_MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$PREMERGE_MAIN"
+          test "$(git rev-list --count "$PREMERGE_MAIN"..HEAD)" = 1
+          test "$(git diff --name-only "$PREMERGE_MAIN"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$PREMERGE_MAIN"...HEAD)" = $'A\t'"$SELF"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr/files?per_page=100" > "$OUT/api/carrier-files.json"
+          ROOT="$OUT" PR="$pr" HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); pr=json.loads((root/'api/carrier-pr.json').read_text()); files=json.loads((root/'api/carrier-files.json').read_text())
+          assert pr['number']==int(os.environ['PR']) and pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['head']['ref']==os.environ['BRANCH'] and pr['head']['sha']==os.environ['HEAD'] and pr['base']['ref']=='main'
+          assert pr['commits']==1 and pr['changed_files']==1 and len(files)==1 and files[0]['filename']==os.environ['SELF'] and files[0]['status']=='added'
+          PY
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\n' "$pr" "$head" >> "$GITHUB_ENV"
+
+      - name: Wait for exact terminal canonical proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=false
+          for _ in $(seq 1 1440); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f branch="$PROOF_BRANCH" -f event=pull_request -F per_page=30 > "$OUT/api/proof-runs.json"
+            run_id="$(jq -r --arg name "$PROOF_WORKFLOW" --arg branch "$PROOF_BRANCH" '[.workflow_runs[] | select(.name==$name and .head_branch==$branch)] | sort_by(.id) | last | if .status=="completed" and .conclusion=="success" then .id else empty end' "$OUT/api/proof-runs.json")"
+            if [ -n "$run_id" ]; then ready=true; break; fi
+            sleep 15
+          done
+          test "$ready" = true
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$OUT/api/proof-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$OUT/api/proof-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$OUT/api/proof-artifacts.json"
+          jq -e --arg name "$PROOF_WORKFLOW" --arg branch "$PROOF_BRANCH" '.name==$name and .head_branch==$branch and .status=="completed" and .conclusion=="success"' "$OUT/api/proof-run.json" >/dev/null
+          jq -e '.jobs|length==1 and .[0].name=="prove" and .[0].conclusion=="success"' "$OUT/api/proof-jobs.json" >/dev/null
+          mapfile -t artifacts < <(jq -r '.artifacts[] | select(.expired==false and (.name|contains("diagnostics")|not)) | [.id,.name,.digest] | @tsv' "$OUT/api/proof-artifacts.json")
+          test "${#artifacts[@]}" = 1
+          IFS=$'\t' read -r artifact_id artifact_name artifact_digest <<<"${artifacts[0]}"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$OUT/proof.zip"
+          test "$(sha256sum "$OUT/proof.zip" | awk '{print $1}')" = "${artifact_digest#sha256:}"
+          ROOT="$OUT" ARTIFACT_ID="$artifact_id" ARTIFACT_DIGEST="$artifact_digest" PROOF_RUN="$run_id" python3 - <<'PY'
+          import hashlib,json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['ROOT']); target=root/'proof'
+          with zipfile.ZipFile(root/'proof.zip') as z:
+              names=z.namelist(); assert len(names)==len(set(names))
+              for info in z.infolist():
+                  p=PurePosixPath(info.filename); assert not p.is_absolute() and '..' not in p.parts and not info.is_dir()
+                  out=target/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(z.read(info))
+          ledger=target/'SHA256SUMS.pre'; sealed=target/'SHA256SUMS'; assert hashlib.sha256(ledger.read_bytes()).hexdigest()==sealed.read_text().split()[0]
+          for raw in ledger.read_text().splitlines():
+              if not raw.strip(): continue
+              digest,name=raw.split(None,1); p=target/name.lstrip('*'); assert p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==digest
+          proof=json.loads((target/'proof.json').read_text()); assert proof['status']=='cycle-009-megnus-jaka-terminal-canonical-proof' and proof['proof_run']==int(os.environ['PROOF_RUN'])
+          assert proof['queue']=={'total':316,'queued':307,'resolved':9,'in_flight':0} and proof['waterline_claim_allowed'] is True and proof['tenth_lease_issued'] is False
+          meta={'proof_run':int(os.environ['PROOF_RUN']),'artifact_id':int(os.environ['ARTIFACT_ID']),'artifact_digest':os.environ['ARTIFACT_DIGEST'],'proof_identity':proof['identity'],'canonical_main':proof['canonical_main'],'canonical_tree':proof['canonical_tree']}
+          (root/'receipt/proof-custody.json').write_text(json.dumps(meta,indent=2,sort_keys=True)+'\n')
+          PY
+          printf 'PROOF_RUN=%s\nPROOF_ARTIFACT=%s\nPROOF_ARTIFACT_DIGEST=%s\nCANONICAL_MAIN=%s\nCANONICAL_TREE=%s\n' "$run_id" "$artifact_id" "$artifact_digest" "$(jq -r '.canonical_main' "$OUT/proof/proof.json")" "$(jq -r '.canonical_tree' "$OUT/proof/proof.json")" >> "$GITHUB_ENV"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+
+      - name: Freeze the exact cleanup denominator
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$OUT/targets.txt" <<'EOF'
+          agent/doctor-who-cycle-009-megnus-jaka-adjudication-v1
+          agent/doctor-who-cycle-009-megnus-jaka-evidence-v2
+          agent/doctor-who-cycle-009-megnus-jaka-evidence-v3
+          agent/doctor-who-cycle-009-megnus-jaka-cover-review-v1
+          agent/doctor-who-cycle-009-megnus-jaka-candidate-materializer-v1
+          agent/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v1
+          agent/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v2
+          agent/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v3
+          agent/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v4
+          agent/doctor-who-cycle-009-megnus-jaka-candidate-publisher-v1
+          agent/doctor-who-cycle-009-megnus-jaka-candidate-product-v1
+          agent/doctor-who-cycle-009-megnus-jaka-candidate-review-v1
+          agent/doctor-who-cycle-009-finalization-template-v1
+          agent/doctor-who-cycle-009-megnus-jaka-final-product-v1
+          agent/doctor-who-cycle-009-megnus-jaka-final-review-v1
+          agent/doctor-who-cycle-009-megnus-jaka-final-publisher-v1
+          agent/doctor-who-cycle-009-megnus-jaka-reviewed-product-v1
+          agent/doctor-who-cycle-009-megnus-jaka-merger-v1
+          agent/doctor-who-cycle-009-megnus-jaka-postmerge-v1
+          agent/retire-cycle009-supervisor-placeholders-v1
+          EOF
+          sed -i 's/^          //' "$OUT/targets.txt"
+          LC_ALL=C sort -u "$OUT/targets.txt" -o "$OUT/targets.txt"
+          test "$(wc -l < "$OUT/targets.txt")" = 20
+          ! grep -Fxq main "$OUT/targets.txt"
+          ! grep -Fxq "$BRANCH" "$OUT/targets.txt"
+          sha256sum "$OUT/targets.txt" > "$OUT/receipt/target-denominator.sha256"
+
+      - name: Close exact transport PRs and inventory target refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > "$OUT/receipt/prs.jsonl"
+          : > "$OUT/receipt/refs-before.jsonl"
+          while IFS= read -r branch; do
+            case "$branch" in
+              agent/doctor-who-cycle-009-*|agent/retire-cycle009-supervisor-placeholders-v1) ;;
+              *) echo "ref outside cleanup namespace: $branch" >&2; exit 1 ;;
+            esac
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/pulls" -f state=all -f head="BigBirdReturns:$branch" -F per_page=100 > "$OUT/api/prs.json"
+            ROOT="$OUT" BRANCH_NAME="$branch" python3 - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); branch=os.environ['BRANCH_NAME']; prs=json.loads((root/'api/prs.json').read_text())
+          for summary in prs:
+              number=summary['number']
+              p=subprocess.run(['gh','api',f'/repos/{os.environ["GITHUB_REPOSITORY"]}/pulls/{number}'],capture_output=True,text=True,check=True)
+              pr=json.loads(p.stdout)
+              if pr['state']=='open':
+                  p=subprocess.run(['gh','api','--method','PATCH',f'/repos/{os.environ["GITHUB_REPOSITORY"]}/pulls/{number}','--input','-'],input=json.dumps({'state':'closed'}),capture_output=True,text=True,check=True)
+                  pr=json.loads(p.stdout)
+              row={'branch':branch,'pull_request':number,'state':pr['state'],'merged':pr['merged'],'head_sha':pr['head']['sha'],'base_ref':pr['base']['ref']}
+              with (root/'receipt/prs.jsonl').open('a') as fh: fh.write(json.dumps(row,sort_keys=True,separators=(',',':'))+'\n')
+          PY
+            if gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" > "$OUT/api/ref.json" 2>/dev/null; then
+              sha="$(jq -r '.object.sha' "$OUT/api/ref.json")"
+              jq -cn --arg branch "$branch" --arg sha "$sha" '{branch:$branch,present:true,sha:$sha}' >> "$OUT/receipt/refs-before.jsonl"
+            else
+              jq -cn --arg branch "$branch" '{branch:$branch,present:false}' >> "$OUT/receipt/refs-before.jsonl"
+            fi
+          done < "$OUT/targets.txt"
+          test "$(wc -l < "$OUT/receipt/refs-before.jsonl")" = 20
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+
+      - name: Delete only enumerated temporary refs and prove absence
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > "$OUT/receipt/deletions.jsonl"
+          while IFS= read -r branch; do
+            if gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" > "$OUT/api/ref-delete.json" 2>/dev/null; then
+              prior="$(jq -r '.object.sha' "$OUT/api/ref-delete.json")"
+              gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$branch"
+              absent=false
+              for _ in $(seq 1 60); do
+                if ! gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" >/dev/null 2>&1; then absent=true; break; fi
+                sleep 2
+              done
+              test "$absent" = true
+              jq -cn --arg branch "$branch" --arg prior "$prior" '{branch:$branch,prior_sha:$prior,was_present:true,deleted:true,absence_proved:true}' >> "$OUT/receipt/deletions.jsonl"
+            else
+              jq -cn --arg branch "$branch" '{branch:$branch,was_present:false,deleted:false,absence_proved:true}' >> "$OUT/receipt/deletions.jsonl"
+            fi
+            test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+          done < "$OUT/targets.txt"
+          test "$(wc -l < "$OUT/receipt/deletions.jsonl")" = 20
+
+      - name: Close and delete the cleanup carrier itself
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method PATCH "/repos/$GITHUB_REPOSITORY/pulls/$CARRIER_PR" --input - > "$OUT/api/self-pr-closed.json" <<'JSON'
+          {"state":"closed"}
+          JSON
+          jq -e '.state=="closed" and .merged==false' "$OUT/api/self-pr-closed.json" >/dev/null
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --jq '.object.sha')" = "$CARRIER_HEAD"
+          gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH"
+          absent=false
+          for _ in $(seq 1 60); do
+            if ! gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" >/dev/null 2>&1; then absent=true; break; fi
+            sleep 2
+          done
+          test "$absent" = true
+          jq -cn --arg branch "$BRANCH" --arg prior "$CARRIER_HEAD" '{branch:$branch,prior_sha:$prior,deleted:true,absence_proved:true}' > "$OUT/receipt/self-deletion.json"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+
+      - name: Seal terminal cleanup receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); targets=(root/'targets.txt').read_text().splitlines(); refs=[json.loads(x) for x in (root/'receipt/refs-before.jsonl').read_text().splitlines()]; deletions=[json.loads(x) for x in (root/'receipt/deletions.jsonl').read_text().splitlines()]; prs=[json.loads(x) for x in (root/'receipt/prs.jsonl').read_text().splitlines() if x.strip()]; own=json.loads((root/'receipt/self-deletion.json').read_text()); proof=json.loads((root/'proof/proof.json').read_text())
+          assert len(targets)==len(refs)==len(deletions)==20 and all(x['absence_proved'] for x in deletions+[own]) and all(x['state']=='closed' for x in prs)
+          receipt={'status':'cycle-009-temporary-authority-retired','cleanup_run':int(os.environ['GITHUB_RUN_ID']),'cleanup_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'carrier_pr':int(os.environ['CARRIER_PR']),'canonical_main':os.environ['CANONICAL_MAIN'],'canonical_tree':os.environ['CANONICAL_TREE'],'proof_run':int(os.environ['PROOF_RUN']),'proof_artifact':int(os.environ['PROOF_ARTIFACT']),'proof_artifact_digest':os.environ['PROOF_ARTIFACT_DIGEST'],'proof_identity':proof['identity'],'target_ref_count':len(targets),'target_refs_present_before':sum(1 for x in refs if x['present']),'target_refs_present_after':0,'transport_pr_count':len(prs),'all_transport_prs_closed':True,'cleanup_ref_present_after':False,'main_mutated':False,'product_state_mutated':False,'queue_mutated':False,'tenth_lease_issued':False,'outside_human_dependency':False,'owner_physical_action_required':False,'next_gate':'fresh bounded cycle-010 selector preflight'}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest(); (root/'receipt/cleanup.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          cp "$OUT/proof/proof.json" "$OUT/receipt/proof.bound.json"
+          find "$OUT/receipt" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/receipt/$rel" | sed "s#  $OUT/receipt/#  #"; done > "$OUT/receipt/SHA256SUMS.pre"
+          sha256sum "$OUT/receipt/SHA256SUMS.pre" | sed "s#  $OUT/receipt/#  #" > "$OUT/receipt/SHA256SUMS"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-cleanup-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-cleanup-v1/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-cleanup-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-cleanup-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
