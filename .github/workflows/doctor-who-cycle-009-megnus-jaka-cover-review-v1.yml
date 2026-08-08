@@ -1,0 +1,208 @@
+name: doctor-who-cycle-009-megnus-jaka-cover-review-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-009-megnus-jaka-cover-review-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-009-megnus-jaka-cover-review-v1
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-009-megnus-jaka-cover-review-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXACT_MAIN: 759589336a140487ebf3baad8c3f95fd9943b16b
+      BRANCH: agent/doctor-who-cycle-009-megnus-jaka-cover-review-v1
+      SELF: .github/workflows/doctor-who-cycle-009-megnus-jaka-cover-review-v1.yml
+      OUT: /tmp/doctor-who-cycle-009-megnus-jaka-cover-review-v1
+      EVIDENCE_RUN: "31239057687"
+      EVIDENCE_ARTIFACT: "9016403859"
+      EVIDENCE_ZIP_SHA256: 4f1665ad983e40525223539f6c1ad368f392c2d29887200cb3ee2ce4238d822f
+      EVIDENCE_IDENTITY: dd59759b825c013869e5c7d75d99cdc12d2f38c4e46262e97a7aacd81bf7192c
+      COVER_SHA256: 91c6542a599c9c330cd5f561de262bcaf253c95bbd575b41f3b75cdfc2ea1c38
+      COVER_BYTES: "99902"
+      TASK_ID: ap_45bb5fdcdf4aff65aa7a87c3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact read-only review carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" && mkdir -p "$OUT"/{api,evidence,receipt}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test '${{ github.event.pull_request.base.sha }}' = "$EXACT_MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = 1
+          test "$(git diff --name-only "$EXACT_MAIN"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$EXACT_MAIN"...HEAD)" = $'A\t'"$SELF"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr/files?per_page=100" > "$OUT/api/files.json"
+          ROOT="$OUT" PR="$pr" HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          pr=json.loads((root/'api/pr.json').read_text())
+          files=json.loads((root/'api/files.json').read_text())
+          assert pr['number']==int(os.environ['PR']) and pr['state']=='open' and pr['draft'] is True
+          assert pr['base']['sha']==os.environ['EXACT_MAIN']
+          assert pr['head']['ref']==os.environ['BRANCH'] and pr['head']['sha']==os.environ['HEAD']
+          assert pr['commits']==1 and pr['changed_files']==1
+          assert len(files)==1 and files[0]['filename']==os.environ['SELF'] and files[0]['status']=='added'
+          PY
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\n' "$pr" "$head" >> "$GITHUB_ENV"
+          git checkout --detach "$EXACT_MAIN"
+
+      - name: Rehydrate exact evidence and cover bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$EVIDENCE_ARTIFACT/zip" > "$OUT/evidence.zip"
+          test "$(sha256sum "$OUT/evidence.zip" | cut -d' ' -f1)" = "$EVIDENCE_ZIP_SHA256"
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['ROOT']); dst=root/'evidence'
+          with zipfile.ZipFile(root/'evidence.zip') as z:
+              names=z.namelist(); assert names and len(names)==len(set(names))
+              for info in z.infolist():
+                  p=PurePosixPath(info.filename)
+                  assert not p.is_absolute() and '..' not in p.parts
+                  if not info.is_dir():
+                      out=dst/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(z.read(info))
+          prefix='/tmp/doctor-who-cycle-009-megnus-jaka-evidence-v3/receipt/'
+          for row in (dst/'SHA256SUMS.pre').read_text().splitlines():
+              digest,path=row.split('  ',1); assert path.startswith(prefix)
+              local=dst/path[len(prefix):]; assert local.is_file()
+              assert hashlib.sha256(local.read_bytes()).hexdigest()==digest
+          outer=(dst/'SHA256SUMS').read_text().split()[0]
+          assert hashlib.sha256((dst/'SHA256SUMS.pre').read_bytes()).hexdigest()==outer
+          receipt=json.loads((dst/'evidence.json').read_text())
+          identity=receipt.pop('identity')
+          assert identity==os.environ['EVIDENCE_IDENTITY']
+          assert hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()==identity
+          assert receipt['task_id']==os.environ['TASK_ID']
+          assert receipt['official_cover']['sha256']==os.environ['COVER_SHA256']
+          assert receipt['official_cover']['bytes']==int(os.environ['COVER_BYTES'])
+          cover=dst/'cover.bin'
+          assert hashlib.sha256(cover.read_bytes()).hexdigest()==os.environ['COVER_SHA256']
+          assert cover.stat().st_size==int(os.environ['COVER_BYTES'])
+          PY
+          file "$OUT/evidence/cover.bin" | tee "$OUT/receipt/cover-file.txt"
+          grep -F 'Web/P image' "$OUT/receipt/cover-file.txt" >/dev/null
+
+      - name: Seal independent visual disposition
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT'])
+          evidence=json.loads((root/'evidence/evidence.json').read_text())
+          review={
+            'version':1,
+            'status':'megnus-jaka-cover-review-complete',
+            'canonical_main':os.environ['EXACT_MAIN'],
+            'review_run':int(os.environ['GITHUB_RUN_ID']),
+            'review_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),
+            'carrier_pr':int(os.environ['CARRIER_PR']),
+            'carrier_head':os.environ['CARRIER_HEAD'],
+            'evidence_run':int(os.environ['EVIDENCE_RUN']),
+            'evidence_artifact':int(os.environ['EVIDENCE_ARTIFACT']),
+            'evidence_artifact_sha256':os.environ['EVIDENCE_ZIP_SHA256'],
+            'evidence_identity':os.environ['EVIDENCE_IDENTITY'],
+            'task_id':os.environ['TASK_ID'],
+            'performer':'Dan Starkey',
+            'role':'Megnus Jaka',
+            'performance_mode':'voice',
+            'reviewed_asset':{
+              'sha256':os.environ['COVER_SHA256'],
+              'bytes':int(os.environ['COVER_BYTES']),
+              'mime':'image/webp',
+              'width':600,
+              'height':600,
+              'origin':evidence['official_cover']['url'],
+              'class':'official-publication-cover-artwork'
+            },
+            'visual_observations':{
+              'title_typography_present':True,
+              'publisher_branding_present':True,
+              'multi_subject_composite':True,
+              'multiple_faces_present':True,
+              'silhouettes_present':True,
+              'single_exact_character_portrait':False,
+              'source_labels_depicted_sontaran_as_megnus_jaka':False
+            },
+            'identity_disposition':'not-established-for-megnus-jaka',
+            'presentation_disposition':'promotional-composite-not-character-still',
+            'character_still_status':'absent',
+            'character_still_asset':None,
+            'performer_portrait_status':'absent',
+            'performer_portrait_asset':None,
+            'duplicate_dan_starkey_portrait_adoption':False,
+            'cover_adopted':False,
+            'generic_sontaran_substitution':False,
+            'reviewed_by':'chatgpt-second-desk',
+            'reviewed_role':'second-desk',
+            'review_basis':'manual visual review of exact hash-bound official cover bytes',
+            'lease_issued':False,
+            'queue_mutated':False,
+            'canonical_record_created':False,
+            'media_adopted':False,
+            'repository_write':False,
+            'outside_human_dependency':False,
+            'owner_physical_action_required':False,
+            'next_gate':'exact one-task lease and candidate materialization with both media facets honestly absent'
+          }
+          review['identity']=hashlib.sha256(json.dumps(review,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (root/'receipt/visual-disposition.json').write_text(json.dumps(review,indent=2,sort_keys=True)+'\n')
+          (root/'receipt/cover.webp').write_bytes((root/'evidence/cover.bin').read_bytes())
+          PY
+          find "$OUT/receipt" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/receipt/SHA256SUMS.pre"
+          sha256sum "$OUT/receipt/SHA256SUMS.pre" > "$OUT/receipt/SHA256SUMS"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_MAIN"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-cover-review-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-cover-review-v1/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-cover-review-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-cover-review-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
