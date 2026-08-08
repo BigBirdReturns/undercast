@@ -1,0 +1,501 @@
+name: doctor-who-cycle-009-megnus-jaka-final-product-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-009-megnus-jaka-final-product-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-009-megnus-jaka-final-product-v1
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-009-megnus-jaka-final-product-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_MAIN: ${{ github.event.pull_request.base.sha }}
+      SELF: .github/workflows/doctor-who-cycle-009-megnus-jaka-final-product-v1.yml
+      BRANCH: agent/doctor-who-cycle-009-megnus-jaka-final-product-v1
+      TEMPLATE_BRANCH: agent/doctor-who-cycle-009-finalization-template-v1
+      TEMPLATE_WORKFLOW: doctor-who-cycle-009-finalization-template-v1
+      PRODUCT_BRANCH: agent/doctor-who-cycle-009-megnus-jaka-candidate-product-v1
+      OUT: /tmp/doctor-who-cycle-009-megnus-jaka-final-product-v1
+      TASK_ID: ap_45bb5fdcdf4aff65aa7a87c3
+      WALL_ID: UC-1354
+      PERFORMER: Dan Starkey
+      ROLE: Megnus Jaka
+      SOURCE_URL: https://tardis.fandom.com/wiki/Megnus_Jaka
+      SOURCE_FINGERPRINT: 799004715f79b976ef967f63bfd4a085be22683047d87fcdf1dbc73968e50b35
+      RECEIPT_PATH: data/review/adapter-sdk/doctor-who-cycle-009-megnus-jaka.json
+      CHECKER_PATH: scripts/doctor-who-cycle-009.mjs
+      PRIOR_RECEIPT_PATH: data/review/adapter-sdk/doctor-who-cycle-008-kreg.json
+      PRIOR_CHECKER_PATH: scripts/doctor-who-cycle-008-historical.mjs
+      OLD_TASK_ID: ap_469d79ea29fd7f877395d20f
+      OLD_LEASE_ID: lease_e65f837070361eacbb1abd46
+      OLD_WALL_ID: UC-1353
+      OLD_CYCLE_ID: cycle_89daa03cca72b8522c76725c
+      OLD_ROLE: Kreg
+      OLD_SOURCE_URL: https://tardis.fandom.com/wiki/Kreg
+      OLD_SOURCE_FINGERPRINT: e9d2d5a601e8ca061ac0bf3ffb9148537772e92ef267f23e703a9250b1d9fda4
+      OLD_REVIEWED_AT: 2026-08-07T20:42:01.000Z
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact one-path prototype carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" && mkdir -p "$OUT"/{api,template,prototype,final,diagnostics}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_MAIN"
+          test "$(git rev-list --count "$BASE_MAIN"..HEAD)" = 1
+          test "$(git diff --name-only "$BASE_MAIN"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$BASE_MAIN"...HEAD)" = $'A\t'"$SELF"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr/files?per_page=100" > "$OUT/api/carrier-files.json"
+          ROOT="$OUT" PR="$pr" HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); pr=json.loads((root/'api/carrier-pr.json').read_text()); files=json.loads((root/'api/carrier-files.json').read_text())
+          assert pr['number']==int(os.environ['PR']) and pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['sha']==os.environ['BASE_MAIN'] and pr['head']['sha']==os.environ['HEAD'] and pr['head']['ref']==os.environ['BRANCH']
+          assert pr['commits']==1 and pr['changed_files']==1 and len(files)==1 and files[0]['filename']==os.environ['SELF'] and files[0]['status']=='added'
+          PY
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\n' "$pr" "$head" >> "$GITHUB_ENV"
+          git checkout --detach "$BASE_MAIN"
+
+      - name: Wait for and verify exact finalization template artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=false
+          for _ in $(seq 1 720); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f branch="$TEMPLATE_BRANCH" -f event=pull_request -F per_page=20 > "$OUT/api/template-runs.json"
+            run_id="$(jq -r --arg name "$TEMPLATE_WORKFLOW" '[.workflow_runs[] | select(.name==$name and .head_branch==env.TEMPLATE_BRANCH)] | sort_by(.id) | last | if .status=="completed" then .id else empty end' "$OUT/api/template-runs.json")"
+            if [ -n "$run_id" ]; then ready=true; break; fi
+            sleep 15
+          done
+          test "$ready" = true
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$OUT/api/template-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$OUT/api/template-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$OUT/api/template-artifacts.json"
+          jq -e --arg name "$TEMPLATE_WORKFLOW" --arg branch "$TEMPLATE_BRANCH" '.name==$name and .head_branch==$branch and .event=="pull_request" and .status=="completed" and .conclusion=="success"' "$OUT/api/template-run.json" >/dev/null
+          jq -e '.jobs|length==1 and .[0].name=="recover" and .[0].conclusion=="success"' "$OUT/api/template-jobs.json" >/dev/null
+          mapfile -t artifacts < <(jq -r '.artifacts[] | select(.expired==false and (.name|contains("diagnostics")|not)) | [.id,.name,.digest] | @tsv' "$OUT/api/template-artifacts.json")
+          test "${#artifacts[@]}" = 1
+          IFS=$'\t' read -r artifact_id artifact_name artifact_digest <<<"${artifacts[0]}"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$OUT/template.zip"
+          test "$(sha256sum "$OUT/template.zip" | awk '{print $1}')" = "${artifact_digest#sha256:}"
+          ROOT="$OUT" ARTIFACT_ID="$artifact_id" ARTIFACT_DIGEST="$artifact_digest" TEMPLATE_RUN="$run_id" python3 - <<'PY'
+          import hashlib,json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['ROOT']); target=root/'template'
+          with zipfile.ZipFile(root/'template.zip') as z:
+              names=z.namelist(); assert len(names)==len(set(names))
+              for info in z.infolist():
+                  p=PurePosixPath(info.filename); assert not p.is_absolute() and '..' not in p.parts and not info.is_dir()
+                  out=target/p; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(z.read(info))
+          ledger=target/'SHA256SUMS.pre'; sealed=target/'SHA256SUMS'; assert hashlib.sha256(ledger.read_bytes()).hexdigest()==sealed.read_text().split()[0]
+          for raw in ledger.read_text().splitlines():
+              if not raw.strip(): continue
+              digest,name=raw.split(None,1); p=target/name.lstrip('*'); assert p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==digest
+          recovery=json.loads((target/'template-recovery.json').read_text()); assert recovery['status']=='cycle-009-finalization-template-recovered' and recovery['recovery_run']==int(os.environ['TEMPLATE_RUN'])
+          (root/'prototype/template-custody.json').write_text(json.dumps({'run':int(os.environ['TEMPLATE_RUN']),'artifact':int(os.environ['ARTIFACT_ID']),'artifact_digest':os.environ['ARTIFACT_DIGEST'],'identity':recovery['identity']},indent=2,sort_keys=True)+'\n')
+          PY
+          printf 'TEMPLATE_RUN=%s\nTEMPLATE_ARTIFACT=%s\nTEMPLATE_ARTIFACT_DIGEST=%s\n' "$run_id" "$artifact_id" "$artifact_digest" >> "$GITHUB_ENV"
+
+      - name: Checkout exact independently approved candidate product
+        shell: bash
+        run: |
+          set -euo pipefail
+          product_commit="$(jq -r '.cycle_009_product_commit' "$OUT/template/template-recovery.json")"
+          product_tree="$(jq -r '.cycle_009_product_tree' "$OUT/template/template-recovery.json")"
+          review_commit="$(jq -r '.product_commit' "$OUT/template/cycle-009-review.bound.json")"
+          review_tree="$(jq -r '.product_tree' "$OUT/template/cycle-009-review.bound.json")"
+          test "$product_commit" = "$review_commit"
+          test "$product_tree" = "$review_tree"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$PRODUCT_BRANCH" --jq '.object.sha')" = "$product_commit"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/$PRODUCT_BRANCH:refs/remotes/origin/$PRODUCT_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/$PRODUCT_BRANCH)" = "$product_commit"
+          git checkout --detach "$product_commit"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_MAIN"
+          test "$(git show -s --format=%T HEAD)" = "$product_tree"
+          printf 'PRODUCT_COMMIT=%s\nPRODUCT_TREE=%s\n' "$product_commit" "$product_tree" >> "$GITHUB_ENV"
+
+      - name: Materialize exact eight-path receipt-bearing finalization
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import base64,copy,datetime,difflib,hashlib,json,os,re,subprocess
+          from pathlib import Path,PurePosixPath
+
+          root=Path(os.environ['ROOT']); template=root/'template/template'; repo=Path.cwd()
+          TASK=os.environ['TASK_ID']; WALL=os.environ['WALL_ID']; PERFORMER=os.environ['PERFORMER']; ROLE=os.environ['ROLE']; SOURCE=os.environ['SOURCE_URL']; FINGERPRINT=os.environ['SOURCE_FINGERPRINT']
+          OLD_TASK=os.environ['OLD_TASK_ID']; OLD_LEASE=os.environ['OLD_LEASE_ID']; OLD_WALL=os.environ['OLD_WALL_ID']; OLD_CYCLE=os.environ['OLD_CYCLE_ID']; OLD_ROLE=os.environ['OLD_ROLE']; OLD_SOURCE=os.environ['OLD_SOURCE_URL']; OLD_FINGERPRINT=os.environ['OLD_SOURCE_FINGERPRINT']; OLD_REVIEWED=os.environ['OLD_REVIEWED_AT']
+          RECEIPT=Path(os.environ['RECEIPT_PATH']); CHECKER=Path(os.environ['CHECKER_PATH']); PRIOR_RECEIPT=Path(os.environ['PRIOR_RECEIPT_PATH']); PRIOR_CHECKER=Path(os.environ['PRIOR_CHECKER_PATH'])
+
+          def sha(data): return hashlib.sha256(data).hexdigest()
+          def stable(v):
+              if isinstance(v,list): return [stable(x) for x in v]
+              if isinstance(v,dict): return {k:stable(v[k]) for k in sorted(v)}
+              return v
+          def stable_json(v): return json.dumps(stable(v),separators=(',',':'))
+          def stable_pretty(v): return json.dumps(stable(v),indent=2)+'\n'
+          def read(path): return json.loads(Path(path).read_text())
+          def read_jsonl(path): return [json.loads(x) for x in Path(path).read_text().splitlines() if x.strip()]
+          def write_json(path,value): Path(path).parent.mkdir(parents=True,exist_ok=True); Path(path).write_text(json.dumps(value,indent=2,sort_keys=True)+'\n')
+          def all_strings(v):
+              if isinstance(v,str): yield v
+              elif isinstance(v,dict):
+                  for x in v.values(): yield from all_strings(x)
+              elif isinstance(v,list):
+                  for x in v: yield from all_strings(x)
+          def iso_values(v):
+              for s in all_strings(v):
+                  if re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z',s):
+                      try: yield datetime.datetime.fromisoformat(s.replace('Z','+00:00'))
+                      except: pass
+          def jsonl_bytes(rows): return ''.join(json.dumps(x,separators=(',',':'))+'\n' for x in rows).encode()
+          def git_blob(path): return subprocess.check_output(['git','hash-object',str(path)],text=True).strip()
+
+          state=read('data/AUTOPILOT.json'); jobs=[x for x in state['jobs'] if x.get('scope')=='doctor-who']; task=next(x for x in jobs if x['id']==TASK)
+          assert task['status']=='resolved' and task['performer']==PERFORMER and task['character']==ROLE and task['performance_modes']==['voice'] and task['source_fingerprint']==FINGERPRINT and task['wall_ids']==[WALL]
+          claims=[x for x in read_jsonl('data/journal/autopilot.jsonl') if x.get('op')=='lease.claimed' and x.get('task_id')==TASK]
+          assert len(claims)==1; claim=claims[0]; lease=claim['lease_id']; claimed_at=claim['at']
+          acceptances=[x for x in read_jsonl('data/journal/candidates.jsonl') if x.get('op')=='draft.accept' and x.get('specimen')==WALL]
+          assert len(acceptances)==1; acceptance=acceptances[0]; accepted_at=acceptance['ts']
+          wall=next(x for x in read('data/specimens.json') if x['id']==WALL); source_row=next(x for x in read('data/SOURCES.json') if x['id']==WALL)
+          assert wall['actor']==PERFORMER and wall['character']==ROLE and wall['production']=='The First Sontarans' and wall['kind']=='voice' and wall['link']==SOURCE and 'still' not in wall and 'portrait' not in wall
+          assert source_row['still'] is None and source_row['portrait'] is None
+          audit=read('data/MEDIA-AUDIT.json'); facets=sorted([x for x in audit['items'] if x['wall_id']==WALL],key=lambda x:x['side']); assert len(facets)==2 and [x['side'] for x in facets]==['portrait','still'] and all(x['status']=='absent' and x['asset'] is None for x in facets)
+
+          waterline=read('data/WATERLINE-STATE.json'); current_cycles=[x for x in waterline['cycles'] if x.get('scope_id')=='doctor-who' and x.get('lease_id')==lease]; assert len(current_cycles)==1; current_cycle=current_cycles[0]
+          prior_cycles=[x for x in waterline['cycles'] if x.get('scope_id')=='doctor-who' and x.get('lease_id')!=lease and x.get('reviewed_at')]
+          assert prior_cycles; prior_cycle=max(prior_cycles,key=lambda x:x['reviewed_at'])
+          assert prior_cycle['id']==OLD_CYCLE
+          times=list(iso_values(task))+list(iso_values(current_cycle))+list(iso_values(claim))+list(iso_values(acceptance)); assert times
+          reviewed_dt=max(times)+datetime.timedelta(seconds=1); reviewed_at=reviewed_dt.astimezone(datetime.timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z')
+
+          hist_before_water=read(template/'before/data/WATERLINE-STATE.json'); hist_after_water=read(template/'after/data/WATERLINE-STATE.json')
+          hb_cycle=next(x for x in hist_before_water['cycles'] if x.get('lease_id')==OLD_LEASE); ha_cycle=next(x for x in hist_after_water['cycles'] if x.get('lease_id')==OLD_LEASE)
+          old_before_cycle_id=hb_cycle['id']; old_after_cycle_id=ha_cycle['id']; assert old_after_cycle_id==OLD_CYCLE
+
+          mapping={OLD_TASK:TASK,OLD_LEASE:lease,OLD_WALL:WALL,OLD_ROLE:ROLE,OLD_SOURCE:SOURCE,OLD_FINGERPRINT:FINGERPRINT,OLD_REVIEWED:reviewed_at,old_before_cycle_id:current_cycle['id'],old_after_cycle_id:'__NEW_CYCLE__'}
+          replacements=[('doctor-who-cycle-008-kreg','doctor-who-cycle-009-megnus-jaka'),('doctor-who-cycle-008','doctor-who-cycle-009'),('cycle-008','cycle-009'),('cycle 008','cycle 009'),('Cycle 008','Cycle 009'),('Kreg','Megnus Jaka')]
+          def map_string(value):
+              if value in mapping: return mapping[value]
+              out=value
+              for a,b in replacements: out=out.replace(a,b)
+              return out
+          def transform(value):
+              if isinstance(value,str): return map_string(value)
+              if isinstance(value,list): return [transform(x) for x in value]
+              if isinstance(value,dict): return {map_string(k):transform(v) for k,v in value.items()}
+              return copy.deepcopy(value)
+          def advance(before,after,current,path='$'):
+              if before==after: return copy.deepcopy(current)
+              if isinstance(before,dict) and isinstance(after,dict):
+                  result=copy.deepcopy(current) if isinstance(current,dict) else {}
+                  for key in before.keys()-after.keys(): result.pop(map_string(key),None)
+                  for key in after:
+                      out_key=map_string(key)
+                      if key not in before: result[out_key]=transform(after[key])
+                      else: result[out_key]=advance(before[key],after[key],result.get(out_key),path+'.'+key)
+                  return result
+              if isinstance(before,list) and isinstance(after,list):
+                  cur=copy.deepcopy(current) if isinstance(current,list) else []
+                  if len(after)>=len(before) and after[:len(before)]==before: return cur+[transform(x) for x in after[len(before):]]
+                  return transform(after)
+              if isinstance(before,(int,float)) and not isinstance(before,bool) and isinstance(after,(int,float)) and not isinstance(after,bool) and isinstance(current,(int,float)) and not isinstance(current,bool): return current+(after-before)
+              return transform(after)
+
+          new_cycle=advance(hb_cycle,ha_cycle,current_cycle)
+          def replace_placeholder(v):
+              if isinstance(v,str): return v.replace('__NEW_CYCLE__',current_cycle['id'])
+              if isinstance(v,list): return [replace_placeholder(x) for x in v]
+              if isinstance(v,dict): return {k:replace_placeholder(x) for k,x in v.items()}
+              return v
+          new_cycle=replace_placeholder(new_cycle)
+          new_cycle['scope_id']='doctor-who'; new_cycle['lease_id']=lease; new_cycle['outcome']='completed'; new_cycle['reviewed_at']=reviewed_at
+          if 'task_statuses' in new_cycle: new_cycle['task_statuses']={TASK:'resolved'}
+          for key in ('task_ids','tasks'):
+              if key in new_cycle and isinstance(new_cycle[key],list): new_cycle[key]=[TASK]
+          cycle_body=copy.deepcopy(new_cycle); cycle_body.pop('id',None); new_cycle_id='cycle_'+sha(stable_json(cycle_body).encode())[:24]; new_cycle['id']=new_cycle_id
+          mapping[old_after_cycle_id]=new_cycle_id; mapping['__NEW_CYCLE__']=new_cycle_id
+          waterline['cycles']=[new_cycle if x.get('lease_id')==lease else x for x in waterline['cycles']]
+          write_json('data/WATERLINE-STATE.json',waterline)
+
+          hb_journal=read_jsonl(template/'before/data/journal/waterline.jsonl'); ha_journal=read_jsonl(template/'after/data/journal/waterline.jsonl'); hb_ids={x['id'] for x in hb_journal}; added=[x for x in ha_journal if x['id'] not in hb_ids]; assert len(added)==1; old_event=added[0]
+          new_event=transform(old_event); new_event=json.loads(json.dumps(new_event).replace('__NEW_CYCLE__',new_cycle_id));
+          for key in ('at','reviewed_at'):
+              if key in new_event: new_event[key]=reviewed_at
+          event_body=copy.deepcopy(new_event); old_event_id=event_body.pop('id')
+          stable_candidate='waterline_'+sha(stable_json(event_body).encode())[:24]
+          ordered_candidate='waterline_'+sha(json.dumps(event_body,separators=(',',':')).encode())[:24]
+          old_body=copy.deepcopy(old_event); old_id=old_body.pop('id'); old_stable='waterline_'+sha(stable_json(old_body).encode())[:24]; old_ordered='waterline_'+sha(json.dumps(old_body,separators=(',',':')).encode())[:24]
+          if old_id==old_stable: new_event_id=stable_candidate; event_hash_mode='stable'
+          elif old_id==old_ordered: new_event_id=ordered_candidate; event_hash_mode='ordered'
+          else: raise AssertionError('historical waterline event id formula is unknown')
+          new_event['id']=new_event_id
+          current_journal=read_jsonl('data/journal/waterline.jsonl'); assert not any(x.get('id')==new_event_id for x in current_journal); current_journal.append(new_event); Path('data/journal/waterline.jsonl').write_bytes(jsonl_bytes(current_journal))
+
+          prior_receipt=read(PRIOR_RECEIPT); prior_receipt_file_sha=sha(PRIOR_RECEIPT.read_bytes()); prior_checker_sha=sha(PRIOR_CHECKER.read_bytes())
+          review=read(root/'template/cycle-009-review.bound.json'); product_commit=review['product_commit']; product_tree=review['product_tree']; product_paths=review['product_path_count']; review_identity=review['identity']
+          queue_after={'total':316,'queued':307,'resolved':9,'in_flight':0}; queue_before={'total':316,'queued':308,'resolved':8,'in_flight':0}
+          record_sha=sha(stable_pretty(wall).encode()); facets_sha=sha(stable_pretty(facets).encode())
+
+          constants={
+              'RECEIPT_PATH':str(RECEIPT),'CHECKER_PATH':str(CHECKER),'TASK_ID':TASK,'LEASE_ID':lease,'WALL_ID':WALL,'PERFORMER':PERFORMER,'ROLE':ROLE,'SOURCE_URL':SOURCE,'SOURCE_FINGERPRINT':FINGERPRINT,'CLAIM_EVENT_ID':claim['id'],'CANDIDATE_EVENT_ID':acceptance['id'],'CYCLE_ID':new_cycle_id,'CYCLE_EVENT_ID':new_event_id,'REVIEWED_AT':reviewed_at,'PRIOR_RECEIPT_PATH':str(PRIOR_RECEIPT),'PRIOR_CHECKER_PATH':str(PRIOR_CHECKER),'PRIOR_RECEIPT_FILE_SHA':prior_receipt_file_sha,'PRIOR_RECEIPT_DECLARED_SHA':prior_receipt['receipt_sha256'],'PRIOR_CHECKER_SHA':prior_checker_sha,'PRIOR_CYCLE_ID':prior_cycle['id'],'REVIEW_IDENTITY':review_identity,'PRODUCT_TREE':product_tree,'EXPECTED_QUEUE':queue_after,'EVENT_HASH_MODE':event_hash_mode,
+          }
+          cjson=lambda k: json.dumps(constants[k],separators=(',',':'))
+          checker=f'''#!/usr/bin/env node
+          import fs from "node:fs";
+          import crypto from "node:crypto";
+          const RECEIPT_PATH={cjson('RECEIPT_PATH')};
+          const CHECKER_PATH={cjson('CHECKER_PATH')};
+          const TASK_ID={cjson('TASK_ID')};
+          const LEASE_ID={cjson('LEASE_ID')};
+          const WALL_ID={cjson('WALL_ID')};
+          const PERFORMER={cjson('PERFORMER')};
+          const ROLE={cjson('ROLE')};
+          const SOURCE_URL={cjson('SOURCE_URL')};
+          const SOURCE_FINGERPRINT={cjson('SOURCE_FINGERPRINT')};
+          const CLAIM_EVENT_ID={cjson('CLAIM_EVENT_ID')};
+          const CANDIDATE_EVENT_ID={cjson('CANDIDATE_EVENT_ID')};
+          const CYCLE_ID={cjson('CYCLE_ID')};
+          const CYCLE_EVENT_ID={cjson('CYCLE_EVENT_ID')};
+          const REVIEWED_AT={cjson('REVIEWED_AT')};
+          const PRIOR_RECEIPT_PATH={cjson('PRIOR_RECEIPT_PATH')};
+          const PRIOR_CHECKER_PATH={cjson('PRIOR_CHECKER_PATH')};
+          const PRIOR_RECEIPT_FILE_SHA={cjson('PRIOR_RECEIPT_FILE_SHA')};
+          const PRIOR_RECEIPT_DECLARED_SHA={cjson('PRIOR_RECEIPT_DECLARED_SHA')};
+          const PRIOR_CHECKER_SHA={cjson('PRIOR_CHECKER_SHA')};
+          const PRIOR_CYCLE_ID={cjson('PRIOR_CYCLE_ID')};
+          const REVIEW_IDENTITY={cjson('REVIEW_IDENTITY')};
+          const PRODUCT_TREE={cjson('PRODUCT_TREE')};
+          const EXPECTED_QUEUE={json.dumps(queue_after,separators=(',',':'))};
+          const EVENT_HASH_MODE={cjson('EVENT_HASH_MODE')};
+          const sha=(value)=>crypto.createHash("sha256").update(value).digest("hex");
+          const stable=(value)=>Array.isArray(value)?value.map(stable):value&&typeof value==="object"?Object.fromEntries(Object.keys(value).sort().map((key)=>[key,stable(value[key])])):value;
+          const stableJson=(value)=>JSON.stringify(stable(value));
+          const stablePretty=(value)=>JSON.stringify(stable(value),null,2)+"\\n";
+          const read=(file)=>JSON.parse(fs.readFileSync(file,"utf8"));
+          const readJsonl=(file)=>fs.readFileSync(file,"utf8").split(/\\r?\\n/).filter(Boolean).map((line)=>JSON.parse(line));
+          const fail=(message)=>{{throw new Error(message);}};
+          const exact=(actual,expected,label)=>{{if(stableJson(actual)!==stableJson(expected))fail(label+" drifted");}};
+          const receipt=read(RECEIPT_PATH); const receiptBody=structuredClone(receipt); delete receiptBody.receipt_sha256;
+          if(receipt.receipt_sha256!==sha(stablePretty(receiptBody)))fail("cycle 009 receipt hash drifted");
+          if(receipt.transaction!=="DOCTOR-WHO-CYCLE-009-MEGNUS-JAKA"||receipt.version!==1)fail("cycle 009 receipt identity drifted");
+          if(receipt.qualification?.checker_sha256!==sha(fs.readFileSync(CHECKER_PATH)))fail("cycle 009 checker hash drifted");
+          const autopilot=read("data/AUTOPILOT.json"), journal=readJsonl("data/journal/autopilot.jsonl"), candidates=readJsonl("data/journal/candidates.jsonl"), waterline=read("data/WATERLINE-STATE.json"), waterJournal=readJsonl("data/journal/waterline.jsonl"), specimens=read("data/specimens.json"), sources=read("data/SOURCES.json"), audit=read("data/MEDIA-AUDIT.json"), registry=read("data/ESTATE-REGISTRY.json"), baseline=read("data/review/adapter-sdk/BASELINE.json");
+          const job=autopilot.jobs.find((row)=>row.id===TASK_ID);
+          if(!job||job.scope!=="doctor-who"||job.status!=="resolved"||job.performer!==PERFORMER||job.character!==ROLE)fail("Megnus Jaka task drifted");
+          exact(job.performance_modes,["voice"],"Megnus Jaka performance mode"); exact(job.wall_ids,[WALL_ID],"Megnus Jaka wall binding");
+          if(job.source_fingerprint!==SOURCE_FINGERPRINT||!job.sources.includes(SOURCE_URL))fail("Megnus Jaka source custody drifted");
+          const claims=journal.filter((row)=>row.op==="lease.claimed"&&row.scope==="doctor-who"); const claim=claims.filter((row)=>row.id===CLAIM_EVENT_ID&&row.task_id===TASK_ID&&row.lease_id===LEASE_ID);
+          if(claim.length!==1)fail("cycle 009 claim drifted"); const claimBody=structuredClone(claim[0]); delete claimBody.id; if(claim[0].id!=="apj_"+sha(JSON.stringify(claimBody)).slice(0,24))fail("cycle 009 claim is not content-addressed");
+          const acceptance=candidates.filter((row)=>row.id===CANDIDATE_EVENT_ID&&row.op==="draft.accept"&&row.specimen===WALL_ID); if(acceptance.length!==1)fail("cycle 009 acceptance drifted"); const acceptanceBody=structuredClone(acceptance[0]); delete acceptanceBody.id; const acceptanceId="jr_"+crypto.createHash("sha256").update(acceptance[0].actor+"|"+JSON.stringify(acceptanceBody)).digest("base64url").slice(0,22); if(acceptanceId!==CANDIDATE_EVENT_ID)fail("cycle 009 acceptance is not content-addressed");
+          const wall=specimens.find((row)=>row.id===WALL_ID); if(!wall||wall.actor!==PERFORMER||wall.character!==ROLE||wall.production!=="The First Sontarans"||wall.kind!=="voice"||wall.link!==SOURCE_URL||wall.still!==undefined||wall.portrait!==undefined)fail("Megnus Jaka canonical record drifted");
+          if(receipt.canonical.record_sha256!==sha(stablePretty(wall)))fail("Megnus Jaka canonical digest drifted"); const source=sources.find((row)=>row.id===WALL_ID); if(!source||source.still!==null||source.portrait!==null)fail("Megnus Jaka source ledger drifted");
+          const facets=audit.items.filter((row)=>row.wall_id===WALL_ID).sort((a,b)=>a.side.localeCompare(b.side)); if(facets.length!==2||facets.some((row)=>row.status!=="absent"||row.asset!==null)||stableJson(facets.map((row)=>row.side))!==stableJson(["portrait","still"]))fail("Megnus Jaka absent facets drifted"); if(receipt.media.facets_sha256!==sha(stablePretty(facets)))fail("Megnus Jaka facet digest drifted");
+          const cycles=waterline.cycles.filter((row)=>row.scope_id==="doctor-who"&&row.lease_id===LEASE_ID); if(cycles.length!==1||cycles[0].id!==CYCLE_ID||cycles[0].outcome!=="completed"||cycles[0].task_statuses?.[TASK_ID]!=="resolved"||cycles[0].reviewed_at!==REVIEWED_AT)fail("cycle 009 reviewed waterline drifted"); const cycleBody=structuredClone(cycles[0]); delete cycleBody.id; if(cycles[0].id!=="cycle_"+sha(stableJson(cycleBody)).slice(0,24))fail("cycle 009 id is not content-addressed");
+          const events=waterJournal.filter((row)=>row.id===CYCLE_EVENT_ID); if(events.length!==1)fail("cycle 009 waterline event drifted"); const eventBody=structuredClone(events[0]); delete eventBody.id; const eventId="waterline_"+sha(EVENT_HASH_MODE==="stable"?stableJson(eventBody):JSON.stringify(eventBody)).slice(0,24); if(eventId!==CYCLE_EVENT_ID)fail("cycle 009 waterline event is not content-addressed");
+          const doctor=autopilot.jobs.filter((row)=>row.scope==="doctor-who"), inFlight=doctor.filter((row)=>["leased","drafted","merged"].includes(row.status)).length, resolved=doctor.filter((row)=>row.status==="resolved").length, queued=doctor.filter((row)=>row.status==="queued").length;
+          const historicalClaims=claims.filter((row)=>Number.isFinite(Date.parse(row.at||""))&&Date.parse(row.at)<=Date.parse(REVIEWED_AT)); const laterClaims=claims.filter((row)=>Number.isFinite(Date.parse(row.at||""))&&Date.parse(row.at)>Date.parse(REVIEWED_AT)); if(historicalClaims.length!==9||laterClaims.length>1||doctor.length!==316||resolved<9||inFlight>1)fail("cycle 009 composable queue boundary drifted"); if(laterClaims.length===0)exact({{total:doctor.length,queued,resolved,in_flight:inFlight}},EXPECTED_QUEUE,"cycle 009 queue");
+          if(receipt.reviewed_cycle.id!==CYCLE_ID||receipt.reviewed_cycle.event_id!==CYCLE_EVENT_ID||receipt.reviewed_cycle.prior_cycle_id!==PRIOR_CYCLE_ID||receipt.execution.independent_review_identity!==REVIEW_IDENTITY||receipt.execution.candidate_tree!==PRODUCT_TREE)fail("cycle 009 receipt binding drifted");
+          const priorReceipt=read(PRIOR_RECEIPT_PATH); if(sha(fs.readFileSync(PRIOR_RECEIPT_PATH))!==PRIOR_RECEIPT_FILE_SHA||priorReceipt.receipt_sha256!==PRIOR_RECEIPT_DECLARED_SHA||sha(fs.readFileSync(PRIOR_CHECKER_PATH))!==PRIOR_CHECKER_SHA)fail("cycle 009 lost cycle 008 custody");
+          if(baseline.inputs?.estate_registry?.sha256!==sha(fs.readFileSync("data/ESTATE-REGISTRY.json")))fail("cycle 009 baseline registry binding drifted");
+          if(receipt.boundary?.tenth_lease_issued!==false||receipt.boundary?.cover_adopted!==false||receipt.boundary?.generic_sontaran_substituted!==false||receipt.boundary?.duplicate_performer_portrait_adopted!==false||receipt.boundary?.outside_human_dependency!==false||receipt.boundary?.owner_physical_action_required!==false)fail("cycle 009 boundary drifted");
+          console.log("doctor-who-cycle-009: PASS — immutable Megnus Jaka voice custody, honestly absent media, reviewed waterline state, and one-later-cycle composability are preserved");
+          '''
+          checker='\n'.join(line[10:] if line.startswith('          ') else line for line in checker.splitlines())+'\n'; CHECKER.parent.mkdir(parents=True,exist_ok=True); CHECKER.write_text(checker); checker_sha=sha(CHECKER.read_bytes())
+
+          receipt={'transaction':'DOCTOR-WHO-CYCLE-009-MEGNUS-JAKA','version':1,'canonical_parent':os.environ['BASE_MAIN'],'task':{'id':TASK,'performer':PERFORMER,'role':ROLE,'performance_mode':'voice','source':SOURCE,'source_fingerprint':FINGERPRINT,'source_receipts':task.get('source_receipts',[])},'lease':{'id':lease,'claimed_at':claimed_at,'claim_event_id':claim['id']},'candidate':{'accepted_at':accepted_at,'event_id':acceptance['id']},'canonical':{'wall_id':WALL,'record_sha256':record_sha},'media':{'still':'absent','portrait':'absent','facets_sha256':facets_sha,'cover_adopted':False,'generic_sontaran_substituted':False,'duplicate_performer_portrait_adopted':False},'queue':{'before':queue_before,'after':queue_after},'reviewed_cycle':{'id':new_cycle_id,'event_id':new_event_id,'prior_cycle_id':prior_cycle['id'],'reviewed_at':reviewed_at},'execution':{'candidate_product_commit':product_commit,'candidate_tree':product_tree,'candidate_path_count':product_paths,'independent_review_identity':review_identity},'prior_custody':{'cycle_008_receipt_path':str(PRIOR_RECEIPT),'cycle_008_receipt_file_sha256':prior_receipt_file_sha,'cycle_008_receipt_declared_sha256':prior_receipt['receipt_sha256'],'cycle_008_checker_path':str(PRIOR_CHECKER),'cycle_008_checker_sha256':prior_checker_sha,'cycle_008_id':prior_cycle['id']},'boundary':{'ninth_doctor_who_lease_is_this_cycle':True,'tenth_lease_issued':False,'cover_adopted':False,'generic_sontaran_substituted':False,'duplicate_performer_portrait_adopted':False,'outside_human_dependency':False,'owner_physical_action_required':False},'qualification':{'checker_path':str(CHECKER),'checker_sha256':checker_sha,'historical_claims':9,'denominator':316}}
+          receipt['receipt_sha256']=sha(stable_pretty(receipt).encode()); RECEIPT.parent.mkdir(parents=True,exist_ok=True); RECEIPT.write_text(stable_pretty(receipt)); receipt_file_sha=sha(RECEIPT.read_bytes())
+
+          # Package registration.
+          package=read('package.json'); scripts=package.setdefault('scripts',{}); old_key=next((k for k,v in scripts.items() if 'cycle' in k and '008' in k and 'doctor' in k),None)
+          new_key='doctor-who:cycle:009'; scripts[new_key]=f'node {CHECKER.as_posix()}' if old_key is None else scripts[old_key].replace('008','009').replace('kreg','megnus-jaka'); write_json('package.json',package)
+
+          # Human-readable operational ledger; append only once.
+          docs=Path('docs/AUTOPILOT.md'); marker='Doctor Who cycle 009 — Megnus Jaka'; current_docs=docs.read_text()
+          if marker not in current_docs:
+              docs.write_text(current_docs.rstrip()+f'\n\n## {marker}\n\n- Task `{TASK}` is resolved as Dan Starkey’s voice performance as Megnus Jaka in *The First Sontarans*.\n- Queue: 307 queued / 9 resolved / 0 in flight.\n- Character still and performer portrait are both honestly absent; the generic publication cover remains refused.\n- Reviewed cycle: `{new_cycle_id}` at `{reviewed_at}`.\n')
+
+          # Advance the registry using the exact historical before/after transformation.
+          hist_before_registry=read(template/'before/data/ESTATE-REGISTRY.json'); hist_after_registry=read(template/'after/data/ESTATE-REGISTRY.json'); registry=read('data/ESTATE-REGISTRY.json')
+          hist_receipt_path=next((template/'after/data/review/adapter-sdk').glob('doctor-who-cycle-008-*.json')); hist_checker_path=template/'after/scripts/doctor-who-cycle-008.mjs'; hist_receipt=read(hist_receipt_path)
+          mapping.update({str(hist_receipt_path.relative_to(template/'after')):str(RECEIPT),str(hist_checker_path.relative_to(template/'after')):str(CHECKER),sha(hist_receipt_path.read_bytes()):receipt_file_sha,hist_receipt.get('receipt_sha256',''):receipt['receipt_sha256'],sha(hist_checker_path.read_bytes()):checker_sha,hist_receipt.get('execution',{}).get('independent_review_identity',''):review_identity,hist_receipt.get('execution',{}).get('candidate_tree',''):product_tree})
+          registry=advance(hist_before_registry,hist_after_registry,registry)
+          def refresh(obj):
+              if isinstance(obj,dict):
+                  path_values=[]
+                  for k,v in obj.items():
+                      if isinstance(v,str) and ('path' in k.lower() or k.lower() in {'file','source'}): path_values.append(v)
+                  for value in path_values:
+                      p=Path(value)
+                      if p.is_file():
+                          data=p.read_bytes()
+                          for k in list(obj):
+                              lk=k.lower()
+                              if lk.endswith('sha256') or lk=='sha256': obj[k]=sha(data)
+                              elif lk.endswith('bytes') or lk=='bytes': obj[k]=len(data)
+                              elif 'git_blob' in lk: obj[k]=git_blob(p)
+                          break
+                  for v in obj.values(): refresh(v)
+              elif isinstance(obj,list):
+                  for v in obj: refresh(v)
+          refresh(registry); write_json('data/ESTATE-REGISTRY.json',registry)
+
+          hist_before_baseline=read(template/'before/data/review/adapter-sdk/BASELINE.json'); hist_after_baseline=read(template/'after/data/review/adapter-sdk/BASELINE.json'); baseline=read('data/review/adapter-sdk/BASELINE.json'); baseline=advance(hist_before_baseline,hist_after_baseline,baseline); refresh(baseline)
+          if isinstance(baseline.get('inputs',{}).get('estate_registry'),dict): baseline['inputs']['estate_registry']['sha256']=sha(Path('data/ESTATE-REGISTRY.json').read_bytes())
+          write_json('data/review/adapter-sdk/BASELINE.json',baseline)
+
+          historical_paths=(template/'finalization-paths.txt').read_text().splitlines(); expected=[]
+          for path in historical_paths:
+              if path.endswith('doctor-who-cycle-008-kreg.json'): expected.append(str(RECEIPT))
+              elif path.endswith('doctor-who-cycle-008.mjs'): expected.append(str(CHECKER))
+              else: expected.append(path)
+          expected=sorted(expected); actual=sorted(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          assert len(expected)==8 and actual==expected,(expected,actual)
+          (root/'prototype/expected-finalization-paths.txt').write_text('\n'.join(expected)+'\n')
+          (root/'prototype/finalization-facts.json').write_text(json.dumps({'task_id':TASK,'lease_id':lease,'wall_id':WALL,'cycle_id':new_cycle_id,'cycle_event_id':new_event_id,'reviewed_at':reviewed_at,'receipt_sha256':receipt['receipt_sha256'],'receipt_file_sha256':receipt_file_sha,'checker_sha256':checker_sha,'queue_after':queue_after,'review_identity':review_identity,'candidate_commit':product_commit,'candidate_tree':product_tree},indent=2,sort_keys=True)+'\n')
+          PY
+          test "$(git diff --name-only | wc -l)" = 8
+          test -z "$(git diff --check)"
+
+      - name: Commit and completely gate the finalization child
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Undercast Cycle Finalizer'
+          git config user.email 'cycle-finalizer@users.noreply.github.com'
+          git add --all
+          git commit -m 'Doctor Who: review cycle 009 Megnus Jaka'
+          finalization_commit="$(git rev-parse HEAD)"
+          test "$(git show -s --format=%P HEAD)" = "$PRODUCT_COMMIT"
+          test "$(git diff-tree --no-commit-id --name-only -r HEAD | LC_ALL=C sort)" = "$(LC_ALL=C sort "$OUT/prototype/expected-finalization-paths.txt")"
+          node scripts/doctor-who-cycle-008.mjs | tee "$OUT/prototype/cycle-008.log"
+          node scripts/doctor-who-cycle-009.mjs | tee "$OUT/prototype/cycle-009.log"
+          node scripts/autopilot.mjs validate | tee "$OUT/prototype/autopilot-validate.log"
+          node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/prototype/media-gate.log"
+          node scripts/waterline.mjs validate | tee "$OUT/prototype/waterline-validate.log"
+          node scripts/waterline.mjs status --scope doctor-who --requested 1 --json > "$OUT/prototype/waterline-status.json"
+          node scripts/waterline.mjs gate --scope doctor-who --requested 1 | tee "$OUT/prototype/waterline-gate.log"
+          jq -e '.claim_allowed==true and .claim_reasons==[] and .jobs.in_flight==0 and .media.debt==0 and .cycles.unreceipted==[]' "$OUT/prototype/waterline-status.json" >/dev/null
+          node scripts/gate.mjs | tee "$OUT/prototype/complete-gate.log"
+          test -z "$(git status --porcelain)"
+          printf 'FINALIZATION_COMMIT=%s\n' "$finalization_commit" >> "$GITHUB_ENV"
+
+      - name: Recompose one-parent final product over canonical main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git reset --soft "$BASE_MAIN"
+          git commit -m 'Doctor Who: complete reviewed cycle 009 for Megnus Jaka'
+          final_commit="$(git rev-parse HEAD)"
+          final_tree="$(git rev-parse HEAD^{tree})"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_MAIN"
+          test "$(git rev-list --count "$BASE_MAIN"..HEAD)" = 1
+          candidate_count="$(git diff --name-only "$BASE_MAIN"..."$PRODUCT_COMMIT" | wc -l)"
+          final_count="$(git diff --name-only "$BASE_MAIN"...HEAD | wc -l)"
+          test "$final_count" = "$((candidate_count + 8))"
+          ! git diff --name-only "$BASE_MAIN"...HEAD | grep -Eq '(^|/)\.github/workflows/|(^|/)(\.tmp|tmp|transport)(/|$)'
+          node scripts/doctor-who-cycle-008.mjs | tee "$OUT/final/cycle-008.log"
+          node scripts/doctor-who-cycle-009.mjs | tee "$OUT/final/cycle-009.log"
+          node scripts/autopilot.mjs validate | tee "$OUT/final/autopilot-validate.log"
+          node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/final/media-gate.log"
+          node scripts/waterline.mjs validate | tee "$OUT/final/waterline-validate.log"
+          node scripts/waterline.mjs status --scope doctor-who --requested 1 --json > "$OUT/final/waterline-status.json"
+          node scripts/waterline.mjs gate --scope doctor-who --requested 1 | tee "$OUT/final/waterline-gate.log"
+          jq -e '.claim_allowed==true and .claim_reasons==[] and .jobs.in_flight==0 and .media.debt==0 and .cycles.unreceipted==[]' "$OUT/final/waterline-status.json" >/dev/null
+          node scripts/gate.mjs | tee "$OUT/final/complete-gate.log"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+          git diff --name-only "$BASE_MAIN"...HEAD | LC_ALL=C sort > "$OUT/final/changed-paths.txt"
+          git diff --name-status --no-renames "$BASE_MAIN"...HEAD | LC_ALL=C sort > "$OUT/final/changed-paths-status.txt"
+          git diff --binary "$BASE_MAIN"...HEAD > "$OUT/final/product.patch"
+          git bundle create "$OUT/final/product.bundle" HEAD ^"$BASE_MAIN"
+          printf 'FINAL_COMMIT=%s\nFINAL_TREE=%s\nFINAL_PATH_COUNT=%s\nCANDIDATE_PATH_COUNT=%s\n' "$final_commit" "$final_tree" "$final_count" "$candidate_count" >> "$GITHUB_ENV"
+
+      - name: Seal immutable final-product prototype
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,subprocess,tarfile,io
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['ROOT']); base=os.environ['BASE_MAIN']; final=os.environ['FINAL_COMMIT']; rows=[]
+          raw=subprocess.check_output(['git','diff','--name-status','--no-renames','-z',f'{base}...{final}']).split(b'\0')
+          for i in range(0,len(raw)-1,2):
+              status=raw[i].decode(); path=raw[i+1].decode(); assert status in {'A','M','D'}; pp=PurePosixPath(path); assert not pp.is_absolute() and '..' not in pp.parts
+              row={'path':path,'status':status}
+              if status!='D':
+                  data=Path(path).read_bytes(); line=subprocess.check_output(['git','ls-tree',final,'--',path],text=True).strip(); mode,kind,blob,_=line.split(None,3); assert kind=='blob'; row.update({'mode':mode,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),'git_blob':blob})
+              rows.append(row)
+          rows.sort(key=lambda x:x['path']); assert len(rows)==int(os.environ['FINAL_PATH_COUNT']) and len({x['path'] for x in rows})==len(rows)
+          manifest={'version':1,'base_main':base,'candidate_product_commit':os.environ['PRODUCT_COMMIT'],'candidate_product_tree':os.environ['PRODUCT_TREE'],'final_commit':final,'final_tree':os.environ['FINAL_TREE'],'paths':rows}
+          (root/'final/file-manifest.json').write_text(json.dumps(manifest,indent=2,sort_keys=True)+'\n')
+          with tarfile.open(root/'final/product.tar','w',format=tarfile.PAX_FORMAT) as tar:
+              for row in rows:
+                  if row['status']=='D': continue
+                  data=Path(row['path']).read_bytes(); info=tarfile.TarInfo(row['path']); info.size=len(data); info.mtime=0; info.uid=0; info.gid=0; info.uname=''; info.gname=''; info.mode=int(row['mode'],8)&0o777; tar.addfile(info,io.BytesIO(data))
+          facts=json.loads((root/'prototype/finalization-facts.json').read_text()); template=json.loads((root/'prototype/template-custody.json').read_text())
+          receipt={'status':'cycle-009-megnus-jaka-receipt-bearing-product-qualified','qualification_run':int(os.environ['GITHUB_RUN_ID']),'qualification_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'carrier_pr':int(os.environ['CARRIER_PR']),'carrier_head':os.environ['CARRIER_HEAD'],'canonical_parent':base,'candidate_product_commit':os.environ['PRODUCT_COMMIT'],'candidate_product_tree':os.environ['PRODUCT_TREE'],'candidate_path_count':int(os.environ['CANDIDATE_PATH_COUNT']),'finalization_commit':os.environ['FINALIZATION_COMMIT'],'finalization_path_count':8,'final_commit':final,'final_tree':os.environ['FINAL_TREE'],'final_path_count':int(os.environ['FINAL_PATH_COUNT']),'task_id':os.environ['TASK_ID'],'wall_id':os.environ['WALL_ID'],'cycle_id':facts['cycle_id'],'cycle_event_id':facts['cycle_event_id'],'receipt_sha256':facts['receipt_sha256'],'checker_sha256':facts['checker_sha256'],'queue_after':facts['queue_after'],'template_custody':template,'product_patch_sha256':hashlib.sha256((root/'final/product.patch').read_bytes()).hexdigest(),'product_bundle_sha256':hashlib.sha256((root/'final/product.bundle').read_bytes()).hexdigest(),'product_tar_sha256':hashlib.sha256((root/'final/product.tar').read_bytes()).hexdigest(),'file_manifest_sha256':hashlib.sha256((root/'final/file-manifest.json').read_bytes()).hexdigest(),'repository_write':False,'product_published':False,'main_mutated':False,'outside_human_dependency':False,'owner_physical_action_required':False,'next_gate':'independent final-product review and trusted exact-tree publication'}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest(); (root/'final/qualification.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          cp "$OUT/prototype/finalization-facts.json" "$OUT/final/"
+          cp "$OUT/prototype/expected-finalization-paths.txt" "$OUT/final/"
+          cp "$OUT/prototype/template-custody.json" "$OUT/final/"
+          find "$OUT/final" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/final/$rel" | sed "s#  $OUT/final/#  #"; done > "$OUT/final/SHA256SUMS.pre"
+          sha256sum "$OUT/final/SHA256SUMS.pre" | sed "s#  $OUT/final/#  #" > "$OUT/final/SHA256SUMS"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-final-product-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-final-product-v1/final
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-final-product-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-final-product-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
