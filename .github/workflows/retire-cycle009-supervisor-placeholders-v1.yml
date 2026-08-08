@@ -1,0 +1,141 @@
+name: retire-cycle009-supervisor-placeholders-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/retire-cycle009-supervisor-placeholders-v1.yml"
+
+permissions: {}
+
+jobs:
+  retire:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/retire-cycle009-supervisor-placeholders-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_MAIN: ${{ github.event.pull_request.base.sha }}
+      SELF: .github/workflows/retire-cycle009-supervisor-placeholders-v1.yml
+      BRANCH: agent/retire-cycle009-supervisor-placeholders-v1
+      OUT: /tmp/retire-cycle009-supervisor-placeholders-v1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact cleanup carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" && mkdir -p "$OUT"/{api,receipt}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_MAIN"
+          test "$(git rev-list --count "$BASE_MAIN"..HEAD)" = 1
+          test "$(git diff --name-only "$BASE_MAIN"...HEAD)" = "$SELF"
+          test "$(git diff --name-status "$BASE_MAIN"...HEAD)" = $'A\t'"$SELF"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier-pr.json"
+          jq -e --arg head "$head" --arg base "$BASE_MAIN" --arg branch "$BRANCH" '.state=="open" and .draft==true and .merged==false and .head.sha==$head and .head.ref==$branch and .base.sha==$base and .commits==1 and .changed_files==1' "$OUT/api/carrier-pr.json" >/dev/null
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\n' "$pr" "$head" >> "$GITHUB_ENV"
+
+      - name: Prove exact inert target refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$OUT/targets.tsv" <<'EOF'
+          agent/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v1	.github/workflows/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v1.yml	__PLACEHOLDER__
+          agent/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v2	.github/workflows/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v2.yml	name: placeholder-v2
+          agent/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v3	.github/workflows/doctor-who-cycle-009-megnus-jaka-candidate-supervisor-v3.yml	name: temporary-marker-v3
+          EOF
+          sed -i 's/^          //' "$OUT/targets.tsv"
+          : > "$OUT/receipt/targets-before.jsonl"
+          while IFS=$'\t' read -r branch path expected; do
+            gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" > "$OUT/api/ref.json"
+            sha="$(jq -r '.object.sha' "$OUT/api/ref.json")"
+            test "$(git show -s --format=%P "$sha")" = "$BASE_MAIN"
+            test "$(git rev-list --count "$BASE_MAIN".."$sha")" = 1
+            test "$(git diff --name-only "$BASE_MAIN"..."$sha")" = "$path"
+            test "$(git diff --name-status "$BASE_MAIN"..."$sha")" = $'A\t'"$path"
+            actual="$(git show "$sha:$path")"
+            test "$actual" = "$expected"
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/pulls" -f state=open -f head="BigBirdReturns:$branch" -F per_page=100 > "$OUT/api/open-prs.json"
+            test "$(jq 'length' "$OUT/api/open-prs.json")" = 0
+            jq -cn --arg branch "$branch" --arg path "$path" --arg sha "$sha" '{branch:$branch,path:$path,sha:$sha,one_parent:true,one_path:true,open_pull_requests:0,inert:true}' >> "$OUT/receipt/targets-before.jsonl"
+          done < "$OUT/targets.tsv"
+          test "$(wc -l < "$OUT/receipt/targets-before.jsonl")" = 3
+
+      - name: Delete exact placeholder refs and own carrier ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > "$OUT/receipt/deletions.jsonl"
+          while IFS=$'\t' read -r branch path expected; do
+            prior="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --jq '.object.sha')"
+            gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$branch"
+            absent=false
+            for _ in $(seq 1 30); do
+              if ! gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" >/dev/null 2>&1; then absent=true; break; fi
+              sleep 2
+            done
+            test "$absent" = true
+            jq -cn --arg branch "$branch" --arg prior "$prior" '{branch:$branch,prior_sha:$prior,deleted:true,absence_proved:true}' >> "$OUT/receipt/deletions.jsonl"
+          done < "$OUT/targets.tsv"
+          test "$(wc -l < "$OUT/receipt/deletions.jsonl")" = 3
+          gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH"
+          absent=false
+          for _ in $(seq 1 30); do
+            if ! gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" >/dev/null 2>&1; then absent=true; break; fi
+            sleep 2
+          done
+          test "$absent" = true
+          jq -cn --arg branch "$BRANCH" --arg prior "$CARRIER_HEAD" '{branch:$branch,prior_sha:$prior,deleted:true,absence_proved:true}' > "$OUT/receipt/self-deletion.json"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$BASE_MAIN"
+
+      - name: Seal cleanup receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); before=[json.loads(x) for x in (root/'receipt/targets-before.jsonl').read_text().splitlines()]; deleted=[json.loads(x) for x in (root/'receipt/deletions.jsonl').read_text().splitlines()]; own=json.loads((root/'receipt/self-deletion.json').read_text())
+          assert len(before)==len(deleted)==3 and all(x['inert'] and x['open_pull_requests']==0 for x in before) and all(x['deleted'] and x['absence_proved'] for x in deleted+[own])
+          receipt={'status':'cycle-009-supervisor-placeholders-retired','cleanup_run':int(os.environ['GITHUB_RUN_ID']),'cleanup_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'carrier_pr':int(os.environ['CARRIER_PR']),'canonical_main':os.environ['BASE_MAIN'],'target_refs_before':3,'target_refs_after':0,'cleanup_ref_after':0,'main_mutated':False,'product_state_mutated':False,'queue_mutated':False,'lease_issued':False,'outside_human_dependency':False,'owner_physical_action_required':False}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (root/'receipt/cleanup.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          find "$OUT/receipt" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/receipt/$rel" | sed "s#  $OUT/receipt/#  #"; done > "$OUT/receipt/SHA256SUMS.pre"
+          sha256sum "$OUT/receipt/SHA256SUMS.pre" | sed "s#  $OUT/receipt/#  #" > "$OUT/receipt/SHA256SUMS"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: retire-cycle009-supervisor-placeholders-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/retire-cycle009-supervisor-placeholders-v1/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retire-cycle009-supervisor-placeholders-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/retire-cycle009-supervisor-placeholders-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
