@@ -1,0 +1,99 @@
+name: RD-W03 exact-capture source blob export
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/rd-wave03-exact-capture-blob-export.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUT: /tmp/rd-wave03-exact-capture-blob-export
+      SOURCE_BLOB: 517a5e31870e3c4aa4b1266f029d58c62cbf3c81
+      SCHEMA_BLOB: 2eaf29a88a388977b540ab32f980e0a25900c161
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Recover exact Git object bytes and attempt bounded salvage
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT/unpacked"
+          for spec in "source:$SOURCE_BLOB:source.bin" "schema:$SCHEMA_BLOB:schema.json"; do
+            IFS=: read -r label sha target <<< "$spec"
+            gh api "repos/BigBirdReturns/undercast/git/blobs/$sha" > "$OUT/$label-blob.json"
+            python3 - "$OUT/$label-blob.json" "$OUT/$target" "$sha" <<'PY'
+          import base64, json, pathlib, sys
+          doc=json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert doc['sha']==sys.argv[3]
+          assert doc['encoding']=='base64'
+          data=base64.b64decode(doc['content'])
+          assert len(data)==doc['size']
+          pathlib.Path(sys.argv[2]).write_bytes(data)
+          pathlib.Path(sys.argv[1]).with_name(pathlib.Path(sys.argv[1]).stem+'-metadata.json').write_text(json.dumps({
+              'sha': doc['sha'], 'size': doc['size'], 'encoding': doc['encoding']
+          }, sort_keys=True, indent=2)+'\n')
+          PY
+            test "$(git hash-object "$OUT/$target")" = "$sha"
+            printf '%s\n' "$(git hash-object "$OUT/$target")" > "$OUT/$label.git-blob"
+            sha256sum "$OUT/$target" > "$OUT/$label.sha256"
+            file "$OUT/$target" > "$OUT/$label.file"
+          done
+          python3 -m json.tool "$OUT/schema.json" > /dev/null
+
+          set +e
+          gzip -cd "$OUT/source.bin" > "$OUT/unpacked/gzip-partial.bin" 2> "$OUT/gzip.stderr"
+          gzip_status=$?
+          set -e
+          printf '%s\n' "$gzip_status" > "$OUT/gzip.status"
+          test -s "$OUT/unpacked/gzip-partial.bin" || rm -f "$OUT/unpacked/gzip-partial.bin"
+
+          python3 - "$OUT/source.bin" "$OUT/unpacked" <<'PY'
+          import json, pathlib, sys, tarfile, zipfile, zlib
+          src=pathlib.Path(sys.argv[1]); out=pathlib.Path(sys.argv[2]); data=src.read_bytes()
+          report={'source_bytes':len(data),'gzip_magic':data.startswith(b'\x1f\x8b')}
+          if report['gzip_magic']:
+              decoder=zlib.decompressobj(31); chunks=[]; error=None; offset=0
+              for offset in range(0, len(data), 4096):
+                  try: chunks.append(decoder.decompress(data[offset:offset+4096]))
+                  except Exception as exc:
+                      error=f'{type(exc).__name__}: {exc}'; break
+              partial=b''.join(chunks)
+              if partial: (out/'zlib-partial.bin').write_bytes(partial)
+              report.update({'zlib_partial_bytes':len(partial),'zlib_error':error,'zlib_error_offset':offset})
+          if zipfile.is_zipfile(src):
+              with zipfile.ZipFile(src) as zf: report['zip_names']=zf.namelist()
+          (out/'salvage-report.json').write_text(json.dumps(report,sort_keys=True,indent=2)+'\n')
+          for candidate in [out/'gzip-partial.bin', out/'zlib-partial.bin']:
+              if candidate.exists() and tarfile.is_tarfile(candidate):
+                  target=out/(candidate.stem+'-tar')
+                  with tarfile.open(candidate) as tf:
+                      for member in tf.getmembers():
+                          resolved=(target/member.name).resolve()
+                          if target.resolve() not in resolved.parents and resolved != target.resolve():
+                              raise SystemExit(f'unsafe tar member {member.name}')
+                      tf.extractall(target)
+          PY
+          find "$OUT" -type f -printf '%P\t%s bytes\n' | LC_ALL=C sort | tee "$OUT/file-list.txt"
+          find "$OUT" -type f -not -name '*-blob.json' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/SHA256SUMS"
+
+      - name: Upload exact recovered bytes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-exact-capture-source-blob-${{ github.run_id }}
+          path: /tmp/rd-wave03-exact-capture-blob-export
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
