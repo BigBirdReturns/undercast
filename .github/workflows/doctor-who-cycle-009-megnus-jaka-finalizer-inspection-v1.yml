@@ -1,0 +1,126 @@
+name: doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      SOURCE_COMMIT: "4092ef83a46e281cd878ac821dcfc343262901d1"
+      SOURCE_RUNNER_GZIP_SHA256: "f5cc713026b7a73685e964dc774918ad4b2de25c967bb0d68e3b3c187dd071aa"
+      SOURCE_RUNNER_SHA256: "d9ac4dd21978d3e08b37d607ce5c8c70e34ae7f603e89d2e5c97879f03bfd6c1"
+      EXACT_MAIN: "707f2c14c4dc183afceb732c2b56124ed3a37c93"
+      SELF: ".github/workflows/doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1.yml"
+      OUT: "/tmp/doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1"
+      PR_HEAD: ${{ github.event.pull_request.head.sha }}
+      PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Extract and seal immutable finalizer source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          test "$(git rev-parse HEAD)" = "$PR_HEAD"
+          test "$PR_BASE_SHA" = "$EXACT_MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$EXACT_MAIN"
+          test "$(git rev-list --count "$EXACT_MAIN"..HEAD)" = 1
+          test "$(git diff --name-only "$EXACT_MAIN"...HEAD)" = "$SELF"
+          test "$(git rev-parse origin/main)" = "$EXACT_MAIN"
+
+          message="$OUT/source-commit-message.txt"
+          runner_gz="$OUT/finalizer.sh.gz"
+          runner="$OUT/finalizer.sh"
+          git show -s --format=%B "$SOURCE_COMMIT" > "$message"
+          MESSAGE="$message" RUNNER_GZ="$runner_gz" python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          text=Path(os.environ['MESSAGE']).read_text()
+          begin='RUNNER_GZIP_BASE64_BEGIN'
+          end='RUNNER_GZIP_BASE64_END'
+          assert text.count(begin)==1 and text.count(end)==1
+          payload=''.join(text.split(begin,1)[1].split(end,1)[0].split())
+          assert payload
+          Path(os.environ['RUNNER_GZ']).write_bytes(base64.b64decode(payload,validate=True))
+          PY
+          test "$(sha256sum "$runner_gz" | awk '{print $1}')" = "$SOURCE_RUNNER_GZIP_SHA256"
+          gzip -dc "$runner_gz" > "$runner"
+          test "$(sha256sum "$runner" | awk '{print $1}')" = "$SOURCE_RUNNER_SHA256"
+          bash -n "$runner"
+
+          RUNNER="$runner" OUT="$OUT" python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          runner=Path(os.environ['RUNNER'])
+          out=Path(os.environ['OUT'])
+          lines=runner.read_text().splitlines()
+          marker='Materialize exact eight-path cycle closure'
+          marker_rows=[i for i,line in enumerate(lines) if marker in line]
+          assert len(marker_rows)==1
+          marker_i=marker_rows[0]
+          starts=[i for i in range(marker_i+1,len(lines)) if "python3 - <<'PY'" in lines[i]]
+          assert starts
+          start=starts[0]
+          ends=[i for i in range(start+1,len(lines)) if lines[i].strip()=='PY']
+          assert ends
+          end=ends[0]
+          block=lines[start+1:end]
+          assert len(block)>=30
+          (out/'finalizer.numbered.txt').write_text(''.join(f'{i+1:5d}  {line}\n' for i,line in enumerate(lines)))
+          (out/'closure-section.txt').write_text(''.join(f'{i+1:5d}  {lines[i]}\n' for i in range(max(0,marker_i-10),min(len(lines),end+20))))
+          (out/'closure-python.py').write_text('\n'.join(block)+'\n')
+          (out/'closure-python.numbered.txt').write_text(''.join(f'{i+1:5d}  {line}\n' for i,line in enumerate(block)))
+          meta={
+            'source_commit':os.environ['SOURCE_COMMIT'],
+            'runner_sha256':hashlib.sha256(runner.read_bytes()).hexdigest(),
+            'runner_lines':len(lines),
+            'marker_line':marker_i+1,
+            'python_shell_line':start+1,
+            'python_end_shell_line':end+1,
+            'python_lines':len(block),
+            'failed_python_line_30':block[29],
+            'canonical_main':os.environ['EXACT_MAIN'],
+            'repository_write':False,
+            'cycle_state_write':False,
+          }
+          (out/'inspection.json').write_text(json.dumps(meta,indent=2,sort_keys=True)+'\n')
+          PY
+          sha256sum "$OUT"/finalizer.sh "$OUT"/closure-python.py "$OUT"/closure-section.txt "$OUT"/inspection.json > "$OUT/SHA256SUMS"
+
+      - name: Upload exact finalizer inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-009-megnus-jaka-finalizer-inspection-v1
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
