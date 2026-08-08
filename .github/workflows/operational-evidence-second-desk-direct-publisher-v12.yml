@@ -1,0 +1,229 @@
+name: operational-evidence-second-desk-direct-publisher-v12
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - .github/workflows/operational-evidence-second-desk-direct-publisher-v12.yml
+
+permissions: {}
+
+concurrency:
+  group: operational-evidence-second-desk-direct-publisher-v12
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/operational-evidence-second-desk-direct-publisher-v12'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      CONTROL_PR: ${{ github.event.pull_request.number }}
+      INSTALLER_MAIN: 35928065df6821920a0efe84755b0a57c01a5a45
+      INSTALLER_PARENT: cf0c0abda404d3751677c1c7cfb1673bf791dfae
+      REVIEW_BASE: 37d681f419db5ef874b2cc41df1c631c047218d8
+      V3_WORKFLOW_BLOB: c28876fda070c0da6df9acde7bf49a4e98d1bda7
+      IGNITER_WORKFLOW_BLOB: cb1d999205d927120d7a7a4251621b47a67b31b7
+      V9_WRAPPER_BLOB: 297e1819fef7a41038183b00e4eb9ce234980f44
+      V11_WORKFLOW_BLOB: f188f8fd94ccc0d219255fe13a048026724d3d37
+      CARRIER_BRANCH: agent/operational-evidence-second-desk-direct-publisher-v12
+      CARRIER_PATH: .github/workflows/operational-evidence-second-desk-direct-publisher-v12.yml
+      PRODUCT_BRANCH: agent/operational-evidence-second-desk-product-v12-20260807
+      PRODUCT_TITLE: "Operations: refresh reviewed exact-main reliability evidence (V12)"
+      PUBLISH_ROOT: /tmp/undercast-operational-second-desk-publisher-v12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind exact same-repository carrier and trusted current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$PUBLISH_ROOT"
+          mkdir -p "$PUBLISH_ROOT"/{api,diagnostics,receipt}
+
+          test "$GITHUB_REPOSITORY" = 'BigBirdReturns/undercast'
+          test "$GITHUB_EVENT_NAME" = 'pull_request'
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git show -s --format=%P HEAD | wc -w)" -eq 1
+          test "$(git rev-parse HEAD^)" = "$INSTALLER_MAIN"
+          test "$(git rev-list --count "$INSTALLER_MAIN..HEAD")" = 1
+          test "$(git diff --name-only "$INSTALLER_MAIN...HEAD")" = "$CARRIER_PATH"
+
+          remote_main="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          remote_carrier="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$CARRIER_BRANCH" --jq '.object.sha')"
+          test "$remote_main" = "$INSTALLER_MAIN"
+          test "$remote_carrier" = "$EXPECTED_HEAD"
+
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$CONTROL_PR" > "$PUBLISH_ROOT/api/control-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$CONTROL_PR/files?per_page=100" > "$PUBLISH_ROOT/api/control-files.json"
+          ROOT="$PUBLISH_ROOT" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['ROOT']) / 'api'
+          pr = json.loads((root / 'control-pr.json').read_text())
+          files = json.loads((root / 'control-files.json').read_text())
+          assert pr['number'] == int(os.environ['CONTROL_PR'])
+          assert pr['state'] == 'open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['ref'] == 'main' and pr['base']['sha'] == os.environ['INSTALLER_MAIN']
+          assert pr['head']['ref'] == os.environ['CARRIER_BRANCH']
+          assert pr['head']['sha'] == os.environ['EXPECTED_HEAD']
+          assert pr['commits'] == 1 and pr['changed_files'] == 1
+          assert len(files) == 1
+          assert files[0]['filename'] == os.environ['CARRIER_PATH'] and files[0]['status'] == 'added'
+          PY
+
+          git checkout --detach "$INSTALLER_MAIN"
+          test "$(git rev-parse HEAD^)" = "$INSTALLER_PARENT"
+          git merge-base --is-ancestor "$REVIEW_BASE" "$INSTALLER_MAIN"
+          printf '%s\n' \
+            'data/MEDIA-SEARCH-LATEST.json' \
+            'data/journal/media-search.jsonl' \
+            > "$PUBLISH_ROOT/expected-current-main-paths.txt"
+          git diff --name-only "$INSTALLER_PARENT..$INSTALLER_MAIN" | LC_ALL=C sort > "$PUBLISH_ROOT/actual-current-main-paths.txt"
+          diff -u "$PUBLISH_ROOT/expected-current-main-paths.txt" "$PUBLISH_ROOT/actual-current-main-paths.txt"
+          test "$(git rev-parse "$INSTALLER_MAIN:.github/workflows/operational-evidence-second-desk-publisher.yml")" = "$V3_WORKFLOW_BLOB"
+          test "$(git rev-parse "$INSTALLER_MAIN:.github/workflows/operational-evidence-second-desk-workflow-run.yml")" = "$IGNITER_WORKFLOW_BLOB"
+          test "$(git rev-parse "$INSTALLER_MAIN:.github/workflows/operational-evidence-second-desk-publisher-v6-wrapper.yml")" = "$V9_WRAPPER_BLOB"
+          test "$(git rev-parse "$INSTALLER_MAIN:.github/workflows/operational-evidence-second-desk-publisher-v10-trigger.yml")" = "$V11_WORKFLOW_BLOB"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$INSTALLER_MAIN"
+          test -z "$(git status --porcelain)"
+
+      - name: Recover and execute exact V9 publisher as V12
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          node --input-type=module - <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import YAML from 'yaml';
+
+          const wrapper = YAML.parse(
+            readFileSync('.github/workflows/operational-evidence-second-desk-publisher-v6-wrapper.yml', 'utf8'),
+            { schema: 'core', uniqueKeys: true, maxAliasCount: 100 },
+          );
+          const step = wrapper.jobs?.publish?.steps?.find(
+            (row) => row?.name === 'Recover and execute reviewed V3 publisher as V9',
+          );
+          if (!step || typeof step.run !== 'string') {
+            throw new Error('V9 publisher execution step is missing');
+          }
+          let source = step.run;
+          const replaceOnce = (oldValue, newValue, label) => {
+            const count = source.split(oldValue).length - 1;
+            if (count !== 1) throw new Error(`${label} replacement count ${count}`);
+            source = source.replace(oldValue, newValue);
+          };
+          replaceOnce(
+            "workflow_path='.github/workflows/operational-evidence-second-desk-publisher-v6-wrapper.yml'",
+            "workflow_path='data/MEDIA-SEARCH-LATEST.json\\ndata/journal/media-search.jsonl'",
+            'V12 current-main path denominator',
+          );
+          replaceOnce(
+            'git diff --name-only "$review_base..$expected_parent" | LC_ALL=C sort -u > "$root/diagnostics/parent-delta-paths"',
+            'git diff --name-only "$review_base..$INSTALLER_MAIN" | LC_ALL=C sort -u > "$root/diagnostics/parent-delta-paths"',
+            'V12 reviewed overlap window',
+          );
+          const uniqueFlowStart = [
+            'const flowStart = String.raw`while IFS= read -r path; do',
+            '  mkdir -p "$(dirname "$path")"',
+            '  cp "$root/payload/$path" "$path"',
+            'done < "$root/paths"',
+            'while IFS= read -r path; do cmp -s "$root/payload/$path" "$path" || fail "candidate byte drift: $path"; done < "$root/paths"',
+            '',
+            'npm ci`;',
+          ].join('\n');
+          replaceOnce(
+            "const flowStart = `[[ \"$(main_sha)\" == \"$INSTALLER_MAIN\" ]] || fail 'main advanced during artifact review'`;",
+            uniqueFlowStart,
+            'V12 unique post-artifact flow start',
+          );
+          const v12Transform = [
+            'replaceOnce(',
+            '  `[[ "$GITHUB_REPOSITORY" == "$repo" && "$GITHUB_EVENT_NAME" == \'push\' && "$GITHUB_REF_NAME" == \'main\' ]] || fail \'untrusted execution context\'`,',
+            '  `[[ "$GITHUB_REPOSITORY" == "$repo" && "$GITHUB_EVENT_NAME" == \'pull_request\' ]] || fail \'untrusted execution context\'`,',
+            "  'V12 event context',",
+            ');',
+            "source = source.replaceAll('V3', 'V12');",
+          ].join('\n');
+          replaceOnce(
+            "source = source.replaceAll('V3', 'V9');",
+            v12Transform,
+            'V12 transaction and event transform',
+          );
+          source = source.replaceAll(
+            '/tmp/operational-evidence-second-desk-publisher-v9.sh',
+            '/tmp/operational-evidence-second-desk-publisher-v12.sh',
+          );
+          const executeMarker = 'bash /tmp/operational-evidence-second-desk-publisher-v12.sh';
+          replaceOnce(
+            executeMarker,
+            [
+              'cp /tmp/operational-evidence-second-desk-publisher-v12.sh "$PUBLISH_ROOT/diagnostics/"',
+              'nl -ba /tmp/operational-evidence-second-desk-publisher-v12.sh > "$PUBLISH_ROOT/diagnostics/operational-evidence-second-desk-publisher-v12.numbered.txt"',
+              executeMarker,
+            ].join('\n'),
+            'V12 generated publisher diagnostics',
+          );
+          writeFileSync('/tmp/operational-evidence-second-desk-v12-run.sh', `#!/usr/bin/env bash\n${source}`);
+          NODE
+          bash -n /tmp/operational-evidence-second-desk-v12-run.sh
+          cp /tmp/operational-evidence-second-desk-v12-run.sh "$PUBLISH_ROOT/diagnostics/"
+          nl -ba /tmp/operational-evidence-second-desk-v12-run.sh > "$PUBLISH_ROOT/diagnostics/operational-evidence-second-desk-v12-run.numbered.txt"
+          sha256sum /tmp/operational-evidence-second-desk-v12-run.sh | tee "$PUBLISH_ROOT/diagnostics/v9-step-as-v12.sha256"
+          bash /tmp/operational-evidence-second-desk-v12-run.sh
+
+      - name: Upload exact V12 publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-evidence-second-desk-publication-v12-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/undercast-operational-second-desk-publisher-v12/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Remove partial V12 publication after any later failure
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          root="$PUBLISH_ROOT"
+          pr=""
+          if [ -f "$root/product-pr.txt" ]; then
+            pr="$(cat "$root/product-pr.txt")"
+          fi
+          if [ -z "$pr" ]; then
+            pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$PRODUCT_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          fi
+          [ -z "$pr" ] || gh pr close "$pr" --repo "$GITHUB_REPOSITORY" --comment 'Closed automatically because V12 publication did not reach terminal success.'
+          gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$PRODUCT_BRANCH" >/dev/null 2>&1 || true
+
+      - name: Upload V12 failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-evidence-second-desk-publication-v12-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/undercast-operational-second-desk-publisher-v12
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
