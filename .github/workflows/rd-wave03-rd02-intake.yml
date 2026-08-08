@@ -1,0 +1,94 @@
+name: RD-W03 RD-02 fixed intake
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/rd-wave03-rd02-intake.yml
+      - data/research/residual-denominator/wave-03/rd-02/protocol.json
+      - docs/research/residual-denominator/wave-03/RD-02.md
+      - schema/rd-wave03-rd02-intake.schema.json
+      - scripts/rd-wave03-rd02-build.mjs
+      - scripts/rd-wave03-rd02-validate.mjs
+      - test/rd-wave03-rd02-adversarial.mjs
+  workflow_call:
+    inputs:
+      base_sha:
+        required: true
+        type: string
+      head_sha:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  qualify-and-execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      BASE_SHA: ${{ inputs.base_sha || '318e7fd2826511c283e2d81622459fe0bb74e0d2' }}
+      EXPECTED_HEAD: ${{ inputs.head_sha || github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head_sha || github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Verify exact checked-out one-parent head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git show -s --format=%P "$EXPECTED_HEAD")" = "$BASE_SHA"
+
+      - name: Verify exact permanent path denominator
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --name-only "$BASE_SHA" "$EXPECTED_HEAD" | sort > "$RUNNER_TEMP/actual-paths.txt"
+          cat > "$RUNNER_TEMP/expected-paths.txt" <<'EOF'
+          .github/workflows/rd-wave03-rd02-intake.yml
+          data/research/residual-denominator/wave-03/rd-02/protocol.json
+          docs/research/residual-denominator/wave-03/RD-02.md
+          schema/rd-wave03-rd02-intake.schema.json
+          scripts/rd-wave03-rd02-build.mjs
+          scripts/rd-wave03-rd02-validate.mjs
+          test/rd-wave03-rd02-adversarial.mjs
+          EOF
+          sort -o "$RUNNER_TEMP/expected-paths.txt" "$RUNNER_TEMP/expected-paths.txt"
+          diff -u "$RUNNER_TEMP/expected-paths.txt" "$RUNNER_TEMP/actual-paths.txt"
+
+      - name: Parse-check deterministic machinery
+        run: |
+          node --check scripts/rd-wave03-rd02-build.mjs
+          node --check scripts/rd-wave03-rd02-validate.mjs
+          node --check test/rd-wave03-rd02-adversarial.mjs
+
+      - name: Run closed-schema and no-magic-human validation
+        run: node scripts/rd-wave03-rd02-validate.mjs
+
+      - name: Run deterministic clean replays
+        run: node scripts/rd-wave03-rd02-build.mjs --check
+
+      - name: Run adversarial refusal suite
+        run: node test/rd-wave03-rd02-adversarial.mjs
+
+      - name: Execute bounded public-source protocol
+        run: GITHUB_SHA="$EXPECTED_HEAD" node scripts/rd-wave03-rd02-build.mjs --execute --out "$RUNNER_TEMP/rd-wave03-rd02-intake"
+
+      - name: Verify terminal cell classification receipt
+        run: node scripts/rd-wave03-rd02-build.mjs --verify-receipt "$RUNNER_TEMP/rd-wave03-rd02-intake/receipt.json"
+
+      - name: Upload read-only intake receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd-wave03-rd02-intake-${{ github.run_id }}
+          path: ${{ runner.temp }}/rd-wave03-rd02-intake
+          if-no-files-found: error
+          retention-days: 30
