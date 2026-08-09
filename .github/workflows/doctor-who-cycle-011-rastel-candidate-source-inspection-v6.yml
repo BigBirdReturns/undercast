@@ -1,0 +1,165 @@
+name: doctor-who-cycle-011-rastel-candidate-source-inspection-v6
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-candidate-source-inspection-v6.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-candidate-source-inspection-v6
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-candidate-source-inspection-v6'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_HEAD: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      OUT: /tmp/doctor-who-cycle-011-rastel-candidate-source-inspection-v6
+      SOURCE_B64_SHA256: 68f41b9507610202efdf24e172ede533f7f0efbdc0df3ec0f500ed732c2b997e
+      SOURCE_GZIP_SHA256: b2c34d677a7a27320e9adb7287181814dc2e73e741678c87d36907de790282fe
+      SOURCE_RUNNER_SHA256: 11a94699015384fcacaa0b4d2b0721dcb465c90b3f49e5c26b87958b93556fab
+      SOURCE_RUNNER_BYTES: "16400"
+      RUNNER_SHA256: 27be453c030811c6ac57499d4bc1df79d80b1db928869549efb756f435f74c09
+      RUNNER_BYTES: "17258"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Reconstruct exact V4 source and apply closed task-binding repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=/tmp/doctor-who-cycle-011-rastel-candidate-source-inspection-v6-runner
+          rm -rf "$root"
+          mkdir -p "$root"
+          : > "$root/source.gz.b64"
+          for blob in 1f77b30eeb8cfc4895a1d4b7c733fa2d876b707c 7c5dc7163647775fc2f106f4f30eb5127950e740 4d3fe7037a3b145ccae05c1bf5bb03e600df851d 91ba84758107cc0182b55bb161780752f82a1103; do
+            gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$blob" --jq '.content' | tr -d '\n' | base64 -d >> "$root/source.gz.b64"
+          done
+          test "$(sha256sum "$root/source.gz.b64" | awk '{print $1}')" = "$SOURCE_B64_SHA256"
+          base64 -d "$root/source.gz.b64" > "$root/source.sh.gz"
+          test "$(sha256sum "$root/source.sh.gz" | awk '{print $1}')" = "$SOURCE_GZIP_SHA256"
+          gzip -dc "$root/source.sh.gz" > "$root/source.sh"
+          test "$(wc -c < "$root/source.sh" | tr -d ' ')" = "$SOURCE_RUNNER_BYTES"
+          test "$(sha256sum "$root/source.sh" | awk '{print $1}')" = "$SOURCE_RUNNER_SHA256"
+          ROOT="$root" python3 - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          root=Path(os.environ['ROOT']); text=(root/'source.sh').read_text()
+          replacements=[
+            ('candidate-source-inspection-v4','candidate-source-inspection-v6',3),
+            ('rastel-source-v4-reconstruction','rastel-source-v6-reconstruction',6),
+            ("'version':4,","'version':6,",1),
+            ('source-recovered-v4','source-recovered-v6',2),
+          ]
+          for old,new,count in replacements:
+              assert text.count(old)==count
+              assert new not in text
+              text=text.replace(old,new)
+          old_import="import hashlib,json,os,re\nfrom pathlib import Path\nroot=Path(os.environ['ROOT']); original=root/'source/materialize.original.sh'; patched=root/'source/materialize.v4.sh'"
+          new_import="import hashlib,json,os,re,yaml\nfrom pathlib import Path\nroot=Path(os.environ['ROOT']); original=root/'source/materialize.original.sh'; patched=root/'source/materialize.v4.sh'"
+          assert text.count(old_import)==1 and new_import not in text
+          text=text.replace(old_import,new_import)
+          old_assert="""markers=['lease.claimed','draft.accept','task.merged','media-verified']
+          counts={m:{'original':old.count(m),'v4':new.count(m)} for m in markers}
+          assert old.count(os.environ['MERX_TASK'])>0 and new.count(os.environ['MERX_TASK'])>0
+          assert all(row['original']>0 and row['v4']>0 for row in counts.values())
+          assert os.environ['RASTEL_TASK'] not in old and os.environ['RASTEL_TASK'] not in new"""
+          new_assert="""markers=['lease.claimed','draft.accept','task.merged','media-verified']
+          counts={m:{'original':old.count(m),'v4':new.count(m)} for m in markers}
+          expected_counts={
+              'lease.claimed':{'original':1,'v4':1},
+              'draft.accept':{'original':2,'v4':2},
+              'task.merged':{'original':1,'v4':1},
+              'media-verified':{'original':1,'v4':1},
+          }
+          assert counts==expected_counts
+          source_env=yaml.safe_load((root/'source/workflow.yml').read_text())['jobs']['materialize']['env']
+          task_binding={
+              'source_workflow_task_id':str(source_env['TASK_ID']),
+              'materializer_task_id_env_references':{'original':old.count('TASK_ID'),'v4':new.count('TASK_ID')},
+              'materializer_literal_task_occurrences':{'original':old.count(os.environ['MERX_TASK']),'v4':new.count(os.environ['MERX_TASK'])},
+              'materializer_role_literal_occurrences':{'original':old.count('Merx'),'v4':new.count('Merx')},
+          }
+          assert task_binding=={
+              'source_workflow_task_id':os.environ['MERX_TASK'],
+              'materializer_task_id_env_references':{'original':14,'v4':14},
+              'materializer_literal_task_occurrences':{'original':0,'v4':0},
+              'materializer_role_literal_occurrences':{'original':33,'v4':33},
+          }
+          assert os.environ['RASTEL_TASK'] not in old and os.environ['RASTEL_TASK'] not in new"""
+          assert text.count(old_assert)==1 and new_assert not in text
+          text=text.replace(old_assert,new_assert)
+          old_receipt="""        'merx_task':os.environ['MERX_TASK'],
+                  'rastel_task_absent':True,
+                  'lifecycle_markers':counts,"""
+          new_receipt="""        'source_task_binding':task_binding,
+                  'rastel_task_absent':True,
+                  'lifecycle_markers':counts,"""
+          assert text.count(old_receipt)==1 and new_receipt not in text
+          text=text.replace(old_receipt,new_receipt)
+          data=text.encode()
+          assert len(data)==int(os.environ['RUNNER_BYTES'])
+          assert hashlib.sha256(data).hexdigest()==os.environ['RUNNER_SHA256']
+          (root/'runner.sh').write_bytes(data)
+          PY
+          bash -n "$root/runner.sh"
+          python3 - <<'PY'
+          import re,textwrap
+          from pathlib import Path
+          text=Path('/tmp/doctor-who-cycle-011-rastel-candidate-source-inspection-v6-runner/runner.sh').read_text()
+          blocks=re.findall(r"python3 - <<'PY'\n(.*?)\nPY(?:\n|$)",text,re.S)
+          assert len(blocks)==4
+          for i,block in enumerate(blocks): compile(textwrap.dedent(block),f'<embedded-{i}>','exec')
+          PY
+
+      - name: Execute exact read-only source inspection V6
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod 700 /tmp/doctor-who-cycle-011-rastel-candidate-source-inspection-v6-runner/runner.sh
+          exec /tmp/doctor-who-cycle-011-rastel-candidate-source-inspection-v6-runner/runner.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-candidate-source-inspection-v6-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-candidate-source-inspection-v6
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-candidate-source-inspection-v6-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-011-rastel-candidate-source-inspection-v6
+            /tmp/doctor-who-cycle-011-rastel-candidate-source-inspection-v6-runner
+            /tmp/rastel-source-v6-reconstruction
+            /tmp/merx-materializer-v4
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
