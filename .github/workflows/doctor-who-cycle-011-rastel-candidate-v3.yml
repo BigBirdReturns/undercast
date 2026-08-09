@@ -1,0 +1,124 @@
+name: doctor-who-cycle-011-rastel-candidate-v3
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-candidate-v3.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-candidate-v3
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-candidate-v3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BOOTSTRAP: /tmp/doctor-who-cycle-011-rastel-candidate-v3-bootstrap
+      OUT: /tmp/doctor-who-cycle-011-rastel-candidate-v3
+      CONTROLLER_CHUNK_0_BLOB: 24e901a415b26583f48ca2b38ecb363994a4a3f9
+      CONTROLLER_CHUNK_0_BYTES: "3000"
+      CONTROLLER_CHUNK_0_SHA256: 25170bd1edf27f0d7ac822c5930b5a7f78ffd23ea82624ca646fd124570148f2
+      CONTROLLER_CHUNK_1_BLOB: eec052e10918b1949a69fa3a6c6d2b1d44a27132
+      CONTROLLER_CHUNK_1_BYTES: "3000"
+      CONTROLLER_CHUNK_1_SHA256: b1e299186c69dc2bb2a05c0d59403b66221e0beeb2bb476ff2f6cab287f62ddf
+      CONTROLLER_CHUNK_2_BLOB: efbd663b61f45b0d4b5e1b50a2a93c1639fdd695
+      CONTROLLER_CHUNK_2_BYTES: "2280"
+      CONTROLLER_CHUNK_2_SHA256: d552d3869b32aa03eaa920489529faf065f3f37664e2fbbdad19a3b97a8ebeba
+      CONTROLLER_B64_BYTES: "8280"
+      CONTROLLER_B64_SHA256: 71685d02b6f7d3294a9b8c295231241ff389cbbfacb00c0a1ca7c407aadd9a48
+      CONTROLLER_GZIP_BYTES: "6208"
+      CONTROLLER_GZIP_SHA256: 5ed4d9c56c322e0cd10097924dd1fbb6ec0f9acb5d7f0a0ee09f5c0fdb149956
+      CONTROLLER_BYTES: "19180"
+      CONTROLLER_SHA256: e02e49e54587547df4af3a3bd2bdc3b642030f6bfd82a6cd4c7911fa61769f61
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Authenticate both failed candidates and execute exact V3 controller
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$BOOTSTRAP"
+          mkdir -p "$BOOTSTRAP/node"
+          : > "$BOOTSTRAP/controller.sh.gz.b64"
+          for n in 0 1 2; do
+            blob_var="CONTROLLER_CHUNK_${n}_BLOB"; blob="${!blob_var}"
+            bytes_var="CONTROLLER_CHUNK_${n}_BYTES"; expected_bytes="${!bytes_var}"
+            sha_var="CONTROLLER_CHUNK_${n}_SHA256"; expected_sha="${!sha_var}"
+            gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$blob" --jq '.content' | tr -d '\n' | base64 -d > "$BOOTSTRAP/chunk.${n}"
+            test "$(wc -c < "$BOOTSTRAP/chunk.${n}" | tr -d ' ')" = "$expected_bytes"
+            test "$(sha256sum "$BOOTSTRAP/chunk.${n}" | awk '{print $1}')" = "$expected_sha"
+            cat "$BOOTSTRAP/chunk.${n}" >> "$BOOTSTRAP/controller.sh.gz.b64"
+          done
+          test "$(wc -c < "$BOOTSTRAP/controller.sh.gz.b64" | tr -d ' ')" = "$CONTROLLER_B64_BYTES"
+          test "$(sha256sum "$BOOTSTRAP/controller.sh.gz.b64" | awk '{print $1}')" = "$CONTROLLER_B64_SHA256"
+          python3 - <<'PY'
+          import base64,gzip,hashlib,os,re
+          from pathlib import Path
+          root=Path(os.environ['BOOTSTRAP'])
+          packed=base64.b64decode((root/'controller.sh.gz.b64').read_text())
+          assert len(packed)==int(os.environ['CONTROLLER_GZIP_BYTES'])
+          assert hashlib.sha256(packed).hexdigest()==os.environ['CONTROLLER_GZIP_SHA256']
+          source=gzip.decompress(packed)
+          assert len(source)==int(os.environ['CONTROLLER_BYTES'])
+          assert hashlib.sha256(source).hexdigest()==os.environ['CONTROLLER_SHA256']
+          controller=root/'controller.sh'
+          controller.write_bytes(source)
+          text=source.decode()
+          blocks=re.findall(r"python3 - <<'PY'\n(.*?)\nPY",text,re.S)
+          assert len(blocks)==3
+          for index,block in enumerate(blocks,1):
+              compile(block,f'<rastel-candidate-v3-controller-{index}>','exec')
+          PY
+          chmod 700 "$BOOTSTRAP/controller.sh"
+          bash -n "$BOOTSTRAP/controller.sh"
+          CURRENT_HEAD='${{ github.event.pull_request.head.sha }}' \
+          CURRENT_PR='${{ github.event.pull_request.number }}' \
+          CURRENT_BASE='${{ github.event.pull_request.base.sha }}' \
+            exec "$BOOTSTRAP/controller.sh"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-candidate-v3-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-candidate-v3
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-candidate-v3-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-011-rastel-candidate-v3
+            /tmp/doctor-who-cycle-011-rastel-candidate-v3-control
+            /tmp/doctor-who-cycle-011-rastel-candidate-v3-bootstrap
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
