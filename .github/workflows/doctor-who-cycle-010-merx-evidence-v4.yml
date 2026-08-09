@@ -1,0 +1,200 @@
+name: doctor-who-cycle-010-merx-evidence-v4
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths: [".github/workflows/doctor-who-cycle-010-merx-evidence-v4.yml"]
+permissions: {}
+concurrency:
+  group: doctor-who-cycle-010-merx-evidence-v4
+  cancel-in-progress: true
+jobs:
+  recover:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-010-merx-evidence-v4'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions: {contents: read, actions: read, pull-requests: read}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: agent/doctor-who-cycle-010-merx-evidence-v4
+      SELF: .github/workflows/doctor-who-cycle-010-merx-evidence-v4.yml
+      OUT: /tmp/doctor-who-cycle-010-merx-evidence-v4
+      BOOTSTRAP: /tmp/doctor-who-cycle-010-merx-evidence-v4-bootstrap
+      CONTROL: /tmp/doctor-who-cycle-010-merx-evidence-v4-control
+      SUPERVISOR: /tmp/doctor-who-cycle-010-merx-evidence-v4-supervisor
+      MAIN: 2b077a7371e7214e8a2e93653f0e5f6df5fdbeb6
+      V3_COMMIT: 8542e7507b2e64f4e022bb55db2b964f33f8ffbc
+      V3_PATH: .github/workflows/doctor-who-cycle-010-merx-evidence-v3.yml
+      V3_BLOB: ae0b931af9d3d301ba43b6d737a1b93d7ec3e90a
+      V3_RUN: "31288539470"
+      V3_JOB: "93181639341"
+      V3_DIAGNOSTICS: "9030629843"
+      V3_DIAGNOSTICS_SHA256: 9701ff8f677c38d4ebc0ec2ee2e306b5a739d8731eed7e75f4b022bb749b760c
+      V1_RAW_SHA256: 6cc69228edde060b73203e06cefa9c110df6db4ee4956ecbacda4a5eeb1a9810
+      PR_HEAD: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ github.event.pull_request.head.sha }}", fetch-depth: 0, filter: blob:none, persist-credentials: false}
+      - uses: actions/setup-node@v4
+        with: {node-version: "24", cache: npm}
+      - name: Recover exact V3 program chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$SUPERVISOR" "$CONTROL" "$BOOTSTRAP" "$OUT"
+          mkdir -p "$SUPERVISOR"/{source,scripts,receipt,api}
+          test "$(git rev-parse HEAD)" = "$PR_HEAD"
+          test "$PR_BASE_SHA" = "$MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$MAIN"
+          test "$(git rev-list --count "$MAIN"..HEAD)" = 1
+          test -z "$(git rev-list --merges "$MAIN"..HEAD)"
+          test "$(git diff --name-status "$MAIN"...HEAD)" = $'A\t'"$SELF"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$MAIN"
+
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$V3_RUN" > "$SUPERVISOR/api/v3-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$V3_RUN/jobs?per_page=100" > "$SUPERVISOR/api/v3-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$V3_RUN/artifacts?per_page=100" > "$SUPERVISOR/api/v3-artifacts.json"
+          ROOT="$SUPERVISOR" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          r=Path(os.environ['ROOT'])
+          run=json.loads((r/'api/v3-run.json').read_text())
+          jobs=json.loads((r/'api/v3-jobs.json').read_text())['jobs']
+          arts=json.loads((r/'api/v3-artifacts.json').read_text())['artifacts']
+          assert run['id']==int(os.environ['V3_RUN']) and run['head_sha']==os.environ['V3_COMMIT'] and run['status']=='completed' and run['conclusion']=='failure'
+          job=next(x for x in jobs if x['id']==int(os.environ['V3_JOB']))
+          assert job['name']=='recover' and job['conclusion']=='failure'
+          steps={x['name']:(x['status'],x['conclusion']) for x in job['steps']}
+          assert steps['Recover exact V2 program chain and correct one metadata binding']==('completed','success')
+          assert steps['Execute exact recovered V2 repair bootstrap']==('completed','failure')
+          assert steps['Execute recovered V1 preflight binding']==('completed','skipped')
+          art=next(x for x in arts if x['id']==int(os.environ['V3_DIAGNOSTICS']))
+          assert art['digest']=='sha256:'+os.environ['V3_DIAGNOSTICS_SHA256'] and art['expired'] is False
+          PY
+
+          git cat-file -e "$V3_COMMIT^{commit}"
+          git show "$V3_COMMIT:$V3_PATH" > "$SUPERVISOR/source/v3.yml"
+          test "$(git hash-object "$SUPERVISOR/source/v3.yml")" = "$V3_BLOB"
+
+          SOURCE="$SUPERVISOR/source/v3.yml" DEST="$SUPERVISOR" python3 - <<'PY'
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          source=Path(os.environ['SOURCE']); dest=Path(os.environ['DEST'])
+          ruby=r'''require 'yaml'; require 'json'
+          source, out = ARGV
+          doc = YAML.safe_load(File.read(source), permitted_classes: [], aliases: true)
+          job = doc.fetch('jobs').fetch('recover')
+          File.write(File.join(out,'source','v3-env.json'), JSON.generate(job.fetch('env')))
+          wanted = {
+            'Recover exact V2 program chain and correct one metadata binding'=>'recover-v2.sh',
+            'Execute exact recovered V2 repair bootstrap'=>'recover-v1.sh',
+            'Execute recovered V1 preflight binding'=>'bind.sh',
+            'Record V1 and V2 recovery custody'=>'record-v1v2.sh',
+            'Record V3 wrapper custody'=>'record-v3.sh',
+            'Execute recovered current-main gate'=>'gates.sh',
+            'Execute repaired exact Merx source census'=>'source.sh',
+            'Execute repaired official-page and cover recovery'=>'official.sh',
+            'Execute canonical Dan Starkey portrait inventory and evidence seal'=>'inventory.sh',
+            'Verify exact artifact denominator'=>'verify.sh'
+          }
+          found = {}
+          job.fetch('steps').each do |step|
+            name=step['name']; next unless wanted.key?(name)
+            raise "duplicate #{name}" if found[name]
+            File.write(File.join(out,'scripts',wanted[name]), step.fetch('run'))
+            found[name]=true
+          end
+          raise "missing steps" unless found.keys.sort == wanted.keys.sort
+          '''
+          subprocess.run(['ruby','-e',ruby,str(source),str(dest)],check=True)
+          scripts=dest/'scripts'
+          for p in scripts.glob('*.sh'): subprocess.run(['bash','-n',str(p)],check=True)
+          env=json.loads((dest/'source/v3-env.json').read_text())
+          excluded={'GH_TOKEN','BRANCH','SELF','OUT','BOOTSTRAP','CONTROL','PR_HEAD','PR_NUMBER','PR_BASE_SHA'}
+          with open(os.environ['GITHUB_ENV'],'a') as fh:
+              for key in sorted(env):
+                  if key in excluded: continue
+                  value=str(env[key]); assert '\n' not in value and '\r' not in value
+                  fh.write(f'{key}={value}\n')
+          hashes={p.name:{'bytes':len(p.read_bytes()),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted(scripts.glob('*.sh'))}
+          receipt={'version':1,'status':'exact-v3-program-chain-recovered','source':{'commit':os.environ['V3_COMMIT'],'path':os.environ['V3_PATH'],'git_blob':os.environ['V3_BLOB'],'failed_run':int(os.environ['V3_RUN']),'failed_job':int(os.environ['V3_JOB']),'diagnostics_artifact':int(os.environ['V3_DIAGNOSTICS']),'diagnostics_sha256':os.environ['V3_DIAGNOSTICS_SHA256']},'single_override':{'field':'V1_SHA256','stale':'12615e42e3575f998f1149346af2eead1c0f9a1119dd52313864f54d210060c8','raw_git_file_sha256':os.environ['V1_RAW_SHA256']},'programs':hashes}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (dest/'receipt/v4-wrapper.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          chmod 0755 "$SUPERVISOR/scripts"/*.sh
+      - name: Execute recovered V3 supervisor
+        shell: bash
+        run: bash "$SUPERVISOR/scripts/recover-v2.sh"
+      - name: Correct immutable V1 raw-file SHA
+        shell: bash
+        run: printf 'V1_SHA256=%s\n' "$V1_RAW_SHA256" >> "$GITHUB_ENV"
+      - name: Execute recovered V2 bootstrap
+        shell: bash
+        run: bash "$SUPERVISOR/scripts/recover-v1.sh"
+      - name: Restore current carrier event bindings
+        shell: bash
+        run: |
+          printf 'PR_HEAD=%s\nPR_NUMBER=%s\nPR_BASE_SHA=%s\n' \
+            '${{ github.event.pull_request.head.sha }}' \
+            '${{ github.event.pull_request.number }}' \
+            '${{ github.event.pull_request.base.sha }}' >> "$GITHUB_ENV"
+      - name: Execute recovered preflight binding
+        shell: bash
+        run: bash "$SUPERVISOR/scripts/bind.sh"
+      - name: Record V1 and V2 recovery custody
+        shell: bash
+        run: bash "$SUPERVISOR/scripts/record-v1v2.sh"
+      - name: Record V3 recovery custody
+        shell: bash
+        run: bash "$SUPERVISOR/scripts/record-v3.sh"
+      - name: Record V4 recovery custody
+        shell: bash
+        run: cp "$SUPERVISOR/receipt/v4-wrapper.json" "$OUT/evidence/v4-wrapper.json"
+      - name: Execute recovered current-main gate
+        shell: bash
+        run: bash "$SUPERVISOR/scripts/gates.sh"
+      - name: Execute repaired exact Merx source census
+        shell: bash
+        run: bash "$SUPERVISOR/scripts/source.sh"
+      - name: Execute repaired official-page and cover recovery
+        shell: bash
+        run: bash "$SUPERVISOR/scripts/official.sh"
+      - name: Execute canonical Dan Starkey portrait inventory and evidence seal
+        shell: bash
+        run: bash "$SUPERVISOR/scripts/inventory.sh"
+      - name: Verify exact artifact denominator
+        shell: bash
+        run: bash "$SUPERVISOR/scripts/verify.sh"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-010-merx-evidence-v4-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-010-merx-evidence-v4/SHA256SUMS
+            /tmp/doctor-who-cycle-010-merx-evidence-v4/SHA256SUMS.pre
+            /tmp/doctor-who-cycle-010-merx-evidence-v4/evidence
+            /tmp/doctor-who-cycle-010-merx-evidence-v4/source
+            /tmp/doctor-who-cycle-010-merx-evidence-v4/official
+            /tmp/doctor-who-cycle-010-merx-evidence-v4/media
+            /tmp/doctor-who-cycle-010-merx-evidence-v4/logs
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-010-merx-evidence-v4-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-010-merx-evidence-v4
+            /tmp/doctor-who-cycle-010-merx-evidence-v4-bootstrap
+            /tmp/doctor-who-cycle-010-merx-evidence-v4-control
+            /tmp/doctor-who-cycle-010-merx-evidence-v4-supervisor
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
