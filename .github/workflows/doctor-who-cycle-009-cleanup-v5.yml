@@ -1,0 +1,254 @@
+name: doctor-who-cycle-009-cleanup-v5
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths: [".github/workflows/doctor-who-cycle-009-cleanup-v5.yml"]
+
+permissions: {}
+concurrency:
+  group: doctor-who-cycle-009-cleanup-v5
+  cancel-in-progress: true
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  MAIN: 2b077a7371e7214e8a2e93653f0e5f6df5fdbeb6
+  TREE: 50b59f4a945c12b7a1718bc0046608b6335f6aab
+  BRANCH: agent/doctor-who-cycle-009-cleanup-v5-guard-only
+  SELF: .github/workflows/doctor-who-cycle-009-cleanup-v5.yml
+  PREFIX: agent/doctor-who-cycle-009-
+  GUARD: publisher-custody-or-guard
+  SOURCE_RUN: "31287552877"
+  SOURCE_JOB: "93179029640"
+  SOURCE_HEAD: 9d329e26baeb855055989a6eecf7c497a4399154
+  SOURCE_ARTIFACT: "9030324989"
+  SOURCE_SHA256: 2a1998c1f2170b74cff855348cc04a9763d7774d1f970008f811447e382152aa
+  SOURCE_IDENTITY: 68095b5d9928390443ec26bdbfaffdbf857609708a575193fe37d1e7110fbf43
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-009-cleanup-v5-guard-only'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - name: Freeze exact guarded cleanup settlement
+        shell: bash
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          OUT: /tmp/cycle009-cleanup-v5-settlement
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" && mkdir -p "$OUT/source"
+          python3 - <<'PY'
+          import hashlib,json,os,subprocess,time,zipfile
+          from pathlib import Path,PurePosixPath
+          repo=os.environ['GITHUB_REPOSITORY']; out=Path(os.environ['OUT'])
+          main=os.environ['MAIN']; tree=os.environ['TREE']; branch=os.environ['BRANCH']; prefix=os.environ['PREFIX']; head=os.environ['HEAD']; prn=int(os.environ['PR'])
+          def run(a,inp=None,b=False,ok=True):
+            p=subprocess.run(a,input=inp,capture_output=True,text=not b)
+            if ok and p.returncode: raise RuntimeError(f"{p.returncode}: {' '.join(a)}\n{p.stderr if not b else p.stderr.decode(errors='replace')}")
+            return p
+          def api(path,method='GET',fields=None,body=None,ok=True,b=False):
+            a=['gh','api','--method',method,path]
+            for k,v in (fields or {}).items(): a+=['-f',f'{k}={v}']
+            if body is not None: a+=['--input','-']
+            p=run(a,json.dumps(body) if body is not None else None,b,ok)
+            if b: return p.stdout if p.returncode==0 else None
+            return json.loads(p.stdout) if p.returncode==0 and p.stdout.strip() else None
+          def pages(path,fields=None):
+            rows=[]
+            for n in range(1,100):
+              part=api(path,fields={**(fields or {}),'per_page':100,'page':n}); assert isinstance(part,list); rows+=part
+              if len(part)<100:return rows
+            raise AssertionError('pagination')
+          def mainsha():return api(f'/repos/{repo}/git/ref/heads/main')['object']['sha']
+          def refs():
+            rows=[]
+            for r in pages(f'/repos/{repo}/git/matching-refs/heads/{prefix}'):
+              name=r['ref'].removeprefix('refs/heads/'); assert name.startswith(prefix) and r['object']['type']=='commit'
+              rows.append({'branch':name,'sha':r['object']['sha']})
+            return sorted(rows,key=lambda x:x['branch'])
+          assert os.environ['BASE']==main==mainsha()
+          assert run(['git','rev-parse','HEAD']).stdout.strip()==head
+          assert run(['git','show','-s','--format=%P','HEAD']).stdout.strip()==main
+          assert run(['git','rev-list','--count',f'{main}..HEAD']).stdout.strip()=='1'
+          assert not run(['git','rev-list','--merges',f'{main}..HEAD']).stdout.strip()
+          assert run(['git','diff','--name-only',f'{main}...HEAD']).stdout.strip()==os.environ['SELF']
+          assert api(f'/repos/{repo}/git/commits/{main}')['tree']['sha']==tree
+          pr=api(f'/repos/{repo}/pulls/{prn}'); files=api(f'/repos/{repo}/pulls/{prn}/files',fields={'per_page':100})
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False and pr['base']['sha']==main and pr['head']['sha']==head and pr['commits']==1 and pr['changed_files']==1
+          assert len(files)==1 and files[0]['filename']==os.environ['SELF'] and files[0]['status']=='added'
+          guard=None
+          for _ in range(80):
+            matches=[r for r in api(f'/repos/{repo}/actions/runs',fields={'head_sha':head,'event':'pull_request','per_page':100})['workflow_runs'] if r['name']==os.environ['GUARD']]
+            if len(matches)==1 and matches[0]['status']=='completed' and matches[0]['conclusion']=='success' and matches[0]['run_attempt']==1:
+              jobs=api(f'/repos/{repo}/actions/runs/{matches[0]["id"]}/jobs',fields={'per_page':100})['jobs']; assert len(jobs)==1 and jobs[0]['name']=='verify' and jobs[0]['conclusion']=='success'
+              guard={'run':matches[0]['id'],'job':jobs[0]['id'],'head':head}; break
+            time.sleep(15)
+          assert guard
+          sr=api(f'/repos/{repo}/actions/runs/{os.environ["SOURCE_RUN"]}'); sj=api(f'/repos/{repo}/actions/runs/{os.environ["SOURCE_RUN"]}/jobs',fields={'per_page':100})['jobs']; sa=api(f'/repos/{repo}/actions/runs/{os.environ["SOURCE_RUN"]}/artifacts',fields={'per_page':100})['artifacts']
+          assert sr['head_sha']==os.environ['SOURCE_HEAD'] and sr['run_attempt']==1
+          j=next(x for x in sj if x['id']==int(os.environ['SOURCE_JOB'])); assert j['name']=='verify' and j['conclusion']=='success'
+          a=next(x for x in sa if x['id']==int(os.environ['SOURCE_ARTIFACT'])); assert a['digest']=='sha256:'+os.environ['SOURCE_SHA256'] and not a['expired']
+          z=api(f'/repos/{repo}/actions/artifacts/{a["id"]}/zip',b=True); assert hashlib.sha256(z).hexdigest()==os.environ['SOURCE_SHA256']
+          zp=out/'source.zip'; zp.write_bytes(z)
+          with zipfile.ZipFile(zp) as arc:
+            for i in arc.infolist():
+              p=PurePosixPath(i.filename); assert not p.is_absolute() and '..' not in p.parts
+              if not i.is_dir():
+                target=out/'source'/p; target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes(arc.read(i))
+          pre=out/'source/SHA256SUMS.pre'; seal=out/'source/SHA256SUMS'; assert hashlib.sha256(pre.read_bytes()).hexdigest()==seal.read_text().split()[0]
+          for raw in pre.read_text().splitlines():
+            d,n=raw.split(None,1); p=out/'source'/n.lstrip('*'); assert p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==d
+          source=json.loads((out/'source/settlement.json').read_text()); sid=source.pop('identity'); assert sid==os.environ['SOURCE_IDENTITY'] and hashlib.sha256(json.dumps(source,sort_keys=True,separators=(',',':')).encode()).hexdigest()==sid; source['identity']=sid
+          assert source['status']=='cycle-009-transport-cleanup-approved-v3' and source['canonical_main']==main and source['canonical_tree']==tree and source['queue']=={'total':316,'queued':307,'resolved':9,'in_flight':0} and source['media_debt']==0 and source['next_selector_allowed'] is True and source['cycle_010_lease_issued'] is False
+          targets=[r for r in refs() if r['branch']!=branch]; assert len(targets)<=250
+          prs=[]
+          for t in targets:
+            for item in pages(f'/repos/{repo}/pulls',{'state':'all','head':f'BigBirdReturns:{t["branch"]}'}):
+              q=api(f'/repos/{repo}/pulls/{item["number"]}'); assert q['head']['ref']==t['branch']
+              prs.append({'branch':t['branch'],'pull_request':q['number'],'pr_head_sha':q['head']['sha'],'current_ref_sha':t['sha'],'state':q['state'],'merged':q['merged']})
+          assert [r for r in refs() if r['branch']!=branch]==targets and mainsha()==main
+          tt=''.join(json.dumps(x,sort_keys=True,separators=(',',':'))+'\n' for x in targets); pt=''.join(json.dumps(x,sort_keys=True,separators=(',',':'))+'\n' for x in sorted(prs,key=lambda x:(x['branch'],x['pull_request'])))
+          (out/'targets.jsonl').write_text(tt); (out/'prs.jsonl').write_text(pt); (out/'source.json').write_text(json.dumps(source,sort_keys=True)+'\n')
+          s={'status':'cycle-009-cleanup-v5-approved','verify_run':int(os.environ['GITHUB_RUN_ID']),'verify_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'carrier_pr':prn,'carrier_head':head,'canonical_main':main,'canonical_tree':tree,'guard':guard,'source_identity':sid,'target_count':len(targets),'targets_sha256':hashlib.sha256(tt.encode()).hexdigest(),'attached_pr_count':len(prs),'prs_sha256':hashlib.sha256(pt.encode()).hexdigest(),'queue':source['queue'],'media_debt':0,'next_selector_allowed':True,'cycle_010_lease_issued':False,'main_mutated':False}
+          s['identity']=hashlib.sha256(json.dumps(s,sort_keys=True,separators=(',',':')).encode()).hexdigest(); (out/'settlement.json').write_text(json.dumps(s,indent=2,sort_keys=True)+'\n')
+          for p in sorted(x for x in out.iterdir() if x.is_file() and x.name not in {'SHA256SUMS.pre','SHA256SUMS','source.zip'}):
+            with (out/'SHA256SUMS.pre').open('a') as f:f.write(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n')
+          d=hashlib.sha256((out/'SHA256SUMS.pre').read_bytes()).hexdigest(); (out/'SHA256SUMS').write_text(f'{d}  SHA256SUMS.pre\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-cleanup-v5-settlement-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/cycle009-cleanup-v5-settlement
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-cleanup-v5-verify-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/cycle009-cleanup-v5-settlement
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
+
+  cleanup:
+    needs: verify
+    if: needs.verify.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: doctor-who-cycle-009-cleanup-v5-settlement-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/cycle009-cleanup-v5-settlement
+      - name: Retire only the frozen exact refs
+        shell: bash
+        env:
+          ROOT: /tmp/cycle009-cleanup-v5-settlement
+          OUT: /tmp/cycle009-cleanup-v5-receipt
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" && mkdir -p "$OUT"
+          python3 - <<'PY'
+          import hashlib,json,os,subprocess,time
+          from pathlib import Path
+          repo=os.environ['GITHUB_REPOSITORY']; root=Path(os.environ['ROOT']); out=Path(os.environ['OUT']); main=os.environ['MAIN']; branch=os.environ['BRANCH']; prefix=os.environ['PREFIX']
+          def api(path,method='GET',fields=None,body=None,ok=True):
+            a=['gh','api','--method',method,path]
+            for k,v in (fields or {}).items():a+=['-f',f'{k}={v}']
+            if body is not None:a+=['--input','-']
+            p=subprocess.run(a,input=json.dumps(body) if body is not None else None,capture_output=True,text=True)
+            if ok and p.returncode:raise RuntimeError(f'{p.returncode}: {path}\n{p.stderr}')
+            return json.loads(p.stdout) if p.returncode==0 and p.stdout.strip() else None
+          def pages(path,fields=None):
+            rows=[]
+            for n in range(1,100):
+              x=api(path,fields={**(fields or {}),'per_page':100,'page':n}); assert isinstance(x,list); rows+=x
+              if len(x)<100:return rows
+            raise AssertionError('pagination')
+          def mainsha():return api(f'/repos/{repo}/git/ref/heads/main')['object']['sha']
+          def ref(name,ok=True):return api(f'/repos/{repo}/git/ref/heads/{name}',ok=ok)
+          def refs():
+            rows=[]
+            for r in pages(f'/repos/{repo}/git/matching-refs/heads/{prefix}'):rows.append({'branch':r['ref'].removeprefix('refs/heads/'),'sha':r['object']['sha']})
+            return sorted(rows,key=lambda x:x['branch'])
+          pre=root/'SHA256SUMS.pre'; seal=root/'SHA256SUMS'; assert hashlib.sha256(pre.read_bytes()).hexdigest()==seal.read_text().split()[0]
+          for raw in pre.read_text().splitlines():
+            d,n=raw.split(None,1); p=root/n.lstrip('*'); assert p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==d
+          s=json.loads((root/'settlement.json').read_text()); identity=s.pop('identity'); assert hashlib.sha256(json.dumps(s,sort_keys=True,separators=(',',':')).encode()).hexdigest()==identity; s['identity']=identity
+          assert s['status']=='cycle-009-cleanup-v5-approved' and s['verify_run']==int(os.environ['GITHUB_RUN_ID']) and s['verify_attempt']==int(os.environ['GITHUB_RUN_ATTEMPT']) and s['canonical_main']==main and s['cycle_010_lease_issued'] is False
+          g=s['guard']; gr=api(f'/repos/{repo}/actions/runs/{g["run"]}'); gj=api(f'/repos/{repo}/actions/runs/{g["run"]}/jobs',fields={'per_page':100})['jobs']; assert gr['name']==os.environ['GUARD'] and gr['head_sha']==s['carrier_head'] and gr['conclusion']=='success' and next(x for x in gj if x['id']==g['job'])['conclusion']=='success'
+          targets=[json.loads(x) for x in (root/'targets.jsonl').read_text().splitlines()]; frozen=[json.loads(x) for x in (root/'prs.jsonl').read_text().splitlines()]
+          assert len(targets)==s['target_count'] and hashlib.sha256((root/'targets.jsonl').read_bytes()).hexdigest()==s['targets_sha256'] and len(frozen)==s['attached_pr_count'] and hashlib.sha256((root/'prs.jsonl').read_bytes()).hexdigest()==s['prs_sha256']
+          assert mainsha()==main and [x for x in refs() if x['branch']!=branch]==targets
+          f={(x['branch'],x['pull_request']):x for x in frozen}; by={}
+          for x in frozen:by.setdefault(x['branch'],[]).append(x['pull_request'])
+          for t in targets:
+            current=pages(f'/repos/{repo}/pulls',{'state':'all','head':f'BigBirdReturns:{t["branch"]}'}); assert sorted(x['number'] for x in current)==sorted(by.get(t['branch'],[]))
+            for x in current:
+              q=api(f'/repos/{repo}/pulls/{x["number"]}'); b=f[(t['branch'],q['number'])]; assert q['head']['ref']==t['branch'] and q['head']['sha']==b['pr_head_sha']
+          closed=[]; deleted=[]
+          for t in targets:
+            name=t['branch']; expected=t['sha']; assert name.startswith(prefix) and name not in {branch,'main'}
+            for x in pages(f'/repos/{repo}/pulls',{'state':'all','head':f'BigBirdReturns:{name}'}):
+              q=api(f'/repos/{repo}/pulls/{x["number"]}'); b=f[(name,q['number'])]; assert q['head']['sha']==b['pr_head_sha']; before=q['state']
+              if before=='open':q=api(f'/repos/{repo}/pulls/{q["number"]}',method='PATCH',body={'state':'closed'})
+              assert q['state']=='closed'; closed.append({'branch':name,'pull_request':q['number'],'before':before,'pr_head_sha':q['head']['sha'],'ref_sha':expected})
+            assert ref(name)['object']['sha']==expected; api(f'/repos/{repo}/git/refs/heads/{name}',method='DELETE')
+            for _ in range(60):
+              if ref(name,ok=False) is None:break
+              time.sleep(1)
+            else:raise AssertionError(name)
+            deleted.append({'branch':name,'sha':expected}); assert mainsha()==main
+          assert refs()==[{'branch':branch,'sha':s['carrier_head']}]
+          q=api(f'/repos/{repo}/pulls/{s["carrier_pr"]}',method='PATCH',body={'state':'closed'}); assert q['state']=='closed' and not q['merged']; assert ref(branch)['object']['sha']==s['carrier_head']; api(f'/repos/{repo}/git/refs/heads/{branch}',method='DELETE')
+          for _ in range(60):
+            if ref(branch,ok=False) is None:break
+            time.sleep(1)
+          else:raise AssertionError(branch)
+          assert refs()==[] and mainsha()==main
+          (out/'prs.jsonl').write_text(''.join(json.dumps(x,sort_keys=True)+'\n' for x in closed)); (out/'refs.jsonl').write_text(''.join(json.dumps(x,sort_keys=True)+'\n' for x in deleted))
+          r={'status':'cycle-009-transport-authority-retired-v5','cleanup_run':int(os.environ['GITHUB_RUN_ID']),'cleanup_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'canonical_main':main,'settlement_identity':identity,'target_count':len(targets),'deleted_ref_count':len(deleted),'self_deleted':True,'remaining_prefix_refs':0,'queue':s['queue'],'media_debt':0,'next_selector_allowed':True,'cycle_010_lease_issued':False,'main_mutated':False,'outside_human_dependency':False}
+          r['identity']=hashlib.sha256(json.dumps(r,sort_keys=True,separators=(',',':')).encode()).hexdigest(); (out/'cleanup.json').write_text(json.dumps(r,indent=2,sort_keys=True)+'\n')
+          for p in sorted(x for x in out.iterdir() if x.is_file() and x.name not in {'SHA256SUMS.pre','SHA256SUMS'}):
+            with (out/'SHA256SUMS.pre').open('a') as h:h.write(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n')
+          d=hashlib.sha256((out/'SHA256SUMS.pre').read_bytes()).hexdigest(); (out/'SHA256SUMS').write_text(f'{d}  SHA256SUMS.pre\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-cleanup-v5-receipt-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/cycle009-cleanup-v5-receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-009-cleanup-v5-write-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/cycle009-cleanup-v5-receipt
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
