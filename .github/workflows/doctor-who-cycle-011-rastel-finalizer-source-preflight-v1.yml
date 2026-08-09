@@ -1,0 +1,312 @@
+name: doctor-who-cycle-011-rastel-finalizer-source-preflight-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-finalizer-source-preflight-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-finalizer-source-preflight-v1
+  cancel-in-progress: true
+
+jobs:
+  recover:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-finalizer-source-preflight-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_MAIN: 96abbacf2f033ff9bceef0205ea477cd17e45fcd
+      SOURCE_TREE: cd1f495acf79d8d8d24861cdfde84dd137fec386
+      BRANCH: agent/doctor-who-cycle-011-rastel-finalizer-source-preflight-v1
+      SELF: .github/workflows/doctor-who-cycle-011-rastel-finalizer-source-preflight-v1.yml
+      OUT: /tmp/doctor-who-cycle-011-rastel-finalizer-source-preflight-v1
+      OBSERVER_PR: "763"
+      OBSERVER_BRANCH: agent/doctor-who-cycle-011-rastel-candidate-v7-observer-v1
+      OBSERVER_WORKFLOW: doctor-who-cycle-011-rastel-candidate-v7-observer-v1
+      OBSERVER_ARTIFACT_PREFIX: doctor-who-cycle-011-rastel-candidate-v7-observer-v1-
+      FINALIZER_PR: "733"
+      FINALIZER_HEAD: 881d842c726806f504d127f55c076e3cac1c2a48
+      FINALIZER_PATH: .github/workflows/doctor-who-cycle-010-merx-final-product-v4.yml
+      FINALIZER_WORKFLOW_SHA256: 89a6e660c306fd758cf416739633ef1e893928110b2198181699b358cd599b85
+      SOURCE_JOINED_SHA256: 3bd60a97b181fb8c89482a6ddb282fe9fe70163618e7086540d27e2aae174eac
+      SOURCE_GZIP_SHA256: 5e4b5aca1cbc246f93218608a29f1e116b72b860d50ea7dc62121c8015ef1d3b
+      SOURCE_RUNNER_BYTES: "35695"
+      SOURCE_RUNNER_SHA256: 9e91ad925a882ed16fdbe21e165fd885aaee96755ba7d3bd9a8248cb07a86507
+      TASK_ID: ap_25277c8fbe9e5369ed2e3d81
+      WALL_ID: UC-1356
+      ROLE: Rastel
+      PORTRAIT_SHA256: 42412f0f18ebf8f3ba536e633ac9777a19fa4f81277aad1086d410ea03501f4a
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind source-preflight carrier and wait for exact observer result
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,observer,source,receipt,logs}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          base='${{ github.event.pull_request.base.sha }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test "$(git show -s --format=%P HEAD)" = "$base"
+          test "$(git rev-list --count "$base"..HEAD)" = 1
+          test -z "$(git rev-list --merges "$base"..HEAD)"
+          test "$(git diff --name-status "$base"...HEAD)" = $'A\t'"$SELF"
+          test "$(git show -s --format=%T "$base")" = "$SOURCE_TREE"
+          git merge-base --is-ancestor "$SOURCE_MAIN" "$base"
+          test -z "$(git diff --name-only "$SOURCE_MAIN...$base")"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$base"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$OBSERVER_PR" > "$OUT/api/observer-pr.json"
+          CARRIER_PR="$pr" CARRIER_HEAD="$head" CURRENT_BASE="$base" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          api=Path(os.environ['OUT'])/'api'
+          own=json.loads((api/'carrier.json').read_text())
+          observer=json.loads((api/'observer-pr.json').read_text())
+          assert own['number']==int(os.environ['CARRIER_PR']) and own['state']=='open' and own['draft'] is True and own['merged'] is False
+          assert own['base']['sha']==os.environ['CURRENT_BASE'] and own['head']['ref']==os.environ['BRANCH'] and own['head']['sha']==os.environ['CARRIER_HEAD']
+          assert own['commits']==1 and own['changed_files']==1
+          assert observer['number']==int(os.environ['OBSERVER_PR']) and observer['state']=='open' and observer['draft'] is True and observer['merged'] is False
+          assert observer['base']['sha']==os.environ['CURRENT_BASE'] and observer['head']['ref']==os.environ['OBSERVER_BRANCH']
+          (api/'observer-head.txt').write_text(observer['head']['sha']+'\n')
+          PY
+          observer_head="$(cat "$OUT/api/observer-head.txt")"
+          run_id=''
+          for attempt in $(seq 1 180); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f branch="$OBSERVER_BRANCH" -f event=pull_request -f per_page=100 > "$OUT/api/observer-runs.json"
+            run_id="$(OBSERVER_HEAD="$observer_head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/observer-runs.json').read_text())['workflow_runs']
+          rows=[row for row in rows if row['head_sha']==os.environ['OBSERVER_HEAD'] and row['name']==os.environ['OBSERVER_WORKFLOW']]
+          rows.sort(key=lambda row:(row['run_attempt'],row['id']),reverse=True)
+          print(rows[0]['id'] if rows else '')
+          PY
+          )"
+            if [ -n "$run_id" ]; then
+              gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$OUT/api/observer-run.json"
+              if [ "$(jq -r '.status' "$OUT/api/observer-run.json")" = completed ]; then
+                break
+              fi
+            fi
+            sleep 10
+          done
+          test -n "$run_id"
+          test "$(jq -r '.status' "$OUT/api/observer-run.json")" = completed
+          conclusion="$(jq -r '.conclusion' "$OUT/api/observer-run.json")"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$OUT/api/observer-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$OUT/api/observer-artifacts.json"
+          jq -r '.jobs[] | [.id,.name,.status,.conclusion] | @tsv' "$OUT/api/observer-jobs.json" > "$OUT/logs/observer-jobs.tsv"
+          while IFS=$'\t' read -r job_id job_name job_status job_conclusion; do
+            gh api "/repos/$GITHUB_REPOSITORY/actions/jobs/$job_id/logs" > "$OUT/logs/observer-job-$job_id.log" || true
+          done < "$OUT/logs/observer-jobs.tsv"
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\nCURRENT_BASE=%s\nOBSERVER_HEAD=%s\nOBSERVER_RUN=%s\n' "$pr" "$head" "$base" "$observer_head" "$run_id" >> "$GITHUB_ENV"
+          test "$conclusion" = success
+
+      - name: Authenticate independent candidate review packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          OBSERVER_ARTIFACT="$(python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/observer-artifacts.json').read_text())['artifacts']
+          expected=os.environ['OBSERVER_ARTIFACT_PREFIX']+os.environ['OBSERVER_RUN']+'-attempt-1'
+          rows=[row for row in rows if row['name']==expected and not row['expired']]
+          assert len(rows)==1, [(row['id'],row['name']) for row in rows]
+          print(rows[0]['id'])
+          PY
+          )"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$OBSERVER_ARTIFACT" > "$OUT/api/observer-artifact.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$OBSERVER_ARTIFACT/zip" > "$OUT/observer.zip"
+          OBSERVER_ZIP_SHA256="$(sha256sum "$OUT/observer.zip" | awk '{print $1}')"
+          test "$(jq -r '.digest' "$OUT/api/observer-artifact.json")" = "sha256:$OBSERVER_ZIP_SHA256"
+          OBSERVER_ARTIFACT="$OBSERVER_ARTIFACT" OBSERVER_ZIP_SHA256="$OBSERVER_ZIP_SHA256" python3 - <<'PY'
+          import hashlib,json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['OUT']); target=root/'observer'
+          sha=lambda data:hashlib.sha256(data).hexdigest()
+          with zipfile.ZipFile(root/'observer.zip') as archive:
+              infos=archive.infolist()
+              assert infos and len(infos)==len({row.filename for row in infos})
+              for info in infos:
+                  path=PurePosixPath(info.filename)
+                  assert not path.is_absolute() and '..' not in path.parts
+                  if info.is_dir(): continue
+                  out=target/path
+                  out.parent.mkdir(parents=True,exist_ok=True)
+                  out.write_bytes(archive.read(info))
+          sealed=list(target.rglob('SHA256SUMS'))
+          assert len(sealed)==1
+          pre=sealed[0].with_name('SHA256SUMS.pre')
+          assert pre.is_file() and sha(pre.read_bytes())==sealed[0].read_text().split()[0]
+          ledger_root=sealed[0].parent
+          for raw in pre.read_text().splitlines():
+              digest,name=raw.split(None,1); path=ledger_root/name.lstrip('*')
+              assert path.is_file() and sha(path.read_bytes())==digest
+          reviews=[]
+          for path in target.rglob('review.json'):
+              try: data=json.loads(path.read_text())
+              except Exception: continue
+              if data.get('status')=='cycle-011-rastel-v7-candidate-packet-independently-reconstructed-v1':
+                  reviews.append((path,data))
+          assert len(reviews)==1
+          path,review=reviews[0]
+          identity=review.pop('identity')
+          assert sha(json.dumps(review,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())==identity
+          review['identity']=identity
+          assert review['candidate']['task']==os.environ['TASK_ID'] and review['candidate']['wall']==os.environ['WALL_ID']
+          assert review['candidate']['portrait_sha256']==os.environ['PORTRAIT_SHA256']
+          assert review['queue']=={'total':316,'queued':305,'resolved':11,'in_flight':0}
+          assert all(review['gates'].values())
+          assert review['boundary']['candidate_only'] is True
+          assert not any(value for key,value in review['boundary'].items() if key!='candidate_only')
+          (root/'receipt/candidate-review.json').write_text(json.dumps(review,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          summary={
+              'status':'cycle-011-rastel-independent-review-authenticated',
+              'observer':{'pr':int(os.environ['OBSERVER_PR']),'head':os.environ['OBSERVER_HEAD'],'run':int(os.environ['OBSERVER_RUN']),'artifact':int(os.environ['OBSERVER_ARTIFACT']),'artifact_sha256':os.environ['OBSERVER_ZIP_SHA256'],'identity':identity},
+              'candidate':review['candidate'],
+              'queue':review['queue'],
+          }
+          summary['identity']=sha(json.dumps(summary,sort_keys=True,separators=(',',':')).encode())
+          (root/'receipt/candidate-authority.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n')
+          PY
+          printf 'OBSERVER_ARTIFACT=%s\nOBSERVER_ZIP_SHA256=%s\n' "$OBSERVER_ARTIFACT" "$OBSERVER_ZIP_SHA256" >> "$GITHUB_ENV"
+
+      - name: Recover exact prior-cycle finalizer source from immutable Git blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$FINALIZER_PR" > "$OUT/api/finalizer-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/contents/$FINALIZER_PATH?ref=$FINALIZER_HEAD" > "$OUT/api/finalizer-workflow.json"
+          python3 - <<'PY'
+          import base64,hashlib,json,os,re
+          from pathlib import Path
+          root=Path(os.environ['OUT']); payload=json.loads((root/'api/finalizer-workflow.json').read_text())
+          data=base64.b64decode(payload['content'])
+          assert hashlib.sha256(data).hexdigest()==os.environ['FINALIZER_WORKFLOW_SHA256']
+          text=data.decode('utf-8')
+          assert os.environ['SOURCE_RUNNER_SHA256'] in text
+          loops=[]
+          for match in re.finditer(r'for blob in\s+([^;\n]+);\s*do',text):
+              ids=re.findall(r'\b[0-9a-f]{40}\b',match.group(1))
+              if len(ids)>=2 and os.environ['SOURCE_RUNNER_SHA256'] in text[match.start():match.start()+8000]:
+                  loops.append((match.start(),ids))
+          assert loops, 'finalizer runner blob loop not found'
+          loops.sort(key=lambda row:row[0],reverse=True)
+          ids=loops[0][1]
+          assert len(ids)==len(set(ids)) and len(ids)>=5
+          (root/'source/finalizer-workflow.yml').write_bytes(data)
+          (root/'source/finalizer-runner-blobs.txt').write_text('\n'.join(ids)+'\n')
+          metadata={'workflow_git_blob':payload['sha'],'workflow_bytes':len(data),'workflow_sha256':hashlib.sha256(data).hexdigest(),'runner_blob_ids':ids}
+          (root/'source/finalizer-source-metadata.json').write_text(json.dumps(metadata,indent=2,sort_keys=True)+'\n')
+          PY
+          : > "$OUT/source/finalizer-runner.gz.b64"
+          while IFS= read -r blob; do
+            gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$blob" --jq '.content' | tr -d '\n' | base64 -d >> "$OUT/source/finalizer-runner.gz.b64"
+          done < "$OUT/source/finalizer-runner-blobs.txt"
+          test "$(sha256sum "$OUT/source/finalizer-runner.gz.b64" | awk '{print $1}')" = "$SOURCE_JOINED_SHA256"
+          python3 - <<'PY'
+          import base64,gzip,hashlib,json,os,re,subprocess
+          from pathlib import Path
+          root=Path(os.environ['OUT']); source=root/'source'
+          joined=(source/'finalizer-runner.gz.b64').read_bytes()
+          packed=base64.b64decode(joined)
+          assert hashlib.sha256(packed).hexdigest()==os.environ['SOURCE_GZIP_SHA256']
+          runner=gzip.decompress(packed)
+          assert len(runner)==int(os.environ['SOURCE_RUNNER_BYTES'])
+          assert hashlib.sha256(runner).hexdigest()==os.environ['SOURCE_RUNNER_SHA256']
+          path=source/'merx-finalizer-v3.sh'; path.write_bytes(runner)
+          subprocess.run(['bash','-n',str(path)],check=True)
+          text=runner.decode('utf-8')
+          blocks=re.findall(r"python3 - <<'PY'\n(.*?)\nPY",text,re.S)
+          assert len(blocks)==3
+          for index,block in enumerate(blocks): compile(block,f'<embedded-finalizer-{index}>','exec')
+          needles=['ap_cab2d7f95d930401627c1b30','Merx','UC-1355','doctor-who-cycle-009','doctor-who-cycle-010','306 queued','307 queued','data/ESTATE-REGISTRY.json','git diff --name-only']
+          census={needle:text.count(needle) for needle in needles}
+          rows=[]
+          for index,line in enumerate(text.splitlines(),1):
+              if any(needle in line for needle in ('git diff --name-only','git ls-files --others','doctor-who-cycle-009','doctor-who-cycle-010','UC-1355','ap_cab2d7f95d930401627c1b30')):
+                  rows.append({'line':index,'text':line})
+          candidate=json.loads((root/'receipt/candidate-authority.json').read_text())
+          plan={
+              'status':'cycle-011-rastel-finalizer-source-preflight-complete-v1',
+              'version':1,
+              'source_finalizer':{'bytes':len(runner),'sha256':hashlib.sha256(runner).hexdigest(),'embedded_python':len(blocks),'census':census,'relevant_rows':rows},
+              'candidate_authority':candidate,
+              'required_shift':{
+                  'prior_cycle':'010',
+                  'new_cycle':'011',
+                  'prior_task':'ap_cab2d7f95d930401627c1b30',
+                  'new_task':os.environ['TASK_ID'],
+                  'prior_wall':'UC-1355',
+                  'new_wall':os.environ['WALL_ID'],
+                  'prior_role':'Merx',
+                  'new_role':'Rastel',
+                  'queue_before':{'queued':306,'resolved':10,'in_flight':0},
+                  'queue_after':{'queued':305,'resolved':11,'in_flight':0},
+                  'historical_checker_move':'scripts/doctor-who-cycle-010.mjs -> scripts/doctor-who-cycle-010-historical.mjs',
+                  'new_wrapper':'scripts/doctor-who-cycle-010.mjs',
+                  'new_checker':'scripts/doctor-who-cycle-011.mjs',
+              },
+              'execution':{'finalizer_executed':False,'candidate_imported_by_this_lane':False,'cycle_receipt_written':False,'repository_write':False},
+          }
+          plan['identity']=hashlib.sha256(json.dumps(plan,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
+          (root/'receipt/finalizer-source-preflight.json').write_text(json.dumps(plan,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          PY
+
+      - name: Seal finalizer source handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          find "$OUT" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/$rel" | sed "s#  $OUT/#  #"; done > "$OUT/SHA256SUMS.pre"
+          sha256sum "$OUT/SHA256SUMS.pre" | sed "s#  $OUT/#  #" > "$OUT/SHA256SUMS"
+          python3 - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          root=Path(os.environ['OUT']); pre=root/'SHA256SUMS.pre'; sealed=root/'SHA256SUMS'
+          assert hashlib.sha256(pre.read_bytes()).hexdigest()==sealed.read_text().split()[0]
+          for raw in pre.read_text().splitlines():
+              digest,name=raw.split(None,1); path=root/name.lstrip('*')
+              assert path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==digest
+          PY
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CURRENT_BASE"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-finalizer-source-preflight-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-finalizer-source-preflight-v1
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-finalizer-source-preflight-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-finalizer-source-preflight-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
