@@ -1,0 +1,480 @@
+name: doctor-who-cycle-011-rastel-exact-cycle-binder-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-exact-cycle-binder-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-exact-cycle-binder-v1
+  cancel-in-progress: true
+
+jobs:
+  bind:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-exact-cycle-binder-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_MAIN: 96abbacf2f033ff9bceef0205ea477cd17e45fcd
+      SOURCE_TREE: cd1f495acf79d8d8d24861cdfde84dd137fec386
+      BRANCH: agent/doctor-who-cycle-011-rastel-exact-cycle-binder-v1
+      SELF: .github/workflows/doctor-who-cycle-011-rastel-exact-cycle-binder-v1.yml
+      OUT: /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v1
+      CLOSURE_PACKET: /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v1-closure
+      NORMALIZER_PACKET: /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v1-normalizer
+      CLOSURE_BRANCH: agent/doctor-who-cycle-011-rastel-cycle-closure-preflight-v1
+      CLOSURE_WORKFLOW: doctor-who-cycle-011-rastel-cycle-closure-preflight-v1
+      CLOSURE_ARTIFACT_PREFIX: doctor-who-cycle-011-rastel-cycle-closure-preflight-v1-
+      REVIEW_PAYLOAD_ARTIFACT_PREFIX: doctor-who-cycle-011-rastel-normalized-review-payload-v1-
+      BINDER_ARTIFACT_PREFIX: doctor-who-cycle-011-rastel-exact-cycle-binder-v1-
+      TASK_ID: ap_25277c8fbe9e5369ed2e3d81
+      OLD_TASK: ap_cab2d7f95d930401627c1b30
+      WALL_ID: UC-1356
+      OLD_WALL: UC-1355
+      ROLE: Rastel
+      OLD_ROLE: Merx
+      EXPECTED_LEASE: lease_20eea426f818ecf4732fce39
+      OBSERVER_STATUS: cycle-011-rastel-v7-candidate-packet-independently-reconstructed-v1
+      NORMALIZED_STATUS: cycle-011-rastel-candidate-independently-approved-v1
+      REVIEW_ARTIFACT_PLACEHOLDER: __RASTEL_REVIEW_ARTIFACT_ID__
+      REVIEW_ZIP_PLACEHOLDER: __RASTEL_REVIEW_ARTIFACT_SHA256__
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact closure-preflight artifact and carrier geometry
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" "$CLOSURE_PACKET" "$NORMALIZER_PACKET"
+          mkdir -p "$OUT"/{api,source,review-payload,receipt,logs} "$CLOSURE_PACKET" "$NORMALIZER_PACKET"
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          base='${{ github.event.pull_request.base.sha }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test "$(git show -s --format=%P HEAD)" = "$base"
+          test "$(git rev-list --count "$base"..HEAD)" = 1
+          test -z "$(git rev-list --merges "$base"..HEAD)"
+          test "$(git diff --name-status "$base"...HEAD)" = $'A\t'"$SELF"
+          test "$(git show -s --format=%T "$base")" = "$SOURCE_TREE"
+          git merge-base --is-ancestor "$SOURCE_MAIN" "$base"
+          test -z "$(git diff --name-only "$SOURCE_MAIN...$base")"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$base"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier.json"
+          gh api --method GET "/repos/$GITHUB_REPOSITORY/pulls" -f state=all -f head="${GITHUB_REPOSITORY_OWNER}:$CLOSURE_BRANCH" -f per_page=100 > "$OUT/api/closure-prs.json"
+          CARRIER_PR="$pr" CARRIER_HEAD="$head" CURRENT_BASE="$base" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          api=Path(os.environ['OUT'])/'api'
+          own=json.loads((api/'carrier.json').read_text())
+          rows=json.loads((api/'closure-prs.json').read_text())
+          assert own['number']==int(os.environ['CARRIER_PR']) and own['state']=='open' and own['draft'] is True and own['merged'] is False
+          assert own['base']['sha']==os.environ['CURRENT_BASE'] and own['head']['ref']==os.environ['BRANCH'] and own['head']['sha']==os.environ['CARRIER_HEAD']
+          assert own['commits']==1 and own['changed_files']==1
+          rows=[row for row in rows if row['head']['ref']==os.environ['CLOSURE_BRANCH'] and row['merged'] is False]
+          assert len(rows)==1,[(row['number'],row['state'],row['head']['sha']) for row in rows]
+          source=rows[0]
+          assert source['state']=='open' and source['draft'] is True and source['base']['sha']==os.environ['CURRENT_BASE']
+          (api/'closure-pr.json').write_text(json.dumps(source,indent=2,sort_keys=True)+'\n')
+          (api/'closure-head.txt').write_text(source['head']['sha']+'\n')
+          (api/'closure-number.txt').write_text(str(source['number'])+'\n')
+          PY
+          closure_head="$(cat "$OUT/api/closure-head.txt")"
+          closure_pr="$(cat "$OUT/api/closure-number.txt")"
+          run_id=''
+          for attempt in $(seq 1 180); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f branch="$CLOSURE_BRANCH" -f event=pull_request -f per_page=100 > "$OUT/api/closure-runs.json"
+            run_id="$(CLOSURE_HEAD="$closure_head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/closure-runs.json').read_text())['workflow_runs']
+          rows=[row for row in rows if row['head_sha']==os.environ['CLOSURE_HEAD'] and row['name']==os.environ['CLOSURE_WORKFLOW']]
+          rows.sort(key=lambda row:(row['run_attempt'],row['id']),reverse=True)
+          print(rows[0]['id'] if rows else '')
+          PY
+          )"
+            if [ -n "$run_id" ]; then
+              gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$OUT/api/closure-run.json"
+              if [ "$(jq -r '.status' "$OUT/api/closure-run.json")" = completed ]; then break; fi
+            fi
+            sleep 10
+          done
+          test -n "$run_id"
+          test "$(jq -r '.status' "$OUT/api/closure-run.json")" = completed
+          test "$(jq -r '.conclusion' "$OUT/api/closure-run.json")" = success
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$OUT/api/closure-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$OUT/api/closure-artifacts.json"
+          closure_job="$(jq -r '.jobs[] | select(.name=="derive" and .conclusion=="success") | .id' "$OUT/api/closure-jobs.json")"
+          test -n "$closure_job"
+          closure_artifact="$(CLOSURE_RUN="$run_id" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/closure-artifacts.json').read_text())['artifacts']
+          expected=os.environ['CLOSURE_ARTIFACT_PREFIX']+os.environ['CLOSURE_RUN']+'-attempt-1'
+          rows=[row for row in rows if row['name']==expected and not row['expired']]
+          assert len(rows)==1,[(row['id'],row['name']) for row in rows]
+          print(rows[0]['id'])
+          PY
+          )"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$closure_artifact" > "$OUT/api/closure-artifact.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$closure_artifact/zip" > "$OUT/closure.zip"
+          closure_sha="$(sha256sum "$OUT/closure.zip" | awk '{print $1}')"
+          test "$(jq -r '.digest' "$OUT/api/closure-artifact.json")" = "sha256:$closure_sha"
+          CLOSURE_PR="$closure_pr" CLOSURE_HEAD="$closure_head" CLOSURE_RUN="$run_id" CLOSURE_JOB="$closure_job" CLOSURE_ARTIFACT="$closure_artifact" CLOSURE_ZIP_SHA256="$closure_sha" python3 - <<'PY'
+          import hashlib,json,os,shutil,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['OUT']); target=Path(os.environ['CLOSURE_PACKET'])
+          sha=lambda data:hashlib.sha256(data).hexdigest()
+          with zipfile.ZipFile(root/'closure.zip') as archive:
+              infos=archive.infolist(); assert infos and len(infos)==len({row.filename for row in infos})
+              for info in infos:
+                  path=PurePosixPath(info.filename); assert not path.is_absolute() and '..' not in path.parts
+                  if info.is_dir():continue
+                  out=target/path; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(archive.read(info))
+          ledgers=[]
+          for sealed in target.rglob('SHA256SUMS'):
+              pre=sealed.with_name('SHA256SUMS.pre')
+              if not pre.is_file():continue
+              assert sha(pre.read_bytes())==sealed.read_text().split()[0]
+              base=sealed.parent; count=0
+              for raw in pre.read_text().splitlines():
+                  digest,name=raw.split(None,1); path=base/name.lstrip('*')
+                  assert path.is_file() and sha(path.read_bytes())==digest; count+=1
+              ledgers.append({'root':base.relative_to(target).as_posix(),'rows':count,'sha256':sha(pre.read_bytes())})
+          assert ledgers
+          rows=[]
+          for path in target.rglob('*.json'):
+              try:data=json.loads(path.read_text())
+              except Exception:continue
+              if data.get('status')=='cycle-011-rastel-native-cycle-closure-preflight-complete-v1':rows.append((path,data))
+          assert len(rows)==1
+          path,closure=rows[0]
+          identity=closure.pop('identity'); assert sha(json.dumps(closure,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())==identity; closure['identity']=identity
+          assert closure['candidate']['task']==os.environ['TASK_ID'] and closure['candidate']['lease']==os.environ['EXPECTED_LEASE'] and closure['candidate']['wall']==os.environ['WALL_ID']
+          assert closure['queue']=={'total':316,'queued':305,'resolved':11,'in_flight':0}
+          assert all(closure['gates'].values()) and closure['boundary']['disposable_simulation'] is True and closure['boundary']['finalizer_executed'] is False
+          (root/'receipt/native-closure.json').write_text(json.dumps(closure,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          custody={'status':'cycle-011-rastel-native-closure-artifact-authenticated','version':1,'source':{'pr':int(os.environ['CLOSURE_PR']),'head':os.environ['CLOSURE_HEAD'],'run':int(os.environ['CLOSURE_RUN']),'job':int(os.environ['CLOSURE_JOB']),'artifact':int(os.environ['CLOSURE_ARTIFACT']),'artifact_sha256':os.environ['CLOSURE_ZIP_SHA256']},'identity':identity,'ledgers':ledgers}
+          custody['receipt_identity']=sha(json.dumps(custody,sort_keys=True,separators=(',',':')).encode())
+          (root/'receipt/closure-custody.json').write_text(json.dumps(custody,indent=2,sort_keys=True)+'\n')
+          PY
+          current_job="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '.jobs[] | select(.name=="bind") | .id')"
+          test -n "$current_job"
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\nCURRENT_BASE=%s\nBINDER_JOB=%s\nCLOSURE_PR=%s\nCLOSURE_HEAD=%s\nCLOSURE_RUN=%s\nCLOSURE_JOB=%s\nCLOSURE_ARTIFACT=%s\nCLOSURE_ZIP_SHA256=%s\n' "$pr" "$head" "$base" "$current_job" "$closure_pr" "$closure_head" "$run_id" "$closure_job" "$closure_artifact" "$closure_sha" >> "$GITHUB_ENV"
+
+      - name: Rehydrate exact normalizer packet and construct legacy-topology review payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          NORMALIZER_PR="$(jq -r '.normalizer.pr' "$OUT/receipt/native-closure.json")"
+          NORMALIZER_HEAD="$(jq -r '.normalizer.head' "$OUT/receipt/native-closure.json")"
+          NORMALIZER_RUN="$(jq -r '.normalizer.run' "$OUT/receipt/native-closure.json")"
+          NORMALIZER_JOB="$(jq -r '.normalizer.job' "$OUT/receipt/native-closure.json")"
+          NORMALIZER_ARTIFACT="$(jq -r '.normalizer.artifact' "$OUT/receipt/native-closure.json")"
+          NORMALIZER_ZIP_SHA256="$(jq -r '.normalizer.artifact_sha256' "$OUT/receipt/native-closure.json")"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$NORMALIZER_PR" > "$OUT/api/normalizer-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$NORMALIZER_RUN" > "$OUT/api/normalizer-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$NORMALIZER_RUN/jobs?per_page=100" > "$OUT/api/normalizer-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$NORMALIZER_ARTIFACT" > "$OUT/api/normalizer-artifact.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$NORMALIZER_ARTIFACT/zip" > "$OUT/normalizer.zip"
+          test "$(sha256sum "$OUT/normalizer.zip" | awk '{print $1}')" = "$NORMALIZER_ZIP_SHA256"
+          NORMALIZER_PR="$NORMALIZER_PR" NORMALIZER_HEAD="$NORMALIZER_HEAD" NORMALIZER_RUN="$NORMALIZER_RUN" NORMALIZER_JOB="$NORMALIZER_JOB" NORMALIZER_ARTIFACT="$NORMALIZER_ARTIFACT" NORMALIZER_ZIP_SHA256="$NORMALIZER_ZIP_SHA256" python3 - <<'PY'
+          import hashlib,json,os,shutil,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['OUT']); packet=Path(os.environ['NORMALIZER_PACKET']); payload=root/'review-payload'
+          sha=lambda data:hashlib.sha256(data).hexdigest()
+          pr=json.loads((root/'api/normalizer-pr.json').read_text()); run=json.loads((root/'api/normalizer-run.json').read_text()); jobs=json.loads((root/'api/normalizer-jobs.json').read_text())['jobs']; artifact=json.loads((root/'api/normalizer-artifact.json').read_text())
+          assert pr['number']==int(os.environ['NORMALIZER_PR']) and pr['head']['sha']==os.environ['NORMALIZER_HEAD'] and pr['merged'] is False
+          assert run['id']==int(os.environ['NORMALIZER_RUN']) and run['head_sha']==os.environ['NORMALIZER_HEAD'] and run['conclusion']=='success'
+          job=next(row for row in jobs if row['id']==int(os.environ['NORMALIZER_JOB'])); assert job['name']=='normalize' and job['conclusion']=='success'
+          assert artifact['id']==int(os.environ['NORMALIZER_ARTIFACT']) and artifact['digest']=='sha256:'+os.environ['NORMALIZER_ZIP_SHA256'] and artifact['expired'] is False
+          with zipfile.ZipFile(root/'normalizer.zip') as archive:
+              infos=archive.infolist(); assert infos and len(infos)==len({row.filename for row in infos})
+              for info in infos:
+                  path=PurePosixPath(info.filename); assert not path.is_absolute() and '..' not in path.parts
+                  if info.is_dir():continue
+                  out=packet/path; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(archive.read(info))
+          ledgers=[]
+          for sealed in packet.rglob('SHA256SUMS'):
+              pre=sealed.with_name('SHA256SUMS.pre')
+              if not pre.is_file():continue
+              assert sha(pre.read_bytes())==sealed.read_text().split()[0]
+              base=sealed.parent; count=0
+              for raw in pre.read_text().splitlines():
+                  digest,name=raw.split(None,1); path=base/name.lstrip('*')
+                  assert path.is_file() and sha(path.read_bytes())==digest; count+=1
+              ledgers.append({'root':base.relative_to(packet).as_posix(),'rows':count,'sha256':sha(pre.read_bytes())})
+          assert ledgers
+          def find_status(status):
+              rows=[]
+              for path in packet.rglob('*.json'):
+                  try:data=json.loads(path.read_text())
+                  except Exception:continue
+                  if data.get('status')==status:rows.append((path,data))
+              assert len(rows)==1,(status,[p.as_posix() for p,_ in rows])
+              return rows[0]
+          norm_path,norm=find_status('cycle-011-rastel-review-schema-normalized-v1')
+          bindings_path,bindings=find_status('cycle-011-rastel-finalizer-exact-bindings-v1')
+          legacy_schema_path,legacy_schema=find_status('exact-legacy-merx-approval-schema-authenticated')
+          for data in (norm,bindings):
+              identity=data.pop('identity'); assert sha(json.dumps(data,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())==identity; data['identity']=identity
+          approvals=[]
+          for path in packet.rglob('approval.json'):
+              try:data=json.loads(path.read_text())
+              except Exception:continue
+              if data.get('status')==os.environ['NORMALIZED_STATUS']:approvals.append((path,data))
+          assert len(approvals)==1
+          approval_path,approval=approvals[0]
+          approval_identity=approval.pop('identity'); assert sha(json.dumps(approval,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())==approval_identity; approval['identity']=approval_identity
+          legacy_roots=[]
+          relative=Path(legacy_schema['path'])
+          for directory in packet.rglob('legacy'):
+              if directory.is_dir() and (directory/relative).is_file():legacy_roots.append(directory)
+          assert len(legacy_roots)==1,[p.as_posix() for p in legacy_roots]
+          shutil.copytree(legacy_roots[0],payload,dirs_exist_ok=True)
+          target=payload/relative
+          target.write_text(json.dumps(approval,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          rebuilt=[]
+          for pre in payload.rglob('SHA256SUMS.pre'):
+              sealed=pre.with_name('SHA256SUMS')
+              rows=[]
+              for raw in pre.read_text().splitlines():
+                  if not raw.strip():continue
+                  _,name=raw.split(None,1); name=name.lstrip('*'); path=pre.parent/name
+                  assert path.is_file(),name
+                  rows.append(f"{sha(path.read_bytes())}  {name}")
+              pre.write_text('\n'.join(rows)+'\n')
+              sealed.write_text(f"{sha(pre.read_bytes())}  SHA256SUMS.pre\n")
+              rebuilt.append({'root':pre.parent.relative_to(payload).as_posix(),'rows':len(rows),'sha256':sha(pre.read_bytes())})
+          if not rebuilt:
+              rows=[]
+              for path in sorted(p for p in payload.rglob('*') if p.is_file()):
+                  rows.append(f"{sha(path.read_bytes())}  {path.relative_to(payload).as_posix()}")
+              (payload/'SHA256SUMS.pre').write_text('\n'.join(rows)+'\n')
+              (payload/'SHA256SUMS').write_text(f"{sha((payload/'SHA256SUMS.pre').read_bytes())}  SHA256SUMS.pre\n")
+              rebuilt.append({'root':'.','rows':len(rows),'sha256':sha((payload/'SHA256SUMS.pre').read_bytes())})
+          assert json.loads(target.read_text())['identity']==approval_identity
+          (root/'receipt/bindings.json').write_text(json.dumps(bindings,indent=2,sort_keys=True)+'\n')
+          (root/'receipt/normalization.json').write_text(json.dumps(norm,indent=2,sort_keys=True)+'\n')
+          (root/'receipt/normalized-approval.json').write_text(json.dumps(approval,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          payload_receipt={'status':'cycle-011-rastel-legacy-topology-review-payload-complete-v1','version':1,'normalizer':{'pr':int(os.environ['NORMALIZER_PR']),'head':os.environ['NORMALIZER_HEAD'],'run':int(os.environ['NORMALIZER_RUN']),'job':int(os.environ['NORMALIZER_JOB']),'artifact':int(os.environ['NORMALIZER_ARTIFACT']),'artifact_sha256':os.environ['NORMALIZER_ZIP_SHA256']},'legacy_relative_path':relative.as_posix(),'approval_identity':approval_identity,'approval_sha256':sha(target.read_bytes()),'rebuilt_ledgers':rebuilt,'source_ledgers':ledgers,'file_count':sum(1 for p in payload.rglob('*') if p.is_file())}
+          payload_receipt['identity']=sha(json.dumps(payload_receipt,sort_keys=True,separators=(',',':')).encode())
+          (root/'receipt/review-payload.json').write_text(json.dumps(payload_receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          printf 'NORMALIZER_PR=%s\nNORMALIZER_HEAD=%s\nNORMALIZER_RUN=%s\nNORMALIZER_JOB=%s\nNORMALIZER_ARTIFACT=%s\nNORMALIZER_ZIP_SHA256=%s\n' "$NORMALIZER_PR" "$NORMALIZER_HEAD" "$NORMALIZER_RUN" "$NORMALIZER_JOB" "$NORMALIZER_ARTIFACT" "$NORMALIZER_ZIP_SHA256" >> "$GITHUB_ENV"
+
+      - name: Bind exact cycle identities into finalizer template
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import difflib,hashlib,json,os,re,subprocess
+          from pathlib import Path
+          root=Path(os.environ['OUT']); packet=Path(os.environ['NORMALIZER_PACKET']); sha=lambda data:hashlib.sha256(data).hexdigest()
+          closure=json.loads((root/'receipt/native-closure.json').read_text()); bindings=json.loads((root/'receipt/bindings.json').read_text()); approval=json.loads((root/'receipt/normalized-approval.json').read_text())
+          transforms=[]
+          for path in packet.rglob('transformation.json'):
+              try:data=json.loads(path.read_text())
+              except Exception:continue
+              if data.get('status','').startswith('cycle-shift-materialized-'):transforms.append((path,data))
+          assert len(transforms)==1
+          transform_path,transform=transforms[0]
+          transform_identity=transform.pop('identity'); assert sha(json.dumps(transform,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())==transform_identity; transform['identity']=transform_identity
+          drafts=[p for p in packet.rglob('*') if p.is_file() and sha(p.read_bytes())==transform['target']['sha256'] and p.stat().st_size==transform['target']['bytes']]
+          assert len(drafts)==1
+          raw=drafts[0].read_bytes(); text=raw.decode('utf-8')
+          paths=subprocess.check_output(['git','ls-tree','-r','--name-only',os.environ['CURRENT_BASE'],'--','data/review/adapter-sdk'],text=True).splitlines()
+          merx=[]
+          for path in paths:
+              if not path.endswith('.json') or 'doctor-who-cycle-010' not in path:continue
+              try:data=json.loads(subprocess.check_output(['git','show',f"{os.environ['CURRENT_BASE']}:{path}"]))
+              except Exception:continue
+              flat=json.dumps(data,sort_keys=True,ensure_ascii=False)
+              if 'Merx' in flat:merx.append((path,data,flat))
+          assert len(merx)==1,[path for path,_,_ in merx]
+          merx_path,merx_receipt,merx_flat=merx[0]
+          merx_cycles=sorted(set(re.findall(r'\bcycle_[0-9a-f]{16,64}\b',merx_flat)))
+          merx_events=sorted(set(re.findall(r'\bwaterline_[0-9a-f]{16,64}\b',merx_flat)))
+          assert len(merx_cycles)==1 and len(merx_events)==1
+          merx_cycle=merx_cycles[0]; merx_event=merx_events[0]
+          merx_identity=merx_receipt.get('identity')
+          assert isinstance(merx_identity,str) and re.fullmatch(r'[0-9a-f]{64}',merx_identity)
+          rastel_cycle=closure['native']['cycle_id']; rastel_event=closure['native']['waterline_event']; rastel_identity=closure['native']['receipt_identity']
+          current_markers=[os.environ['TASK_ID'],os.environ['WALL_ID'],os.environ['ROLE'],'doctor-who-cycle-011','cycle-011','doctor-who-cycle-011-rastel']
+          prior_markers=[os.environ['OLD_TASK'],os.environ['OLD_WALL'],os.environ['OLD_ROLE'],'doctor-who-cycle-010','cycle-010','historical','composability']
+          def nearest(marker_list,pos):
+              values=[]
+              for marker in marker_list:
+                  start=0
+                  while True:
+                      index=text.find(marker,start)
+                      if index<0:break
+                      values.append(abs(index-pos)); start=index+1
+              return min(values) if values else 10**12
+          contextual=[]
+          def patch_contextual(old,new,label):
+              nonlocal text
+              positions=[]; start=0
+              while True:
+                  index=text.find(old,start)
+                  if index<0:break
+                  positions.append(index); start=index+len(old)
+              assert positions,(label,old)
+              pieces=[]; cursor=0; replaced=0; kept=0; decisions=[]
+              for pos in positions:
+                  pieces.append(text[cursor:pos])
+                  current_distance=nearest(current_markers,pos); prior_distance=nearest(prior_markers,pos)
+                  choose=current_distance<prior_distance
+                  if choose:
+                      pieces.append(new); replaced+=1
+                  else:
+                      pieces.append(old); kept+=1
+                  decisions.append({'position':pos,'current_distance':current_distance,'prior_distance':prior_distance,'replaced':choose})
+                  cursor=pos+len(old)
+              pieces.append(text[cursor:]); text=''.join(pieces)
+              assert replaced>0,(label,decisions)
+              contextual.append({'label':label,'old':old,'new':new,'replaced':replaced,'kept':kept,'decisions':decisions})
+          patch_contextual(merx_cycle,rastel_cycle,'cycle-id')
+          patch_contextual(merx_event,rastel_event,'waterline-event')
+          patch_contextual(merx_identity,rastel_identity,'cycle-receipt-identity')
+          review_replacements=[
+              (str(bindings['observer']['pr']),str(os.environ['CARRIER_PR']),'review-pr'),
+              (bindings['observer']['head'],os.environ['CARRIER_HEAD'],'review-head'),
+              (str(bindings['observer']['run']),str(os.environ['GITHUB_RUN_ID']),'review-run'),
+              (str(bindings['observer']['job']),str(os.environ['BINDER_JOB']),'review-job'),
+              (str(bindings['observer']['artifact']),os.environ['REVIEW_ARTIFACT_PLACEHOLDER'],'review-artifact'),
+              (bindings['observer']['artifact_sha256'],os.environ['REVIEW_ZIP_PLACEHOLDER'],'review-artifact-sha'),
+              (bindings['observer']['identity'],approval['identity'],'review-identity'),
+              (os.environ['OBSERVER_STATUS'],os.environ['NORMALIZED_STATUS'],'review-status'),
+          ]
+          review_rows=[]
+          lines=text.splitlines(keepends=True)
+          for old,new,label in review_replacements:
+              count=0
+              if label in ('review-head','review-artifact-sha','review-identity','review-status'):
+                  count=text.count(old); text=text.replace(old,new)
+              else:
+                  new_lines=[]
+                  for line in text.splitlines(keepends=True):
+                      lower=line.lower()
+                      if old in line and any(token in lower for token in ('review','approval','reviewer')):
+                          count+=line.count(old); line=line.replace(old,new)
+                      new_lines.append(line)
+                  text=''.join(new_lines)
+              assert count>0,(label,old)
+              review_rows.append({'label':label,'old':old,'new':new,'occurrences':count})
+          unknown_cycles=[value for value in transform['residual']['cycle_ids'] if value not in (merx_cycle,rastel_cycle)]
+          unknown_events=[value for value in transform['residual']['waterline_events'] if value not in (merx_event,rastel_event)]
+          residual_unknown={}
+          for value in unknown_cycles+unknown_events:
+              count=text.count(value)
+              if count:residual_unknown[value]=count
+          required=[merx_cycle,rastel_cycle,merx_event,rastel_event,merx_identity,rastel_identity,approval['identity'],os.environ['NORMALIZED_STATUS'],os.environ['REVIEW_ARTIFACT_PLACEHOLDER'],os.environ['REVIEW_ZIP_PLACEHOLDER'],os.environ['TASK_ID'],os.environ['EXPECTED_LEASE'],os.environ['WALL_ID']]
+          missing=[value for value in required if value not in text]
+          old_review=[str(bindings['observer']['artifact']),bindings['observer']['artifact_sha256'],bindings['observer']['identity'],os.environ['OBSERVER_STATUS']]
+          old_review_residual={value:text.count(value) for value in old_review if value in text}
+          target=root/'source/finalizer-bound-template-v1.sh'; target.write_text(text)
+          syntax=subprocess.run(['bash','-n',str(target)],capture_output=True,text=True)
+          blocks=re.findall(r"python3 - <<'PY'\n(.*?)\nPY",text,re.S)
+          compile_errors=[]
+          for index,block in enumerate(blocks):
+              try:compile(block,f'<embedded-bound-finalizer-{index}>','exec')
+              except Exception as error:compile_errors.append({'index':index,'error':repr(error)})
+          assert syntax.returncode==0,syntax.stderr
+          assert not compile_errors,compile_errors
+          assert not missing,missing
+          assert not old_review_residual,old_review_residual
+          assert not residual_unknown,residual_unknown
+          assert text.count(os.environ['REVIEW_ARTIFACT_PLACEHOLDER'])>0 and text.count(os.environ['REVIEW_ZIP_PLACEHOLDER'])>0
+          diff=''.join(difflib.unified_diff(raw.decode('utf-8').splitlines(True),text.splitlines(True),fromfile='rastel-finalizer-draft-v1.sh',tofile='rastel-finalizer-bound-template-v1.sh'))
+          (root/'source/draft-to-bound-template.patch').write_text(diff)
+          receipt={
+              'status':'cycle-011-rastel-exact-cycle-finalizer-template-bound-v1','version':1,
+              'source':{'bytes':len(raw),'sha256':sha(raw),'transformation_identity':transform['identity']},
+              'target':{'bytes':target.stat().st_size,'sha256':sha(target.read_bytes()),'bash_syntax':True,'embedded_python':len(blocks),'compile_errors':[]},
+              'prior_cycle':{'receipt_path':merx_path,'cycle_id':merx_cycle,'waterline_event':merx_event,'receipt_identity':merx_identity},
+              'current_cycle':{'cycle_id':rastel_cycle,'waterline_event':rastel_event,'receipt_identity':rastel_identity,'native_closure_identity':closure['identity']},
+              'review':{'payload_identity':json.loads((root/'receipt/review-payload.json').read_text())['identity'],'approval_identity':approval['identity'],'status':os.environ['NORMALIZED_STATUS'],'pr':int(os.environ['CARRIER_PR']),'head':os.environ['CARRIER_HEAD'],'run':int(os.environ['GITHUB_RUN_ID']),'job':int(os.environ['BINDER_JOB']),'artifact_placeholder':os.environ['REVIEW_ARTIFACT_PLACEHOLDER'],'artifact_sha256_placeholder':os.environ['REVIEW_ZIP_PLACEHOLDER']},
+              'contextual_replacements':contextual,
+              'review_replacements':review_rows,
+              'placeholders':{'artifact_id_occurrences':text.count(os.environ['REVIEW_ARTIFACT_PLACEHOLDER']),'artifact_sha256_occurrences':text.count(os.environ['REVIEW_ZIP_PLACEHOLDER'])},
+              'boundary':{'template_only':True,'finalizer_executed':False,'candidate_imported':False,'cycle_receipt_written_by_binder':False,'product_commit_created':False,'repository_write':False,'canonical_mutation':False,'cycle_012_authorized':False,'outside_human_dependency':False,'owner_physical_action_required':False},
+          }
+          receipt['identity']=sha(json.dumps(receipt,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())
+          (root/'receipt/binder.json').write_text(json.dumps(receipt,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          PY
+          jq -e '.status=="cycle-011-rastel-exact-cycle-finalizer-template-bound-v1" and .boundary.template_only==true and .target.bash_syntax==true' "$OUT/receipt/binder.json" >/dev/null
+
+      - name: Seal binder and review-payload ledgers
+        shell: bash
+        run: |
+          set -euo pipefail
+          find "$OUT/review-payload" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/review-payload/$rel" | sed "s#  $OUT/review-payload/#  #"; done > "$OUT/review-payload/BINDER-SHA256SUMS.pre"
+          sha256sum "$OUT/review-payload/BINDER-SHA256SUMS.pre" | sed "s#  $OUT/review-payload/#  #" > "$OUT/review-payload/BINDER-SHA256SUMS"
+          find "$OUT" -path "$OUT/review-payload" -prune -o -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/$rel" | sed "s#  $OUT/#  #"; done > "$OUT/SHA256SUMS.pre"
+          sha256sum "$OUT/SHA256SUMS.pre" | sed "s#  $OUT/#  #" > "$OUT/SHA256SUMS"
+          python3 - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          root=Path(os.environ['OUT'])
+          for pre,sealed in ((root/'SHA256SUMS.pre',root/'SHA256SUMS'),(root/'review-payload/BINDER-SHA256SUMS.pre',root/'review-payload/BINDER-SHA256SUMS')):
+              assert hashlib.sha256(pre.read_bytes()).hexdigest()==sealed.read_text().split()[0]
+              base=pre.parent
+              for raw in pre.read_text().splitlines():
+                  digest,name=raw.split(None,1); path=base/name.lstrip('*')
+                  assert path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==digest
+          PY
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CURRENT_BASE"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-normalized-review-payload-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v1/review-payload
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-exact-cycle-binder-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v1/api
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v1/source
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v1/receipt
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v1/logs
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v1/SHA256SUMS.pre
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v1/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-exact-cycle-binder-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v1
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v1-closure
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v1-normalizer
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
