@@ -1,0 +1,362 @@
+name: doctor-who-cycle-012-candidate-source-inspection-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-012-candidate-source-inspection-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-012-candidate-source-inspection-v1
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-012-candidate-source-inspection-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CARRIER_BASE: ${{ github.event.pull_request.base.sha }}
+      BRANCH: agent/doctor-who-cycle-012-candidate-source-inspection-v1
+      SELF: .github/workflows/doctor-who-cycle-012-candidate-source-inspection-v1.yml
+      OUT: /tmp/doctor-who-cycle-012-candidate-source-inspection-v1
+      REVIEW_PACKET: /tmp/doctor-who-cycle-012-candidate-source-inspection-v1-review
+      RETIREMENT_PACKET: /tmp/doctor-who-cycle-012-candidate-source-inspection-v1-retirement
+      PRIOR_PACKET: /tmp/doctor-who-cycle-012-candidate-source-inspection-v1-prior
+      REVIEW_BRANCH: agent/doctor-who-cycle-012-media-review-v1
+      REVIEW_WORKFLOW: doctor-who-cycle-012-media-review-v1
+      REVIEW_ARTIFACT_PREFIX: doctor-who-cycle-012-media-review-v1-
+      RETIREMENT_ARTIFACT_PREFIX: doctor-who-cycle-012-media-review-v1-retirement-
+      PRIOR_BRANCH: agent/doctor-who-cycle-011-rastel-candidate-v7-current-main
+      PRIOR_WORKFLOW: doctor-who-cycle-011-rastel-candidate-v7-current-main
+      PRIOR_ARTIFACT_PREFIX: doctor-who-cycle-011-rastel-candidate-v7-current-main-
+      PRIOR_TASK: ap_25277c8fbe9e5369ed2e3d81
+      PRIOR_WALL: UC-1356
+      PRIOR_PORTRAIT_SHA256: 42412f0f18ebf8f3ba536e633ac9777a19fa4f81277aad1086d410ea03501f4a
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind source inspector and exact media-review transaction
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" "$REVIEW_PACKET" "$RETIREMENT_PACKET" "$PRIOR_PACKET"
+          mkdir -p "$OUT"/{api,review,prior,source,receipt,logs,payload} "$REVIEW_PACKET" "$RETIREMENT_PACKET" "$PRIOR_PACKET"
+          head='${{ github.event.pull_request.head.sha }}'; pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"; test "$(git show -s --format=%P HEAD)" = "$CARRIER_BASE"; test "$(git rev-list --count "$CARRIER_BASE"..HEAD)" = 1; test -z "$(git rev-list --merges "$CARRIER_BASE"..HEAD)"; test "$(git diff --name-status "$CARRIER_BASE"...HEAD)" = $'A\t'"$SELF"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier.json"; gh api --method GET "/repos/$GITHUB_REPOSITORY/pulls" -f state=all -f head="${GITHUB_REPOSITORY_OWNER}:$REVIEW_BRANCH" -f per_page=100 > "$OUT/api/review-prs.json"
+          CARRIER_PR="$pr" CARRIER_HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          api=Path(os.environ['OUT'])/'api'; own=json.loads((api/'carrier.json').read_text()); rows=json.loads((api/'review-prs.json').read_text())
+          assert own['number']==int(os.environ['CARRIER_PR']) and own['state']=='open' and own['draft'] is True and own['merged'] is False; assert own['base']['sha']==os.environ['CARRIER_BASE'] and own['head']['ref']==os.environ['BRANCH'] and own['head']['sha']==os.environ['CARRIER_HEAD']; assert own['commits']==1 and own['changed_files']==1
+          rows=[row for row in rows if row['head']['ref']==os.environ['REVIEW_BRANCH'] and row['merged'] is False]; assert len(rows)==1,[(row['number'],row['state'],row['head']['sha']) for row in rows]
+          source=rows[0]; assert source['state']=='open' and source['draft'] is True and source['merged'] is False; (api/'review-pr.json').write_text(json.dumps(source,indent=2,sort_keys=True)+'\n'); (api/'review-head.txt').write_text(source['head']['sha']+'\n'); (api/'review-number.txt').write_text(str(source['number'])+'\n')
+          PY
+          review_head="$(cat "$OUT/api/review-head.txt")"; review_pr="$(cat "$OUT/api/review-number.txt")"; run_id=''
+          for attempt in $(seq 1 180); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f branch="$REVIEW_BRANCH" -f event=pull_request -f per_page=100 > "$OUT/api/review-runs.json"
+            run_id="$(REVIEW_HEAD="$review_head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/review-runs.json').read_text())['workflow_runs']; rows=[row for row in rows if row['head_sha']==os.environ['REVIEW_HEAD'] and row['name']==os.environ['REVIEW_WORKFLOW']]; rows.sort(key=lambda row:(row['run_attempt'],row['id']),reverse=True); print(rows[0]['id'] if rows else '')
+          PY
+          )"
+            if [ -n "$run_id" ]; then gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$OUT/api/review-run.json"; [ "$(jq -r '.status' "$OUT/api/review-run.json")" = completed ] && break; fi
+            sleep 10
+          done
+          test -n "$run_id"; test "$(jq -r '.status' "$OUT/api/review-run.json")" = completed; test "$(jq -r '.conclusion' "$OUT/api/review-run.json")" = success; review_attempt="$(jq -r '.run_attempt' "$OUT/api/review-run.json")"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$OUT/api/review-jobs.json"; gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$OUT/api/review-artifacts.json"
+          review_job="$(jq -r '.jobs[] | select(.name=="review" and .conclusion=="success") | .id' "$OUT/api/review-jobs.json")"; retire_job="$(jq -r '.jobs[] | select(.name=="retire_census" and .conclusion=="success") | .id' "$OUT/api/review-jobs.json")"; test -n "$review_job"; test -n "$retire_job"
+          REVIEW_RUN="$run_id" REVIEW_ATTEMPT="$review_attempt" python3 - <<'PY' > "$OUT/api/review-artifact-env"
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/review-artifacts.json').read_text())['artifacts']; run=os.environ['REVIEW_RUN']; attempt=os.environ['REVIEW_ATTEMPT']; expected={'REVIEW_ARTIFACT':os.environ['REVIEW_ARTIFACT_PREFIX']+run+'-attempt-'+attempt,'RETIREMENT_ARTIFACT':os.environ['RETIREMENT_ARTIFACT_PREFIX']+run+'-attempt-'+attempt}
+          for key,name in expected.items():
+              matches=[row for row in rows if row['name']==name and not row['expired']]; assert len(matches)==1,(key,name,[(row['id'],row['name']) for row in rows]); print(f'{key}={matches[0]["id"]}')
+          PY
+          source "$OUT/api/review-artifact-env"
+          for label in review retirement; do upper="${label^^}_ARTIFACT"; artifact="${!upper}"; gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact" > "$OUT/api/$label-artifact.json"; gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact/zip" > "$OUT/$label.zip"; digest="$(sha256sum "$OUT/$label.zip" | awk '{print $1}')"; test "$(jq -r '.digest' "$OUT/api/$label-artifact.json")" = "sha256:$digest"; printf '%s_ZIP_SHA256=%s\n' "${label^^}" "$digest" >> "$GITHUB_ENV"; done
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\nREVIEW_PR=%s\nREVIEW_HEAD=%s\nREVIEW_RUN=%s\nREVIEW_ATTEMPT=%s\nREVIEW_JOB=%s\nRETIRE_JOB=%s\nREVIEW_ARTIFACT=%s\nRETIREMENT_ARTIFACT=%s\n' "$pr" "$head" "$review_pr" "$review_head" "$run_id" "$review_attempt" "$review_job" "$retire_job" "$REVIEW_ARTIFACT" "$RETIREMENT_ARTIFACT" >> "$GITHUB_ENV"
+
+      - name: Authenticate media-review artifacts and exact prior candidate authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib,json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['OUT']); sha=lambda data:hashlib.sha256(data).hexdigest()
+          def extract(name,target):
+              target=Path(target)
+              with zipfile.ZipFile(root/(name+'.zip')) as archive:
+                  infos=archive.infolist(); assert infos and len(infos)==len({row.filename for row in infos})
+                  for info in infos:
+                      path=PurePosixPath(info.filename); assert not path.is_absolute() and '..' not in path.parts
+                      if info.is_dir():continue
+                      out=target/path; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(archive.read(info))
+          extract('review',os.environ['REVIEW_PACKET']); extract('retirement',os.environ['RETIREMENT_PACKET'])
+          def verify(target):
+              target=Path(target); rows=[]
+              for sealed in target.rglob('SHA256SUMS'):
+                  pre=sealed.with_name('SHA256SUMS.pre')
+                  if not pre.is_file():continue
+                  assert sha(pre.read_bytes())==sealed.read_text().split()[0]; base=sealed.parent; count=0
+                  for raw in pre.read_text().splitlines():
+                      if not raw.strip():continue
+                      digest,name=raw.split(None,1); path=base/name.lstrip('*'); assert path.is_file() and sha(path.read_bytes())==digest; count+=1
+                  rows.append({'root':base.relative_to(target).as_posix(),'rows':count,'sha256':sha(pre.read_bytes())})
+              assert rows; return rows
+          review_ledgers=verify(os.environ['REVIEW_PACKET']); retirement_ledgers=verify(os.environ['RETIREMENT_PACKET'])
+          def one_status(target,status):
+              rows=[]
+              for path in Path(target).rglob('*.json'):
+                  try:data=json.loads(path.read_text())
+                  except Exception:continue
+                  if data.get('status')==status:rows.append((path,data))
+              assert len(rows)==1,(status,[p.as_posix() for p,_ in rows]); return rows[0]
+          _,review=one_status(os.environ['REVIEW_PACKET'],'cycle-012-doctor-who-media-independently-adjudicated-v1'); _,retirement=one_status(os.environ['RETIREMENT_PACKET'],'cycle-012-media-census-carrier-retired-after-review-v1')
+          for data in (review,retirement):
+              identity=data.pop('identity'); assert sha(json.dumps(data,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())==identity; data['identity']=identity
+          assert retirement['review']['identity']==review['identity'] and retirement['review']['task_id']==review['task']['id']; assert retirement['canonical_main']==review['canonical_main']; assert all(review['gates'].values())
+          assert review['boundary']=={'media_review_only':True,'lease_issued':False,'queue_mutated':False,'canonical_mutated':False,'wall_created':False,'character_image_adopted':False,'performer_portrait_adopted':False,'cycle_receipt_written':False,'cycle_012_product_authority':False,'outside_human_dependency':False,'owner_physical_action_required':False}; assert retirement['boundary']=={'census_carrier_retired':True,'review_carrier_retained':True,'lease_issued':False,'queue_mutated':False,'canonical_mutated':False,'cycle_012_product_authority':False}
+          for rel in ('media-review.json','review/character-image-candidate','review/performer-portrait-candidate.jpg','review/portrait-crop.json'):
+              rows=[p for p in Path(os.environ['REVIEW_PACKET']).rglob(rel) if p.is_file()]; assert len(rows)<=1,(rel,[p.as_posix() for p in rows])
+              if rows:dst=root/'review'/rel; dst.parent.mkdir(parents=True,exist_ok=True); dst.write_bytes(rows[0].read_bytes())
+          (root/'review/media-review.json').write_text(json.dumps(review,indent=2,sort_keys=True,ensure_ascii=False)+'\n'); (root/'review/retirement.json').write_text(json.dumps(retirement,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          custody={'status':'cycle-012-media-review-authenticated-for-candidate-source-inspection-v1','version':1,'review':{'pr':int(os.environ['REVIEW_PR']),'head':os.environ['REVIEW_HEAD'],'run':int(os.environ['REVIEW_RUN']),'attempt':int(os.environ['REVIEW_ATTEMPT']),'review_job':int(os.environ['REVIEW_JOB']),'retire_job':int(os.environ['RETIRE_JOB']),'artifact':int(os.environ['REVIEW_ARTIFACT']),'artifact_sha256':os.environ['REVIEW_ZIP_SHA256'],'identity':review['identity'],'retirement_artifact':int(os.environ['RETIREMENT_ARTIFACT']),'retirement_artifact_sha256':os.environ['RETIREMENT_ZIP_SHA256'],'retirement_identity':retirement['identity']},'canonical_main':review['canonical_main'],'task':review['task'],'review_ledgers':review_ledgers,'retirement_ledgers':retirement_ledgers}
+          custody['identity']=sha(json.dumps(custody,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()); (root/'receipt/review-custody.json').write_text(json.dumps(custody,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          PY
+          gh api --method GET "/repos/$GITHUB_REPOSITORY/pulls" -f state=all -f head="${GITHUB_REPOSITORY_OWNER}:$PRIOR_BRANCH" -f per_page=100 > "$OUT/api/prior-prs.json"
+          PRIOR_PR="$PRIOR_BRANCH" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT']); rows=json.loads((root/'api/prior-prs.json').read_text()); rows=[row for row in rows if row['head']['ref']==os.environ['PRIOR_BRANCH']]; assert len(rows)==1,[(row['number'],row['state'],row['head']['sha']) for row in rows]; row=rows[0]; assert row['merged'] is False; (root/'api/prior-pr.json').write_text(json.dumps(row,indent=2,sort_keys=True)+'\n'); (root/'api/prior-head.txt').write_text(row['head']['sha']+'\n'); (root/'api/prior-number.txt').write_text(str(row['number'])+'\n')
+          PY
+          prior_head="$(cat "$OUT/api/prior-head.txt")"; prior_pr="$(cat "$OUT/api/prior-number.txt")"; : > "$OUT/api/prior-runs-all.jsonl"
+          for page in $(seq 1 10); do gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f event=pull_request -f per_page=100 -f page="$page" > "$OUT/api/prior-runs-$page.json"; jq -c '.workflow_runs[]' "$OUT/api/prior-runs-$page.json" >> "$OUT/api/prior-runs-all.jsonl"; [ "$(jq '.workflow_runs|length' "$OUT/api/prior-runs-$page.json")" -lt 100 ] && break; done
+          PRIOR_HEAD="$prior_head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT']); rows=[json.loads(line) for line in (root/'api/prior-runs-all.jsonl').read_text().splitlines() if line]; rows=[row for row in rows if row['head_sha']==os.environ['PRIOR_HEAD'] and row['name']==os.environ['PRIOR_WORKFLOW'] and row['status']=='completed' and row['conclusion']=='success']; rows.sort(key=lambda row:(row['run_attempt'],row['id']),reverse=True); assert rows,[(row['id'],row['name'],row['head_sha'],row['conclusion']) for row in rows[:10]]; row=rows[0]; (root/'api/prior-run.json').write_text(json.dumps(row,indent=2,sort_keys=True)+'\n'); (root/'api/prior-run-id.txt').write_text(str(row['id'])+'\n'); (root/'api/prior-attempt.txt').write_text(str(row['run_attempt'])+'\n')
+          PY
+          prior_run="$(cat "$OUT/api/prior-run-id.txt")"; prior_attempt="$(cat "$OUT/api/prior-attempt.txt")"; gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$prior_run/jobs?per_page=100" > "$OUT/api/prior-jobs.json"; gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$prior_run/artifacts?per_page=100" > "$OUT/api/prior-artifacts.json"
+          prior_job="$(python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/prior-jobs.json').read_text())['jobs']; rows=[row for row in rows if row['conclusion']=='success']; assert len(rows)==1,[(row['id'],row['name'],row['conclusion']) for row in rows]; print(rows[0]['id'])
+          PY
+          )"
+          prior_artifact="$(PRIOR_RUN="$prior_run" PRIOR_ATTEMPT="$prior_attempt" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/prior-artifacts.json').read_text())['artifacts']; prefix=os.environ['PRIOR_ARTIFACT_PREFIX']+os.environ['PRIOR_RUN']+'-attempt-'+os.environ['PRIOR_ATTEMPT']; rows=[row for row in rows if row['name']==prefix and not row['expired']]; assert len(rows)==1,(prefix,[(row['id'],row['name']) for row in rows]); print(rows[0]['id'])
+          PY
+          )"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$prior_artifact" > "$OUT/api/prior-artifact.json"; gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$prior_artifact/zip" > "$OUT/prior.zip"; prior_sha="$(sha256sum "$OUT/prior.zip" | awk '{print $1}')"; test "$(jq -r '.digest' "$OUT/api/prior-artifact.json")" = "sha256:$prior_sha"
+          printf 'PRIOR_PR=%s\nPRIOR_HEAD=%s\nPRIOR_RUN=%s\nPRIOR_ATTEMPT=%s\nPRIOR_JOB=%s\nPRIOR_ARTIFACT=%s\nPRIOR_ZIP_SHA256=%s\n' "$prior_pr" "$prior_head" "$prior_run" "$prior_attempt" "$prior_job" "$prior_artifact" "$prior_sha" >> "$GITHUB_ENV"
+
+      - name: Recover exact prior workflow and hidden candidate materializer without execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$PRIOR_PR/files?per_page=100" > "$OUT/api/prior-files.json"
+          PRIOR_HEAD="$PRIOR_HEAD" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT']); rows=json.loads((root/'api/prior-files.json').read_text()); paths=[row['filename'] for row in rows if row['filename'].startswith('.github/workflows/') and row['filename'].endswith(('.yml','.yaml'))]; assert len(paths)==1,paths; (root/'api/prior-workflow-path.txt').write_text(paths[0]+'\n')
+          PY
+          prior_path="$(cat "$OUT/api/prior-workflow-path.txt")"; gh api "/repos/$GITHUB_REPOSITORY/contents/$prior_path?ref=$PRIOR_HEAD" > "$OUT/api/prior-workflow-content.json"; jq -r '.content' "$OUT/api/prior-workflow-content.json" | tr -d '\n' | base64 -d > "$OUT/source/prior-workflow.yml"
+          python3 - <<'PY'
+          import hashlib,json,os,re,subprocess,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['OUT']); target=Path(os.environ['PRIOR_PACKET']); sha=lambda data:hashlib.sha256(data).hexdigest()
+          with zipfile.ZipFile(root/'prior.zip') as archive:
+              infos=archive.infolist(); assert infos and len(infos)==len({row.filename for row in infos})
+              for info in infos:
+                  path=PurePosixPath(info.filename); assert not path.is_absolute() and '..' not in path.parts
+                  if info.is_dir():continue
+                  out=target/path; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(archive.read(info))
+          ledgers=[]
+          for sealed in target.rglob('SHA256SUMS'):
+              pre=sealed.with_name('SHA256SUMS.pre')
+              if not pre.is_file():continue
+              assert sha(pre.read_bytes())==sealed.read_text().split()[0]; base=sealed.parent; count=0
+              for raw in pre.read_text().splitlines():
+                  if not raw.strip():continue
+                  digest,name=raw.split(None,1); path=base/name.lstrip('*'); assert path.is_file() and sha(path.read_bytes())==digest; count+=1
+              ledgers.append({'root':base.relative_to(target).as_posix(),'rows':count,'sha256':sha(pre.read_bytes())})
+          assert ledgers
+          markers=[os.environ['PRIOR_TASK'],'lease.claimed','draft.accept','task.merged','media-verified','npm run gate']
+          candidates=[]
+          for path in target.rglob('*'):
+              if not path.is_file() or path.stat().st_size<10000 or path.stat().st_size>300000:continue
+              try:text=path.read_text()
+              except Exception:continue
+              counts={marker:text.count(marker) for marker in markers}; score=sum((10 if marker==os.environ['PRIOR_TASK'] else 4)*count for marker,count in counts.items())
+              if all(counts[marker]>0 for marker in markers):candidates.append({'path':path,'text':text,'score':score,'counts':counts})
+          assert candidates,[(p.relative_to(target).as_posix(),p.stat().st_size) for p in target.rglob('*') if p.is_file() and 10000<=p.stat().st_size<=300000][:100]
+          maximum=max(row['score'] for row in candidates); selected=[row for row in candidates if row['score']==maximum]; assert len(selected)==1,[(row['path'].as_posix(),row['score'],row['counts']) for row in selected]; selected=selected[0]
+          materializer=selected['path']; subprocess.run(['bash','-n',str(materializer)],check=True)
+          blocks=re.findall(r"python3 - <<'PY'\n(.*?)\nPY",selected['text'],re.S)
+          for index,block in enumerate(blocks):compile(block,f'<embedded-{index}>','exec')
+          output=root/'source/prior-materializer.sh'; output.write_bytes(materializer.read_bytes())
+          workflow=root/'source/prior-workflow.yml'; workflow_meta={'path':(root/'api/prior-workflow-path.txt').read_text().strip(),'git_blob':json.loads((root/'api/prior-workflow-content.json').read_text())['sha'],'bytes':workflow.stat().st_size,'sha256':sha(workflow.read_bytes())}
+          matched=[]
+          for path in target.rglob('*.json'):
+              try:data=json.loads(path.read_text())
+              except Exception:continue
+              text=json.dumps(data,sort_keys=True)
+              if os.environ['PRIOR_TASK'] in text and ('305' in text or os.environ['PRIOR_WALL'] in text):
+                  dst=root/'source/receipts'/path.relative_to(target); dst.parent.mkdir(parents=True,exist_ok=True); dst.write_bytes(path.read_bytes()); matched.append({'path':path.relative_to(target).as_posix(),'bytes':path.stat().st_size,'sha256':sha(path.read_bytes())})
+          assert matched
+          census={'status':'cycle-012-prior-candidate-mechanism-recovered-v1','version':1,'prior':{'pr':int(os.environ['PRIOR_PR']),'head':os.environ['PRIOR_HEAD'],'run':int(os.environ['PRIOR_RUN']),'attempt':int(os.environ['PRIOR_ATTEMPT']),'job':int(os.environ['PRIOR_JOB']),'artifact':int(os.environ['PRIOR_ARTIFACT']),'artifact_sha256':os.environ['PRIOR_ZIP_SHA256'],'branch':os.environ['PRIOR_BRANCH'],'workflow':workflow_meta},'materializer':{'source_path':materializer.relative_to(target).as_posix(),'bytes':materializer.stat().st_size,'sha256':sha(materializer.read_bytes()),'score':selected['score'],'marker_counts':selected['counts'],'embedded_python_programs':len(blocks),'bash_syntax':True},'matched_receipts':matched,'artifact_ledgers':ledgers,'execution':{'workflow_executed':False,'materializer_executed':False,'candidate_transaction_executed':False}}
+          census['identity']=sha(json.dumps(census,sort_keys=True,separators=(',',':')).encode()); (root/'source/mechanism.json').write_text(json.dumps(census,indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Seal exact nonexecuted candidate-source inspection
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT']); sha=lambda data:hashlib.sha256(data).hexdigest(); custody=json.loads((root/'receipt/review-custody.json').read_text()); review=json.loads((root/'review/media-review.json').read_text()); mechanism=json.loads((root/'source/mechanism.json').read_text())
+          receipt={'status':'cycle-012-candidate-source-inspection-complete-v1','version':1,'carrier':{'pr':int(os.environ['CARRIER_PR']),'head':os.environ['CARRIER_HEAD'],'carrier_base':os.environ['CARRIER_BASE']},'media_review':custody['review'],'media_review_identity':review['identity'],'canonical_main':review['canonical_main'],'task':review['task'],'character_image':review['character_image'],'performer_portrait':review['performer_portrait'],'prior_mechanism':mechanism,'boundary':{'source_inspection_only':True,'workflow_executed':False,'materializer_executed':False,'candidate_transaction_executed':False,'lease_issued':False,'queue_mutated':False,'canonical_mutated':False,'wall_created':False,'media_adopted':False,'cycle_receipt_written':False,'cycle_012_product_authority':False,'outside_human_dependency':False,'owner_physical_action_required':False}}
+          receipt['identity']=sha(json.dumps(receipt,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()); (root/'payload/source-inspection.json').write_text(json.dumps(receipt,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          for name in ('source/prior-workflow.yml','source/prior-materializer.sh','source/mechanism.json','receipt/review-custody.json','review/media-review.json'):
+              src=root/name; dst=root/'payload'/name; dst.parent.mkdir(parents=True,exist_ok=True); dst.write_bytes(src.read_bytes())
+          for path in (root/'source/receipts').rglob('*'):
+              if path.is_file():dst=root/'payload/source/receipts'/path.relative_to(root/'source/receipts'); dst.parent.mkdir(parents=True,exist_ok=True); dst.write_bytes(path.read_bytes())
+          for name in ('review/character-image-candidate','review/performer-portrait-candidate.jpg','review/portrait-crop.json'):
+              src=root/name
+              if src.is_file():dst=root/'payload'/name; dst.parent.mkdir(parents=True,exist_ok=True); dst.write_bytes(src.read_bytes())
+          PY
+          find "$OUT/payload" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/payload/$rel" | sed "s#  $OUT/payload/#  #"; done > "$OUT/payload/SHA256SUMS.pre"; sha256sum "$OUT/payload/SHA256SUMS.pre" | sed "s#  $OUT/payload/#  #" > "$OUT/payload/SHA256SUMS"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-candidate-source-inspection-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-012-candidate-source-inspection-v1/payload
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-candidate-source-inspection-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-012-candidate-source-inspection-v1
+            /tmp/doctor-who-cycle-012-candidate-source-inspection-v1-review
+            /tmp/doctor-who-cycle-012-candidate-source-inspection-v1-retirement
+            /tmp/doctor-who-cycle-012-candidate-source-inspection-v1-prior
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
+
+  retire_review:
+    needs: inspect
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PACKET: /tmp/doctor-who-cycle-012-candidate-source-inspection-v1-retire-input
+      OUT: /tmp/doctor-who-cycle-012-candidate-source-inspection-v1-retire-result
+      SOURCE_NAME: doctor-who-cycle-012-candidate-source-inspection-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+      REVIEW_BRANCH: agent/doctor-who-cycle-012-media-review-v1
+      SOURCE_BRANCH: agent/doctor-who-cycle-012-candidate-source-inspection-v1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Authenticate source inspection and retire exact media-review carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$PACKET" "$OUT"; mkdir -p "$PACKET" "$OUT"/{api,receipt,logs}; artifact=''
+          for attempt in $(seq 1 60); do gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" > "$OUT/api/run-artifacts.json"; artifact="$(python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/run-artifacts.json').read_text())['artifacts']; rows=[row for row in rows if row['name']==os.environ['SOURCE_NAME'] and not row['expired']]; print(rows[0]['id'] if len(rows)==1 else '')
+          PY
+          )"; [ -n "$artifact" ] && break; sleep 2; done
+          test -n "$artifact"; gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact" > "$OUT/api/source-artifact.json"; gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact/zip" > "$OUT/source.zip"; zip_sha="$(sha256sum "$OUT/source.zip" | awk '{print $1}')"; test "$(jq -r '.digest' "$OUT/api/source-artifact.json")" = "sha256:$zip_sha"
+          SOURCE_ARTIFACT="$artifact" SOURCE_ZIP_SHA256="$zip_sha" python3 - <<'PY'
+          import hashlib,json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          out=Path(os.environ['OUT']); packet=Path(os.environ['PACKET']); sha=lambda data:hashlib.sha256(data).hexdigest()
+          with zipfile.ZipFile(out/'source.zip') as archive:
+              infos=archive.infolist(); assert infos and len(infos)==len({row.filename for row in infos})
+              for info in infos:
+                  path=PurePosixPath(info.filename); assert not path.is_absolute() and '..' not in path.parts
+                  if info.is_dir():continue
+                  target=packet/path; target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes(archive.read(info))
+          pre=packet/'SHA256SUMS.pre'; sealed=packet/'SHA256SUMS'; assert sha(pre.read_bytes())==sealed.read_text().split()[0]
+          for raw in pre.read_text().splitlines():digest,name=raw.split(None,1); path=packet/name.lstrip('*'); assert path.is_file() and sha(path.read_bytes())==digest
+          receipt=json.loads((packet/'source-inspection.json').read_text()); identity=receipt.pop('identity'); assert sha(json.dumps(receipt,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())==identity; receipt['identity']=identity
+          assert receipt['status']=='cycle-012-candidate-source-inspection-complete-v1'; assert receipt['boundary']=={'source_inspection_only':True,'workflow_executed':False,'materializer_executed':False,'candidate_transaction_executed':False,'lease_issued':False,'queue_mutated':False,'canonical_mutated':False,'wall_created':False,'media_adopted':False,'cycle_receipt_written':False,'cycle_012_product_authority':False,'outside_human_dependency':False,'owner_physical_action_required':False}; assert receipt['prior_mechanism']['execution']=={'workflow_executed':False,'materializer_executed':False,'candidate_transaction_executed':False}; (out/'receipt/source.json').write_text(json.dumps(receipt,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          PY
+          review_pr="$(jq -r '.media_review.pr' "$OUT/receipt/source.json")"; review_head="$(jq -r '.media_review.head' "$OUT/receipt/source.json")"; canonical="$(jq -r '.canonical_main' "$OUT/receipt/source.json")"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$review_pr" > "$OUT/api/review-pr-before.json"; test "$(jq -r '.state' "$OUT/api/review-pr-before.json")" = open; test "$(jq -r '.merged' "$OUT/api/review-pr-before.json")" = false; test "$(jq -r '.head.ref' "$OUT/api/review-pr-before.json")" = "$REVIEW_BRANCH"; test "$(jq -r '.head.sha' "$OUT/api/review-pr-before.json")" = "$review_head"; test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$REVIEW_BRANCH" --jq '.object.sha')" = "$review_head"; test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$canonical"
+          gh api --method PATCH "/repos/$GITHUB_REPOSITORY/pulls/$review_pr" -f state=closed > "$OUT/api/review-pr-close.json"; test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$REVIEW_BRANCH" --jq '.object.sha')" = "$review_head"; gh api --method DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$REVIEW_BRANCH"; if gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$REVIEW_BRANCH" > /dev/null 2>&1; then exit 1; fi
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$review_pr" > "$OUT/api/review-pr-after.json"; test "$(jq -r '.state' "$OUT/api/review-pr-after.json")" = closed; test "$(jq -r '.merged' "$OUT/api/review-pr-after.json")" = false; test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$canonical"; test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$SOURCE_BRANCH" --jq '.object.sha')" = "${{ github.event.pull_request.head.sha }}"
+          printf 'SOURCE_ARTIFACT=%s\nSOURCE_ZIP_SHA256=%s\nREVIEW_PR=%s\nREVIEW_HEAD=%s\nCANONICAL_MAIN=%s\n' "$artifact" "$zip_sha" "$review_pr" "$review_head" "$canonical" >> "$GITHUB_ENV"
+
+      - name: Seal media-review-carrier retirement receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT']); source=json.loads((root/'receipt/source.json').read_text()); sha=lambda data:hashlib.sha256(data).hexdigest(); receipt={'status':'cycle-012-media-review-carrier-retired-after-source-inspection-v1','version':1,'run':int(os.environ['GITHUB_RUN_ID']),'attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'source':{'artifact':int(os.environ['SOURCE_ARTIFACT']),'artifact_sha256':os.environ['SOURCE_ZIP_SHA256'],'identity':source['identity'],'task_id':source['task']['id']},'review':{'pr':int(os.environ['REVIEW_PR']),'head':os.environ['REVIEW_HEAD'],'branch':os.environ['REVIEW_BRANCH'],'state':'closed','ref':'absent'},'canonical_main':os.environ['CANONICAL_MAIN'],'retained_source_branch':os.environ['SOURCE_BRANCH'],'boundary':{'review_carrier_retired':True,'source_carrier_retained':True,'lease_issued':False,'queue_mutated':False,'canonical_mutated':False,'cycle_012_product_authority':False}}; receipt['identity']=sha(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()); (root/'receipt/retirement.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          find "$OUT" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/$rel" | sed "s#  $OUT/#  #"; done > "$OUT/SHA256SUMS.pre"; sha256sum "$OUT/SHA256SUMS.pre" | sed "s#  $OUT/#  #" > "$OUT/SHA256SUMS"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-candidate-source-inspection-v1-retirement-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-012-candidate-source-inspection-v1-retire-result
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-candidate-source-inspection-v1-retirement-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-012-candidate-source-inspection-v1-retire-input
+            /tmp/doctor-who-cycle-012-candidate-source-inspection-v1-retire-result
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
