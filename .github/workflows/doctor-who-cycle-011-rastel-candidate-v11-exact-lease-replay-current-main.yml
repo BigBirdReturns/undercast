@@ -1,0 +1,156 @@
+name: doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay-current-main
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay-current-main.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay-current-main
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay-current-main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CARRIER: /tmp/doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay-carrier
+      BUNDLE_BLOBS: "9b44e6994e5f32c28d77bcd1779901a4f96aefaa dab3ae38896f50bd5a5420b4362c7bbe3d13a8dc 510810143932f6e04a212706654bf11cfec67505 34f3439a4f12e141432bc6a847566954633abe00 12cc57bfb1755eba6832b51ccc1e115994c41e97 8f7e568378014e1c95b14600bc5484147bfee980 53ada36c863e8ec3d2aeb46b069e8bee4b4cf52d 2bbe8f5bf1f555874021009090bb50c60c961311"
+      CHUNK_BYTES: "3704 3704 3704 3704 3704 3704 3704 3700"
+      CHUNK_SHA256: "b5c86f851bf28875a01c034037c034dd2c2c00ffecb9cde94292d82201436acd 87215002b3bc9564c974639189c3653c82b1852309d5e43600924c8439fc83c5 05c70110c74d4ec52fcd82dcc214d7d4b68ef8c8d3608384f6b66ccb65fad27f 2085745dddad67b28948f78cdc6c7aef38710eef40aff46f305abef684d46951 38a934517d36d47a29fe204419bd70a5538a158dcb33be976117c1efee8fe463 bf8daa94dabad1a1f2802a559a57432896a3800fa3dd24869233ff12401b4ecf aa8d3fc39c3dc357fdfdcf7718ba948c2588c536c1814ca0a9c7642e65a4156c 0298cb54d8fc6de6dd492a01bec9aa5ed9d3561ffd4a9d994a7833ffff85bb7a"
+      BUNDLE_B64_BYTES: "29628"
+      BUNDLE_B64_SHA256: e2b394267ab847cfd9004c70e9752e825f9e5542416abc11cc3374f866cc9057
+      BUNDLE_BYTES: "22220"
+      BUNDLE_SHA256: 732cdb5f070765e48e73679eddb18f431b218cedaafe8bf60337da4b0b122160
+      LAUNCHER_BYTES: "23625"
+      LAUNCHER_SHA256: 145561865441cca750156e7eafa1b73dbc61ad2bab1f2e1dd40fc4d30af2ad79
+      MATERIALIZER_BYTES: "51893"
+      MATERIALIZER_SHA256: dfcc27702c7a25301e57f4b123678f564f4200ddd89b6bab7e6bef77bc248849
+      PATCH_BYTES: "12829"
+      PATCH_SHA256: 5520d3aa82acf0e2a2c67f01f0ab5d041d1e09bdb9bd46e155e39f285a04d626
+      CHANGES_BYTES: "3659"
+      CHANGES_SHA256: 1f04793a9e7300aacc748cca443b007bb63c79286471e55f003be768b7a6e329
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Authenticate exact V11 transport and execute retained-lease replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$CARRIER"
+          mkdir -p "$CARRIER/chunks" "$CARRIER/bundle"
+          : > "$CARRIER/bundle.tar.gz.b64"
+          read -r -a blobs <<< "$BUNDLE_BLOBS"
+          read -r -a sizes <<< "$CHUNK_BYTES"
+          read -r -a hashes <<< "$CHUNK_SHA256"
+          test "${#blobs[@]}" = 8
+          test "${#sizes[@]}" = 8
+          test "${#hashes[@]}" = 8
+          test "$(printf '%s\n' "${blobs[@]}" | sort -u | wc -l | tr -d ' ')" = 8
+          for index in 0 1 2 3 4 5 6 7; do
+            gh api "/repos/$GITHUB_REPOSITORY/git/blobs/${blobs[$index]}" --jq '.content' | tr -d '\n' | base64 -d > "$CARRIER/chunks/$index"
+            test "$(wc -c < "$CARRIER/chunks/$index" | tr -d ' ')" = "${sizes[$index]}"
+            test "$(sha256sum "$CARRIER/chunks/$index" | awk '{print $1}')" = "${hashes[$index]}"
+            cat "$CARRIER/chunks/$index" >> "$CARRIER/bundle.tar.gz.b64"
+          done
+          test "$(wc -c < "$CARRIER/bundle.tar.gz.b64" | tr -d ' ')" = "$BUNDLE_B64_BYTES"
+          test "$(sha256sum "$CARRIER/bundle.tar.gz.b64" | awk '{print $1}')" = "$BUNDLE_B64_SHA256"
+          base64 -d "$CARRIER/bundle.tar.gz.b64" > "$CARRIER/bundle.tar.gz"
+          test "$(wc -c < "$CARRIER/bundle.tar.gz" | tr -d ' ')" = "$BUNDLE_BYTES"
+          test "$(sha256sum "$CARRIER/bundle.tar.gz" | awk '{print $1}')" = "$BUNDLE_SHA256"
+          python3 - <<'PY'
+          import os, tarfile
+          from pathlib import Path, PurePosixPath
+          root=Path(os.environ['CARRIER'])
+          dest=root/'bundle'
+          expected={'launcher.sh','materialize-v11.sh','materializer.patch','materializer-changes.json'}
+          with tarfile.open(root/'bundle.tar.gz','r:gz') as archive:
+              members=archive.getmembers()
+              assert len(members)==4 and {m.name for m in members}==expected
+              for member in members:
+                  path=PurePosixPath(member.name)
+                  assert not path.is_absolute() and '..' not in path.parts
+                  assert member.isfile() and not member.issym() and not member.islnk()
+                  target=dest/path
+                  target.parent.mkdir(parents=True,exist_ok=True)
+                  source=archive.extractfile(member)
+                  assert source is not None
+                  target.write_bytes(source.read())
+          assert {p.name for p in dest.iterdir()}==expected
+          PY
+          test "$(wc -c < "$CARRIER/bundle/launcher.sh" | tr -d ' ')" = "$LAUNCHER_BYTES"
+          test "$(sha256sum "$CARRIER/bundle/launcher.sh" | awk '{print $1}')" = "$LAUNCHER_SHA256"
+          test "$(wc -c < "$CARRIER/bundle/materialize-v11.sh" | tr -d ' ')" = "$MATERIALIZER_BYTES"
+          test "$(sha256sum "$CARRIER/bundle/materialize-v11.sh" | awk '{print $1}')" = "$MATERIALIZER_SHA256"
+          test "$(wc -c < "$CARRIER/bundle/materializer.patch" | tr -d ' ')" = "$PATCH_BYTES"
+          test "$(sha256sum "$CARRIER/bundle/materializer.patch" | awk '{print $1}')" = "$PATCH_SHA256"
+          test "$(wc -c < "$CARRIER/bundle/materializer-changes.json" | tr -d ' ')" = "$CHANGES_BYTES"
+          test "$(sha256sum "$CARRIER/bundle/materializer-changes.json" | awk '{print $1}')" = "$CHANGES_SHA256"
+          bash -n "$CARRIER/bundle/launcher.sh"
+          bash -n "$CARRIER/bundle/materialize-v11.sh"
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          root=Path('/tmp/doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay-carrier/bundle')
+          expected={'launcher.sh':3,'materialize-v11.sh':12}
+          for name,count in expected.items():
+              text=(root/name).read_text()
+              blocks=re.findall(r"python3 - <<'PY'\n(.*?)\nPY",text,re.S)
+              assert len(blocks)==count,(name,len(blocks),count)
+              for index,block in enumerate(blocks,1):
+                  compile(block,f'<rastel-v11-{name}-{index}>','exec')
+          PY
+          chmod 700 "$CARRIER/bundle/launcher.sh" "$CARRIER/bundle/materialize-v11.sh"
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          base='${{ github.event.pull_request.base.sha }}'
+          V11_BUNDLE_ROOT="$CARRIER/bundle" CURRENT_HEAD="$head" CURRENT_PR="$pr" CURRENT_BASE="$base" exec "$CARRIER/bundle/launcher.sh"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay-current-main-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay-current-main-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay
+            /tmp/doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay-bootstrap
+            /tmp/doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay-control
+            /tmp/doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay-carrier
+            !/tmp/doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay-bootstrap/v6.zip
+            !/tmp/doctor-who-cycle-011-rastel-candidate-v11-exact-lease-replay-bootstrap/v10.zip
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
