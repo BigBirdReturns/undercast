@@ -1,0 +1,122 @@
+name: doctor-who-cycle-011-rastel-candidate-v9-exact-lease-current-main
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-candidate-v9-exact-lease-current-main.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-candidate-v9-exact-lease-current-main
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-candidate-v9-exact-lease-current-main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TRANSPORT: /tmp/doctor-who-cycle-011-rastel-candidate-v9-exact-lease-transport
+      CONTROLLER_BLOBS: "981a41da886aa7da531e612e26b7ff01a48b2267 7e81ff744a7e8f12f2c3b185ce53e30fef2c24de"
+      CONTROLLER_CHUNK_BYTES: "2400 2096"
+      CONTROLLER_CHUNK_SHA256: "b00bf5f2905c2a2a7d3c258ccbf9e653ebf06a4fb0e6daa3a42001606e3f4988 07785c7e93b4fd5c7c3517dbbbc7acd82bd65145e6b2462ee91ebd76b457325e"
+      CONTROLLER_B64_BYTES: "4496"
+      CONTROLLER_B64_SHA256: e1b34aeddf64bd43de1db368ce7f053fb67c50824e93703fb9f68357fe472412
+      CONTROLLER_GZIP_BYTES: "3371"
+      CONTROLLER_GZIP_SHA256: 9147b28d1757e94a745c3b3ce0f632bed02036bfd1021fd4eac84af8b0ad2b60
+      CONTROLLER_BYTES: "10622"
+      CONTROLLER_SHA256: f703be6c5040c7d17455e1dd367030da1ca4ea6ab6004e46b9d6cd46bdabd6d6
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Reconstruct exact V9 controller and execute
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$TRANSPORT"
+          mkdir -p "$TRANSPORT"
+          : > "$TRANSPORT/controller.sh.gz.b64"
+          read -r -a blobs <<< "$CONTROLLER_BLOBS"
+          read -r -a sizes <<< "$CONTROLLER_CHUNK_BYTES"
+          read -r -a hashes <<< "$CONTROLLER_CHUNK_SHA256"
+          test "${#blobs[@]}" = 2
+          test "${#sizes[@]}" = 2
+          test "${#hashes[@]}" = 2
+          for index in 0 1; do
+            gh api "/repos/$GITHUB_REPOSITORY/git/blobs/${blobs[$index]}" --jq '.content' | tr -d '\n' | base64 -d > "$TRANSPORT/chunk.$index"
+            test "$(wc -c < "$TRANSPORT/chunk.$index" | tr -d ' ')" = "${sizes[$index]}"
+            test "$(sha256sum "$TRANSPORT/chunk.$index" | awk '{print $1}')" = "${hashes[$index]}"
+            cat "$TRANSPORT/chunk.$index" >> "$TRANSPORT/controller.sh.gz.b64"
+          done
+          test "$(wc -c < "$TRANSPORT/controller.sh.gz.b64" | tr -d ' ')" = "$CONTROLLER_B64_BYTES"
+          test "$(sha256sum "$TRANSPORT/controller.sh.gz.b64" | awk '{print $1}')" = "$CONTROLLER_B64_SHA256"
+          base64 -d "$TRANSPORT/controller.sh.gz.b64" > "$TRANSPORT/controller.sh.gz"
+          test "$(wc -c < "$TRANSPORT/controller.sh.gz" | tr -d ' ')" = "$CONTROLLER_GZIP_BYTES"
+          test "$(sha256sum "$TRANSPORT/controller.sh.gz" | awk '{print $1}')" = "$CONTROLLER_GZIP_SHA256"
+          gzip -dc "$TRANSPORT/controller.sh.gz" > "$TRANSPORT/controller.sh"
+          test "$(wc -c < "$TRANSPORT/controller.sh" | tr -d ' ')" = "$CONTROLLER_BYTES"
+          test "$(sha256sum "$TRANSPORT/controller.sh" | awk '{print $1}')" = "$CONTROLLER_SHA256"
+          bash -n "$TRANSPORT/controller.sh"
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text=Path('/tmp/doctor-who-cycle-011-rastel-candidate-v9-exact-lease-transport/controller.sh').read_text()
+          blocks=re.findall(r"python3 - <<'PY'\n(.*?)\nPY",text,re.S)
+          assert len(blocks)==1
+          for index,block in enumerate(blocks,1): compile(block,f'<rastel-v9-controller-{index}>','exec')
+          assert text.count("assert lease==os.environ['EXACT_LEASE_ID']")==2
+          assert "assert re.fullmatch(r'lease_[0-9a-f]{24}',lease),lease" not in text
+          assert "len(lease)==31" in text
+          assert "export EXACT_LEASE_ID='lease_a6fc819786f4296a40bdc540'" in text
+          PY
+          chmod 700 "$TRANSPORT/controller.sh"
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          base='${{ github.event.pull_request.base.sha }}'
+          CURRENT_HEAD="$head" CURRENT_PR="$pr" CURRENT_BASE="$base" exec "$TRANSPORT/controller.sh"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-candidate-v9-exact-lease-current-main-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-candidate-v9-exact-lease
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-candidate-v9-exact-lease-current-main-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-011-rastel-candidate-v9-exact-lease
+            /tmp/doctor-who-cycle-011-rastel-candidate-v9-exact-lease-bootstrap
+            /tmp/doctor-who-cycle-011-rastel-candidate-v9-exact-lease-control
+            /tmp/doctor-who-cycle-011-rastel-candidate-v9-exact-lease-transport
+            !/tmp/doctor-who-cycle-011-rastel-candidate-v9-exact-lease-transport/v7.zip
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
