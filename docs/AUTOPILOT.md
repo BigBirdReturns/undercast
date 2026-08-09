@@ -402,3 +402,11 @@ The eighth bounded Doctor Who cycle is receipted by `data/review/adapter-sdk/doc
 - Queue: 307 queued / 9 resolved / 0 in flight.
 - The Dan Starkey portrait is verified at `images/uc-1354-portrait.jpg`; the Megnus Jaka character still remains honestly absent.
 - Reviewed cycle: `cycle_42b1d086ae8eab34f09827dc` at `2026-08-08T19:58:14Z`; cycle 010 remains unauthorized.
+
+
+## Doctor Who cycle 010 — Merx
+
+- Task `ap_cab2d7f95d930401627c1b30` is resolved as Dan Starkey's voice performance as Commander Merx in *The Sontaran Project*.
+- Queue: 306 queued / 10 resolved / 0 in flight.
+- The byte-distinct Dan Starkey portrait is verified at `images/uc-1355-portrait.jpg`; the Merx character still remains honestly absent.
+- Reviewed cycle: `cycle_fb68b31d510d9fe9f05ff4a1` at `2026-08-09T04:30:00Z`; cycle 011 remains unauthorized.
