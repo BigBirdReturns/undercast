@@ -1,0 +1,316 @@
+name: doctor-who-cycle-011-rastel-current-main-review-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-current-main-review-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-current-main-review-v1
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-current-main-review-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_MAIN: 96abbacf2f033ff9bceef0205ea477cd17e45fcd
+      SOURCE_TREE: cd1f495acf79d8d8d24861cdfde84dd137fec386
+      BRANCH: agent/doctor-who-cycle-011-rastel-current-main-review-v1
+      SELF: .github/workflows/doctor-who-cycle-011-rastel-current-main-review-v1.yml
+      OUT: /tmp/doctor-who-cycle-011-rastel-current-main-review-v1
+      PACKET: /tmp/doctor-who-cycle-011-rastel-current-main-review-v1-source
+      WORKTREE: /tmp/doctor-who-cycle-011-rastel-current-main-review-v1-worktree
+      RECOMPOSE_BRANCH: agent/doctor-who-cycle-011-rastel-current-main-recomposition-v2
+      RECOMPOSE_WORKFLOW: doctor-who-cycle-011-rastel-current-main-recomposition-v2
+      RECOMPOSE_ARTIFACT_PREFIX: doctor-who-cycle-011-rastel-current-main-recomposition-v2-
+      TASK_ID: ap_25277c8fbe9e5369ed2e3d81
+      WALL_ID: UC-1356
+      EXPECTED_LEASE: lease_20eea426f818ecf4732fce39
+      PORTRAIT_SHA256: 42412f0f18ebf8f3ba536e633ac9777a19fa4f81277aad1086d410ea03501f4a
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind reviewer and exact terminal recomposition run
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" "$PACKET" "$WORKTREE"
+          mkdir -p "$OUT"/{api,logs,receipt,handoff} "$PACKET"
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          current='${{ github.event.pull_request.base.sha }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test "$(git show -s --format=%P HEAD)" = "$current"
+          test "$(git rev-list --count "$current"..HEAD)" = 1
+          test -z "$(git rev-list --merges "$current"..HEAD)"
+          test "$(git diff --name-status "$current"...HEAD)" = $'A\t'"$SELF"
+          git merge-base --is-ancestor "$SOURCE_MAIN" "$current"
+          test -z "$(git diff --name-only "$SOURCE_MAIN...$current")"
+          test "$(git show -s --format=%T "$current")" = "$SOURCE_TREE"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$current"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/reviewer-pr.json"
+          gh api --method GET "/repos/$GITHUB_REPOSITORY/pulls" -f state=all -f head="${GITHUB_REPOSITORY_OWNER}:$RECOMPOSE_BRANCH" -f per_page=100 > "$OUT/api/recompose-prs.json"
+          REVIEWER_PR="$pr" REVIEWER_HEAD="$head" CURRENT_MAIN="$current" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          api=Path(os.environ['OUT'])/'api'
+          own=json.loads((api/'reviewer-pr.json').read_text())
+          rows=json.loads((api/'recompose-prs.json').read_text())
+          assert own['number']==int(os.environ['REVIEWER_PR']) and own['state']=='open' and own['draft'] is True and own['merged'] is False
+          assert own['base']['sha']==os.environ['CURRENT_MAIN'] and own['head']['ref']==os.environ['BRANCH'] and own['head']['sha']==os.environ['REVIEWER_HEAD']
+          assert own['commits']==1 and own['changed_files']==1
+          rows=[row for row in rows if row['head']['ref']==os.environ['RECOMPOSE_BRANCH'] and row['merged'] is False]
+          assert len(rows)==1,[(row['number'],row['state'],row['head']['sha']) for row in rows]
+          source=rows[0]
+          assert source['state']=='open' and source['draft'] is True and source['base']['sha']==os.environ['CURRENT_MAIN']
+          (api/'recompose-pr.json').write_text(json.dumps(source,indent=2,sort_keys=True)+'\n')
+          (api/'recompose-head.txt').write_text(source['head']['sha']+'\n')
+          (api/'recompose-number.txt').write_text(str(source['number'])+'\n')
+          PY
+          source_head="$(cat "$OUT/api/recompose-head.txt")"
+          source_pr="$(cat "$OUT/api/recompose-number.txt")"
+          run_id=''
+          for attempt in $(seq 1 180); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f branch="$RECOMPOSE_BRANCH" -f event=pull_request -f per_page=100 > "$OUT/api/recompose-runs.json"
+            run_id="$(RECOMPOSE_HEAD="$source_head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/recompose-runs.json').read_text())['workflow_runs']
+          rows=[row for row in rows if row['head_sha']==os.environ['RECOMPOSE_HEAD'] and row['name']==os.environ['RECOMPOSE_WORKFLOW']]
+          rows.sort(key=lambda row:(row['run_attempt'],row['id']),reverse=True)
+          print(rows[0]['id'] if rows else '')
+          PY
+          )"
+            if [ -n "$run_id" ]; then
+              gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$OUT/api/recompose-run.json"
+              if [ "$(jq -r '.status' "$OUT/api/recompose-run.json")" = completed ]; then break; fi
+            fi
+            sleep 10
+          done
+          test -n "$run_id"
+          test "$(jq -r '.status' "$OUT/api/recompose-run.json")" = completed
+          test "$(jq -r '.conclusion' "$OUT/api/recompose-run.json")" = success
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$OUT/api/recompose-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$OUT/api/recompose-artifacts.json"
+          source_job="$(jq -r '.jobs[] | select(.name=="recompose" and .conclusion=="success") | .id' "$OUT/api/recompose-jobs.json")"
+          test -n "$source_job"
+          source_artifact="$(RECOMPOSE_RUN="$run_id" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/recompose-artifacts.json').read_text())['artifacts']
+          expected=os.environ['RECOMPOSE_ARTIFACT_PREFIX']+os.environ['RECOMPOSE_RUN']+'-attempt-1'
+          rows=[row for row in rows if row['name']==expected and not row['expired']]
+          assert len(rows)==1,(expected,[(row['id'],row['name']) for row in rows])
+          print(rows[0]['id'])
+          PY
+          )"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$source_artifact" > "$OUT/api/recompose-artifact.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$source_artifact/zip" > "$OUT/recompose.zip"
+          source_sha="$(sha256sum "$OUT/recompose.zip" | awk '{print $1}')"
+          test "$(jq -r '.digest' "$OUT/api/recompose-artifact.json")" = "sha256:$source_sha"
+          printf 'REVIEWER_PR=%s\nREVIEWER_HEAD=%s\nCURRENT_MAIN=%s\nRECOMPOSE_PR=%s\nRECOMPOSE_HEAD=%s\nRECOMPOSE_RUN=%s\nRECOMPOSE_JOB=%s\nRECOMPOSE_ARTIFACT=%s\nRECOMPOSE_ZIP_SHA256=%s\n' "$pr" "$head" "$current" "$source_pr" "$source_head" "$run_id" "$source_job" "$source_artifact" "$source_sha" >> "$GITHUB_ENV"
+
+      - name: Authenticate packet and independently reconstruct current product
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib,json,os,shutil,subprocess,tarfile,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['OUT']); packet=Path(os.environ['PACKET']); sha=lambda data:hashlib.sha256(data).hexdigest()
+          with zipfile.ZipFile(root/'recompose.zip') as archive:
+              infos=archive.infolist(); assert infos and len(infos)==len({row.filename for row in infos})
+              for info in infos:
+                  path=PurePosixPath(info.filename); assert not path.is_absolute() and '..' not in path.parts
+                  if info.is_dir():continue
+                  out=packet/path; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(archive.read(info))
+          ledgers=[]
+          for sealed in packet.rglob('SHA256SUMS'):
+              pre=sealed.with_name('SHA256SUMS.pre')
+              if not pre.is_file():continue
+              assert sha(pre.read_bytes())==sealed.read_text().split()[0]
+              base=sealed.parent; count=0
+              for raw in pre.read_text().splitlines():
+                  if not raw.strip():continue
+                  digest,name=raw.split(None,1); path=base/name.lstrip('*')
+                  assert path.is_file() and sha(path.read_bytes())==digest; count+=1
+              ledgers.append({'root':base.relative_to(packet).as_posix(),'rows':count,'sha256':sha(pre.read_bytes())})
+          assert ledgers
+          rows=[]
+          for path in packet.rglob('*.json'):
+              try:data=json.loads(path.read_text())
+              except Exception:continue
+              if data.get('status')=='cycle-011-rastel-current-main-recomposition-qualified-v1':rows.append((path,data))
+          assert len(rows)==1,[p.as_posix() for p,_ in rows]
+          receipt_path,receipt=rows[0]
+          identity=receipt.pop('identity'); assert sha(json.dumps(receipt,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())==identity; receipt['identity']=identity
+          assert receipt['carrier']['base']==os.environ['CURRENT_MAIN'] and receipt['current']['main']==os.environ['CURRENT_MAIN']
+          assert receipt['current']['tree']==receipt['source']['tree'] and receipt['current']['paths']==receipt['source']['paths']
+          assert receipt['queue']=={'total':316,'queued':305,'resolved':11,'in_flight':0}
+          assert all(receipt['checks'].values()) and receipt['boundary']['local_current_main_product_only'] is True
+          product=receipt['current']['product']; tree=receipt['current']['tree']; paths=int(receipt['current']['paths'])
+          product_files=[]
+          for directory in [packet]+[p for p in packet.rglob('*') if p.is_dir()]:
+              if all((directory/row['path']).is_file() and (directory/row['path']).stat().st_size==row['bytes'] and sha((directory/row['path']).read_bytes())==row['sha256'] for row in receipt['files']):product_files.append(directory)
+          product_files=sorted(set(product_files),key=lambda p:len(p.parts),reverse=True)
+          assert len(product_files)==1,[p.as_posix() for p in product_files]
+          product_root=product_files[0]
+          bundle=product_root/'current-product.bundle'; assert bundle.is_file()
+          subprocess.run(['git','bundle','verify',str(bundle)],check=True,capture_output=True,text=True)
+          heads=subprocess.check_output(['git','bundle','list-heads',str(bundle)],text=True)
+          assert any(line.startswith(product+' ') for line in heads.splitlines())
+          subprocess.run(['git','fetch','--no-tags',str(bundle),product+':refs/rastel-current-review/product'],check=True)
+          assert subprocess.check_output(['git','show','-s','--format=%P',product],text=True).strip()==os.environ['CURRENT_MAIN']
+          assert subprocess.check_output(['git','show','-s','--format=%T',product],text=True).strip()==tree
+          assert int(subprocess.check_output(['git','rev-list','--count',os.environ['CURRENT_MAIN']+'..'+product],text=True))==1
+          assert subprocess.check_output(['git','rev-list','--merges',os.environ['CURRENT_MAIN']+'..'+product],text=True).strip()==''
+          actual_paths=sorted(subprocess.check_output(['git','diff','--name-only',os.environ['CURRENT_MAIN'],product],text=True).splitlines())
+          assert len(actual_paths)==paths
+          assert (product_root/'current-product-paths.txt').read_text().splitlines()==actual_paths
+          actual_status=subprocess.check_output(['git','diff','--name-status',os.environ['CURRENT_MAIN'],product],text=True)
+          assert (product_root/'current-product-name-status.tsv').read_text()==actual_status
+          assert not any(line.startswith('D') for line in actual_status.splitlines())
+          assert not any(line.split('\t')[-1].startswith('.github/workflows/') for line in actual_status.splitlines())
+          patch=subprocess.check_output(['git','diff','--binary',os.environ['CURRENT_MAIN'],product])
+          assert (product_root/'current-product.patch').read_bytes()==patch
+          manifest=json.loads((product_root/'file-manifest.json').read_text())
+          collected=[]
+          def walk(value):
+              if isinstance(value,dict):
+                  if isinstance(value.get('path'),str) and any(key in value for key in ('sha256','file_sha256','digest')):collected.append(value)
+                  for item in value.values():walk(item)
+              elif isinstance(value,list):
+                  for item in value:walk(item)
+          walk(manifest)
+          normalized={}
+          for row in collected:
+              name=row.get('path')
+              if name not in actual_paths:continue
+              digest=row.get('sha256') or row.get('file_sha256') or str(row.get('digest','')).removeprefix('sha256:')
+              size=row.get('bytes',row.get('byte_count',row.get('size')))
+              mode=str(row.get('mode',row.get('git_mode')))
+              blob=row.get('blob',row.get('git_blob',row.get('blob_id')))
+              normalized[name]={'sha256':digest,'bytes':int(size),'mode':mode,'blob':blob}
+          assert set(normalized)==set(actual_paths) and all(row['sha256'] and row['mode'] and row['blob'] for row in normalized.values())
+          archive_path=product_root/'product.tar.gz'; assert archive_path.is_file()
+          with tarfile.open(archive_path,'r:*') as archive:
+              infos=[info for info in archive.getmembers() if info.isfile()]
+              assert {PurePosixPath(info.name).as_posix() for info in infos}==set(actual_paths)
+              for info in infos:
+                  name=PurePosixPath(info.name).as_posix(); row=normalized[name]; data=archive.extractfile(info).read()
+                  assert len(data)==row['bytes'] and sha(data)==row['sha256']
+                  assert subprocess.check_output(['git','show',product+':'+name])==data
+                  git_mode,kind,blob_id,git_path=subprocess.check_output(['git','ls-tree',product,'--',name],text=True).strip().split(None,3)
+                  assert kind=='blob' and git_path==name and blob_id==row['blob'] and git_mode==row['mode']
+                  assert info.mode==int(git_mode[-3:],8)
+          for name in ('current-product.bundle','current-product.patch','current-product-paths.txt','current-product-name-status.tsv','product.tar.gz','file-manifest.json','commit-env.sh','commit-message.txt'):
+              src=product_root/name
+              if src.is_file():shutil.copy2(src,root/'handoff'/name)
+          verification={'status':'cycle-011-rastel-current-main-product-object-review-complete-v1','version':1,'product':{'commit':product,'parent':os.environ['CURRENT_MAIN'],'tree':tree,'paths':paths},'bundle_sha256':sha(bundle.read_bytes()),'patch_sha256':sha(patch),'archive_sha256':sha(archive_path.read_bytes()),'manifest_sha256':sha((product_root/'file-manifest.json').read_bytes()),'checks':{'outer_artifact':True,'checksum_ledgers':True,'receipt_identity':True,'bundle':True,'one_parent':True,'tree':True,'path_set':True,'name_status':True,'deletion_free':True,'workflow_free':True,'patch':True,'archive_members':True,'archive_modes':True,'manifest_bytes':True,'git_modes':True,'git_blobs':True,'committed_bytes':True}}
+          verification['identity']=sha(json.dumps(verification,sort_keys=True,separators=(',',':')).encode())
+          (root/'receipt/recomposition.json').write_text(json.dumps(receipt,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          (root/'receipt/object-review.json').write_text(json.dumps(verification,indent=2,sort_keys=True)+'\n')
+          custody={'status':'cycle-011-rastel-current-main-recomposition-artifact-authenticated-v1','version':1,'source':{'pr':int(os.environ['RECOMPOSE_PR']),'head':os.environ['RECOMPOSE_HEAD'],'run':int(os.environ['RECOMPOSE_RUN']),'job':int(os.environ['RECOMPOSE_JOB']),'artifact':int(os.environ['RECOMPOSE_ARTIFACT']),'artifact_sha256':os.environ['RECOMPOSE_ZIP_SHA256'],'identity':identity},'ledgers':ledgers,'product_root':product_root.relative_to(packet).as_posix(),'object_review_identity':verification['identity']}
+          custody['identity']=sha(json.dumps(custody,sort_keys=True,separators=(',',':')).encode())
+          (root/'receipt/source-custody.json').write_text(json.dumps(custody,indent=2,sort_keys=True)+'\n')
+          PY
+          product="$(jq -r '.current.product' "$OUT/receipt/recomposition.json")"
+          tree="$(jq -r '.current.tree' "$OUT/receipt/recomposition.json")"
+          paths="$(jq -r '.current.paths' "$OUT/receipt/recomposition.json")"
+          printf 'PRODUCT=%s\nPRODUCT_TREE=%s\nPRODUCT_PATHS=%s\n' "$product" "$tree" "$paths" >> "$GITHUB_ENV"
+
+      - name: Rerun complete current-main product gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$WORKTREE" "$PRODUCT"
+          cd "$WORKTREE"
+          npm ci
+          npx playwright install --with-deps chromium
+          node scripts/doctor-who-cycle-010.mjs | tee "$OUT/logs/cycle-010.log"
+          node scripts/doctor-who-cycle-011.mjs | tee "$OUT/logs/cycle-011.log"
+          node scripts/autopilot.mjs validate | tee "$OUT/logs/autopilot.log"
+          node scripts/autopilot.mjs status --scope doctor-who --json > "$OUT/receipt/autopilot-status.json"
+          jq -e '.total==316 and .statuses.queued==305 and .statuses.resolved==11 and .in_flight==0' "$OUT/receipt/autopilot-status.json" >/dev/null
+          node scripts/media-audit.mjs validate | tee "$OUT/logs/media-validate.log"
+          node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/logs/media-gate.log"
+          grep -F '22/22 complete' "$OUT/logs/media-gate.log" >/dev/null
+          node scripts/waterline.mjs validate | tee "$OUT/logs/waterline-validate.log"
+          node scripts/waterline.mjs status --scope doctor-who --requested 1 --json > "$OUT/receipt/waterline-status.json"
+          npm run gate 2>&1 | tee "$OUT/logs/complete-gate.log"
+          grep -F 'gate: PASS' "$OUT/logs/complete-gate.log" >/dev/null
+          test -f images/uc-1356-portrait.jpg
+          test "$(sha256sum images/uc-1356-portrait.jpg | awk '{print $1}')" = "$PORTRAIT_SHA256"
+          test -z "$(git status --porcelain)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CURRENT_MAIN"
+
+      - name: Seal independent current-main approval
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT']); sha=lambda data:hashlib.sha256(data).hexdigest()
+          source=json.loads((root/'receipt/recomposition.json').read_text()); objects=json.loads((root/'receipt/object-review.json').read_text()); custody=json.loads((root/'receipt/source-custody.json').read_text()); autopilot=json.loads((root/'receipt/autopilot-status.json').read_text()); waterline=json.loads((root/'receipt/waterline-status.json').read_text())
+          approval={'status':'cycle-011-rastel-current-main-product-independently-approved-v1','version':1,'reviewer':{'pr':int(os.environ['REVIEWER_PR']),'head':os.environ['REVIEWER_HEAD']},'source':{'pr':int(os.environ['RECOMPOSE_PR']),'head':os.environ['RECOMPOSE_HEAD'],'run':int(os.environ['RECOMPOSE_RUN']),'job':int(os.environ['RECOMPOSE_JOB']),'artifact':int(os.environ['RECOMPOSE_ARTIFACT']),'artifact_sha256':os.environ['RECOMPOSE_ZIP_SHA256'],'qualification_identity':source['identity']},'product':{'commit':os.environ['PRODUCT'],'parent':os.environ['CURRENT_MAIN'],'tree':os.environ['PRODUCT_TREE'],'paths':int(os.environ['PRODUCT_PATHS']),'task':os.environ['TASK_ID'],'lease':os.environ['EXPECTED_LEASE'],'wall':os.environ['WALL_ID'],'portrait_sha256':os.environ['PORTRAIT_SHA256']},'queue':{'total':autopilot['total'],'queued':autopilot['statuses']['queued'],'resolved':autopilot['statuses']['resolved'],'in_flight':autopilot['in_flight']},'waterline':waterline,'source_custody_identity':custody['identity'],'object_review_identity':objects['identity'],'gates':{'source_artifact':True,'object_review':True,'cycle_010':True,'cycle_011':True,'autopilot':True,'media_22_of_22':True,'waterline':True,'complete_rendered_gate':True,'clean_reconstruction':True},'boundary':{'approved_for_isolated_publication':True,'repository_product_ref_created':False,'canonical_mutation':False,'cycle_012_authorized':False,'outside_human_dependency':False,'owner_physical_action_required':False}}
+          approval['identity']=sha(json.dumps(approval,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())
+          (root/'receipt/approval.json').write_text(json.dumps(approval,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          PY
+          find "$OUT" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/$rel" | sed "s#  $OUT/#  #"; done > "$OUT/SHA256SUMS.pre"
+          sha256sum "$OUT/SHA256SUMS.pre" | sed "s#  $OUT/#  #" > "$OUT/SHA256SUMS"
+          python3 - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          root=Path(os.environ['OUT']); pre=root/'SHA256SUMS.pre'; sealed=root/'SHA256SUMS'
+          assert hashlib.sha256(pre.read_bytes()).hexdigest()==sealed.read_text().split()[0]
+          for raw in pre.read_text().splitlines():
+              digest,name=raw.split(None,1); path=root/name.lstrip('*')
+              assert path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==digest
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-current-main-review-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-current-main-review-v1
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-current-main-review-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-011-rastel-current-main-review-v1
+            /tmp/doctor-who-cycle-011-rastel-current-main-review-v1-source
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
