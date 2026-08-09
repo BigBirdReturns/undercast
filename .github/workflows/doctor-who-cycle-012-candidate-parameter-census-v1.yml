@@ -1,0 +1,257 @@
+name: doctor-who-cycle-012-candidate-parameter-census-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-012-candidate-parameter-census-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-012-candidate-parameter-census-v1
+  cancel-in-progress: true
+
+jobs:
+  census:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-012-candidate-parameter-census-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CARRIER_BASE: ${{ github.event.pull_request.base.sha }}
+      BRANCH: agent/doctor-who-cycle-012-candidate-parameter-census-v1
+      SELF: .github/workflows/doctor-who-cycle-012-candidate-parameter-census-v1.yml
+      OUT: /tmp/doctor-who-cycle-012-candidate-parameter-census-v1
+      SOURCE_PACKET: /tmp/doctor-who-cycle-012-candidate-parameter-census-v1-source
+      RETIREMENT_PACKET: /tmp/doctor-who-cycle-012-candidate-parameter-census-v1-retirement
+      CENSUS_PACKET: /tmp/doctor-who-cycle-012-candidate-parameter-census-v1-media-census
+      SOURCE_BRANCH: agent/doctor-who-cycle-012-candidate-source-inspection-v1
+      SOURCE_WORKFLOW: doctor-who-cycle-012-candidate-source-inspection-v1
+      SOURCE_ARTIFACT_PREFIX: doctor-who-cycle-012-candidate-source-inspection-v1-
+      RETIREMENT_ARTIFACT_PREFIX: doctor-who-cycle-012-candidate-source-inspection-v1-retirement-
+      PRIOR_TASK: ap_25277c8fbe9e5369ed2e3d81
+      PRIOR_WALL: UC-1356
+      PRIOR_PORTRAIT_SHA256: 42412f0f18ebf8f3ba536e633ac9777a19fa4f81277aad1086d410ea03501f4a
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind parameter census and exact source-inspection transaction
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" "$SOURCE_PACKET" "$RETIREMENT_PACKET" "$CENSUS_PACKET"
+          mkdir -p "$OUT"/{api,source,current,receipt,logs,payload} "$SOURCE_PACKET" "$RETIREMENT_PACKET" "$CENSUS_PACKET"
+          head='${{ github.event.pull_request.head.sha }}'; pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"; test "$(git show -s --format=%P HEAD)" = "$CARRIER_BASE"; test "$(git rev-list --count "$CARRIER_BASE"..HEAD)" = 1; test -z "$(git rev-list --merges "$CARRIER_BASE"..HEAD)"; test "$(git diff --name-status "$CARRIER_BASE"...HEAD)" = $'A\t'"$SELF"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier.json"; gh api --method GET "/repos/$GITHUB_REPOSITORY/pulls" -f state=all -f head="${GITHUB_REPOSITORY_OWNER}:$SOURCE_BRANCH" -f per_page=100 > "$OUT/api/source-prs.json"
+          CARRIER_PR="$pr" CARRIER_HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          api=Path(os.environ['OUT'])/'api'; own=json.loads((api/'carrier.json').read_text()); rows=json.loads((api/'source-prs.json').read_text())
+          assert own['number']==int(os.environ['CARRIER_PR']) and own['state']=='open' and own['draft'] is True and own['merged'] is False; assert own['base']['sha']==os.environ['CARRIER_BASE'] and own['head']['ref']==os.environ['BRANCH'] and own['head']['sha']==os.environ['CARRIER_HEAD']; assert own['commits']==1 and own['changed_files']==1
+          rows=[row for row in rows if row['head']['ref']==os.environ['SOURCE_BRANCH'] and row['merged'] is False]; assert len(rows)==1,[(row['number'],row['state'],row['head']['sha']) for row in rows]
+          source=rows[0]; assert source['state']=='open' and source['draft'] is True; (api/'source-pr.json').write_text(json.dumps(source,indent=2,sort_keys=True)+'\n'); (api/'source-head.txt').write_text(source['head']['sha']+'\n'); (api/'source-number.txt').write_text(str(source['number'])+'\n')
+          PY
+          source_head="$(cat "$OUT/api/source-head.txt")"; source_pr="$(cat "$OUT/api/source-number.txt")"; run_id=''
+          for attempt in $(seq 1 180); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f branch="$SOURCE_BRANCH" -f event=pull_request -f per_page=100 > "$OUT/api/source-runs.json"
+            run_id="$(SOURCE_HEAD="$source_head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/source-runs.json').read_text())['workflow_runs']; rows=[row for row in rows if row['head_sha']==os.environ['SOURCE_HEAD'] and row['name']==os.environ['SOURCE_WORKFLOW']]; rows.sort(key=lambda row:(row['run_attempt'],row['id']),reverse=True); print(rows[0]['id'] if rows else '')
+          PY
+          )"
+            if [ -n "$run_id" ]; then gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$OUT/api/source-run.json"; [ "$(jq -r '.status' "$OUT/api/source-run.json")" = completed ] && break; fi
+            sleep 10
+          done
+          test -n "$run_id"; test "$(jq -r '.status' "$OUT/api/source-run.json")" = completed; test "$(jq -r '.conclusion' "$OUT/api/source-run.json")" = success; source_attempt="$(jq -r '.run_attempt' "$OUT/api/source-run.json")"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$OUT/api/source-jobs.json"; gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$OUT/api/source-artifacts.json"
+          inspect_job="$(jq -r '.jobs[] | select(.name=="inspect" and .conclusion=="success") | .id' "$OUT/api/source-jobs.json")"; retire_job="$(jq -r '.jobs[] | select(.name=="retire_review" and .conclusion=="success") | .id' "$OUT/api/source-jobs.json")"; test -n "$inspect_job"; test -n "$retire_job"
+          SOURCE_RUN="$run_id" SOURCE_ATTEMPT="$source_attempt" python3 - <<'PY' > "$OUT/api/artifact-env"
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/source-artifacts.json').read_text())['artifacts']; run=os.environ['SOURCE_RUN']; attempt=os.environ['SOURCE_ATTEMPT']; expected={'SOURCE_ARTIFACT':os.environ['SOURCE_ARTIFACT_PREFIX']+run+'-attempt-'+attempt,'RETIREMENT_ARTIFACT':os.environ['RETIREMENT_ARTIFACT_PREFIX']+run+'-attempt-'+attempt}
+          for key,name in expected.items():
+              matches=[row for row in rows if row['name']==name and not row['expired']]; assert len(matches)==1,(key,name,[(row['id'],row['name']) for row in rows]); print(f'{key}={matches[0]["id"]}')
+          PY
+          source "$OUT/api/artifact-env"
+          for label in source retirement; do upper="${label^^}_ARTIFACT"; artifact="${!upper}"; gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact" > "$OUT/api/$label-artifact.json"; gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact/zip" > "$OUT/$label.zip"; digest="$(sha256sum "$OUT/$label.zip" | awk '{print $1}')"; test "$(jq -r '.digest' "$OUT/api/$label-artifact.json")" = "sha256:$digest"; printf '%s_ZIP_SHA256=%s\n' "${label^^}" "$digest" >> "$GITHUB_ENV"; done
+          printf 'CARRIER_PR=%s\nCARRIER_HEAD=%s\nSOURCE_PR=%s\nSOURCE_HEAD=%s\nSOURCE_RUN=%s\nSOURCE_ATTEMPT=%s\nINSPECT_JOB=%s\nRETIRE_JOB=%s\nSOURCE_ARTIFACT=%s\nRETIREMENT_ARTIFACT=%s\n' "$pr" "$head" "$source_pr" "$source_head" "$run_id" "$source_attempt" "$inspect_job" "$retire_job" "$SOURCE_ARTIFACT" "$RETIREMENT_ARTIFACT" >> "$GITHUB_ENV"
+
+      - name: Authenticate source packet, retirement, and current media census
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib,json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['OUT']); sha=lambda data:hashlib.sha256(data).hexdigest()
+          def extract(name,target):
+              target=Path(target)
+              with zipfile.ZipFile(root/(name+'.zip')) as archive:
+                  infos=archive.infolist(); assert infos and len(infos)==len({row.filename for row in infos})
+                  for info in infos:
+                      path=PurePosixPath(info.filename); assert not path.is_absolute() and '..' not in path.parts
+                      if info.is_dir():continue
+                      out=target/path; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(archive.read(info))
+          extract('source',os.environ['SOURCE_PACKET']); extract('retirement',os.environ['RETIREMENT_PACKET'])
+          def verify(target):
+              target=Path(target); rows=[]
+              for sealed in target.rglob('SHA256SUMS'):
+                  pre=sealed.with_name('SHA256SUMS.pre')
+                  if not pre.is_file():continue
+                  assert sha(pre.read_bytes())==sealed.read_text().split()[0]; base=sealed.parent; count=0
+                  for raw in pre.read_text().splitlines():
+                      if not raw.strip():continue
+                      digest,name=raw.split(None,1); path=base/name.lstrip('*'); assert path.is_file() and sha(path.read_bytes())==digest; count+=1
+                  rows.append({'root':base.relative_to(target).as_posix(),'rows':count,'sha256':sha(pre.read_bytes())})
+              assert rows; return rows
+          source_ledgers=verify(os.environ['SOURCE_PACKET']); retirement_ledgers=verify(os.environ['RETIREMENT_PACKET'])
+          def one_status(target,status):
+              rows=[]
+              for path in Path(target).rglob('*.json'):
+                  try:data=json.loads(path.read_text())
+                  except Exception:continue
+                  if data.get('status')==status:rows.append((path,data))
+              assert len(rows)==1,(status,[p.as_posix() for p,_ in rows]); return rows[0]
+          _,source=one_status(os.environ['SOURCE_PACKET'],'cycle-012-candidate-source-inspection-complete-v1'); _,retirement=one_status(os.environ['RETIREMENT_PACKET'],'cycle-012-media-review-carrier-retired-after-source-inspection-v1')
+          for data in (source,retirement):
+              identity=data.pop('identity'); assert sha(json.dumps(data,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())==identity; data['identity']=identity
+          assert retirement['source']['identity']==source['identity'] and retirement['source']['task_id']==source['task']['id']; assert retirement['canonical_main']==source['canonical_main']; assert source['boundary']=={'source_inspection_only':True,'workflow_executed':False,'materializer_executed':False,'candidate_transaction_executed':False,'lease_issued':False,'queue_mutated':False,'canonical_mutated':False,'wall_created':False,'media_adopted':False,'cycle_receipt_written':False,'cycle_012_product_authority':False,'outside_human_dependency':False,'owner_physical_action_required':False}
+          for rel in ('source/prior-workflow.yml','source/prior-materializer.sh','source/mechanism.json','review/media-review.json'):
+              rows=[p for p in Path(os.environ['SOURCE_PACKET']).rglob(rel) if p.is_file()]; assert len(rows)==1,(rel,[p.as_posix() for p in rows]); dst=root/'source'/Path(rel).name; dst.write_bytes(rows[0].read_bytes())
+          for rel in ('review/character-image-candidate','review/performer-portrait-candidate.jpg','review/portrait-crop.json'):
+              rows=[p for p in Path(os.environ['SOURCE_PACKET']).rglob(rel) if p.is_file()]; assert len(rows)<=1
+              if rows:dst=root/'current'/Path(rel).name; dst.write_bytes(rows[0].read_bytes())
+          (root/'source/source-inspection.json').write_text(json.dumps(source,indent=2,sort_keys=True,ensure_ascii=False)+'\n'); (root/'source/retirement.json').write_text(json.dumps(retirement,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          custody={'status':'cycle-012-source-inspection-authenticated-for-parameter-census-v1','version':1,'source':{'pr':int(os.environ['SOURCE_PR']),'head':os.environ['SOURCE_HEAD'],'run':int(os.environ['SOURCE_RUN']),'attempt':int(os.environ['SOURCE_ATTEMPT']),'inspect_job':int(os.environ['INSPECT_JOB']),'retire_job':int(os.environ['RETIRE_JOB']),'artifact':int(os.environ['SOURCE_ARTIFACT']),'artifact_sha256':os.environ['SOURCE_ZIP_SHA256'],'identity':source['identity'],'retirement_artifact':int(os.environ['RETIREMENT_ARTIFACT']),'retirement_artifact_sha256':os.environ['RETIREMENT_ZIP_SHA256'],'retirement_identity':retirement['identity']},'canonical_main':source['canonical_main'],'task':source['task'],'source_ledgers':source_ledgers,'retirement_ledgers':retirement_ledgers}; custody['identity']=sha(json.dumps(custody,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()); (root/'receipt/source-custody.json').write_text(json.dumps(custody,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          PY
+          census_artifact="$(jq -r '.census.artifact' "$OUT/source/media-review.json")"; census_sha="$(jq -r '.census.artifact_sha256' "$OUT/source/media-review.json")"; test -n "$census_artifact"; test -n "$census_sha"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$census_artifact" > "$OUT/api/current-census-artifact.json"; test "$(jq -r '.digest' "$OUT/api/current-census-artifact.json")" = "sha256:$census_sha"; gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$census_artifact/zip" > "$OUT/current-census.zip"; test "$(sha256sum "$OUT/current-census.zip" | awk '{print $1}')" = "$census_sha"
+          python3 - <<'PY'
+          import hashlib,json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['OUT']); target=Path(os.environ['CENSUS_PACKET']); sha=lambda data:hashlib.sha256(data).hexdigest()
+          with zipfile.ZipFile(root/'current-census.zip') as archive:
+              infos=archive.infolist(); assert infos and len(infos)==len({row.filename for row in infos})
+              for info in infos:
+                  path=PurePosixPath(info.filename); assert not path.is_absolute() and '..' not in path.parts
+                  if info.is_dir():continue
+                  out=target/path; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(archive.read(info))
+          for sealed in target.rglob('SHA256SUMS'):
+              pre=sealed.with_name('SHA256SUMS.pre')
+              if pre.is_file():
+                  assert sha(pre.read_bytes())==sealed.read_text().split()[0]
+                  for raw in pre.read_text().splitlines():digest,name=raw.split(None,1); path=sealed.parent/name.lstrip('*'); assert path.is_file() and sha(path.read_bytes())==digest
+          rows=[]
+          for path in target.rglob('*.json'):
+              try:data=json.loads(path.read_text())
+              except Exception:continue
+              if data.get('status')=='cycle-012-doctor-who-media-census-complete-v1':rows.append((path,data))
+          assert len(rows)==1,[p.as_posix() for p,_ in rows]; path,census=rows[0]; identity=census.pop('identity'); assert sha(json.dumps(census,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())==identity; census['identity']=identity; (root/'current/media-census.json').write_text(json.dumps(census,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          PY
+          canonical="$(jq -r '.canonical_main' "$OUT/source/source-inspection.json")"; printf 'CANONICAL_MAIN=%s\n' "$canonical" >> "$GITHUB_ENV"
+
+      - name: Rehydrate canonical main and validate terminal state
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$CANONICAL_MAIN"; npm ci; npx playwright install --with-deps chromium
+          node scripts/doctor-who-cycle-011.mjs | tee "$OUT/logs/cycle-011.log"; node scripts/autopilot.mjs validate | tee "$OUT/logs/autopilot.log"; node scripts/autopilot.mjs status --scope doctor-who --json > "$OUT/receipt/autopilot-status.json"; jq -e '.total==316 and .statuses.queued==305 and .statuses.resolved==11 and .in_flight==0' "$OUT/receipt/autopilot-status.json" >/dev/null
+          node scripts/media-audit.mjs validate | tee "$OUT/logs/media-validate.log"; node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/logs/media-gate.log"; grep -F '22/22 complete' "$OUT/logs/media-gate.log" >/dev/null
+          node scripts/waterline.mjs validate | tee "$OUT/logs/waterline-validate.log"; node scripts/waterline.mjs status --scope doctor-who --requested 1 --json > "$OUT/receipt/waterline-status.json"; jq -e '.claim_allowed==true and .claim_reasons==[] and .jobs.in_flight==0 and .media.debt==0 and .cycles.unreceipted==[]' "$OUT/receipt/waterline-status.json" >/dev/null
+          npm run gate 2>&1 | tee "$OUT/logs/complete-gate.log"; grep -F 'gate: PASS' "$OUT/logs/complete-gate.log" >/dev/null; test -z "$(git status --porcelain)"; test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+
+      - name: Derive exact environment, literal, wall, queue, and chronology census
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime,hashlib,json,os,re
+          from pathlib import Path
+          root=Path(os.environ['OUT']); workflow=(root/'source/prior-workflow.yml').read_text(); materializer=(root/'source/prior-materializer.sh').read_text(); source=json.loads((root/'source/source-inspection.json').read_text()); review=json.loads((root/'source/media-review.json').read_text()); census=json.loads((root/'current/media-census.json').read_text()); autopilot=json.loads((root/'receipt/autopilot-status.json').read_text()); sha=lambda data:hashlib.sha256(data).hexdigest()
+          env_rows=[]
+          for number,line in enumerate(workflow.splitlines(),1):
+              match=re.match(r'^\s{6,12}([A-Z][A-Z0-9_]+):\s*(.*?)\s*$',line)
+              if match:env_rows.append({'line':number,'key':match.group(1),'value':match.group(2).strip().strip('"\'')})
+          env={}
+          for row in env_rows:env.setdefault(row['key'],[]).append(row['value'])
+          refs=set(re.findall(r"os\.environ\[['\"]([A-Z][A-Z0-9_]*)['\"]\]",materializer)); refs.update(re.findall(r'\$\{?([A-Z][A-Z0-9_]{2,})\}?',materializer)); refs=sorted(refs)
+          walls=[]
+          for path in Path('data').rglob('*.json'):
+              try:text=path.read_text()
+              except Exception:continue
+              walls.extend(int(value) for value in re.findall(r'\bUC-(\d+)\b',text))
+          assert walls; next_wall=f'UC-{max(walls)+1:04d}'
+          timestamp_pattern=r'\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b'; times=[]
+          for path in [Path('data/WATERLINE-STATE.json'),Path('data/AUTOPILOT-STATE.json'),Path('data/journal/waterline.jsonl')]:
+              if not path.is_file():continue
+              for value in re.findall(timestamp_pattern,path.read_text()):
+                  try:times.append(datetime.datetime.fromisoformat(value.replace('Z','+00:00')))
+                  except Exception:pass
+          assert times; start=max(times)+datetime.timedelta(minutes=5); labels=['claim_at','submit_at','accept_at','merge_at','audit_at','review_at','commit_at']; chronology={label:(start+datetime.timedelta(minutes=index)).isoformat(timespec='milliseconds').replace('+00:00','Z') for index,label in enumerate(labels)}
+          current_task=source['task']; current_source=census['source']; portrait=review['performer_portrait']; character=review['character_image']
+          current={'canonical_main':source['canonical_main'],'task_id':current_task['id'],'performer':current_task['performer'],'role':current_task['role'],'mode':current_task['mode'],'source_fingerprint':current_task.get('source_fingerprint'),'source_page_id':current_source['page_id'],'source_revision_id':current_source['revision_id'],'source_content_sha256':current_source['content_sha256'],'next_wall':next_wall,'queue_before':{'queued':305,'resolved':11,'in_flight':0},'queue_after':{'queued':304,'resolved':12,'in_flight':0},'character_image':character,'performer_portrait':portrait,'chronology':chronology}
+          key_map={
+              'TASK_ID':current['task_id'],'EXPECTED_WALL_ID':next_wall,'WALL_ID':next_wall,'PERFORMER':current['performer'],'ACTOR':current['performer'],'ROLE':current['role'],'CHARACTER':current['role'],'MODE':current['mode'],'SOURCE_PAGEID':str(current['source_page_id']),'SOURCE_PAGE_ID':str(current['source_page_id']),'SOURCE_REVISION':str(current['source_revision_id']),'SOURCE_REVISION_ID':str(current['source_revision_id']),'SOURCE_SHA256':current['source_content_sha256'],'SOURCE_CONTENT_SHA256':current['source_content_sha256'],'SOURCE_FINGERPRINT':current['source_fingerprint'],'QUEUED_BEFORE':'305','QUEUED_AFTER':'304','RESOLVED_BEFORE':'11','RESOLVED_AFTER':'12','CLAIM_AT':chronology['claim_at'],'SUBMIT_AT':chronology['submit_at'],'ACCEPT_AT':chronology['accept_at'],'MERGE_AT':chronology['merge_at'],'AUDIT_AT':chronology['audit_at'],'REVIEW_AT':chronology['review_at'],'COMMIT_AT':chronology['commit_at']
+          }
+          if portrait.get('candidate_sha256'):key_map['PORTRAIT_SHA256']=portrait['candidate_sha256']
+          mapping=[]; unresolved=[]
+          for key in refs:
+              prior=env.get(key,[]); proposed=key_map.get(key)
+              row={'key':key,'prior_values':prior,'proposed_value':proposed,'materializer_occurrences':len(re.findall(r'(?<![A-Z0-9_])'+re.escape(key)+r'(?![A-Z0-9_])',materializer))}
+              mapping.append(row)
+              if proposed is None and key not in {'GH_TOKEN','GITHUB_ENV','GITHUB_OUTPUT','GITHUB_REPOSITORY','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','RUNNER_TEMP','HOME','PATH','PWD','OLDPWD'}:unresolved.append(key)
+          literals={'task_ids':sorted(set(re.findall(r'\bap_[0-9a-f]{24}\b',materializer))),'leases':sorted(set(re.findall(r'\blease_[0-9a-f]{24}\b',materializer))),'walls':sorted(set(re.findall(r'\bUC-\d+\b',materializer))),'sha256_literals':len(set(re.findall(r'\b[0-9a-f]{64}\b',materializer))),'prior_task_occurrences':materializer.count(os.environ['PRIOR_TASK']),'prior_wall_occurrences':materializer.count(os.environ['PRIOR_WALL']),'prior_portrait_occurrences':materializer.count(os.environ['PRIOR_PORTRAIT_SHA256']),'cycle_011_occurrences':materializer.count('cycle-011'),'cycle_012_occurrences':materializer.count('cycle-012')}
+          plan={'status':'cycle-012-candidate-parameter-census-complete-v1','version':1,'source_inspection_identity':source['identity'],'canonical_main':source['canonical_main'],'prior':{'workflow_bytes':len(workflow.encode()),'workflow_sha256':sha(workflow.encode()),'materializer_bytes':len(materializer.encode()),'materializer_sha256':sha(materializer.encode()),'env_rows':env_rows,'environment':env,'referenced_environment_keys':refs,'literal_census':literals},'current':current,'proposed_environment_mapping':mapping,'unresolved_environment_keys':unresolved,'boundary':{'parameter_census_only':True,'patch_created':False,'workflow_executed':False,'materializer_executed':False,'candidate_transaction_executed':False,'lease_issued':False,'queue_mutated':False,'canonical_mutated':False,'wall_created':False,'media_adopted':False,'cycle_receipt_written':False,'cycle_012_product_authority':False}}
+          plan['identity']=sha(json.dumps(plan,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()); (root/'payload/parameter-census.json').write_text(json.dumps(plan,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          for name in ('source/prior-workflow.yml','source/prior-materializer.sh','source/source-inspection.json','source/media-review.json','current/media-census.json','receipt/source-custody.json'):
+              src=root/name; dst=root/'payload'/name; dst.parent.mkdir(parents=True,exist_ok=True); dst.write_bytes(src.read_bytes())
+          for name in ('current/character-image-candidate','current/performer-portrait-candidate.jpg','current/portrait-crop.json'):
+              src=root/name
+              if src.is_file():dst=root/'payload'/name; dst.parent.mkdir(parents=True,exist_ok=True); dst.write_bytes(src.read_bytes())
+          PY
+          find "$OUT/payload" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/payload/$rel" | sed "s#  $OUT/payload/#  #"; done > "$OUT/payload/SHA256SUMS.pre"; sha256sum "$OUT/payload/SHA256SUMS.pre" | sed "s#  $OUT/payload/#  #" > "$OUT/payload/SHA256SUMS"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-candidate-parameter-census-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-012-candidate-parameter-census-v1/payload
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-candidate-parameter-census-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-012-candidate-parameter-census-v1
+            /tmp/doctor-who-cycle-012-candidate-parameter-census-v1-source
+            /tmp/doctor-who-cycle-012-candidate-parameter-census-v1-retirement
+            /tmp/doctor-who-cycle-012-candidate-parameter-census-v1-media-census
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
