@@ -1,0 +1,270 @@
+name: doctor-who-cycle-012-media-census-v2
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-012-media-census-v2.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-012-media-census-v2
+  cancel-in-progress: true
+
+env:
+  SOURCE_V1_BRANCH: agent/doctor-who-cycle-012-media-census-v1
+  SOURCE_V1_PATH: .github/workflows/doctor-who-cycle-012-media-census-v1.yml
+  TARGET_STEM: doctor-who-cycle-012-media-census-v2
+  BRANCH: agent/doctor-who-cycle-012-media-census-v2
+  SELF: .github/workflows/doctor-who-cycle-012-media-census-v2.yml
+  EVIDENCE_BRANCH: agent/doctor-who-cycle-012-evidence-preflight-v2
+  EVIDENCE_WORKFLOW: doctor-who-cycle-012-evidence-preflight-v2
+  EVIDENCE_ARTIFACT_PREFIX: doctor-who-cycle-012-evidence-preflight-v2-
+  RETIREMENT_ARTIFACT_PREFIX: doctor-who-cycle-012-evidence-preflight-v2-retirement-
+
+jobs:
+  inspect:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-012-media-census-v2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CARRIER_PR: "${{ github.event.pull_request.number }}"
+      CARRIER_HEAD: ${{ github.event.pull_request.head.sha }}
+      CARRIER_BASE: ${{ github.event.pull_request.base.sha }}
+      OUT: /tmp/doctor-who-cycle-012-media-census-v2
+      EVIDENCE_PACKET: /tmp/doctor-who-cycle-012-media-census-v2-evidence
+      RETIREMENT_PACKET: /tmp/doctor-who-cycle-012-media-census-v2-retirement
+      BOOTSTRAP: /tmp/doctor-who-cycle-012-media-census-v2-bootstrap-inspect
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Recover exact V1 media programs and apply closed custody repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$BOOTSTRAP"
+          mkdir -p "$BOOTSTRAP/jobs"
+          JOB_NAME=inspect EXPECTED_COUNT=6 python3 - <<'PY'
+          import base64,hashlib,json,os,re,subprocess
+          from pathlib import Path
+          root=Path(os.environ['BOOTSTRAP']); repo=os.environ['GITHUB_REPOSITORY']; branch=os.environ['SOURCE_V1_BRANCH']; path=os.environ['SOURCE_V1_PATH']; source_stem='doctor-who-cycle-012-media-census-v1'; target=os.environ['TARGET_STEM']; job=os.environ['JOB_NAME']; want=int(os.environ['EXPECTED_COUNT'])
+          commits=json.loads(subprocess.check_output(['gh','api',f'/repos/{repo}/commits?sha={branch}&per_page=20'],text=True)); candidates=[]; census=[]
+          for row in commits:
+              response=subprocess.run(['gh','api',f'/repos/{repo}/contents/{path}?ref={row["sha"]}'],capture_output=True,text=True)
+              if response.returncode:census.append({'commit':row['sha'],'status':'path-absent'}); continue
+              payload=json.loads(response.stdout); data=base64.b64decode(payload['content']); text=data.decode('utf-8','replace')
+              eligible=(len(data)>30000 and f'name: {source_stem}' in text and '\n  inspect:\n' in text and '\n  retire_evidence:\n' in text and 'cycle-012-doctor-who-media-census-complete-v1' in text)
+              census.append({'commit':row['sha'],'git_blob':payload['sha'],'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),'eligible':eligible})
+              if eligible:candidates.append((row['sha'],payload['sha'],data))
+          assert len(candidates)==1,census
+          source_commit,source_blob,raw=candidates[0]; text=raw.decode('utf-8').replace(source_stem,target)
+          old="'evidence_custody_identity':custody['identity'],'canonical_main':evidence['canonical_main']"; new="'evidence_custody_identity':custody['identity'],'evidence':custody['evidence'],'canonical_main':evidence['canonical_main']"; assert text.count(old)==1; text=text.replace(old,new)
+          old="evidence_pr=\"$(jq -r '.carrier.pr' \"$OUT/receipt/media.json\")\""; new="evidence_pr=\"$(jq -r '.evidence.pr' \"$OUT/receipt/media.json\")\""; assert text.count(old)==1; text=text.replace(old,new)
+          old="evidence_head=\"$(jq -r '.carrier.head' \"$OUT/receipt/media.json\")\""; new="evidence_head=\"$(jq -r '.evidence.head' \"$OUT/receipt/media.json\")\""; assert text.count(old)==1; text=text.replace(old,new)
+          old="""              if contains_performer(data):
+                  before=len(portraits); collect(data,(path.as_posix(),)); source_docs.append({'path':path.as_posix(),'portrait_rows_added':len(portraits)-before})"""
+          new="""              before=len(portraits)
+              def collect_matching(value,node_path=()):
+                  if isinstance(value,dict):
+                      direct=any(str(key).lower().replace('-','_') in {'performer','actor','performer_name','actor_name'} and isinstance(item,str) and item.strip()==performer for key,item in value.items())
+                      if direct:
+                          collect(value,(path.as_posix(),)+node_path)
+                      else:
+                          for key,item in value.items():collect_matching(item,node_path+(str(key),))
+                  elif isinstance(value,list):
+                      for index,item in enumerate(value):collect_matching(item,node_path+(str(index),))
+              collect_matching(data)
+              if len(portraits)>before:source_docs.append({'path':path.as_posix(),'portrait_rows_added':len(portraits)-before})"""
+          assert text.count(old)==1; text=text.replace(old,new)
+          dollar='$'
+          for expression,value in ((dollar+'{{ github.event.pull_request.head.sha }}','$CARRIER_HEAD'),(dollar+'{{ github.event.pull_request.number }}','$CARRIER_PR'),(dollar+'{{ github.event.pull_request.base.sha }}','$CARRIER_BASE')):
+              for quote in ("'",'"'):text=text.replace(quote+expression+quote,'"'+value+'"')
+          lines=text.splitlines(keepends=True); start=next(i for i,line in enumerate(lines) if line==f'  {job}:\n'); end=next((i for i in range(start+1,len(lines)) if re.fullmatch(r'  [A-Za-z0-9_-]+:\n',lines[i])),len(lines)); block=lines[start:end]; scripts=[]; i=0
+          while i<len(block):
+              if block[i]=='        run: |\n':
+                  i+=1; body=[]
+                  while i<len(block):
+                      line=block[i]
+                      if line.strip() and len(line)-len(line.lstrip(' '))<10:break
+                      if line.startswith('          '):body.append(line[10:])
+                      elif not line.strip():body.append('\n')
+                      else:break
+                      i+=1
+                  script=''.join(body); assert dollar+'{{' not in script; scripts.append(script); continue
+              i+=1
+          assert len(scripts)==want,(job,len(scripts),want)
+          rows=[]
+          for index,script in enumerate(scripts,1):p=root/'jobs'/f'{index:02d}.sh'; p.write_text(script); subprocess.run(['bash','-n',str(p)],check=True); rows.append({'path':p.relative_to(root).as_posix(),'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()})
+          receipt={'status':'cycle-012-media-census-v2-source-recovered','version':2,'job':job,'source':{'branch':branch,'commit':source_commit,'git_blob':source_blob,'path':path,'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()},'repairs':[{'name':'bind-evidence-carrier-through-evidence-custody','occurrences':3},{'name':'restrict-portrait-scan-to-direct-performer-records','occurrences':1}],'scripts':rows,'bootstrap_outside_transaction_roots':True,'commit_census':census,'boundary':{'source_executed':False,'repository_write':False,'canonical_mutation':False}}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest(); (root/'recovery.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Execute exact repaired media census
+        shell: bash
+        run: |
+          set -euo pipefail
+          apply_github_env() { [ -f "$GITHUB_ENV" ] || return 0; while IFS= read -r row; do [ -z "$row" ] && continue; case "$row" in *'<<'*) exit 1 ;; *=*) export "$row" ;; esac; done < "$GITHUB_ENV"; }
+          mapfile -t scripts < <(find "$BOOTSTRAP/jobs" -type f -name '*.sh' | LC_ALL=C sort); test "${#scripts[@]}" = 6
+          for index in 0 1 2 3 4; do bash "${scripts[$index]}"; apply_github_env; done
+          mkdir -p "$OUT/payload"; cp "$BOOTSTRAP/recovery.json" "$OUT/payload/v2-source-recovery.json"
+          bash "${scripts[5]}"; apply_github_env
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-media-census-v2-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-012-media-census-v2/payload
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-media-census-v2-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-012-media-census-v2
+            /tmp/doctor-who-cycle-012-media-census-v2-evidence
+            /tmp/doctor-who-cycle-012-media-census-v2-retirement
+            /tmp/doctor-who-cycle-012-media-census-v2-bootstrap-inspect
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
+
+  retire_evidence:
+    needs: inspect
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CARRIER_PR: "${{ github.event.pull_request.number }}"
+      CARRIER_HEAD: ${{ github.event.pull_request.head.sha }}
+      CARRIER_BASE: ${{ github.event.pull_request.base.sha }}
+      PACKET: /tmp/doctor-who-cycle-012-media-census-v2-retire-input
+      OUT: /tmp/doctor-who-cycle-012-media-census-v2-retire-result
+      MEDIA_NAME: doctor-who-cycle-012-media-census-v2-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+      EVIDENCE_BRANCH: agent/doctor-who-cycle-012-evidence-preflight-v2
+      MEDIA_BRANCH: agent/doctor-who-cycle-012-media-census-v2
+      BOOTSTRAP: /tmp/doctor-who-cycle-012-media-census-v2-bootstrap-retire
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Recover exact V1 retirement programs with corrected evidence custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$BOOTSTRAP"
+          mkdir -p "$BOOTSTRAP/jobs"
+          JOB_NAME=retire_evidence EXPECTED_COUNT=2 python3 - <<'PY'
+          import base64,hashlib,json,os,re,subprocess
+          from pathlib import Path
+          root=Path(os.environ['BOOTSTRAP']); repo=os.environ['GITHUB_REPOSITORY']; branch=os.environ['SOURCE_V1_BRANCH']; path=os.environ['SOURCE_V1_PATH']; source_stem='doctor-who-cycle-012-media-census-v1'; target=os.environ['TARGET_STEM']; job=os.environ['JOB_NAME']; want=int(os.environ['EXPECTED_COUNT'])
+          commits=json.loads(subprocess.check_output(['gh','api',f'/repos/{repo}/commits?sha={branch}&per_page=20'],text=True)); candidates=[]
+          for row in commits:
+              response=subprocess.run(['gh','api',f'/repos/{repo}/contents/{path}?ref={row["sha"]}'],capture_output=True,text=True)
+              if response.returncode:continue
+              payload=json.loads(response.stdout); data=base64.b64decode(payload['content']); text=data.decode('utf-8','replace')
+              if len(data)>30000 and f'name: {source_stem}' in text and 'cycle-012-doctor-who-media-census-complete-v1' in text:candidates.append((row['sha'],payload['sha'],data))
+          assert len(candidates)==1
+          source_commit,source_blob,raw=candidates[0]; text=raw.decode('utf-8').replace(source_stem,target)
+          old="'evidence_custody_identity':custody['identity'],'canonical_main':evidence['canonical_main']"; new="'evidence_custody_identity':custody['identity'],'evidence':custody['evidence'],'canonical_main':evidence['canonical_main']"; assert text.count(old)==1; text=text.replace(old,new)
+          old="evidence_pr=\"$(jq -r '.carrier.pr' \"$OUT/receipt/media.json\")\""; new="evidence_pr=\"$(jq -r '.evidence.pr' \"$OUT/receipt/media.json\")\""; assert text.count(old)==1; text=text.replace(old,new)
+          old="evidence_head=\"$(jq -r '.carrier.head' \"$OUT/receipt/media.json\")\""; new="evidence_head=\"$(jq -r '.evidence.head' \"$OUT/receipt/media.json\")\""; assert text.count(old)==1; text=text.replace(old,new)
+          old="""              if contains_performer(data):
+                  before=len(portraits); collect(data,(path.as_posix(),)); source_docs.append({'path':path.as_posix(),'portrait_rows_added':len(portraits)-before})"""
+          new="""              before=len(portraits)
+              def collect_matching(value,node_path=()):
+                  if isinstance(value,dict):
+                      direct=any(str(key).lower().replace('-','_') in {'performer','actor','performer_name','actor_name'} and isinstance(item,str) and item.strip()==performer for key,item in value.items())
+                      if direct:
+                          collect(value,(path.as_posix(),)+node_path)
+                      else:
+                          for key,item in value.items():collect_matching(item,node_path+(str(key),))
+                  elif isinstance(value,list):
+                      for index,item in enumerate(value):collect_matching(item,node_path+(str(index),))
+              collect_matching(data)
+              if len(portraits)>before:source_docs.append({'path':path.as_posix(),'portrait_rows_added':len(portraits)-before})"""
+          assert text.count(old)==1; text=text.replace(old,new)
+          dollar='$'
+          for expression,value in ((dollar+'{{ github.event.pull_request.head.sha }}','$CARRIER_HEAD'),(dollar+'{{ github.event.pull_request.number }}','$CARRIER_PR'),(dollar+'{{ github.event.pull_request.base.sha }}','$CARRIER_BASE')):
+              for quote in ("'",'"'):text=text.replace(quote+expression+quote,'"'+value+'"')
+          lines=text.splitlines(keepends=True); start=next(i for i,line in enumerate(lines) if line==f'  {job}:\n'); block=lines[start:]; scripts=[]; i=0
+          while i<len(block):
+              if block[i]=='        run: |\n':
+                  i+=1; body=[]
+                  while i<len(block):
+                      line=block[i]
+                      if line.strip() and len(line)-len(line.lstrip(' '))<10:break
+                      if line.startswith('          '):body.append(line[10:])
+                      elif not line.strip():body.append('\n')
+                      else:break
+                      i+=1
+                  script=''.join(body); assert dollar+'{{' not in script; scripts.append(script); continue
+              i+=1
+          assert len(scripts)==want
+          rows=[]
+          for index,script in enumerate(scripts,1):p=root/'jobs'/f'{index:02d}.sh'; p.write_text(script); subprocess.run(['bash','-n',str(p)],check=True); rows.append({'path':p.relative_to(root).as_posix(),'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()})
+          receipt={'status':'cycle-012-media-census-v2-source-recovered','version':2,'job':job,'source_commit':source_commit,'source_blob':source_blob,'source_sha256':hashlib.sha256(raw).hexdigest(),'repairs':['bind-evidence-carrier-through-evidence-custody','restrict-portrait-scan-to-direct-performer-records'],'scripts':rows,'bootstrap_outside_transaction_roots':True}; receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest(); (root/'recovery.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Execute exact evidence retirement
+        shell: bash
+        run: |
+          set -euo pipefail
+          apply_github_env() { [ -f "$GITHUB_ENV" ] || return 0; while IFS= read -r row; do [ -z "$row" ] && continue; case "$row" in *'<<'*) exit 1 ;; *=*) export "$row" ;; esac; done < "$GITHUB_ENV"; }
+          mapfile -t scripts < <(find "$BOOTSTRAP/jobs" -type f -name '*.sh' | LC_ALL=C sort); test "${#scripts[@]}" = 2
+          bash "${scripts[0]}"; apply_github_env
+          cp "$BOOTSTRAP/recovery.json" "$OUT/v2-source-recovery.json"
+          bash "${scripts[1]}"; apply_github_env
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-media-census-v2-retirement-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-012-media-census-v2-retire-result
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-media-census-v2-retirement-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-012-media-census-v2-retire-input
+            /tmp/doctor-who-cycle-012-media-census-v2-retire-result
+            /tmp/doctor-who-cycle-012-media-census-v2-bootstrap-retire
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
