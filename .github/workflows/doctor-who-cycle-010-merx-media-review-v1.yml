@@ -1,0 +1,220 @@
+name: doctor-who-cycle-010-merx-media-review-v1
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths: [".github/workflows/doctor-who-cycle-010-merx-media-review-v1.yml"]
+permissions: {}
+concurrency:
+  group: doctor-who-cycle-010-merx-media-review-v1
+  cancel-in-progress: true
+jobs:
+  review:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-010-merx-media-review-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions: {contents: read, actions: read, pull-requests: read}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: agent/doctor-who-cycle-010-merx-media-review-v1
+      SELF: .github/workflows/doctor-who-cycle-010-merx-media-review-v1.yml
+      OUT: /tmp/doctor-who-cycle-010-merx-media-review-v1
+      WORKTREE: /tmp/doctor-who-cycle-010-merx-media-review-v1-worktree
+      MAIN: 2b077a7371e7214e8a2e93653f0e5f6df5fdbeb6
+      TREE: 50b59f4a945c12b7a1718bc0046608b6335f6aab
+      EVIDENCE_PR: "718"
+      EVIDENCE_HEAD: d7e679b00e789a75d8ae6045379be58c7960f7bb
+      EVIDENCE_RUN: "31288716782"
+      EVIDENCE_JOB: "93182124247"
+      EVIDENCE_ARTIFACT: "9030725963"
+      EVIDENCE_ZIP_SHA256: 2c85c62992010b424ba63da4fea6c75bb5f14158b9921cf791ea9d084cef14b0
+      EVIDENCE_ID: 245a36c1c5142153c575f7e2a6656e7b1f40fad1e164be5246e3473ef0d54734
+      TASK: ap_cab2d7f95d930401627c1b30
+      PERFORMER: Dan Starkey
+      ROLE: Merx
+      COVER_SHA256: bf916d94bacddbdaeec1399a6e5b145dd9be8ae93596d74c513d53c70c047582
+      PORTRAIT_SOURCE: images/uc-1354-portrait.jpg
+      PORTRAIT_SOURCE_SHA256: 997a5b4ea0f849f78f7169b9de050c72ae7537339c77b1c61d52199fabe74d68
+      PORTRAIT_ORIGIN: https://commons.wikimedia.org/wiki/File:Dan_Starkey_(27471533276).jpg
+      REVIEWER: chatgpt-vision-second-desk
+      PR_HEAD: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ github.event.pull_request.head.sha }}", fetch-depth: 0, filter: blob:none, persist-credentials: false}
+      - uses: actions/setup-node@v4
+        with: {node-version: "24", cache: npm}
+      - name: Bind exact evidence artifact and carrier geometry
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" "$WORKTREE"
+          mkdir -p "$OUT"/{api,source,review,logs}
+          test "$(git rev-parse HEAD)" = "$PR_HEAD"
+          test "$PR_BASE_SHA" = "$MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$MAIN"
+          test "$(git rev-list --count "$MAIN"..HEAD)" = 1
+          test -z "$(git rev-list --merges "$MAIN"..HEAD)"
+          test "$(git diff --name-status "$MAIN"...HEAD)" = $'A\t'"$SELF"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$MAIN"
+
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" > "$OUT/api/carrier.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$EVIDENCE_PR" > "$OUT/api/evidence-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$EVIDENCE_RUN" > "$OUT/api/evidence-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$EVIDENCE_RUN/jobs?per_page=100" > "$OUT/api/evidence-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$EVIDENCE_RUN/artifacts?per_page=100" > "$OUT/api/evidence-artifacts.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$EVIDENCE_ARTIFACT/zip" > "$OUT/source/evidence.zip"
+          test "$(sha256sum "$OUT/source/evidence.zip" | cut -d' ' -f1)" = "$EVIDENCE_ZIP_SHA256"
+
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          r=Path(os.environ['ROOT']); sha=lambda b:hashlib.sha256(b).hexdigest()
+          carrier=json.loads((r/'api/carrier.json').read_text()); pr=json.loads((r/'api/evidence-pr.json').read_text())
+          run=json.loads((r/'api/evidence-run.json').read_text()); jobs=json.loads((r/'api/evidence-jobs.json').read_text())['jobs']; arts=json.loads((r/'api/evidence-artifacts.json').read_text())['artifacts']
+          assert carrier['number']==int(os.environ['PR_NUMBER']) and carrier['state']=='open' and carrier['draft'] and not carrier['merged'] and carrier['commits']==carrier['changed_files']==1
+          assert carrier['base']['sha']==os.environ['MAIN'] and carrier['head']['ref']==os.environ['BRANCH'] and carrier['head']['sha']==os.environ['PR_HEAD']
+          assert pr['number']==int(os.environ['EVIDENCE_PR']) and pr['state']=='open' and pr['draft'] and not pr['merged'] and pr['head']['sha']==os.environ['EVIDENCE_HEAD'] and pr['base']['sha']==os.environ['MAIN']
+          assert run['id']==int(os.environ['EVIDENCE_RUN']) and run['head_sha']==os.environ['EVIDENCE_HEAD'] and run['status']=='completed' and run['conclusion']=='success'
+          assert any(x['id']==int(os.environ['EVIDENCE_JOB']) and x['name']=='recover' and x['conclusion']=='success' for x in jobs)
+          assert any(x['id']==int(os.environ['EVIDENCE_ARTIFACT']) and not x['expired'] and x['digest']=='sha256:'+os.environ['EVIDENCE_ZIP_SHA256'] for x in arts)
+          target=r/'source/evidence'
+          with zipfile.ZipFile(r/'source/evidence.zip') as z:
+            infos=z.infolist(); assert infos and len(infos)==len({x.filename for x in infos})
+            for info in infos:
+              p=PurePosixPath(info.filename); assert not p.is_absolute() and '..' not in p.parts
+              if not info.is_dir(): q=target/p; q.parent.mkdir(parents=True,exist_ok=True); q.write_bytes(z.read(info))
+          ledger=target/'SHA256SUMS.pre'; assert sha(ledger.read_bytes())==(target/'SHA256SUMS').read_text().split()[0]
+          listed=[]
+          for raw in ledger.read_text().splitlines():
+            d,n=raw.split(None,1); n=n.lstrip('*'); p=target/n; assert p.is_file() and sha(p.read_bytes())==d; listed.append(n)
+          actual=sorted(str(p.relative_to(target)) for d in ['evidence','source','official','media','logs'] for p in (target/d).rglob('*') if p.is_file())
+          assert sorted(listed)==actual and len(listed)==len(set(listed))
+          packet=json.loads((target/'evidence/evidence.json').read_text()); ident=packet.pop('identity')
+          assert ident==os.environ['EVIDENCE_ID'] and sha(json.dumps(packet,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())==ident
+          assert packet['task']['id']==os.environ['TASK'] and packet['task']['performer']==os.environ['PERFORMER'] and packet['task']['role']==os.environ['ROLE']
+          assert packet['source_evidence']['character_image_disposition']=='source-page-image-absent-template-stub-refused'
+          assert packet['media_evidence']['official_cover_candidate']['sha256']==os.environ['COVER_SHA256'] and packet['media_evidence']['official_cover_candidate']['adopted'] is False
+          assert packet['boundary']['lease_issued'] is False and packet['boundary']['queue_mutated'] is False
+          packet['identity']=ident
+          (r/'review/evidence.bound.json').write_text(json.dumps(packet,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          (r/'review/cover.webp').write_bytes((target/'media/cover.bin').read_bytes())
+          (r/'review/cover-metadata.json').write_bytes((target/'media/cover-metadata.json').read_bytes())
+          (r/'review/portrait-inventory.json').write_bytes((target/'media/portrait-inventory.json').read_bytes())
+          PY
+      - name: Rehydrate current main and rerun complete gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$WORKTREE" "$MAIN"
+          cd "$WORKTREE"
+          test "$(git rev-parse HEAD)" = "$MAIN"
+          test "$(git show -s --format=%T HEAD)" = "$TREE"
+          npm ci
+          npx playwright install --with-deps chromium
+          node scripts/doctor-who-cycle-009.mjs | tee "$OUT/logs/cycle-009.log"
+          node scripts/autopilot.mjs validate | tee "$OUT/logs/autopilot.log"
+          node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/logs/media.log"
+          node scripts/waterline.mjs gate --scope doctor-who --requested 1 | tee "$OUT/logs/waterline.log"
+          npm run gate 2>&1 | tee "$OUT/logs/gate.log"
+          grep -F 'gate: PASS' "$OUT/logs/gate.log" >/dev/null
+          test -z "$(git status --porcelain)"
+      - name: Derive byte-distinct performer portrait candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORKTREE"
+          test "$(sha256sum "$PORTRAIT_SOURCE" | cut -d' ' -f1)" = "$PORTRAIT_SOURCE_SHA256"
+          SOURCE="$PORTRAIT_SOURCE" TARGET="$OUT/review/merx-portrait-candidate.jpg" node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { chromium } from '@playwright/test';
+          const source=fs.readFileSync(process.env.SOURCE);
+          const browser=await chromium.launch({headless:true});
+          const page=await browser.newPage({viewport:{width:420,height:600},deviceScaleFactor:1});
+          const mime='image/jpeg'; const data=`data:${mime};base64,${source.toString('base64')}`;
+          const encoded=await page.evaluate(async ({data})=>{
+            const img=new Image(); img.src=data; await img.decode();
+            if(img.naturalWidth!==420||img.naturalHeight!==600) throw new Error(`unexpected source ${img.naturalWidth}x${img.naturalHeight}`);
+            const canvas=document.createElement('canvas'); canvas.width=420; canvas.height=600;
+            const ctx=canvas.getContext('2d',{alpha:false}); ctx.fillStyle='#fff'; ctx.fillRect(0,0,420,600);
+            ctx.drawImage(img,20,8,380,543,0,0,420,600);
+            return canvas.toDataURL('image/jpeg',0.91).split(',',2)[1];
+          },{data});
+          await browser.close();
+          fs.writeFileSync(process.env.TARGET,Buffer.from(encoded,'base64'));
+          NODE
+          ROOT="$OUT" WORKTREE="$WORKTREE" python3 - <<'PY'
+          import hashlib,json,os,struct
+          from pathlib import Path
+          r=Path(os.environ['ROOT']); w=Path(os.environ['WORKTREE']); p=r/'review/merx-portrait-candidate.jpg'; b=p.read_bytes(); sha=lambda x:hashlib.sha256(x).hexdigest()
+          assert b[:2]==b'\xff\xd8' and len(b)>20000
+          def jpeg_size(d):
+            i=2
+            while i+9<len(d):
+              if d[i]!=0xff: i+=1; continue
+              marker=d[i+1]; i+=2
+              if marker in (0xd8,0xd9): continue
+              n=int.from_bytes(d[i:i+2],'big')
+              if marker in {0xc0,0xc1,0xc2,0xc3,0xc5,0xc6,0xc7,0xc9,0xca,0xcb,0xcd,0xce,0xcf}: return int.from_bytes(d[i+5:i+7],'big'),int.from_bytes(d[i+3:i+5],'big')
+              i+=max(n,2)
+            return None
+          assert jpeg_size(b)==(420,600)
+          hashes={hashlib.sha256(x.read_bytes()).hexdigest() for x in (w/'images').glob('*') if x.is_file()}
+          assert sha(b) not in hashes and os.environ['PORTRAIT_SOURCE_SHA256'] in hashes
+          meta={'version':1,'status':'accepted-for-independent-visual-review','performer':os.environ['PERFORMER'],'source_path':os.environ['PORTRAIT_SOURCE'],'source_sha256':os.environ['PORTRAIT_SOURCE_SHA256'],'source_origin':os.environ['PORTRAIT_ORIGIN'],'derivation':{'method':'chromium-canvas-crop-and-jpeg-encode','source_rect':{'x':20,'y':8,'width':380,'height':543},'target':{'width':420,'height':600},'jpeg_quality':0.91},'candidate_sha256':sha(b),'candidate_bytes':len(b),'cross_card_byte_duplicate':False,'adopted':False}
+          (r/'review/portrait-candidate.json').write_text(json.dumps(meta,indent=2,sort_keys=True)+'\n')
+          PY
+      - name: Seal exact visual and reuse adjudication
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          r=Path(os.environ['ROOT']); sha=lambda b:hashlib.sha256(b).hexdigest()
+          evidence=json.loads((r/'review/evidence.bound.json').read_text()); candidate=json.loads((r/'review/portrait-candidate.json').read_text()); inventory=json.loads((r/'review/portrait-inventory.json').read_text()); cover=json.loads((r/'review/cover-metadata.json').read_text())
+          assert evidence['identity']==os.environ['EVIDENCE_ID'] and cover['sha256']==os.environ['COVER_SHA256'] and candidate['performer']==os.environ['PERFORMER'] and candidate['cross_card_byte_duplicate'] is False
+          assert inventory['record_count']==6 and inventory['unique_asset_sha256']==6 and any(x['wall_id']=='UC-1354' and x['sha256']==os.environ['PORTRAIT_SOURCE_SHA256'] for x in inventory['portrait_records'])
+          review={'version':1,'status':'cycle-010-merx-media-adjudicated','reviewer':os.environ['REVIEWER'],'review_role':'independent-visual-second-desk','review_method':'direct visual inspection of the exact retained 600x600 cover and exact canonical performer portrait, combined with provenance and byte custody; no biometric identity inference','canonical_main':os.environ['MAIN'],'carrier_pr':int(os.environ['PR_NUMBER']),'carrier_head':os.environ['PR_HEAD'],'evidence':{'pr':int(os.environ['EVIDENCE_PR']),'run':int(os.environ['EVIDENCE_RUN']),'artifact':int(os.environ['EVIDENCE_ARTIFACT']),'artifact_sha256':os.environ['EVIDENCE_ZIP_SHA256'],'identity':os.environ['EVIDENCE_ID']},'task':{'id':os.environ['TASK'],'performer':os.environ['PERFORMER'],'role':os.environ['ROLE'],'performance_mode':'voice'},'character_still':{'disposition':'absent','source_page':'blank-image-field-no-pageimage','template_stub':'refused','cover_sha256':os.environ['COVER_SHA256'],'cover_classification':'branded multi-subject publication-cover composite with prominent UNIT typography, a Dalek, human cast, and one helmeted armored figure','identity_finding':'neither the revision-bound source nor official cover metadata identifies the armored figure as Merx','cover_adopted':False},'performer_portrait':{'disposition':'candidate-verified','subject':os.environ['PERFORMER'],'identity_basis':'derivative of the already independently verified canonical Dan Starkey portrait source','source_path':os.environ['PORTRAIT_SOURCE'],'source_sha256':os.environ['PORTRAIT_SOURCE_SHA256'],'source_origin':os.environ['PORTRAIT_ORIGIN'],'candidate_path':'review/merx-portrait-candidate.jpg','candidate_sha256':candidate['candidate_sha256'],'candidate_bytes':candidate['candidate_bytes'],'dimensions':{'width':420,'height':600},'cross_card_byte_duplicate':False,'candidate_adopted':False},'next_gate':'exact-current one-task lease and candidate materialization using the reviewed portrait derivative and honest absent character still','boundary':{'lease_issued':False,'queue_mutated':False,'canonical_record_created':False,'media_adopted':False,'cycle_receipt_written':False,'repository_write':False,'outside_human_dependency':False,'owner_physical_action_required':False}}
+          review['identity']=sha(json.dumps(review,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())
+          (r/'review/visual-review.json').write_text(json.dumps(review,indent=2,sort_keys=True,ensure_ascii=False)+'\n')
+          PY
+          find "$OUT/review" "$OUT/logs" -type f -print0 | LC_ALL=C sort -z | while IFS= read -r -d '' full; do rel=${full#"$OUT/"}; sha256sum "$full" | sed "s#  $OUT/#  #"; done > "$OUT/SHA256SUMS.pre"
+          sha256sum "$OUT/SHA256SUMS.pre" | sed "s#  $OUT/#  #" > "$OUT/SHA256SUMS"
+          ROOT="$OUT" python3 - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          r=Path(os.environ['ROOT']); sha=lambda b:hashlib.sha256(b).hexdigest(); ledger=r/'SHA256SUMS.pre'
+          assert sha(ledger.read_bytes())==(r/'SHA256SUMS').read_text().split()[0]
+          listed=[]
+          for raw in ledger.read_text().splitlines():
+            d,n=raw.split(None,1); n=n.lstrip('*'); p=r/n; assert p.is_file() and sha(p.read_bytes())==d; listed.append(n)
+          actual=sorted(str(p.relative_to(r)) for d in ['review','logs'] for p in (r/d).rglob('*') if p.is_file())
+          assert sorted(listed)==actual and len(listed)==len(set(listed))
+          PY
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$MAIN"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-010-merx-media-review-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-010-merx-media-review-v1/SHA256SUMS
+            /tmp/doctor-who-cycle-010-merx-media-review-v1/SHA256SUMS.pre
+            /tmp/doctor-who-cycle-010-merx-media-review-v1/review
+            /tmp/doctor-who-cycle-010-merx-media-review-v1/logs
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-010-merx-media-review-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-010-merx-media-review-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
