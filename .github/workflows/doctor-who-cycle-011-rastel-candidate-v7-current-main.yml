@@ -1,0 +1,116 @@
+name: doctor-who-cycle-011-rastel-candidate-v7-current-main
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-candidate-v7-current-main.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-candidate-v7-current-main
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-candidate-v7-current-main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TRANSPORT: /tmp/doctor-who-cycle-011-rastel-candidate-v7-transport
+      LAUNCHER_BLOBS: "1c3a3646ea776720e8884426f2931dc5be53b382 f4a6a8b59a75128e916efa9f025c824570be1982 cbb76828503037ee8881c8c308e28a64950014c3"
+      LAUNCHER_CHUNK_BYTES: "2400 2400 1972"
+      LAUNCHER_CHUNK_SHA256: "557661d20e5cb288f2f9b888ab734b70ed0a1ba7a75cfc3a803e31df03760327 269209205810079e738b1e974b7d371dc2e9a18a8eb0ba9d07cf6a5fa93c3450 eaf0e0f9ca720b4fd01675a6267f739525786959e57e5b82aa5ed0903d5e8815"
+      LAUNCHER_B64_BYTES: "6772"
+      LAUNCHER_B64_SHA256: ff9b5276b9cac60725b83e72da72686500211d5db594c9321661609db7fd9dc6
+      LAUNCHER_GZIP_BYTES: "5078"
+      LAUNCHER_GZIP_SHA256: 1deed02ab1813dc05699fc2b81f8ff12498d67ce97f9793316b569245fd3cef5
+      LAUNCHER_BYTES: "17964"
+      LAUNCHER_SHA256: 28cfdb7a5b7015e1bf86e059f3c88fd00a31a060929ce934dba4faf8d9671d1a
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Reconstruct exact V7 launcher and execute
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$TRANSPORT"
+          mkdir -p "$TRANSPORT"
+          : > "$TRANSPORT/launcher.sh.gz.b64"
+          read -r -a blobs <<< "$LAUNCHER_BLOBS"
+          read -r -a sizes <<< "$LAUNCHER_CHUNK_BYTES"
+          read -r -a hashes <<< "$LAUNCHER_CHUNK_SHA256"
+          test "${#blobs[@]}" = 3
+          for index in 0 1 2; do
+            gh api "/repos/$GITHUB_REPOSITORY/git/blobs/${blobs[$index]}" --jq '.content' | tr -d '\n' | base64 -d > "$TRANSPORT/chunk.$index"
+            test "$(wc -c < "$TRANSPORT/chunk.$index" | tr -d ' ')" = "${sizes[$index]}"
+            test "$(sha256sum "$TRANSPORT/chunk.$index" | awk '{print $1}')" = "${hashes[$index]}"
+            cat "$TRANSPORT/chunk.$index" >> "$TRANSPORT/launcher.sh.gz.b64"
+          done
+          test "$(wc -c < "$TRANSPORT/launcher.sh.gz.b64" | tr -d ' ')" = "$LAUNCHER_B64_BYTES"
+          test "$(sha256sum "$TRANSPORT/launcher.sh.gz.b64" | awk '{print $1}')" = "$LAUNCHER_B64_SHA256"
+          base64 -d "$TRANSPORT/launcher.sh.gz.b64" > "$TRANSPORT/launcher.sh.gz"
+          test "$(wc -c < "$TRANSPORT/launcher.sh.gz" | tr -d ' ')" = "$LAUNCHER_GZIP_BYTES"
+          test "$(sha256sum "$TRANSPORT/launcher.sh.gz" | awk '{print $1}')" = "$LAUNCHER_GZIP_SHA256"
+          gzip -dc "$TRANSPORT/launcher.sh.gz" > "$TRANSPORT/launcher.sh"
+          test "$(wc -c < "$TRANSPORT/launcher.sh" | tr -d ' ')" = "$LAUNCHER_BYTES"
+          test "$(sha256sum "$TRANSPORT/launcher.sh" | awk '{print $1}')" = "$LAUNCHER_SHA256"
+          bash -n "$TRANSPORT/launcher.sh"
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text=Path('/tmp/doctor-who-cycle-011-rastel-candidate-v7-transport/launcher.sh').read_text()
+          blocks=re.findall(r"python3 - <<'PY'\n(.*?)\nPY",text,re.S)
+          assert len(blocks)==2
+          for index,block in enumerate(blocks,1): compile(block,f'<rastel-v7-launcher-{index}>','exec')
+          PY
+          chmod 700 "$TRANSPORT/launcher.sh"
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          base='${{ github.event.pull_request.base.sha }}'
+          CURRENT_HEAD="$head" CURRENT_PR="$pr" CURRENT_BASE="$base" exec "$TRANSPORT/launcher.sh"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-candidate-v7-current-main-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-candidate-v7
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-candidate-v7-current-main-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-011-rastel-candidate-v7
+            /tmp/doctor-who-cycle-011-rastel-candidate-v7-bootstrap
+            !/tmp/doctor-who-cycle-011-rastel-candidate-v7-bootstrap/v6.zip
+            /tmp/doctor-who-cycle-011-rastel-candidate-v7-control
+            /tmp/doctor-who-cycle-011-rastel-candidate-v7-transport
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
