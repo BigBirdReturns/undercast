@@ -1,0 +1,502 @@
+name: doctor-who-cycle-012-selection-cleanup-writer-v2
+
+"on":
+  workflow_run:
+    workflows: [doctor-who-cycle-012-selection-evidence-v2]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-012-selection-cleanup-writer-v2
+  cancel-in-progress: false
+
+jobs:
+  write:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'observer/doctor-who-cycle-012-selection-evidence-v2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_MAIN: 8fcc4a414821fe0f5596dec860cb825d70110c27
+      INSTALL_PARENT: 96a0f2286f23045dae4d752c90d2892344d9cc9d
+      BASE_TREE: 92c9ffd80d0c7a2f92bdbae3e6d1844b0531f3c1
+      WRITER_V1: .github/workflows/doctor-who-cycle-012-selection-cleanup-writer-v1.yml
+      WRITER_V2: .github/workflows/doctor-who-cycle-012-selection-cleanup-writer-v2.yml
+      SOURCE_WORKFLOW: doctor-who-cycle-012-selection-evidence-v2
+      SOURCE_BRANCH: observer/doctor-who-cycle-012-selection-evidence-v2
+      ARTIFACT_PREFIX: doctor-who-cycle-012-selection-evidence-v2-
+      CYCLE12_PREFIX: agent/doctor-who-cycle-012-
+      SELECTION_IDENTITY: d17b0bab43d334dab46ef472f765d8d7a70f67fe807902a3c930dc66edcb383a
+      OUT: /tmp/doctor-who-cycle-012-selection-cleanup-writer-v2
+      CLEANUP_MESSAGE: "CI: retire retained cycle 012 preselection transport"
+      CLEANUP_NAME: undercast-cycle-012-selection-cleanup
+      CLEANUP_EMAIL: cycle-012-selection-cleanup@users.noreply.github.com
+      CLEANUP_DATE: 2026-08-10T08:45:00Z
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact two-writer installation and successful V2 evidence run
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,evidence,logs,receipt}
+
+          installed="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          test "$(git rev-parse HEAD)" = "$installed"
+          test "$(git show -s --format=%P "$installed")" = "$INSTALL_PARENT"
+          test "$(git show -s --format=%P "$INSTALL_PARENT")" = "$BASE_MAIN"
+          test "$(git rev-list --count "$BASE_MAIN".."$installed")" = 2
+          test -z "$(git rev-list --merges "$BASE_MAIN".."$installed")"
+          test "$(git show -s --format=%T "$BASE_MAIN")" = "$BASE_TREE"
+          git diff --name-status "$BASE_MAIN" "$installed" | LC_ALL=C sort > "$OUT/logs/installed.tsv"
+          printf 'A\t%s\nA\t%s\n' "$WRITER_V1" "$WRITER_V2" | LC_ALL=C sort > "$OUT/logs/expected-installed.tsv"
+          cmp "$OUT/logs/installed.tsv" "$OUT/logs/expected-installed.tsv"
+
+          source_run='${{ github.event.workflow_run.id }}'
+          source_head='${{ github.event.workflow_run.head_sha }}'
+          source_attempt='${{ github.event.workflow_run.run_attempt }}'
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$source_run" > "$OUT/api/source-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$source_run/jobs?per_page=100" > "$OUT/api/source-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$source_run/artifacts?per_page=100" > "$OUT/api/source-artifacts.json"
+          gh api --method GET "/repos/$GITHUB_REPOSITORY/pulls" \
+            -f state=all -f head="${GITHUB_REPOSITORY_OWNER}:$SOURCE_BRANCH" -f per_page=100 \
+            > "$OUT/api/source-prs.json"
+
+          SOURCE_RUN="$source_run" SOURCE_HEAD="$source_head" SOURCE_ATTEMPT="$source_attempt" INSTALLED_MAIN="$installed" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          root = Path(os.environ['OUT']) / 'api'
+          load = lambda name: json.loads((root / name).read_text())
+          run = load('source-run.json')
+          jobs = load('source-jobs.json')['jobs']
+          artifacts = load('source-artifacts.json')['artifacts']
+          prs = load('source-prs.json')
+
+          assert run['id'] == int(os.environ['SOURCE_RUN'])
+          assert run['head_sha'] == os.environ['SOURCE_HEAD']
+          assert run['head_branch'] == os.environ['SOURCE_BRANCH']
+          assert run['name'] == os.environ['SOURCE_WORKFLOW']
+          assert run['event'] == 'pull_request'
+          assert run['status'] == 'completed' and run['conclusion'] == 'success'
+          assert run['run_attempt'] == int(os.environ['SOURCE_ATTEMPT'])
+
+          matched_jobs = [
+              row for row in jobs
+              if row['name'] == 'retain'
+              and row['status'] == 'completed'
+              and row['conclusion'] == 'success'
+              and row['run_attempt'] == int(os.environ['SOURCE_ATTEMPT'])
+          ]
+          assert len(matched_jobs) == 1, [
+              (row['id'], row['name'], row['run_attempt'], row['conclusion'])
+              for row in jobs
+          ]
+
+          expected_name = (
+              os.environ['ARTIFACT_PREFIX']
+              + os.environ['SOURCE_RUN']
+              + '-attempt-'
+              + os.environ['SOURCE_ATTEMPT']
+          )
+          matched_artifacts = [
+              row for row in artifacts
+              if row['name'] == expected_name and not row['expired']
+          ]
+          assert len(matched_artifacts) == 1, (
+              expected_name,
+              [(row['id'], row['name']) for row in artifacts],
+          )
+
+          matched_prs = [
+              row for row in prs
+              if row['head']['ref'] == os.environ['SOURCE_BRANCH']
+              and row['head']['sha'] == os.environ['SOURCE_HEAD']
+          ]
+          assert len(matched_prs) == 1
+          pr = matched_prs[0]
+          assert pr['draft'] is True and pr['merged_at'] is None
+          assert pr['base']['ref'] == 'main'
+          assert pr['base']['sha'] == os.environ['INSTALLED_MAIN']
+          assert pr['commits'] == 1 and pr['changed_files'] == 1
+
+          (root / 'source-job.txt').write_text(str(matched_jobs[0]['id']) + '\n')
+          (root / 'evidence-artifact.txt').write_text(str(matched_artifacts[0]['id']) + '\n')
+          (root / 'source-pr.txt').write_text(str(pr['number']) + '\n')
+          PY
+
+          evidence_id="$(cat "$OUT/api/evidence-artifact.txt")"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$evidence_id" > "$OUT/api/evidence-artifact.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$evidence_id/zip" > "$OUT/evidence.zip"
+          evidence_sha="$(sha256sum "$OUT/evidence.zip" | awk '{print $1}')"
+          test "$(jq -r '.digest' "$OUT/api/evidence-artifact.json")" = "sha256:$evidence_sha"
+
+          printf 'INSTALLED_MAIN=%s\nSOURCE_RUN=%s\nSOURCE_HEAD=%s\nSOURCE_ATTEMPT=%s\nSOURCE_JOB=%s\nEVIDENCE_ARTIFACT=%s\nEVIDENCE_ZIP_SHA256=%s\nEVIDENCE_PR=%s\n' \
+            "$installed" "$source_run" "$source_head" "$source_attempt" \
+            "$(cat "$OUT/api/source-job.txt")" "$evidence_id" "$evidence_sha" \
+            "$(cat "$OUT/api/source-pr.txt")" >> "$GITHUB_ENV"
+
+      - name: Authenticate exact V2 retention authorization
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$OUT/evidence.zip" TARGET="$OUT/evidence" python3 - <<'PY'
+          import hashlib, json, os, stat, zipfile
+          from pathlib import Path, PurePosixPath
+
+          target = Path(os.environ['TARGET'])
+          target.mkdir(parents=True, exist_ok=True)
+          digest = lambda data: hashlib.sha256(data).hexdigest()
+
+          with zipfile.ZipFile(os.environ['ZIP']) as archive:
+              infos = archive.infolist()
+              assert infos and len(infos) == len({row.filename for row in infos})
+              for info in infos:
+                  path = PurePosixPath(info.filename)
+                  assert not path.is_absolute()
+                  assert '..' not in path.parts
+                  assert '\\' not in info.filename
+                  mode = (info.external_attr >> 16) & 0xffff
+                  assert not stat.S_ISLNK(mode)
+                  if info.is_dir():
+                      continue
+                  out = target.joinpath(*path.parts)
+                  out.parent.mkdir(parents=True, exist_ok=True)
+                  out.write_bytes(archive.read(info))
+
+          pre = target / 'SHA256SUMS.pre'
+          sealed = target / 'SHA256SUMS'
+          assert pre.is_file() and sealed.is_file()
+          assert digest(pre.read_bytes()) == sealed.read_text().split()[0]
+          for raw in pre.read_text().splitlines():
+              if not raw.strip():
+                  continue
+              expected, name = raw.split(None, 1)
+              path = target / name.lstrip('*')
+              assert path.is_file() and digest(path.read_bytes()) == expected
+
+          path = target / 'evidence.json'
+          evidence = json.loads(path.read_text())
+          identity = evidence.pop('identity')
+          assert digest(json.dumps(
+              evidence,
+              sort_keys=True,
+              separators=(',', ':'),
+              ensure_ascii=False,
+          ).encode()) == identity
+          evidence['identity'] = identity
+
+          assert evidence['status'] == 'cycle-012-selection-evidence-retained-v2'
+          assert evidence['source'] == {
+              'pr': int(os.environ['EVIDENCE_PR']),
+              'branch': os.environ['SOURCE_BRANCH'],
+              'head': os.environ['SOURCE_HEAD'],
+              'run': int(os.environ['SOURCE_RUN']),
+              'attempt': int(os.environ['SOURCE_ATTEMPT']),
+              'job': int(os.environ['SOURCE_JOB']),
+          }
+          assert evidence['canonical'] == {
+              'base_main': os.environ['BASE_MAIN'],
+              'installation_parent': os.environ['INSTALL_PARENT'],
+              'installed_main': os.environ['INSTALLED_MAIN'],
+              'base_tree': os.environ['BASE_TREE'],
+              'writer_paths': [os.environ['WRITER_V1'], os.environ['WRITER_V2']],
+          }
+          assert evidence['selection']['identity'] == os.environ['SELECTION_IDENTITY']
+          assert evidence['selection']['selected_task_id'] == 'ap_8965086737382df0e88366db'
+          assert evidence['selection']['normalized'] == {
+              'performer': 'Dan Starkey',
+              'role': 'Senstarg',
+              'mode': 'unresolved',
+          }
+          assert evidence['selection']['queue'] == {
+              'total': 316,
+              'queued': 305,
+              'resolved': 11,
+              'in_flight': 0,
+          }
+
+          refs = evidence['refs_to_delete']
+          prs = evidence['pull_requests']
+          assert evidence['counts'] == {
+              'cycle12_prefix_refs': 23,
+              'observer_refs': 2,
+              'refs_to_delete': 25,
+              'pull_requests': 23,
+          }
+          assert len(refs) == 25 and len(prs) == 23
+          assert len({row['branch'] for row in refs}) == 25
+          assert len({row['pr'] for row in prs}) == 23
+          assert all(len(row['head']) == 40 for row in refs)
+          assert all(row['action'] in {'close_without_merge', 'none'} for row in prs)
+
+          assert evidence['boundary'] == {
+              'selection_retained': True,
+              'exact_heads_frozen': True,
+              'repository_write': False,
+              'canonical_mutation': False,
+              'transport_mutation': False,
+              'force_update': False,
+              'merge': False,
+              'lease_issued': False,
+              'queue_mutated': False,
+              'wall_created': False,
+              'media_adopted': False,
+              'cycle_receipt_written': False,
+              'cycle_012_product_authority': False,
+              'outside_human_dependency': False,
+              'owner_physical_action_required': False,
+          }
+          assert (target / 'EVIDENCE_COMPLETE').read_text() == identity + '\n'
+          (Path(os.environ['OUT']) / 'receipt' / 'authorization.json').write_text(
+              json.dumps(evidence, indent=2, sort_keys=True, ensure_ascii=False) + '\n'
+          )
+          PY
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$INSTALLED_MAIN"
+
+      - name: Close exact pull requests and delete exact frozen refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth="$OUT/receipt/authorization.json"
+          : > "$OUT/logs/pr-actions.tsv"
+          : > "$OUT/logs/ref-actions.tsv"
+          : > "$OUT/logs/ref-already-absent.tsv"
+
+          while IFS=$'\t' read -r number branch head action frozen_merged; do
+            [ -n "$number" ] || continue
+            gh api "/repos/$GITHUB_REPOSITORY/pulls/$number" > "$OUT/api/pr-$number-before.json"
+            NUMBER="$number" BRANCH_NAME="$branch" HEAD_SHA="$head" ACTION="$action" FROZEN_MERGED="$frozen_merged" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          row = json.loads((
+              Path(os.environ['OUT']) / f"api/pr-{os.environ['NUMBER']}-before.json"
+          ).read_text())
+          assert row['number'] == int(os.environ['NUMBER'])
+          assert row['head']['ref'] == os.environ['BRANCH_NAME']
+          assert row['head']['sha'] == os.environ['HEAD_SHA']
+          assert row['base']['ref'] == 'main'
+          if os.environ['ACTION'] == 'close_without_merge':
+              assert row['merged'] is False and row['state'] in {'open', 'closed'}
+          else:
+              assert os.environ['ACTION'] == 'none'
+              assert row['merged'] is (os.environ['FROZEN_MERGED'] == 'true')
+          PY
+            if [ "$action" = close_without_merge ]; then
+              state="$(jq -r '.state' "$OUT/api/pr-$number-before.json")"
+              if [ "$state" = open ]; then
+                gh api --method PATCH "/repos/$GITHUB_REPOSITORY/pulls/$number" \
+                  -f state=closed > "$OUT/api/pr-$number-after.json"
+              else
+                cp "$OUT/api/pr-$number-before.json" "$OUT/api/pr-$number-after.json"
+              fi
+              jq -e --arg head "$head" \
+                '.state=="closed" and .merged==false and .head.sha==$head' \
+                "$OUT/api/pr-$number-after.json" >/dev/null
+            fi
+            printf '%s\t%s\t%s\t%s\n' "$number" "$branch" "$head" "$action" \
+              >> "$OUT/logs/pr-actions.tsv"
+          done < <(jq -r '.pull_requests[] | [.pr,.branch,.head,.action,(.merged|tostring)] | @tsv' "$auth")
+
+          delete_exact_ref() {
+            branch="$1"
+            head="$2"
+            kind="$3"
+            ref_url="/repos/$GITHUB_REPOSITORY/git/ref/heads/$branch"
+            delete_url="/repos/$GITHUB_REPOSITORY/git/refs/heads/$branch"
+            if current="$(gh api "$ref_url" --jq '.object.sha' 2>/dev/null)"; then
+              test "$current" = "$head"
+              gh api --method DELETE "$delete_url"
+            else
+              printf '%s\t%s\t%s\n' "$branch" "$head" "$kind" \
+                >> "$OUT/logs/ref-already-absent.tsv"
+              return 0
+            fi
+            for attempt in $(seq 1 30); do
+              if current="$(gh api "$ref_url" --jq '.object.sha' 2>/dev/null)"; then
+                test "$current" = "$head"
+                sleep 2
+              else
+                printf '%s\t%s\t%s\n' "$branch" "$head" "$kind" \
+                  >> "$OUT/logs/ref-actions.tsv"
+                return 0
+              fi
+            done
+            echo "ref remained visible after deletion settlement: $branch" >&2
+            return 1
+          }
+
+          while IFS=$'\t' read -r branch head kind; do
+            [ -n "$branch" ] || continue
+            delete_exact_ref "$branch" "$head" "$kind"
+          done < <(jq -r '.refs_to_delete[] | [.branch,.head,.kind] | @tsv' "$auth")
+
+          remaining=-1
+          for attempt in $(seq 1 30); do
+            gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$CYCLE12_PREFIX" \
+              > "$OUT/api/terminal-cycle12-refs-$attempt.json"
+            remaining="$(jq 'length' "$OUT/api/terminal-cycle12-refs-$attempt.json")"
+            if [ "$remaining" = 0 ]; then
+              cp "$OUT/api/terminal-cycle12-refs-$attempt.json" \
+                "$OUT/api/terminal-cycle12-refs.json"
+              break
+            fi
+            sleep 2
+          done
+          test "$remaining" = 0
+          for observer in \
+            observer/doctor-who-cycle-012-selection-evidence-v1 \
+            observer/doctor-who-cycle-012-selection-evidence-v2
+          do
+            if gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$observer" >/dev/null 2>&1; then
+              echo "observer ref survived: $observer" >&2
+              exit 1
+            fi
+          done
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$INSTALLED_MAIN"
+
+      - name: Restore exact preselection tree and seal cleanup receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          payload = {
+              'message': os.environ['CLEANUP_MESSAGE'],
+              'tree': os.environ['BASE_TREE'],
+              'parents': [os.environ['INSTALLED_MAIN']],
+              'author': {
+                  'name': os.environ['CLEANUP_NAME'],
+                  'email': os.environ['CLEANUP_EMAIL'],
+                  'date': os.environ['CLEANUP_DATE'],
+              },
+              'committer': {
+                  'name': os.environ['CLEANUP_NAME'],
+                  'email': os.environ['CLEANUP_EMAIL'],
+                  'date': os.environ['CLEANUP_DATE'],
+              },
+          }
+          (Path(os.environ['OUT']) / 'commit.json').write_text(json.dumps(payload))
+          PY
+
+          cleanup_commit="$(gh api --method POST \
+            "/repos/$GITHUB_REPOSITORY/git/commits" \
+            --input "$OUT/commit.json" --jq '.sha')"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/commits/$cleanup_commit" --jq '.tree.sha')" = "$BASE_TREE"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/commits/$cleanup_commit" --jq '.parents[0].sha')" = "$INSTALLED_MAIN"
+          jq -n --arg sha "$cleanup_commit" '{sha:$sha,force:false}' > "$OUT/main-update.json"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$INSTALLED_MAIN"
+          gh api --method PATCH "/repos/$GITHUB_REPOSITORY/git/refs/heads/main" \
+            --input "$OUT/main-update.json" > "$OUT/api/main-update.json"
+          test "$(jq -r '.object.sha' "$OUT/api/main-update.json")" = "$cleanup_commit"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$cleanup_commit"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/commits/$cleanup_commit" --jq '.tree.sha')" = "$BASE_TREE"
+          for path in "$WRITER_V1" "$WRITER_V2"; do
+            if gh api "/repos/$GITHUB_REPOSITORY/contents/$path?ref=$cleanup_commit" >/dev/null 2>&1; then
+              echo "writer survived terminal tree: $path" >&2
+              exit 1
+            fi
+          done
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$CYCLE12_PREFIX" | jq 'length')" = 0
+
+          CLEANUP_COMMIT="$cleanup_commit" python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path(os.environ['OUT'])
+          auth = json.loads((root / 'receipt/authorization.json').read_text())
+          deleted = [row for row in (root / 'logs/ref-actions.tsv').read_text().splitlines() if row]
+          absent = [row for row in (root / 'logs/ref-already-absent.tsv').read_text().splitlines() if row]
+          prs = [row for row in (root / 'logs/pr-actions.tsv').read_text().splitlines() if row]
+          receipt = {
+              'status': 'cycle-012-preselection-transport-cleanup-complete-v2',
+              'version': 2,
+              'writer': {
+                  'run': int(os.environ['GITHUB_RUN_ID']),
+                  'attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              },
+              'source': {
+                  'pr': int(os.environ['EVIDENCE_PR']),
+                  'head': os.environ['SOURCE_HEAD'],
+                  'run': int(os.environ['SOURCE_RUN']),
+                  'attempt': int(os.environ['SOURCE_ATTEMPT']),
+                  'job': int(os.environ['SOURCE_JOB']),
+                  'artifact': int(os.environ['EVIDENCE_ARTIFACT']),
+                  'artifact_sha256': os.environ['EVIDENCE_ZIP_SHA256'],
+                  'evidence_identity': auth['identity'],
+                  'selection_identity': auth['selection']['identity'],
+              },
+              'canonical': {
+                  'base_main': os.environ['BASE_MAIN'],
+                  'installation_parent': os.environ['INSTALL_PARENT'],
+                  'installation_commit': os.environ['INSTALLED_MAIN'],
+                  'cleanup_commit': os.environ['CLEANUP_COMMIT'],
+                  'tree': os.environ['BASE_TREE'],
+                  'writers_absent': True,
+              },
+              'cleanup': {
+                  'authorized_refs': len(auth['refs_to_delete']),
+                  'deleted_in_this_run': len(deleted),
+                  'already_absent': len(absent),
+                  'cycle12_refs_remaining': 0,
+                  'pull_requests_processed': len(prs),
+              },
+              'boundary': {
+                  'product_tree_changed': False,
+                  'force_update': False,
+                  'merge': False,
+                  'lease_issued': False,
+                  'queue_mutated': False,
+                  'wall_created': False,
+                  'media_adopted': False,
+                  'cycle_receipt_written': False,
+                  'cycle_012_product_authority': False,
+                  'outside_human_dependency': False,
+                  'owner_physical_action_required': False,
+              },
+          }
+          receipt['identity'] = hashlib.sha256(json.dumps(
+              receipt,
+              sort_keys=True,
+              separators=(',', ':'),
+          ).encode()).hexdigest()
+          (root / 'receipt/cleanup.json').write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + '\n'
+          )
+          (root / 'receipt/CLEANUP_COMPLETE').write_text(receipt['identity'] + '\n')
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-selection-cleanup-writer-v2-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-012-selection-cleanup-writer-v2/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-selection-cleanup-writer-v2-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-012-selection-cleanup-writer-v2
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
