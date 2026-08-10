@@ -410,3 +410,11 @@ The eighth bounded Doctor Who cycle is receipted by `data/review/adapter-sdk/doc
 - Queue: 306 queued / 10 resolved / 0 in flight.
 - The byte-distinct Dan Starkey portrait is verified at `images/uc-1355-portrait.jpg`; the Merx character still remains honestly absent.
 - Reviewed cycle: `cycle_fb68b31d510d9fe9f05ff4a1` at `2026-08-09T04:30:00Z`; cycle 011 remains unauthorized.
+
+
+## Doctor Who cycle 011 — Rastel
+
+- Task `ap_25277c8fbe9e5369ed2e3d81` is resolved as Dan Starkey's voice performance as Rastel in *Master of the Daleks*.
+- Queue: 305 queued / 11 resolved / 0 in flight.
+- The byte-distinct Dan Starkey portrait is verified at `images/uc-1356-portrait.jpg`; the Rastel character still remains honestly absent.
+- Reviewed cycle: `cycle_74cdc938b028a932a766d209` at `2026-08-09T20:30:00Z`; cycle 012 remains unauthorized.
