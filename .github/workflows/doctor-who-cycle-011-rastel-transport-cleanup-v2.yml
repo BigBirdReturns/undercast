@@ -1,0 +1,548 @@
+name: doctor-who-cycle-011-rastel-transport-cleanup-v2
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-transport-cleanup-v2.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-transport-cleanup-v2
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-transport-cleanup-v2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      authorization_id: ${{ steps.upload.outputs.artifact-id }}
+      authorization_digest: ${{ steps.upload.outputs.artifact-digest }}
+      carrier_head: ${{ steps.bind.outputs.carrier_head }}
+      carrier_pr: ${{ steps.bind.outputs.carrier_pr }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANONICAL_MAIN: 276e3a737318bd2487c0c641f038a71e0543cf55
+      CANONICAL_TREE: dc82d03d761fd39291d792b170488fc242a0d322
+      BRANCH: agent/doctor-who-cycle-011-rastel-transport-cleanup-v2
+      SELF: .github/workflows/doctor-who-cycle-011-rastel-transport-cleanup-v2.yml
+      PREFIX: agent/doctor-who-cycle-011-rastel-
+      OUT: /tmp/doctor-who-cycle-011-rastel-transport-cleanup-v2-verify
+      PROOF: /tmp/doctor-who-cycle-011-rastel-transport-cleanup-v2-verify/proof
+      AUTH: /tmp/doctor-who-cycle-011-rastel-transport-cleanup-v2-verify/authorization
+      PROOF_PR: "838"
+      PROOF_BRANCH: agent/doctor-who-cycle-011-rastel-canonical-proof-v1
+      PROOF_HEAD: c06af243fb3a7bac6ebf7696839e0d6451f6b48c
+      PROOF_WORKFLOW: doctor-who-cycle-011-rastel-canonical-proof-v1
+      PROOF_RUN: "31352609105"
+      PROOF_JOB: "93346085338"
+      PROOF_ARTIFACT: "9049502889"
+      PROOF_DIGEST: "sha256:d1ba754968e67895794e2f02af26c8f3dc562556f46b9b64d3e562d454f1e1f6"
+      PROOF_IDENTITY: de673e54e1f06fef78e1af97906cf57a23492e02130f0bd70fc79ffea2bc5c59
+      CYCLE_ID: cycle_74cdc938b028a932a766d209
+      WATERLINE_EVENT: waterline_852a43e7274e57ef2b69f441
+      RECEIPT_IDENTITY: 0ff1d64e2889ada02b64fefe47e9b91b9627dd479503f9b2458508e846c61df9
+      TASK_ID: ap_25277c8fbe9e5369ed2e3d81
+      LEASE_ID: lease_cc1c8a2f720f9e11f07f9c2d
+      WALL_ID: UC-1356
+      PORTRAIT_SHA256: 42412f0f18ebf8f3ba536e633ac9777a19fa4f81277aad1086d410ea03501f4a
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind cleanup carrier and successful exact-head checks
+        id: bind
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,logs,receipt} "$PROOF" "$AUTH"
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          base='${{ github.event.pull_request.base.sha }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test "$base" = "$CANONICAL_MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$CANONICAL_MAIN"
+          test "$(git rev-list --count "$CANONICAL_MAIN"..HEAD)" = 1
+          test -z "$(git rev-list --merges "$CANONICAL_MAIN"..HEAD)"
+          test "$(git diff --name-status "$CANONICAL_MAIN"...HEAD)" = $'A\t'"$SELF"
+          test "$(git show -s --format=%T "$CANONICAL_MAIN")" = "$CANONICAL_TREE"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier-pr.json"
+          CARRIER_HEAD="$head" CARRIER_PR="$pr" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          pr=json.loads((Path(os.environ['OUT'])/'api/carrier-pr.json').read_text())
+          assert pr['number']==int(os.environ['CARRIER_PR'])
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['head']['repo']['full_name']==os.environ['GITHUB_REPOSITORY']
+          assert pr['head']['ref']==os.environ['BRANCH'] and pr['head']['sha']==os.environ['CARRIER_HEAD']
+          assert pr['base']['ref']=='main' and pr['base']['sha']==os.environ['CANONICAL_MAIN']
+          assert pr['commits']==1 and pr['changed_files']==1
+          PY
+
+          for attempt in $(seq 1 180); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f branch="$BRANCH" -f event=pull_request -f per_page=100 > "$OUT/api/standard-runs.json"
+            state="$(CARRIER_HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/standard-runs.json').read_text())['workflow_runs']
+          expected=['publisher-custody','publisher-custody-or-guard','archive-contract']
+          selected={}
+          for name in expected:
+              matches=[row for row in rows if row.get('name')==name and row.get('head_sha')==os.environ['CARRIER_HEAD']]
+              matches.sort(key=lambda row:row['id'],reverse=True)
+              if matches:
+                  selected[name]=matches[0]
+          (Path(os.environ['OUT'])/'api/standard-checks.json').write_text(json.dumps(selected,indent=2,sort_keys=True)+'\n')
+          if len(selected)<len(expected):
+              print('pending')
+          elif any(row.get('status')=='completed' and row.get('conclusion')!='success' for row in selected.values()):
+              print('failure')
+          elif all(row.get('status')=='completed' and row.get('conclusion')=='success' for row in selected.values()):
+              print('success')
+          else:
+              print('pending')
+          PY
+          )"
+            case "$state" in
+              success) break ;;
+              failure) echo "required exact-head check failed" >&2; exit 1 ;;
+              pending) sleep 10 ;;
+              *) echo "unexpected standard-check state: $state" >&2; exit 1 ;;
+            esac
+            test "$attempt" != 180
+          done
+          CARRIER_HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/standard-checks.json').read_text())
+          assert set(rows)=={'publisher-custody','publisher-custody-or-guard','archive-contract'}
+          for row in rows.values():
+              assert row['head_sha']==os.environ['CARRIER_HEAD']
+              assert row['status']=='completed' and row['conclusion']=='success'
+          PY
+          printf 'CARRIER_HEAD=%s\nCARRIER_PR=%s\n' "$head" "$pr" >> "$GITHUB_ENV"
+          echo "carrier_head=$head" >> "$GITHUB_OUTPUT"
+          echo "carrier_pr=$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate terminal canonical proof packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$PROOF_PR" > "$OUT/api/proof-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$PROOF_RUN" > "$OUT/api/proof-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$PROOF_RUN/jobs?per_page=100" > "$OUT/api/proof-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$PROOF_ARTIFACT" > "$OUT/api/proof-artifact.json"
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          api=Path(os.environ['OUT'])/'api'
+          pr=json.loads((api/'proof-pr.json').read_text())
+          run=json.loads((api/'proof-run.json').read_text())
+          jobs=json.loads((api/'proof-jobs.json').read_text())['jobs']
+          artifact=json.loads((api/'proof-artifact.json').read_text())
+          assert pr['number']==int(os.environ['PROOF_PR']) and pr['merged'] is False
+          assert pr['head']['repo']['full_name']==os.environ['GITHUB_REPOSITORY']
+          assert pr['head']['ref']==os.environ['PROOF_BRANCH'] and pr['head']['sha']==os.environ['PROOF_HEAD']
+          assert pr['base']['ref']=='main' and pr['base']['sha']==os.environ['CANONICAL_MAIN']
+          assert run['id']==int(os.environ['PROOF_RUN']) and run['head_sha']==os.environ['PROOF_HEAD']
+          assert run['head_branch']==os.environ['PROOF_BRANCH'] and run['name']==os.environ['PROOF_WORKFLOW']
+          assert run['event']=='pull_request' and run['status']=='completed' and run['conclusion']=='success'
+          job=next(row for row in jobs if row['id']==int(os.environ['PROOF_JOB']))
+          assert job['name']=='prove' and job['status']=='completed' and job['conclusion']=='success'
+          assert artifact['id']==int(os.environ['PROOF_ARTIFACT']) and artifact['expired'] is False
+          assert artifact['digest']==os.environ['PROOF_DIGEST'] and artifact['workflow_run']['id']==int(os.environ['PROOF_RUN'])
+          assert artifact['workflow_run']['head_sha']==os.environ['PROOF_HEAD']
+          PY
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$PROOF_ARTIFACT/zip" > "$OUT/proof.zip"
+          test "$(sha256sum "$OUT/proof.zip" | awk '{print $1}')" = "${PROOF_DIGEST#sha256:}"
+          ZIP="$OUT/proof.zip" TARGET="$PROOF" python3 - <<'PY'
+          import hashlib,json,os,stat,zipfile
+          from pathlib import Path,PurePosixPath
+          target=Path(os.environ['TARGET']); target.mkdir(parents=True,exist_ok=True)
+          sha=lambda data:hashlib.sha256(data).hexdigest()
+          with zipfile.ZipFile(os.environ['ZIP']) as archive:
+              infos=archive.infolist()
+              assert infos and len(infos)==len({row.filename for row in infos})
+              for info in infos:
+                  path=PurePosixPath(info.filename)
+                  assert not path.is_absolute() and '..' not in path.parts and '\\' not in info.filename
+                  mode=(info.external_attr >> 16) & 0xFFFF
+                  assert stat.S_IFMT(mode) != stat.S_IFLNK
+                  if info.is_dir():
+                      continue
+                  out=target/path
+                  out.parent.mkdir(parents=True,exist_ok=True)
+                  out.write_bytes(archive.read(info))
+          ledgers=[]
+          for sealed in target.rglob('SHA256SUMS'):
+              pre=sealed.with_name('SHA256SUMS.pre')
+              if not pre.is_file():
+                  continue
+              assert sha(pre.read_bytes())==sealed.read_text().split()[0]
+              count=0
+              for raw in pre.read_text().splitlines():
+                  if not raw.strip():
+                      continue
+                  digest,name=raw.split(None,1)
+                  path=sealed.parent/name.lstrip('*')
+                  assert path.is_file() and sha(path.read_bytes())==digest
+                  count+=1
+              ledgers.append({'root':sealed.parent.relative_to(target).as_posix(),'rows':count,'sha256':sha(pre.read_bytes())})
+          assert len(ledgers)>=2
+          proof=json.loads((target/'receipt/terminal-proof.json').read_text())
+          identity=proof.pop('identity')
+          assert identity==os.environ['PROOF_IDENTITY']
+          assert sha(json.dumps(proof,sort_keys=True,separators=(',',':')).encode())==identity
+          proof['identity']=identity
+          assert proof['status']=='cycle-011-rastel-canonical-publication-terminal-v1'
+          assert proof['canonical']=={
+              'original_main':'9a463beea20f89874a817f31460576595fb0ee63',
+              'installed_main':'fbeb6646b555a13b3620b6efa0e1b5d084174e4a',
+              'commit':os.environ['CANONICAL_MAIN'],
+              'tree':os.environ['CANONICAL_TREE'],
+              'paths':49,
+              'parent_count':1,
+              'merge_commit':False,
+              'publisher_paths_deleted':['.github/workflows/doctor-who-cycle-011-rastel-trusted-publisher-v1.yml','.github/workflows/doctor-who-cycle-011-rastel-trusted-publisher-v2.yml'],
+              'workflow_paths':0,
+              'product_deletions':0,
+          }
+          assert proof['cycle']=={
+              'id':os.environ['CYCLE_ID'],
+              'event_id':os.environ['WATERLINE_EVENT'],
+              'receipt_identity':os.environ['RECEIPT_IDENTITY'],
+              'receipt_file_sha256':'dc58f8c89777c5a06c4da97469d596e4798e7b07ea791bd7f75e159029c679c0',
+              'task':os.environ['TASK_ID'],
+              'lease':os.environ['LEASE_ID'],
+              'wall':os.environ['WALL_ID'],
+              'queue':{'total':316,'queued':305,'resolved':11,'in_flight':0},
+              'media':'22/22 complete',
+              'portrait_sha256':os.environ['PORTRAIT_SHA256'],
+              'character_still':'honestly absent',
+          }
+          assert all(proof['gates'].values()) and not any(proof['boundary'].values())
+          (Path(os.environ['OUT'])/'receipt/proof-custody.json').write_text(json.dumps({'status':'cycle-011-rastel-terminal-proof-authenticated-for-cleanup-v2','version':2,'proof_pr':int(os.environ['PROOF_PR']),'proof_head':os.environ['PROOF_HEAD'],'proof_run':int(os.environ['PROOF_RUN']),'proof_job':int(os.environ['PROOF_JOB']),'proof_artifact':int(os.environ['PROOF_ARTIFACT']),'proof_digest':os.environ['PROOF_DIGEST'],'proof_identity':identity,'canonical_main':os.environ['CANONICAL_MAIN'],'canonical_tree':os.environ['CANONICAL_TREE'],'ledgers':ledgers},indent=2,sort_keys=True)+'\n')
+          PY
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+
+      - name: Freeze exact prefix-bounded PR and branch census
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > "$OUT/api/all-pulls.jsonl"
+          for page in $(seq 1 50); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/pulls" -f state=all -f sort=created -f direction=desc -f per_page=100 -f page="$page" > "$OUT/api/pulls-page-$page.json"
+            count="$(jq 'length' "$OUT/api/pulls-page-$page.json")"
+            [ "$count" = 0 ] && break
+            jq -c '.[]' "$OUT/api/pulls-page-$page.json" >> "$OUT/api/all-pulls.jsonl"
+            [ "$count" -lt 100 ] && break
+          done
+          gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$PREFIX" > "$OUT/api/matching-refs.json"
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT']); sha=lambda data:hashlib.sha256(data).hexdigest()
+          pulls=[]
+          for raw in (root/'api/all-pulls.jsonl').read_text().splitlines():
+              row=json.loads(raw)
+              repo=(row.get('head',{}).get('repo') or {}).get('full_name')
+              branch=row.get('head',{}).get('ref','')
+              if repo!=os.environ['GITHUB_REPOSITORY'] or not branch.startswith(os.environ['PREFIX']) or branch==os.environ['BRANCH']:
+                  continue
+              merged=row.get('merged_at') is not None
+              state=row['state']
+              pulls.append({
+                  'pr':int(row['number']),
+                  'title':row['title'],
+                  'branch':branch,
+                  'head':row['head']['sha'],
+                  'state':state,
+                  'draft':bool(row.get('draft')),
+                  'merged':merged,
+                  'base_ref':row['base']['ref'],
+                  'base_sha':row['base']['sha'],
+                  'action':'close_without_merge' if state=='open' and not merged else 'none',
+              })
+          assert len({row['pr'] for row in pulls})==len(pulls)
+          refs=[]
+          for row in json.loads((root/'api/matching-refs.json').read_text()):
+              ref=row['ref']
+              assert ref.startswith('refs/heads/')
+              branch=ref[len('refs/heads/'):]
+              if not branch.startswith(os.environ['PREFIX']) or branch==os.environ['BRANCH']:
+                  continue
+              refs.append({'branch':branch,'head':row['object']['sha'],'action':'delete_exact_ref'})
+          assert len({row['branch'] for row in refs})==len(refs)
+          ref_by_branch={row['branch']:row for row in refs}
+          for row in pulls:
+              if row['branch'] in ref_by_branch:
+                  assert ref_by_branch[row['branch']]['head']==row['head']
+          proof=json.loads((root/'proof/receipt/terminal-proof.json').read_text())
+          authorization={
+              'status':'cycle-011-rastel-transport-cleanup-authorized-v2',
+              'version':2,
+              'carrier':{'pr':int(os.environ['CARRIER_PR']),'head':os.environ['CARRIER_HEAD'],'branch':os.environ['BRANCH'],'retained':True},
+              'terminal_proof':{'pr':int(os.environ['PROOF_PR']),'head':os.environ['PROOF_HEAD'],'run':int(os.environ['PROOF_RUN']),'job':int(os.environ['PROOF_JOB']),'artifact':int(os.environ['PROOF_ARTIFACT']),'digest':os.environ['PROOF_DIGEST'],'identity':proof['identity']},
+              'canonical':proof['canonical'],
+              'cycle':proof['cycle'],
+              'pull_requests':sorted(pulls,key=lambda row:row['pr']),
+              'refs':sorted(refs,key=lambda row:row['branch']),
+              'counts':{'pull_requests':len(pulls),'close_without_merge':sum(row['action']=='close_without_merge' for row in pulls),'refs':len(refs)},
+              'boundary':{'prefix':os.environ['PREFIX'],'exact_heads_frozen':True,'cleanup_carrier_retained':True,'main_mutation':False,'force_update':False,'merge':False,'cycle_012_lease_issued':False,'outside_human_dependency':False,'owner_physical_action_required':False},
+          }
+          authorization['identity']=sha(json.dumps(authorization,sort_keys=True,separators=(',',':')).encode())
+          (Path(os.environ['AUTH'])/'authorization.json').write_text(json.dumps(authorization,indent=2,sort_keys=True)+'\n')
+          rows=[]
+          for path in sorted(p for p in Path(os.environ['AUTH']).rglob('*') if p.is_file()):
+              rows.append(f"{sha(path.read_bytes())}  {path.relative_to(Path(os.environ['AUTH'])).as_posix()}")
+          (Path(os.environ['AUTH'])/'SHA256SUMS.pre').write_text('\n'.join(rows)+'\n')
+          (Path(os.environ['AUTH'])/'SHA256SUMS').write_text(f"{sha((Path(os.environ['AUTH'])/'SHA256SUMS.pre').read_bytes())}  SHA256SUMS.pre\n")
+          PY
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+
+      - name: Upload exact cleanup authorization
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-transport-cleanup-v2-authorization-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-transport-cleanup-v2-verify/authorization
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-transport-cleanup-v2-verification-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-transport-cleanup-v2-verify
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
+
+  write:
+    needs: verify
+    if: >-
+      needs.verify.result == 'success' &&
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-transport-cleanup-v2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANONICAL_MAIN: 276e3a737318bd2487c0c641f038a71e0543cf55
+      CANONICAL_TREE: dc82d03d761fd39291d792b170488fc242a0d322
+      BRANCH: agent/doctor-who-cycle-011-rastel-transport-cleanup-v2
+      PREFIX: agent/doctor-who-cycle-011-rastel-
+      CARRIER_HEAD: ${{ needs.verify.outputs.carrier_head }}
+      CARRIER_PR: ${{ needs.verify.outputs.carrier_pr }}
+      AUTHORIZATION_ID: ${{ needs.verify.outputs.authorization_id }}
+      AUTHORIZATION_DIGEST: ${{ needs.verify.outputs.authorization_digest }}
+      OUT: /tmp/doctor-who-cycle-011-rastel-transport-cleanup-v2-write
+      CYCLE_ID: cycle_74cdc938b028a932a766d209
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANONICAL_MAIN }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ env.AUTHORIZATION_ID }}
+          path: /tmp/doctor-who-cycle-011-rastel-transport-cleanup-v2-write/authorization
+          merge-multiple: true
+
+      - name: Rebind same-run authorization
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"/{api,receipt}
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$AUTHORIZATION_ID" > "$OUT/api/authorization-artifact.json"
+          expected_digest="$AUTHORIZATION_DIGEST"
+          case "$expected_digest" in sha256:*) ;; *) expected_digest="sha256:$expected_digest" ;; esac
+          jq -e --arg digest "$expected_digest" --arg head "$CARRIER_HEAD" '.id==(env.AUTHORIZATION_ID|tonumber) and .expired==false and .digest==$digest and .workflow_run.id==(env.GITHUB_RUN_ID|tonumber) and .workflow_run.head_sha==$head' "$OUT/api/authorization-artifact.json" >/dev/null
+          root="$OUT/authorization"
+          test "$(sha256sum "$root/SHA256SUMS.pre" | awk '{print $1}')" = "$(awk '{print $1}' "$root/SHA256SUMS")"
+          while read -r digest name; do
+            test "$(sha256sum "$root/${name#\*}" | awk '{print $1}')" = "$digest"
+          done < "$root/SHA256SUMS.pre"
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT'])/'authorization'
+          auth=json.loads((root/'authorization.json').read_text())
+          identity=auth.pop('identity')
+          assert hashlib.sha256(json.dumps(auth,sort_keys=True,separators=(',',':')).encode()).hexdigest()==identity
+          auth['identity']=identity
+          assert auth['status']=='cycle-011-rastel-transport-cleanup-authorized-v2'
+          assert auth['carrier']=={'pr':int(os.environ['CARRIER_PR']),'head':os.environ['CARRIER_HEAD'],'branch':os.environ['BRANCH'],'retained':True}
+          assert auth['canonical']['commit']==os.environ['CANONICAL_MAIN'] and auth['canonical']['tree']==os.environ['CANONICAL_TREE']
+          assert auth['cycle']['id']==os.environ['CYCLE_ID']
+          assert auth['boundary']=={'prefix':os.environ['PREFIX'],'exact_heads_frozen':True,'cleanup_carrier_retained':True,'main_mutation':False,'force_update':False,'merge':False,'cycle_012_lease_issued':False,'outside_human_dependency':False,'owner_physical_action_required':False}
+          (Path(os.environ['OUT'])/'api/authorization.json').write_text(json.dumps(auth,indent=2,sort_keys=True)+'\n')
+          PY
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+
+      - name: Close exact frozen PRs and delete exact frozen refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          root=Path(os.environ['OUT'])
+          auth=json.loads((root/'api/authorization.json').read_text())
+          repo=os.environ['GITHUB_REPOSITORY']
+          def run(args,input_obj=None,allow_404=False):
+              cmd=['gh','api']+args
+              input_path=None
+              if input_obj is not None:
+                  input_path=root/'api/request.json'
+                  input_path.write_text(json.dumps(input_obj))
+                  cmd+=['--input',str(input_path)]
+              proc=subprocess.run(cmd,text=True,capture_output=True)
+              if proc.returncode:
+                  if allow_404 and 'HTTP 404' in proc.stderr:
+                      return None
+                  raise RuntimeError({'cmd':cmd,'stdout':proc.stdout,'stderr':proc.stderr})
+              return proc.stdout
+          actions=[]
+          for row in auth['pull_requests']:
+              live=json.loads(run([f'/repos/{repo}/pulls/{row["pr"]}']))
+              assert live['number']==row['pr']
+              assert live['head']['repo']['full_name']==repo
+              assert live['head']['ref']==row['branch'] and live['head']['sha']==row['head']
+              assert live['base']['ref']==row['base_ref'] and live['base']['sha']==row['base_sha']
+              if row['action']=='close_without_merge':
+                  assert live['merged'] is False
+                  if live['state']=='open':
+                      updated=json.loads(run(['--method','PATCH',f'/repos/{repo}/pulls/{row["pr"]}'],{'state':'closed'}))
+                      assert updated['state']=='closed' and updated['merged'] is False
+                      actions.append({'kind':'pull_request','pr':row['pr'],'branch':row['branch'],'head':row['head'],'result':'closed_without_merge'})
+                  else:
+                      assert live['state']=='closed'
+                      actions.append({'kind':'pull_request','pr':row['pr'],'branch':row['branch'],'head':row['head'],'result':'already_closed_without_merge'})
+              else:
+                  assert live['state']=='closed' or live['merged'] is True
+                  actions.append({'kind':'pull_request','pr':row['pr'],'branch':row['branch'],'head':row['head'],'result':'already_terminal'})
+          for row in auth['refs']:
+              endpoint=f'/repos/{repo}/git/ref/heads/{row["branch"]}'
+              raw=run([endpoint],allow_404=True)
+              if raw is None:
+                  actions.append({'kind':'ref','branch':row['branch'],'head':row['head'],'result':'already_absent'})
+                  continue
+              live=json.loads(raw)
+              assert live['ref']=='refs/heads/'+row['branch'] and live['object']['sha']==row['head']
+              run(['--method','DELETE',f'/repos/{repo}/git/refs/heads/{row["branch"]}'])
+              assert run([endpoint],allow_404=True) is None
+              actions.append({'kind':'ref','branch':row['branch'],'head':row['head'],'result':'deleted_exact_ref'})
+          (root/'receipt/actions.json').write_text(json.dumps(actions,indent=2,sort_keys=True)+'\n')
+          PY
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+
+      - name: Prove exact terminal cleanup state
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > "$OUT/api/final-pulls.jsonl"
+          for page in $(seq 1 50); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/pulls" -f state=all -f sort=created -f direction=desc -f per_page=100 -f page="$page" > "$OUT/api/final-pulls-page-$page.json"
+            count="$(jq 'length' "$OUT/api/final-pulls-page-$page.json")"
+            [ "$count" = 0 ] && break
+            jq -c '.[]' "$OUT/api/final-pulls-page-$page.json" >> "$OUT/api/final-pulls.jsonl"
+            [ "$count" -lt 100 ] && break
+          done
+          gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$PREFIX" > "$OUT/api/final-refs.json"
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT'])
+          auth=json.loads((root/'api/authorization.json').read_text())
+          actions=json.loads((root/'receipt/actions.json').read_text())
+          open_rows=[]
+          for raw in (root/'api/final-pulls.jsonl').read_text().splitlines():
+              row=json.loads(raw)
+              repo=(row.get('head',{}).get('repo') or {}).get('full_name')
+              branch=row.get('head',{}).get('ref','')
+              if repo==os.environ['GITHUB_REPOSITORY'] and branch.startswith(os.environ['PREFIX']) and branch!=os.environ['BRANCH'] and row['state']=='open':
+                  open_rows.append({'pr':row['number'],'branch':branch,'head':row['head']['sha']})
+          assert not open_rows,open_rows
+          refs=[]
+          for row in json.loads((root/'api/final-refs.json').read_text()):
+              branch=row['ref'].removeprefix('refs/heads/')
+              refs.append({'branch':branch,'head':row['object']['sha']})
+          assert refs==[{'branch':os.environ['BRANCH'],'head':os.environ['CARRIER_HEAD']}],refs
+          receipt={
+              'status':'cycle-011-rastel-transport-cleanup-complete-v2',
+              'version':2,
+              'authorization_identity':auth['identity'],
+              'terminal_proof_identity':auth['terminal_proof']['identity'],
+              'canonical_main':os.environ['CANONICAL_MAIN'],
+              'canonical_tree':os.environ['CANONICAL_TREE'],
+              'prefix':os.environ['PREFIX'],
+              'carrier':{'pr':int(os.environ['CARRIER_PR']),'head':os.environ['CARRIER_HEAD'],'branch':os.environ['BRANCH'],'retained':True},
+              'counts':{
+                  'authorized_pull_requests':len(auth['pull_requests']),
+                  'authorized_refs':len(auth['refs']),
+                  'closed_without_merge':sum(row['result']=='closed_without_merge' for row in actions if row['kind']=='pull_request'),
+                  'already_terminal_pull_requests':sum(row['kind']=='pull_request' and row['result']!='closed_without_merge' for row in actions),
+                  'deleted_exact_refs':sum(row['result']=='deleted_exact_ref' for row in actions if row['kind']=='ref'),
+                  'already_absent_refs':sum(row['result']=='already_absent' for row in actions if row['kind']=='ref'),
+                  'open_prefix_pull_requests_remaining':0,
+                  'prefix_refs_remaining_excluding_carrier':0,
+              },
+              'cycle':auth['cycle'],
+              'boundary':{'main_mutation':False,'force_update':False,'merge':False,'cycle_012_selector_authorized':True,'cycle_012_lease_issued':False,'outside_human_dependency':False,'owner_physical_action_required':False},
+          }
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (root/'receipt/cleanup.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          rows=[]
+          for path in sorted(p for p in (root/'receipt').rglob('*') if p.is_file() and p.name not in {'SHA256SUMS','SHA256SUMS.pre'}):
+              rows.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root/'receipt').as_posix()}")
+          (root/'receipt/SHA256SUMS.pre').write_text('\n'.join(rows)+'\n')
+          (root/'receipt/SHA256SUMS').write_text(f"{hashlib.sha256((root/'receipt/SHA256SUMS.pre').read_bytes()).hexdigest()}  SHA256SUMS.pre\n")
+          PY
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CANONICAL_MAIN"
+          echo 'DOCTOR-WHO-CYCLE-011-RASTEL-TRANSPORT-CLEANUP-COMPLETE-V2'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-transport-cleanup-v2-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-transport-cleanup-v2-write/receipt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-transport-cleanup-v2-write-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-transport-cleanup-v2-write
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
