@@ -1,0 +1,180 @@
+name: doctor-who-cycle-011-rastel-selected-reviewer-source-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-selected-reviewer-source-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-selected-reviewer-source-v1
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-selected-reviewer-source-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MAIN: 9a463beea20f89874a817f31460576595fb0ee63
+      TREE: cd1f495acf79d8d8d24861cdfde84dd137fec386
+      BRANCH: agent/doctor-who-cycle-011-rastel-selected-reviewer-source-v1
+      SELF: .github/workflows/doctor-who-cycle-011-rastel-selected-reviewer-source-v1.yml
+      OUT: /tmp/doctor-who-cycle-011-rastel-selected-reviewer-source-v1
+      REVIEWER_BLOBS: "458dbc4ac9512f343f634af0ebf2771a7ec14f19 a22cb4d75d7bc2bf07a99a636d4bc0747a66efae 26360dcec222667d8abae12f7a29843859c91d21"
+      REVIEWER_CHUNK_BYTES: "3000 3000 2880"
+      REVIEWER_CHUNK_SHA256: "bb0c0986aeb4591ea8449b128f1a1a809ac02b57319adc41b17df730d2dd9f4e 04925ff28a1fbc2ff09d80f999f84ac3202548d240549452261c3a6bba3c5421 2c22c1c5216607c44cc7d7cdaff2aed0d0ff5afb9f3a6069f4f13bbd4f91a319"
+      REVIEWER_B64_BYTES: "8880"
+      REVIEWER_B64_SHA256: e97089dbf1fde79bc9f88a0395fa32c1d8af5c06aa7bf7ab8db9ec53a7e63229
+      REVIEWER_GZIP_BYTES: "6658"
+      REVIEWER_GZIP_SHA256: 66498bc08afe533810e4bc94de90ac2a8b16d4d33b57665f61f348d8d595d009
+      REVIEWER_BYTES: "25399"
+      REVIEWER_SHA256: b04ac3f4368d87a5146b134e2dea3446a1b782c91a0f3b64d46d68ff823d8fde
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Reconstruct and census exact independent reviewer without execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,chunks,source,receipt}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          base='${{ github.event.pull_request.base.sha }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test "$base" = "$MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$MAIN"
+          test "$(git rev-list --count "$MAIN"..HEAD)" = 1
+          test -z "$(git rev-list --merges "$MAIN"..HEAD)"
+          test "$(git diff --name-status "$MAIN"...HEAD)" = $'A\t'"$SELF"
+          test "$(git show -s --format=%T "$MAIN")" = "$TREE"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier.json"
+
+          : > "$OUT/source/reviewer.sh.gz.b64"
+          read -r -a blobs <<< "$REVIEWER_BLOBS"
+          read -r -a sizes <<< "$REVIEWER_CHUNK_BYTES"
+          read -r -a hashes <<< "$REVIEWER_CHUNK_SHA256"
+          test "${#blobs[@]}" = 3
+          for index in 0 1 2; do
+            gh api "/repos/$GITHUB_REPOSITORY/git/blobs/${blobs[$index]}" --jq '.content' | tr -d '\n' | base64 -d > "$OUT/chunks/chunk.$index"
+            test "$(wc -c < "$OUT/chunks/chunk.$index" | tr -d ' ')" = "${sizes[$index]}"
+            test "$(sha256sum "$OUT/chunks/chunk.$index" | awk '{print $1}')" = "${hashes[$index]}"
+            cat "$OUT/chunks/chunk.$index" >> "$OUT/source/reviewer.sh.gz.b64"
+          done
+          test "$(wc -c < "$OUT/source/reviewer.sh.gz.b64" | tr -d ' ')" = "$REVIEWER_B64_BYTES"
+          test "$(sha256sum "$OUT/source/reviewer.sh.gz.b64" | awk '{print $1}')" = "$REVIEWER_B64_SHA256"
+          base64 -d "$OUT/source/reviewer.sh.gz.b64" > "$OUT/source/reviewer.sh.gz"
+          test "$(wc -c < "$OUT/source/reviewer.sh.gz" | tr -d ' ')" = "$REVIEWER_GZIP_BYTES"
+          test "$(sha256sum "$OUT/source/reviewer.sh.gz" | awk '{print $1}')" = "$REVIEWER_GZIP_SHA256"
+          gzip -dc "$OUT/source/reviewer.sh.gz" > "$OUT/source/reviewer.sh"
+          test "$(wc -c < "$OUT/source/reviewer.sh" | tr -d ' ')" = "$REVIEWER_BYTES"
+          test "$(sha256sum "$OUT/source/reviewer.sh" | awk '{print $1}')" = "$REVIEWER_SHA256"
+          bash -n "$OUT/source/reviewer.sh"
+
+          HEAD="$head" PR="$pr" BASE="$base" python3 - <<'PY'
+          import hashlib,json,os,re
+          from pathlib import Path
+          root=Path(os.environ['OUT'])
+          source=root/'source/reviewer.sh'
+          text=source.read_text()
+          blocks=re.findall(r"python3 - <<'PY'\n(.*?)\nPY",text,re.S)
+          assert len(blocks)==5
+          for index,block in enumerate(blocks,1):
+              compile(block,f'<selected-reviewer-source-{index}>','exec')
+          old={
+            'candidate_commit':'244def71baddd9bdf4591384438b041894d868a1',
+            'candidate_tree':'237226254d6ab45b796b7dbf427f4ac21d765d92',
+            'candidate_identity':'180ad04ea2288e0f3f99b59991d90b35c6fcc8d640c18fd9af33dbb250082626',
+            'lease_id':'lease_cc1c8a2f720f9e11f07f9c2d',
+            'bundle_sha256':'73845e2a6f6267257df53151ebca198c7f75b4ffdc69468cd201f5b0454ae2fd',
+            'patch_sha256':'3b91b402786e56ad4efb3d70aa2996bc0d3dbc4a338b66a904d96f192f9f19d7',
+            'archive_sha256':'4f7848127b48071c32f0ed1fc9786fb3c1200ac6135559bf6dddfb3f30af8059',
+            'file_manifest_sha256':'ca1f0ac0a7cf3e50ff4309979ecd4c5c9625719726fee6adac9cc1f300164815',
+            'v8_repair_identity':'4080051f3dec29207d0b9e99857ca616c00964f3c53e1fc610da139c27748b4d',
+          }
+          new={
+            'candidate_commit':'f26f264dae78acb485ef05e5ab62bd1aad4201b0',
+            'candidate_tree':'77a0dbf40c5054e34d2a7924b0f50297913b0a98',
+            'candidate_identity':'584f5606fbdc7495f8302108dedd669803c0c95cf139f9f59bd09a33c8a8398d',
+            'lease_id':'lease_ea3b5c191a6958024d4f1d9f',
+            'bundle_sha256':'ed37329e0245ae2b9e78382c361e26a28cdfefd0bbf42b6cd3c2e1a726e7ccb8',
+            'patch_sha256':'04f9a5f6c5a0f7bbd467b10fbbcbb15cee421b557e9c4bfdcdb9bdc439abc83d',
+            'archive_sha256':'517e500462a3d151ec91ced8a1e9207d929c58084ac287dc93cb36d845398fc3',
+            'file_manifest_sha256':'3dcf0efed67343511a5ef1d9df16b057a5595dffcfa787579b44e2e460428287',
+            'selected_repair_identity':'34720dc333f3c23931a05ca13f60f605dbfdb956fb4da001f7757406cf204291',
+          }
+          markers=[
+            'SOURCE_PR','SOURCE_HEAD','SOURCE_RUN','SOURCE_JOB','SOURCE_ARTIFACT','SOURCE_ZIP_SHA256','SOURCE_FILES',
+            'CANDIDATE_IDENTITY','CANDIDATE_COMMIT','CANDIDATE_TREE','CANDIDATE_PATHS','LEASE_ID',
+            'BUNDLE_SHA256','PATCH_SHA256','TAR_SHA256','FILE_MANIFEST_SHA256','V8_IDENTITY',
+            'CURRENT_HEAD','CURRENT_PR','CURRENT_BASE','approval','source-verification',
+          ]
+          contexts=[]
+          for number,line in enumerate(text.splitlines(),1):
+              if any(marker in line for marker in markers) or any(value in line for value in old.values()):
+                  contexts.append(f'{number:05d}: {line}')
+          (root/'source/reviewer-context.txt').write_text('\n'.join(contexts)+'\n')
+          carrier=json.loads((root/'api/carrier.json').read_text())
+          assert carrier['number']==int(os.environ['PR']) and carrier['state']=='open' and carrier['draft'] is True and carrier['merged'] is False
+          assert carrier['head']['sha']==os.environ['HEAD'] and carrier['base']['sha']==os.environ['BASE']
+          assert carrier['commits']==1 and carrier['changed_files']==1
+          report={
+            'version':1,
+            'status':'cycle-011-rastel-selected-reviewer-source-recovered-v1',
+            'carrier':{'pr':int(os.environ['PR']),'head':os.environ['HEAD'],'base':os.environ['BASE']},
+            'reviewer':{'bytes':source.stat().st_size,'sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'embedded_python_programs':len(blocks),'executed':False},
+            'occurrences':{'old':{key:text.count(value) for key,value in old.items()},'new':{key:text.count(value) for key,value in new.items()},'markers':{marker:text.count(marker) for marker in markers}},
+            'old':old,
+            'selected':new,
+            'context_lines':len(contexts),
+            'boundary':{'source_inspection_only':True,'review_executed':False,'repository_write':False,'candidate_approved':False,'product_published':False,'canonical_mutation':False,'cycle_012_authorized':False,'outside_human_dependency':False,'owner_physical_action_required':False},
+          }
+          report['identity']=hashlib.sha256(json.dumps(report,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (root/'receipt/reviewer-source.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
+          (root/'receipt/SOURCE_RECOVERY_COMPLETE').write_text(report['identity']+'\n')
+          PY
+
+      - name: Seal source packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          find "$OUT" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/$rel" | sed "s#  $OUT/#  #"; done > "$OUT/SHA256SUMS.pre"
+          sha256sum "$OUT/SHA256SUMS.pre" | sed "s#  $OUT/#  #" > "$OUT/SHA256SUMS"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$MAIN"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-selected-reviewer-source-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-selected-reviewer-source-v1
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-selected-reviewer-source-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-selected-reviewer-source-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
