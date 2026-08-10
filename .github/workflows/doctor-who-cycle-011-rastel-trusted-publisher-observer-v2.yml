@@ -1,0 +1,230 @@
+name: doctor-who-cycle-011-rastel-trusted-publisher-observer-v2
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-trusted-publisher-observer-v2.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-trusted-publisher-observer-v2
+  cancel-in-progress: true
+
+jobs:
+  observe:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-trusted-publisher-observer-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ORIGINAL_MAIN: 9a463beea20f89874a817f31460576595fb0ee63
+      INSTALLED_MAIN: fbeb6646b555a13b3620b6efa0e1b5d084174e4a
+      V1_PATH: .github/workflows/doctor-who-cycle-011-rastel-trusted-publisher-v1.yml
+      V2_PATH: .github/workflows/doctor-who-cycle-011-rastel-trusted-publisher-v2.yml
+      EXPECTED_TREE: dc82d03d761fd39291d792b170488fc242a0d322
+      EXPECTED_PATHS: "49"
+      EXPECTED_CYCLE: cycle_74cdc938b028a932a766d209
+      EXPECTED_EVENT: waterline_852a43e7274e57ef2b69f441
+      EXPECTED_RECEIPT: 0ff1d64e2889ada02b64fefe47e9b91b9627dd479503f9b2458508e846c61df9
+      EXPECTED_TASK: ap_25277c8fbe9e5369ed2e3d81
+      EXPECTED_LEASE: lease_cc1c8a2f720f9e11f07f9c2d
+      EXPECTED_WALL: UC-1356
+      EXPECTED_PORTRAIT: 42412f0f18ebf8f3ba536e633ac9777a19fa4f81277aad1086d410ea03501f4a
+      REVIEW_RUN: "31351067407"
+      REVIEW_ARTIFACT: "9048973081"
+      REVIEW_DIGEST: "sha256:e9f04a66ace4f037b6cb38df58de1aa2496d3e384022421ec9decc3fc75b7df3"
+      PUBLISHER_WORKFLOW: doctor-who-cycle-011-rastel-trusted-publisher-v2
+      SOURCE_AFTER: "2026-08-10T02:54:50Z"
+      BRANCH: agent/doctor-who-cycle-011-rastel-trusted-publisher-observer-v1
+      SELF: .github/workflows/doctor-who-cycle-011-rastel-trusted-publisher-observer-v2.yml
+      OUT: /tmp/doctor-who-cycle-011-rastel-trusted-publisher-observer-v2
+      WORKTREE: /tmp/doctor-who-cycle-011-rastel-trusted-publisher-observer-v2-worktree
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Bind observer, fresh review artifact, and V2 publisher terminal run
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT" "$WORKTREE"
+          mkdir -p "$OUT"/{api,logs,receipt}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/observer-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$REVIEW_ARTIFACT" > "$OUT/api/review-artifact.json"
+          OBSERVER_HEAD="$head" OBSERVER_PR="$pr" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          api=Path(os.environ['OUT'])/'api'
+          pr=json.loads((api/'observer-pr.json').read_text())
+          artifact=json.loads((api/'review-artifact.json').read_text())
+          assert pr['number']==int(os.environ['OBSERVER_PR']) and pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['head']['ref']==os.environ['BRANCH'] and pr['head']['sha']==os.environ['OBSERVER_HEAD'] and pr['base']['ref']=='main'
+          assert artifact['id']==int(os.environ['REVIEW_ARTIFACT']) and artifact['expired'] is False and artifact['digest']==os.environ['REVIEW_DIGEST']
+          assert artifact['workflow_run']['id']==int(os.environ['REVIEW_RUN'])
+          PY
+          printf 'OBSERVER_HEAD=%s\nOBSERVER_PR=%s\n' "$head" "$pr" >> "$GITHUB_ENV"
+
+          publisher_run=''
+          terminal_failure='false'
+          for attempt in $(seq 1 1800); do
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/runs" -f event=workflow_run -f per_page=100 > "$OUT/api/publisher-runs.json"
+            state="$(python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=json.loads((Path(os.environ['OUT'])/'api/publisher-runs.json').read_text())['workflow_runs']
+          rows=[row for row in rows if row.get('name')==os.environ['PUBLISHER_WORKFLOW'] and row.get('event')=='workflow_run' and row.get('created_at','')>=os.environ['SOURCE_AFTER']]
+          rows.sort(key=lambda row:row['id'],reverse=True)
+          (Path(os.environ['OUT'])/'api/publisher-matches.json').write_text(json.dumps(rows,indent=2,sort_keys=True)+'\n')
+          successes=[row for row in rows if row.get('status')=='completed' and row.get('conclusion')=='success']
+          active=[row for row in rows if row.get('status')!='completed']
+          if successes: print('success:'+str(successes[0]['id']))
+          elif active: print('active')
+          elif rows: print('terminal-failure')
+          else: print('none')
+          PY
+          )"
+            case "$state" in
+              success:*) publisher_run="${state#success:}"; break ;;
+              terminal-failure) terminal_failure='true'; break ;;
+              active|none) sleep 10 ;;
+              *) echo "unexpected publisher state: $state" >&2; exit 1 ;;
+            esac
+          done
+          test "$terminal_failure" = false
+          test -n "$publisher_run"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$publisher_run" > "$OUT/api/publisher-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$publisher_run/jobs?per_page=100" > "$OUT/api/publisher-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$publisher_run/artifacts?per_page=100" > "$OUT/api/publisher-artifacts.json"
+          PUBLISHER_RUN="$publisher_run" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          api=Path(os.environ['OUT'])/'api'
+          run=json.loads((api/'publisher-run.json').read_text())
+          jobs=json.loads((api/'publisher-jobs.json').read_text())['jobs']
+          artifacts=json.loads((api/'publisher-artifacts.json').read_text())['artifacts']
+          assert run['id']==int(os.environ['PUBLISHER_RUN']) and run['name']==os.environ['PUBLISHER_WORKFLOW']
+          assert run['event']=='workflow_run' and run['status']=='completed' and run['conclusion']=='success'
+          assert len([job for job in jobs if job['name']=='verify' and job['conclusion']=='success'])==1
+          assert len([job for job in jobs if job['name']=='write' and job['conclusion']=='success'])==1
+          assert any(not row['expired'] and row['name'].startswith(os.environ['PUBLISHER_WORKFLOW']+'-') for row in artifacts)
+          PY
+          jq -r '.jobs[] | [.id,.name,.status,.conclusion] | @tsv' "$OUT/api/publisher-jobs.json" > "$OUT/logs/publisher-jobs.tsv"
+          while IFS=$'\t' read -r job_id job_name job_status job_conclusion; do
+            gh api "/repos/$GITHUB_REPOSITORY/actions/jobs/$job_id/logs" > "$OUT/logs/publisher-job-$job_id.log" || true
+          done < "$OUT/logs/publisher-jobs.tsv"
+          printf 'PUBLISHER_RUN=%s\n' "$publisher_run" >> "$GITHUB_ENV"
+
+      - name: Prove exact canonical two-path self-deletion
+        shell: bash
+        run: |
+          set -euo pipefail
+          canonical="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          test "$canonical" != "$INSTALLED_MAIN"
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$canonical"
+          test "$(git show -s --format=%P "$canonical")" = "$INSTALLED_MAIN"
+          test "$(git show -s --format=%T "$canonical")" = "$EXPECTED_TREE"
+          test "$(git show -s --format=%s "$canonical")" = 'Doctor Who: finalize cycle 011 Rastel'
+          test "$(git rev-list --count "$INSTALLED_MAIN".."$canonical")" = 1
+          test -z "$(git rev-list --merges "$INSTALLED_MAIN".."$canonical")"
+          git diff --name-status "$INSTALLED_MAIN" "$canonical" > "$OUT/logs/installed-to-canonical.tsv"
+          test "$(wc -l < "$OUT/logs/installed-to-canonical.tsv" | tr -d ' ')" = 51
+          test "$(awk -v a="$V1_PATH" -v b="$V2_PATH" '$1=="D" && ($2==a || $2==b) {n++} END {print n+0}' "$OUT/logs/installed-to-canonical.tsv")" = 2
+          test "$(awk '$1=="D" {n++} END {print n+0}' "$OUT/logs/installed-to-canonical.tsv")" = 2
+          for path in "$V1_PATH" "$V2_PATH"; do
+            if git cat-file -e "$canonical:$path" 2>/dev/null; then echo "publisher transport survived: $path" >&2; exit 1; fi
+          done
+          git diff --name-status "$ORIGINAL_MAIN" "$canonical" > "$OUT/logs/original-to-canonical.tsv"
+          test "$(wc -l < "$OUT/logs/original-to-canonical.tsv" | tr -d ' ')" = "$EXPECTED_PATHS"
+          test -z "$(awk '$1=="D" {print}' "$OUT/logs/original-to-canonical.tsv")"
+          test -z "$(awk '$2 ~ /^\.github\/workflows\// {print}' "$OUT/logs/original-to-canonical.tsv")"
+          printf 'CANONICAL_COMMIT=%s\n' "$canonical" >> "$GITHUB_ENV"
+
+      - name: Independently rerun canonical cycle and rendered gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$WORKTREE" "$CANONICAL_COMMIT"
+          cd "$WORKTREE"
+          npm ci
+          npx playwright install --with-deps chromium
+          node scripts/doctor-who-cycle-010.mjs | tee "$OUT/logs/cycle-010.log"
+          node scripts/doctor-who-cycle-011.mjs | tee "$OUT/logs/cycle-011.log"
+          node scripts/autopilot.mjs validate | tee "$OUT/logs/autopilot.log"
+          node scripts/media-audit.mjs validate | tee "$OUT/logs/media-validate.log"
+          node scripts/media-audit.mjs gate --scope doctor-who | tee "$OUT/logs/media-gate.log"
+          grep -F '22/22 complete' "$OUT/logs/media-gate.log" >/dev/null
+          node scripts/waterline.mjs validate | tee "$OUT/logs/waterline.log"
+          node scripts/waterline.mjs status | tee "$OUT/logs/waterline-status.log"
+          npm run gate 2>&1 | tee "$OUT/logs/complete-gate.log"
+          grep -F 'gate: PASS' "$OUT/logs/complete-gate.log" >/dev/null
+          test -z "$(git status --porcelain)"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          root=Path('.')
+          corpus='\n'.join(path.read_text(errors='replace') for path in [root/'data/review/adapter-sdk/doctor-who-cycle-011-rastel.json',root/'data/WATERLINE-STATE.json',root/'data/ESTATE-REGISTRY.json',root/'data/AUTOPILOT.json'])
+          for token in [os.environ['EXPECTED_CYCLE'],os.environ['EXPECTED_EVENT'],os.environ['EXPECTED_RECEIPT'],os.environ['EXPECTED_TASK'],os.environ['EXPECTED_LEASE'],os.environ['EXPECTED_WALL'],os.environ['EXPECTED_PORTRAIT']]: assert token in corpus,token
+          PY
+
+      - name: Seal terminal canonical proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT'])
+          receipt={'status':'cycle-011-rastel-canonical-publication-independently-proved-v2','version':2,'observer':{'pr':int(os.environ['OBSERVER_PR']),'head':os.environ['OBSERVER_HEAD'],'branch':os.environ['BRANCH']},'review':{'run':int(os.environ['REVIEW_RUN']),'artifact':int(os.environ['REVIEW_ARTIFACT']),'digest':os.environ['REVIEW_DIGEST']},'publisher':{'workflow':os.environ['PUBLISHER_WORKFLOW'],'run':int(os.environ['PUBLISHER_RUN'])},'canonical':{'original_main':os.environ['ORIGINAL_MAIN'],'installed_main':os.environ['INSTALLED_MAIN'],'commit':os.environ['CANONICAL_COMMIT'],'tree':os.environ['EXPECTED_TREE'],'paths':int(os.environ['EXPECTED_PATHS']),'publisher_paths_deleted':[os.environ['V1_PATH'],os.environ['V2_PATH']],'merge_commit':False,'force_update':False},'cycle':{'id':os.environ['EXPECTED_CYCLE'],'event_id':os.environ['EXPECTED_EVENT'],'receipt_identity':os.environ['EXPECTED_RECEIPT'],'task':os.environ['EXPECTED_TASK'],'lease':os.environ['EXPECTED_LEASE'],'wall':os.environ['EXPECTED_WALL'],'queue':{'total':316,'queued':305,'resolved':11,'in_flight':0},'media':'22/22 complete'},'gates':{'cycle_010':True,'cycle_011':True,'autopilot':True,'media':True,'waterline':True,'complete_rendered_gate':True,'clean_worktree':True},'boundary':{'cycle_012_authorized':False,'outside_human_dependency':False,'owner_physical_action_required':False,'repository_write':False}}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (root/'receipt/terminal-proof.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          rows=[]
+          for path in sorted(p for p in root.rglob('*') if p.is_file() and p.name not in {'SHA256SUMS','SHA256SUMS.pre'}): rows.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root).as_posix()}")
+          (root/'SHA256SUMS.pre').write_text('\n'.join(rows)+'\n')
+          (root/'SHA256SUMS').write_text(f"{hashlib.sha256((root/'SHA256SUMS.pre').read_bytes()).hexdigest()}  SHA256SUMS.pre\n")
+          PY
+          echo 'DOCTOR-WHO-CYCLE-011-RASTEL-CANONICAL-PUBLICATION-TERMINAL-V2'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-trusted-publisher-observer-v2-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-trusted-publisher-observer-v2
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-trusted-publisher-observer-v2-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-011-rastel-trusted-publisher-observer-v2
+            /tmp/doctor-who-cycle-011-rastel-trusted-publisher-observer-v2-worktree
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
