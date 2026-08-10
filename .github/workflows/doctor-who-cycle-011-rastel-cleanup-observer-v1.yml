@@ -1,0 +1,77 @@
+name: doctor-who-cycle-011-rastel-cleanup-observer-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-cleanup-observer-v1.yml"
+
+permissions: {}
+
+jobs:
+  observe:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-cleanup-observer-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MAIN: ee4bfa70f66d1d4ea5b53765497a185b5c072108
+      VERIFIER_RUN: "31354556860"
+      OUT: /tmp/doctor-who-cycle-011-rastel-cleanup-observer-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Retain exact cleanup writer runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"; mkdir -p "$OUT"/{api,jobs,artifacts,receipt}
+          head='${{ github.event.pull_request.head.sha }}'; base='${{ github.event.pull_request.base.sha }}'; pr='${{ github.event.pull_request.number }}'
+          test "$base" = "$MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$MAIN"
+          test "$(git diff --name-status "$MAIN"...HEAD)" = $'A\t.github/workflows/doctor-who-cycle-011-rastel-cleanup-observer-v1.yml'
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$VERIFIER_RUN" > "$OUT/api/verifier-run.json"
+          for version in v1 v2; do
+            workflow="doctor-who-cycle-011-rastel-cleanup-writer-$version.yml"
+            gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?event=workflow_run&per_page=100" > "$OUT/api/$version-runs.json"
+            jq -r '.workflow_runs[].id' "$OUT/api/$version-runs.json" | while read -r run; do
+              [ -n "$run" ] || continue
+              gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?per_page=100" > "$OUT/jobs/$run.json"
+              gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" > "$OUT/artifacts/$run.json"
+            done
+          done
+          LIVE_MAIN="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" PR="$pr" HEAD="$head" python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT']); rows=[]
+          for version in ('v1','v2'):
+              runs=json.loads((root/f'api/{version}-runs.json').read_text())['workflow_runs']
+              for run in runs:
+                  jobs=json.loads((root/f'jobs/{run["id"]}.json').read_text()).get('jobs',[])
+                  artifacts=json.loads((root/f'artifacts/{run["id"]}.json').read_text()).get('artifacts',[])
+                  rows.append({'version':version,'id':run['id'],'status':run['status'],'conclusion':run.get('conclusion'),'created_at':run['created_at'],'head_sha':run['head_sha'],'jobs':[{'id':j['id'],'name':j['name'],'status':j['status'],'conclusion':j.get('conclusion')} for j in jobs],'artifacts':[{'id':a['id'],'name':a['name'],'digest':a.get('digest')} for a in artifacts]})
+          rows.sort(key=lambda r:(r['created_at'],r['id']),reverse=True)
+          receipt={'status':'cycle-011-rastel-cleanup-writers-observed-v1','version':1,'observer':{'pr':int(os.environ['PR']),'head':os.environ['HEAD']},'verifier_run':int(os.environ['VERIFIER_RUN']),'live_main':os.environ['LIVE_MAIN'],'runs':rows,'boundary':{'repository_write':False,'main_mutation':False,'cycle_012_lease_issued':False}}
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (root/'receipt/observer.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          find "$OUT" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/$rel" | sed "s#  $OUT/#  #"; done > "$OUT/SHA256SUMS.pre"
+          sha256sum "$OUT/SHA256SUMS.pre" | sed "s#  $OUT/#  #" > "$OUT/SHA256SUMS"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-cleanup-observer-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-cleanup-observer-v1
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
