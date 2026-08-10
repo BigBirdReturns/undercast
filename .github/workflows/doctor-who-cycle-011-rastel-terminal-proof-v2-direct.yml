@@ -1,0 +1,118 @@
+name: doctor-who-cycle-011-rastel-terminal-proof-v2-direct
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-terminal-proof-v2-direct.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-terminal-proof-v2-direct
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-terminal-proof-v2-direct'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BOOT: /tmp/doctor-who-cycle-011-rastel-terminal-proof-v2-direct-bootstrap
+      OUT: /tmp/doctor-who-cycle-011-rastel-terminal-proof-v2-direct
+      SCRIPT_BLOBS: af13b777271e7615d022d4c09aeaf86bb51e03e2 9404f0b050b60b19c85e2df877088cc4958afd7a ae070f426f006983f94a6fe5a23332188b60f008
+      CHUNK_BYTES: "3000 3000 2748"
+      CHUNK_SHA256: 1dbf384ab3580ea2f068b2567f3f7d546fa456ed7ddda2df0ddf3702202c20c7 999f0fb8ce31c107968901e8d922a2bbe8b7861e2dd9fb42e183fa273eec9974 4d407559bc455e6a75e78c23b5ac36dcff37e2aabb287751b57ddce85cfda0e7
+      SCRIPT_B64_BYTES: "8748"
+      SCRIPT_B64_SHA256: 861d12cf1066646be2499a0566197a4aa636815a9915c0f70a2c3929675ce23b
+      SCRIPT_GZIP_BYTES: "6560"
+      SCRIPT_GZIP_SHA256: 5b53b27c6b064241e2dac4a9a1b09e378b3c8e5b940aa8745e18e7e6a63cebb8
+      SCRIPT_BYTES: "20842"
+      SCRIPT_SHA256: 9d9326a4d30e4c762811557b2c77edaa054f49f06022052f7f667cbcb766f517
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Reconstruct exact terminal-proof program and execute
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$BOOT"
+          mkdir -p "$BOOT/chunks"
+          : > "$BOOT/proof.sh.gz.b64"
+          read -r -a blobs <<< "$SCRIPT_BLOBS"
+          read -r -a sizes <<< "$CHUNK_BYTES"
+          read -r -a hashes <<< "$CHUNK_SHA256"
+          test "${#blobs[@]}" = 3
+          test "${#sizes[@]}" = 3
+          test "${#hashes[@]}" = 3
+          test "$(printf '%s\n' "${blobs[@]}" | sort -u | wc -l | tr -d ' ')" = 3
+          for index in 0 1 2; do
+            gh api "/repos/$GITHUB_REPOSITORY/git/blobs/${blobs[$index]}" --jq '.content' | tr -d '\n' | base64 -d > "$BOOT/chunks/$index"
+            test "$(wc -c < "$BOOT/chunks/$index" | tr -d ' ')" = "${sizes[$index]}"
+            test "$(sha256sum "$BOOT/chunks/$index" | awk '{print $1}')" = "${hashes[$index]}"
+            cat "$BOOT/chunks/$index" >> "$BOOT/proof.sh.gz.b64"
+          done
+          test "$(wc -c < "$BOOT/proof.sh.gz.b64" | tr -d ' ')" = "$SCRIPT_B64_BYTES"
+          test "$(sha256sum "$BOOT/proof.sh.gz.b64" | awk '{print $1}')" = "$SCRIPT_B64_SHA256"
+          base64 -d "$BOOT/proof.sh.gz.b64" > "$BOOT/proof.sh.gz"
+          test "$(wc -c < "$BOOT/proof.sh.gz" | tr -d ' ')" = "$SCRIPT_GZIP_BYTES"
+          test "$(sha256sum "$BOOT/proof.sh.gz" | awk '{print $1}')" = "$SCRIPT_GZIP_SHA256"
+          gzip -dc "$BOOT/proof.sh.gz" > "$BOOT/proof.sh"
+          test "$(wc -c < "$BOOT/proof.sh" | tr -d ' ')" = "$SCRIPT_BYTES"
+          test "$(sha256sum "$BOOT/proof.sh" | awk '{print $1}')" = "$SCRIPT_SHA256"
+          bash -n "$BOOT/proof.sh"
+          SCRIPT="$BOOT/proof.sh" python3 - <<'PY'
+          import os,re
+          from pathlib import Path
+          text=Path(os.environ['SCRIPT']).read_text()
+          blocks=re.findall(r"python3 - <<'PY'\n(.*?)\nPY",text,re.S)
+          assert len(blocks)==3
+          for index,block in enumerate(blocks,1):
+              compile(block,f'<cycle-011-terminal-proof-v2-{index}>','exec')
+          PY
+          chmod 700 "$BOOT/proof.sh"
+          CURRENT_HEAD='${{ github.event.pull_request.head.sha }}' \
+          CURRENT_PR='${{ github.event.pull_request.number }}' \
+          CURRENT_BASE='${{ github.event.pull_request.base.sha }}' \
+          exec "$BOOT/proof.sh"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-terminal-proof-v2-direct-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-terminal-proof-v2-direct
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-terminal-proof-v2-direct-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-011-rastel-terminal-proof-v2-direct
+            /tmp/doctor-who-cycle-011-rastel-terminal-proof-v2-direct-bootstrap
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
