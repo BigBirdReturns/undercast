@@ -1,0 +1,117 @@
+name: doctor-who-cycle-012-media-review-v3
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-012-media-review-v3.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-012-media-review-v3
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-012-media-review-v3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CONTROLLER_BLOBS: "cc70f1c694a04e4245d02b37e9e269662ca3b288 0bb66ca4a202486b02fd0e140c725dfb29c17000 fefe08ca593aacecd6d2695d8c657020542828e3"
+      CONTROLLER_B64_BYTES: "12960"
+      CONTROLLER_B64_SHA256: 08794ef336dc91f1570e404d02fa62c0839b7439386c9b70acfb11f56280d492
+      CONTROLLER_GZIP_BYTES: "9718"
+      CONTROLLER_GZIP_SHA256: b693907b9ff657ed3a459be65a0401e29970bb9d72880de18eeaf23ad6f69084
+      CONTROLLER_BYTES: "37619"
+      CONTROLLER_SHA256: 5c65d7a5bc0b3895dcb56c086bcdfe552a7f5f75e486b347768a37457eddc8d4
+      ROOT: /tmp/doctor-who-cycle-012-media-review-v3-controller
+      CURRENT_BASE: ${{ github.event.pull_request.base.sha }}
+      CURRENT_HEAD: ${{ github.event.pull_request.head.sha }}
+      CURRENT_PR: ${{ github.event.pull_request.number }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Reconstruct and execute exact V3 independent media review
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          : > "$ROOT/controller.sh.gz.b64"
+          for blob in $CONTROLLER_BLOBS; do
+            gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$blob" --jq '.content' |
+              tr -d '\n' |
+              base64 -d >> "$ROOT/controller.sh.gz.b64"
+          done
+
+          test "$(wc -c < "$ROOT/controller.sh.gz.b64" | tr -d ' ')" = "$CONTROLLER_B64_BYTES"
+          test "$(sha256sum "$ROOT/controller.sh.gz.b64" | awk '{print $1}')" = "$CONTROLLER_B64_SHA256"
+          base64 -d "$ROOT/controller.sh.gz.b64" > "$ROOT/controller.sh.gz"
+          test "$(wc -c < "$ROOT/controller.sh.gz" | tr -d ' ')" = "$CONTROLLER_GZIP_BYTES"
+          test "$(sha256sum "$ROOT/controller.sh.gz" | awk '{print $1}')" = "$CONTROLLER_GZIP_SHA256"
+          gzip -dc "$ROOT/controller.sh.gz" > "$ROOT/controller.sh"
+          test "$(wc -c < "$ROOT/controller.sh" | tr -d ' ')" = "$CONTROLLER_BYTES"
+          test "$(sha256sum "$ROOT/controller.sh" | awk '{print $1}')" = "$CONTROLLER_SHA256"
+          bash -n "$ROOT/controller.sh"
+
+          CONTROLLER="$ROOT/controller.sh" python3 - <<'PY'
+          import os,re,subprocess,tempfile
+          from pathlib import Path
+          text=Path(os.environ['CONTROLLER']).read_text()
+          py=re.findall(r"python3 - <<'PY'\n(.*?)\nPY",text,re.S)
+          assert len(py)==4
+          for index,block in enumerate(py,1):
+              compile(block,f'<cycle-012-media-review-v3-{index}>','exec')
+          node=re.findall(r"node <<'NODE'\n(.*?)\nNODE",text,re.S)
+          assert len(node)==1
+          path=Path(tempfile.mkstemp(suffix='.js')[1])
+          path.write_text(node[0])
+          subprocess.run(['node','--check',str(path)],check=True)
+          PY
+
+          chmod 700 "$ROOT/controller.sh"
+          "$ROOT/controller.sh"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-media-review-v3-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-012-media-review-v3/payload
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-media-review-v3-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-012-media-review-v3
+            /tmp/doctor-who-cycle-012-media-review-v3-census
+            /tmp/doctor-who-cycle-012-media-review-v3-v2-failure
+            /tmp/doctor-who-cycle-012-media-review-v3-controller
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
