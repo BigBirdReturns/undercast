@@ -1,0 +1,205 @@
+name: doctor-who-cycle-011-rastel-exact-cycle-binder-v3
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-exact-cycle-binder-v3.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-exact-cycle-binder-v3
+  cancel-in-progress: true
+
+jobs:
+  bind:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-exact-cycle-binder-v3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_MAIN: 96abbacf2f033ff9bceef0205ea477cd17e45fcd
+      SOURCE_TREE: cd1f495acf79d8d8d24861cdfde84dd137fec386
+      BRANCH: agent/doctor-who-cycle-011-rastel-exact-cycle-binder-v3
+      SELF: .github/workflows/doctor-who-cycle-011-rastel-exact-cycle-binder-v3.yml
+      OUT: /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3
+      CLOSURE_PACKET: /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3-closure
+      NORMALIZER_PACKET: /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3-normalizer
+      CLOSURE_BRANCH: agent/doctor-who-cycle-011-rastel-cycle-closure-preflight-v1
+      CLOSURE_WORKFLOW: doctor-who-cycle-011-rastel-cycle-closure-preflight-v1
+      CLOSURE_ARTIFACT_PREFIX: doctor-who-cycle-011-rastel-cycle-closure-preflight-v1-
+      REVIEW_PAYLOAD_ARTIFACT_PREFIX: doctor-who-cycle-011-rastel-normalized-review-payload-v3-
+      BINDER_ARTIFACT_PREFIX: doctor-who-cycle-011-rastel-exact-cycle-binder-v3-
+      TASK_ID: ap_25277c8fbe9e5369ed2e3d81
+      OLD_TASK: ap_cab2d7f95d930401627c1b30
+      WALL_ID: UC-1356
+      OLD_WALL: UC-1355
+      ROLE: Rastel
+      OLD_ROLE: Merx
+      EXPECTED_LEASE: lease_20eea426f818ecf4732fce39
+      OBSERVER_STATUS: cycle-011-rastel-v7-candidate-packet-independently-reconstructed-v1
+      NORMALIZED_STATUS: cycle-011-rastel-candidate-independently-approved-v1
+      REVIEW_ARTIFACT_PLACEHOLDER: __RASTEL_REVIEW_ARTIFACT_ID__
+      REVIEW_ZIP_PLACEHOLDER: __RASTEL_REVIEW_ARTIFACT_SHA256__
+      SOURCE_HEAD: 9fa1089c677357486541156eb851895308103a52
+      SOURCE_PATH: .github/workflows/doctor-who-cycle-011-rastel-exact-cycle-binder-v1.yml
+      SOURCE_BLOB: 414057fe72e157e1e5151ef5ad9547f16dcbb312
+      SOURCE_STEM: doctor-who-cycle-011-rastel-exact-cycle-binder-v1
+      TARGET_STEM: doctor-who-cycle-011-rastel-exact-cycle-binder-v3
+      BOOTSTRAP: /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3-bootstrap
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Recover exact V1 binder and repair list-response merge observation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$BOOTSTRAP"
+          mkdir -p "$BOOTSTRAP"/{api,scripts}
+          gh api "/repos/$GITHUB_REPOSITORY/contents/$SOURCE_PATH?ref=$SOURCE_HEAD" > "$BOOTSTRAP/api/source.json"
+          CURRENT_HEAD='${{ github.event.pull_request.head.sha }}' \
+          CURRENT_PR='${{ github.event.pull_request.number }}' \
+          CURRENT_BASE='${{ github.event.pull_request.base.sha }}' \
+          python3 - <<'PY'
+          import base64,hashlib,json,os,re,subprocess
+          from pathlib import Path
+          root=Path(os.environ['BOOTSTRAP'])
+          payload=json.loads((root/'api/source.json').read_text())
+          raw=base64.b64decode(payload['content'])
+          assert payload['sha']==os.environ['SOURCE_BLOB']
+          probe=root/'source-v1.yml'; probe.write_bytes(raw)
+          assert subprocess.check_output(['git','hash-object',str(probe)],text=True).strip()==os.environ['SOURCE_BLOB']
+          text=raw.decode('utf-8')
+          assert text.startswith('name: '+os.environ['SOURCE_STEM']+'\n')
+          old="rows=[row for row in rows if row['head']['ref']==os.environ['CLOSURE_BRANCH'] and row['merged'] is False]"
+          new="rows=[row for row in rows if row['head']['ref']==os.environ['CLOSURE_BRANCH'] and row.get('merged_at') is None]"
+          assert text.count(old)==1
+          assert text.count("row['merged'] is False")==1
+          text=text.replace(old,new)
+          assert text.count("row['merged'] is False")==0
+          assert text.count("pr['merged'] is False")==1
+          text=text.replace(os.environ['SOURCE_STEM'],os.environ['TARGET_STEM'])
+          dollar='$'
+          text=text.replace("head='"+dollar+"{{ github.event.pull_request.head.sha }}'",'head="$CURRENT_HEAD"')
+          text=text.replace("pr='"+dollar+"{{ github.event.pull_request.number }}'",'pr="$CURRENT_PR"')
+          text=text.replace("base='"+dollar+"{{ github.event.pull_request.base.sha }}'",'base="$CURRENT_BASE"')
+          assert dollar+'{{ github.event.pull_request.' not in '\n'.join(
+              line for line in text.splitlines()
+              if not line.lstrip().startswith(('if:','ref:'))
+          )
+          lines=text.splitlines(keepends=True)
+          start=next(i for i,line in enumerate(lines) if line=='  bind:\n')
+          block=lines[start:]
+          scripts=[]; i=0
+          while i<len(block):
+              if block[i]=='        run: |\n':
+                  i+=1; body=[]
+                  while i<len(block):
+                      line=block[i]
+                      if line.strip() and len(line)-len(line.lstrip(' '))<10: break
+                      if line.startswith('          '): body.append(line[10:])
+                      elif not line.strip(): body.append('\n')
+                      else: break
+                      i+=1
+                  scripts.append(''.join(body)); continue
+              i+=1
+          assert len(scripts)==4,len(scripts)
+          rows=[]
+          for index,script in enumerate(scripts,1):
+              path=root/'scripts'/f'{index:02d}.sh'
+              path.write_text(script)
+              subprocess.run(['bash','-n',str(path)],check=True)
+              blocks=re.findall(r"python3 - <<'PY'\n(.*?)\nPY",script,re.S)
+              for n,body in enumerate(blocks,1):
+                  compile(body,f'<binder-v3-script-{index}-python-{n}>','exec')
+              rows.append({'path':path.relative_to(root).as_posix(),'bytes':path.stat().st_size,'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'embedded_python':len(blocks)})
+          repaired=text.encode()
+          receipt={
+            'version':3,
+            'status':'cycle-011-rastel-exact-cycle-binder-v3-source-recovered',
+            'source':{'head':os.environ['SOURCE_HEAD'],'path':os.environ['SOURCE_PATH'],'git_blob':os.environ['SOURCE_BLOB'],'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()},
+            'repair':{'old':"list item row['merged'] is False",'new':"row.get('merged_at') is None",'occurrences':1,'full_pr_merged_predicates_retained':1},
+            'target':{'bytes':len(repaired),'sha256':hashlib.sha256(repaired).hexdigest(),'scripts':rows},
+            'boundary':{'template_only':True,'repository_write':False,'canonical_mutation':False,'cycle_012_authorized':False,'outside_human_dependency':False,'owner_physical_action_required':False},
+          }
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (root/'source-recovery.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Execute repaired binder programs and seal repair custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CURRENT_HEAD='${{ github.event.pull_request.head.sha }}'
+          export CURRENT_PR='${{ github.event.pull_request.number }}'
+          export CURRENT_BASE='${{ github.event.pull_request.base.sha }}'
+          apply_github_env() {
+            [ -f "$GITHUB_ENV" ] || return 0
+            while IFS= read -r row; do
+              [ -z "$row" ] && continue
+              case "$row" in
+                *'<<'*) echo "unsupported multiline GITHUB_ENV row" >&2; exit 1 ;;
+                *=*) export "$row" ;;
+              esac
+            done < "$GITHUB_ENV"
+          }
+          for script in "$BOOTSTRAP"/scripts/0{1,2,3}.sh; do
+            bash "$script"
+            apply_github_env
+          done
+          cp "$BOOTSTRAP/source-recovery.json" "$OUT/receipt/binder-v3-source-recovery.json"
+          bash "$BOOTSTRAP/scripts/04.sh"
+          apply_github_env
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CURRENT_BASE"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-normalized-review-payload-v3-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3/review-payload
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-exact-cycle-binder-v3-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3/api
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3/source
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3/receipt
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3/logs
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3/SHA256SUMS.pre
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-exact-cycle-binder-v3-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3-closure
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3-normalizer
+            /tmp/doctor-who-cycle-011-rastel-exact-cycle-binder-v3-bootstrap
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
