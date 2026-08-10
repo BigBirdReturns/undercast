@@ -1,0 +1,151 @@
+name: doctor-who-cycle-011-rastel-final-review-v4-direct
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-final-review-v4-direct-rearm.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-final-review-v4-direct-rearm
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-final-review-v4-direct'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ORIGINAL_MAIN: 9a463beea20f89874a817f31460576595fb0ee63
+      INSTALLED_MAIN: 39cf752efaba48271b078152235045be948b0d64
+      INSTALLED_PATH: .github/workflows/doctor-who-cycle-011-rastel-trusted-publisher-v1.yml
+      BRANCH: agent/doctor-who-cycle-011-rastel-final-review-v4-direct
+      SELF: .github/workflows/doctor-who-cycle-011-rastel-final-review-v4-direct-rearm.yml
+      OUT: /tmp/doctor-who-cycle-011-rastel-final-review-v4-direct-rearm
+      SOURCE_PR: "817"
+      SOURCE_HEAD: 163743c529584cf250f7feb1c5d60ca5b29d460b
+      SOURCE_RUN: "31346032070"
+      SOURCE_JOB: "93328041911"
+      SOURCE_ARTIFACT: "9047395261"
+      SOURCE_ARTIFACT_DIGEST: "sha256:7bbb4d959718935faa22a851f439cdb2ef0c545ce5469b4d5356e056d5612377"
+      APPROVAL_IDENTITY: 44423827f8a95fed286ae381cfc570575ba1067daa00c312efeebd8bb1f68933
+      HANDOFF_IDENTITY: fc7f596318c9753bff53406b718620574214835b3c1ccea892e43fd01bdd66d7
+      PRODUCT_COMMIT: fb25eb067844c2ca1861b45d381967d4aa89af23
+      PRODUCT_TREE: dc82d03d761fd39291d792b170488fc242a0d322
+      PRODUCT_PATHS: "49"
+      CYCLE_ID: cycle_74cdc938b028a932a766d209
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact rearm carrier and installed publisher main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,packet}
+          head='${{ github.event.pull_request.head.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          base='${{ github.event.pull_request.base.sha }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test "$pr" = "$SOURCE_PR"
+          test "$base" = "$ORIGINAL_MAIN"
+          test "$(git merge-base "$ORIGINAL_MAIN" "$INSTALLED_MAIN")" = "$ORIGINAL_MAIN"
+          test "$(git rev-list --count "$ORIGINAL_MAIN".."$INSTALLED_MAIN")" = 1
+          test "$(git diff --name-status "$ORIGINAL_MAIN" "$INSTALLED_MAIN")" = $'A\t'"$INSTALLED_PATH"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$INSTALLED_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/carrier-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > "$OUT/api/source-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/jobs?per_page=100" > "$OUT/api/source-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT" > "$OUT/api/source-artifact.json"
+          CURRENT_HEAD="$head" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT'])/'api'; load=lambda n:json.loads((root/n).read_text())
+          pr=load('carrier-pr.json'); run=load('source-run.json'); jobs=load('source-jobs.json')['jobs']; artifact=load('source-artifact.json')
+          assert pr['number']==int(os.environ['SOURCE_PR']) and pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['base']['sha']==os.environ['ORIGINAL_MAIN'] and pr['head']['ref']==os.environ['BRANCH'] and pr['head']['sha']==os.environ['CURRENT_HEAD']
+          assert run['id']==int(os.environ['SOURCE_RUN']) and run['head_sha']==os.environ['SOURCE_HEAD'] and run['status']=='completed' and run['conclusion']=='success' and run['run_attempt']==1
+          job=next(row for row in jobs if row['id']==int(os.environ['SOURCE_JOB']))
+          assert job['name']=='review' and job['status']=='completed' and job['conclusion']=='success'
+          assert artifact['id']==int(os.environ['SOURCE_ARTIFACT']) and artifact['expired'] is False and artifact['digest']==os.environ['SOURCE_ARTIFACT_DIGEST']
+          assert artifact['workflow_run']['id']==int(os.environ['SOURCE_RUN']) and artifact['workflow_run']['head_sha']==os.environ['SOURCE_HEAD']
+          PY
+          printf 'REARM_HEAD=%s\nREARM_PR=%s\n' "$head" "$pr" >> "$GITHUB_ENV"
+
+      - name: Reauthenticate and re-emit exact approval packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT/zip" > "$OUT/source.zip"
+          test "$(sha256sum "$OUT/source.zip" | awk '{print $1}')" = "${SOURCE_ARTIFACT_DIGEST#sha256:}"
+          python3 - <<'PY'
+          import hashlib,json,os,zipfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['OUT']); packet=root/'packet'; sha=lambda data:hashlib.sha256(data).hexdigest()
+          with zipfile.ZipFile(root/'source.zip') as archive:
+              infos=archive.infolist(); assert infos and len(infos)==len({row.filename for row in infos})
+              for info in infos:
+                  path=PurePosixPath(info.filename); assert not path.is_absolute() and '..' not in path.parts
+                  if info.is_dir(): continue
+                  out=packet/path; out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(archive.read(info))
+          pre=packet/'SHA256SUMS.pre'; sealed=packet/'SHA256SUMS'
+          assert sha(pre.read_bytes())==sealed.read_text().split()[0]
+          for raw in pre.read_text().splitlines():
+              if not raw.strip(): continue
+              digest,name=raw.split(None,1); path=packet/name.lstrip('*')
+              assert path.is_file() and sha(path.read_bytes())==digest
+          approval=json.loads((packet/'receipt/approval.json').read_text()); aid=approval.pop('identity')
+          assert aid==os.environ['APPROVAL_IDENTITY'] and sha(json.dumps(approval,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())==aid
+          approval['identity']=aid
+          handoff=json.loads((packet/'handoff/publication-handoff.json').read_text()); hid=handoff.pop('identity')
+          assert hid==os.environ['HANDOFF_IDENTITY'] and sha(json.dumps(handoff,sort_keys=True,separators=(',',':')).encode())==hid
+          handoff['identity']=hid
+          assert approval['product']['commit']==os.environ['PRODUCT_COMMIT'] and approval['product']['tree']==os.environ['PRODUCT_TREE'] and approval['product']['paths']==int(os.environ['PRODUCT_PATHS'])
+          assert approval['cycle']['id']==os.environ['CYCLE_ID'] and all(approval['gates'].values())
+          assert approval['boundary']['approved_for_default_branch_publication'] is True and approval['boundary']['canonical_mutation'] is False and approval['boundary']['cycle_012_authorized'] is False
+          receipt={'status':'cycle-011-rastel-final-review-v4-direct-rearmed-v1','version':1,'source':{'pr':int(os.environ['SOURCE_PR']),'head':os.environ['SOURCE_HEAD'],'run':int(os.environ['SOURCE_RUN']),'job':int(os.environ['SOURCE_JOB']),'artifact':int(os.environ['SOURCE_ARTIFACT']),'artifact_digest':os.environ['SOURCE_ARTIFACT_DIGEST'],'approval_identity':aid,'handoff_identity':hid},'rearm':{'pr':int(os.environ['REARM_PR']),'head':os.environ['REARM_HEAD'],'installed_main':os.environ['INSTALLED_MAIN'],'installed_path':os.environ['INSTALLED_PATH']},'product':approval['product'],'cycle':approval['cycle'],'boundary':{'repository_write':False,'canonical_mutation':False,'cycle_012_authorized':False,'outside_human_dependency':False,'owner_physical_action_required':False}}
+          receipt['identity']=sha(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode())
+          (packet/'receipt/rearm.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          pre.unlink(); sealed.unlink()
+          rows=[]
+          for path in sorted(p for p in packet.rglob('*') if p.is_file()): rows.append(f"{sha(path.read_bytes())}  {path.relative_to(packet).as_posix()}")
+          (packet/'SHA256SUMS.pre').write_text('\n'.join(rows)+'\n')
+          (packet/'SHA256SUMS').write_text(f"{sha((packet/'SHA256SUMS.pre').read_bytes())}  SHA256SUMS.pre\n")
+          PY
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$INSTALLED_MAIN"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-final-review-v4-direct-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-final-review-v4-direct-rearm/packet
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-final-review-v4-direct-rearm-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-final-review-v4-direct-rearm
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
