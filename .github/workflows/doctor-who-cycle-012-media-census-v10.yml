@@ -1,0 +1,115 @@
+name: doctor-who-cycle-012-media-census-v10
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-012-media-census-v10.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-012-media-census-v10
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-012-media-census-v10'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHUNK1_BLOB: 42afd5d497eb225611a3f2450795b179506527a4
+      CHUNK1_BYTES: "4600"
+      CHUNK1_SHA256: cf1da722d8b8b7b22909c89c91e2a60728c013e161ec5b50db92a677f19f2aa0
+      CHUNK2_BLOB: d448fa5e8da80c7e0e9ed320aaa0719bf3d5fbb1
+      CHUNK2_BYTES: "4597"
+      CHUNK2_SHA256: b5ead40ea1c6582c5279dde2b883dd3de06da20746b78e53571d5dc7ce55db77
+      CONTROLLER_GZIP_BYTES: "9197"
+      CONTROLLER_GZIP_SHA256: 98a56392b5ee3cb26dbe1d790cbf68f6608b4408771df05720227d7c5d560392
+      CONTROLLER_BYTES: "16590"
+      CONTROLLER_SHA256: c832fa2a9914bd4c8c325836f0a905386c6449cef0e40ac967ea44c32d20c8e8
+      ROOT: /tmp/doctor-who-cycle-012-media-census-v10-controller
+      CURRENT_BASE: ${{ github.event.pull_request.base.sha }}
+      CURRENT_HEAD: ${{ github.event.pull_request.head.sha }}
+      CURRENT_PR: ${{ github.event.pull_request.number }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Reconstruct and execute exact V10 transport-recovery controller
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$CHUNK1_BLOB" --jq '.content' | tr -d '\n' | base64 -d > "$ROOT/chunk-01"
+          gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$CHUNK2_BLOB" --jq '.content' | tr -d '\n' | base64 -d > "$ROOT/chunk-02"
+          test "$(wc -c < "$ROOT/chunk-01" | tr -d ' ')" = "$CHUNK1_BYTES"
+          test "$(sha256sum "$ROOT/chunk-01" | awk '{print $1}')" = "$CHUNK1_SHA256"
+          test "$(wc -c < "$ROOT/chunk-02" | tr -d ' ')" = "$CHUNK2_BYTES"
+          test "$(sha256sum "$ROOT/chunk-02" | awk '{print $1}')" = "$CHUNK2_SHA256"
+          cat "$ROOT/chunk-01" "$ROOT/chunk-02" > "$ROOT/controller.sh.gz"
+          test "$(wc -c < "$ROOT/controller.sh.gz" | tr -d ' ')" = "$CONTROLLER_GZIP_BYTES"
+          test "$(sha256sum "$ROOT/controller.sh.gz" | awk '{print $1}')" = "$CONTROLLER_GZIP_SHA256"
+          gzip -dc "$ROOT/controller.sh.gz" > "$ROOT/controller.sh"
+          test "$(wc -c < "$ROOT/controller.sh" | tr -d ' ')" = "$CONTROLLER_BYTES"
+          test "$(sha256sum "$ROOT/controller.sh" | awk '{print $1}')" = "$CONTROLLER_SHA256"
+          bash -n "$ROOT/controller.sh"
+          CONTROLLER="$ROOT/controller.sh" python3 - <<'PY'
+          import os,re
+          from pathlib import Path
+          text=Path(os.environ['CONTROLLER']).read_text()
+          blocks=re.findall(r"python3 - <<'PY'\n(.*?)\nPY",text,re.S)
+          assert len(blocks)==2
+          for index,block in enumerate(blocks,1):
+              compile(block,f'<cycle-012-media-census-v10-controller-{index}>','exec')
+          PY
+          chmod 700 "$ROOT/controller.sh"
+          "$ROOT/controller.sh"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-media-census-v10-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-012-media-census-v10/payload
+            /tmp/doctor-who-cycle-012-media-census-v8-failure/payload
+            /tmp/doctor-who-cycle-012-media-census-v9-failure/payload
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-media-census-v10-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-012-media-census-v10
+            /tmp/doctor-who-cycle-012-media-census-v10-loader
+            /tmp/doctor-who-cycle-012-media-census-v8-failure
+            /tmp/doctor-who-cycle-012-media-census-v9-failure
+            /tmp/doctor-who-cycle-012-media-census-v10-wrapper
+            /tmp/doctor-who-cycle-012-media-census-v10-controller
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
