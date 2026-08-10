@@ -1,0 +1,151 @@
+name: doctor-who-cycle-011-rastel-publisher-observer-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-publisher-observer-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-publisher-observer-v1
+  cancel-in-progress: true
+
+jobs:
+  observe:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-publisher-observer-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INSTALLED_MAIN: 39cf752efaba48271b078152235045be948b0d64
+      ORIGINAL_MAIN: 9a463beea20f89874a817f31460576595fb0ee63
+      SOURCE_HEAD: 7f3343b295eb76005ccc81ff6288da51f0888fa1
+      SOURCE_BRANCH: agent/doctor-who-cycle-011-rastel-final-review-v4-direct
+      PUBLISHER_WORKFLOW: doctor-who-cycle-011-rastel-trusted-publisher-v1.yml
+      PUBLISHER_NAME: doctor-who-cycle-011-rastel-trusted-publisher-v1
+      PUBLISHER_PATH: .github/workflows/doctor-who-cycle-011-rastel-trusted-publisher-v1.yml
+      SELF: .github/workflows/doctor-who-cycle-011-rastel-publisher-observer-v1.yml
+      OUT: /tmp/doctor-who-cycle-011-rastel-publisher-observer-v1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind observer geometry and list trusted publisher runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,jobs,artifacts,receipt}
+          head='${{ github.event.pull_request.head.sha }}'
+          base='${{ github.event.pull_request.base.sha }}'
+          pr='${{ github.event.pull_request.number }}'
+          test "$(git rev-parse HEAD)" = "$head"
+          test "$base" = "$INSTALLED_MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$INSTALLED_MAIN"
+          test "$(git rev-list --count "$INSTALLED_MAIN"..HEAD)" = 1
+          test -z "$(git rev-list --merges "$INSTALLED_MAIN"..HEAD)"
+          test "$(git diff --name-status "$INSTALLED_MAIN"...HEAD)" = $'A\t'"$SELF"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$pr" > "$OUT/api/observer-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/$PUBLISHER_WORKFLOW/runs?event=workflow_run&per_page=100" > "$OUT/api/publisher-runs.json"
+          live_main="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          printf '%s\n' "$live_main" > "$OUT/api/live-main.txt"
+          if gh api "/repos/$GITHUB_REPOSITORY/contents/$PUBLISHER_PATH?ref=main" > "$OUT/api/live-publisher-file.json" 2> "$OUT/api/live-publisher-file.err"; then
+            printf 'true\n' > "$OUT/api/publisher-present.txt"
+          else
+            printf 'false\n' > "$OUT/api/publisher-present.txt"
+          fi
+          if gh api "/repos/$GITHUB_REPOSITORY/contents/scripts/doctor-who-cycle-011.mjs?ref=main" > "$OUT/api/live-cycle-011-file.json" 2> "$OUT/api/live-cycle-011-file.err"; then
+            printf 'true\n' > "$OUT/api/cycle-011-present.txt"
+          else
+            printf 'false\n' > "$OUT/api/cycle-011-present.txt"
+          fi
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT'])
+          rows=json.loads((root/'api/publisher-runs.json').read_text())['workflow_runs']
+          rows=[row for row in rows if row.get('name')==os.environ['PUBLISHER_NAME'] and row.get('event')=='workflow_run']
+          rows.sort(key=lambda row:(row.get('created_at',''),row['id']),reverse=True)
+          selected=rows[:20]
+          (root/'api/selected-runs.json').write_text(json.dumps(selected,indent=2,sort_keys=True)+'\n')
+          (root/'api/selected-run-ids.txt').write_text('\n'.join(str(row['id']) for row in selected)+'\n')
+          PY
+          while IFS= read -r run_id; do
+            [ -n "$run_id" ] || continue
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$OUT/jobs/$run_id.json"
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$OUT/artifacts/$run_id.json"
+          done < "$OUT/api/selected-run-ids.txt"
+          printf 'OBSERVER_PR=%s\nOBSERVER_HEAD=%s\nOBSERVER_BASE=%s\nLIVE_MAIN=%s\n' "$pr" "$head" "$base" "$live_main" >> "$GITHUB_ENV"
+
+      - name: Classify exact live publication boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT'])
+          runs=json.loads((root/'api/selected-runs.json').read_text())
+          enriched=[]
+          for run in runs:
+              jobs_path=root/'jobs'/f"{run['id']}.json"
+              artifacts_path=root/'artifacts'/f"{run['id']}.json"
+              jobs=json.loads(jobs_path.read_text()).get('jobs',[]) if jobs_path.is_file() else []
+              artifacts=json.loads(artifacts_path.read_text()).get('artifacts',[]) if artifacts_path.is_file() else []
+              enriched.append({
+                  'id':run['id'],'run_number':run.get('run_number'),'run_attempt':run.get('run_attempt'),
+                  'status':run.get('status'),'conclusion':run.get('conclusion'),'created_at':run.get('created_at'),'updated_at':run.get('updated_at'),
+                  'head_sha':run.get('head_sha'),'head_branch':run.get('head_branch'),'actor':(run.get('actor') or {}).get('login'),
+                  'jobs':[{'id':j['id'],'name':j['name'],'status':j['status'],'conclusion':j.get('conclusion'),'run_attempt':j.get('run_attempt')} for j in jobs],
+                  'artifacts':[{'id':a['id'],'name':a['name'],'digest':a.get('digest'),'expired':a['expired']} for a in artifacts],
+              })
+          live_main=(root/'api/live-main.txt').read_text().strip()
+          publisher_present=(root/'api/publisher-present.txt').read_text().strip()=='true'
+          cycle_present=(root/'api/cycle-011-present.txt').read_text().strip()=='true'
+          state='no-publisher-run-observed'
+          if live_main!=os.environ['INSTALLED_MAIN'] and not publisher_present and cycle_present:
+              state='canonical-product-present'
+          elif any(r['status']!='completed' for r in enriched):
+              state='publisher-in-progress'
+          elif any(any(j['name']=='write' and j['conclusion']=='success' for j in r['jobs']) for r in enriched):
+              state='publisher-write-success-observed'
+          elif enriched and all(r['status']=='completed' for r in enriched):
+              state='publisher-runs-terminal-without-canonical-write'
+          receipt={
+              'status':'cycle-011-rastel-trusted-publisher-observed-v1','version':1,'state':state,
+              'observer':{'pr':int(os.environ['OBSERVER_PR']),'head':os.environ['OBSERVER_HEAD'],'base':os.environ['OBSERVER_BASE']},
+              'canonical':{'original_main':os.environ['ORIGINAL_MAIN'],'installed_main':os.environ['INSTALLED_MAIN'],'live_main':live_main,'publisher_present':publisher_present,'cycle_011_present':cycle_present},
+              'source':{'head':os.environ['SOURCE_HEAD'],'branch':os.environ['SOURCE_BRANCH']},
+              'runs':enriched,
+              'boundary':{'repository_write':False,'canonical_mutation':False,'cycle_012_authorized':False,'outside_human_dependency':False,'owner_physical_action_required':False},
+          }
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (root/'receipt/observer.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          find "$OUT" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/$rel" | sed "s#  $OUT/#  #"; done > "$OUT/SHA256SUMS.pre"
+          sha256sum "$OUT/SHA256SUMS.pre" | sed "s#  $OUT/#  #" > "$OUT/SHA256SUMS"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-publisher-observer-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-publisher-observer-v1
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
