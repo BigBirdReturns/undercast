@@ -1,0 +1,109 @@
+name: doctor-who-cycle-012-preflight-v12
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-012-preflight-v12.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-012-preflight-v12
+  cancel-in-progress: true
+
+jobs:
+  select:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-012-preflight-v12'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CARRIER_BLOBS: "e22dfd469e8df92edd4d972e6281c758b84e818a 7bf42d1957b0b5920d2dc78cf36c88348adebdf8 e73323f51b4c3e1135450f1cee9f586860054e2b cf23864a66a4dae93555a9795017cf2066446f07 906bc527985d14549c92be3ee3c59fecaafab4cc a9174e8858c10ee3f70838ffe4d6c2a97b3d4c1e 2843edac35c5f7a38901302dcd2548e016b46898 e424cc9fe72e1de16164438d08bf9ab00b2adac2"
+      CARRIER_B64_BYTES: "6840"
+      CARRIER_B64_SHA256: "56f90859f12583a499134b8b01adb76bdaa11ba2b8bd745b582a35541a7b55fc"
+      CARRIER_GZIP_BYTES: "5128"
+      CARRIER_GZIP_SHA256: "841aa6453e56e41344940a0ed9affb4e7e5df413d32f2334c3cdee48120f9fd5"
+      CARRIER_BYTES: "13879"
+      CARRIER_SHA256: "8850785fb7821d40687e0b722bd7be37b477e7830e71e5e1049a2d6c9fdf530b"
+      ROOT: "/tmp/doctor-who-cycle-012-preflight-v12-carrier"
+      CURRENT_HEAD: ${{ github.event.pull_request.head.sha }}
+      CURRENT_BASE: ${{ github.event.pull_request.base.sha }}
+      CURRENT_PR: ${{ github.event.pull_request.number }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Reconstruct and execute exact V12 padding repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          : > "$ROOT/carrier.sh.gz.b64"
+          for blob in $CARRIER_BLOBS; do
+            gh api "/repos/$GITHUB_REPOSITORY/git/blobs/$blob" --jq '.content' | tr -d '\n' | base64 -d >> "$ROOT/carrier.sh.gz.b64"
+          done
+          test "$(wc -c < "$ROOT/carrier.sh.gz.b64" | tr -d ' ')" = "$CARRIER_B64_BYTES"
+          test "$(sha256sum "$ROOT/carrier.sh.gz.b64" | awk '{print $1}')" = "$CARRIER_B64_SHA256"
+          base64 -d "$ROOT/carrier.sh.gz.b64" > "$ROOT/carrier.sh.gz"
+          test "$(wc -c < "$ROOT/carrier.sh.gz" | tr -d ' ')" = "$CARRIER_GZIP_BYTES"
+          test "$(sha256sum "$ROOT/carrier.sh.gz" | awk '{print $1}')" = "$CARRIER_GZIP_SHA256"
+          gzip -dc "$ROOT/carrier.sh.gz" > "$ROOT/carrier.sh"
+          test "$(wc -c < "$ROOT/carrier.sh" | tr -d ' ')" = "$CARRIER_BYTES"
+          test "$(sha256sum "$ROOT/carrier.sh" | awk '{print $1}')" = "$CARRIER_SHA256"
+          bash -n "$ROOT/carrier.sh"
+          CARRIER="$ROOT/carrier.sh" python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          text = Path(os.environ['CARRIER']).read_text()
+          blocks = re.findall(r"python3 - <<'PY'\n(.*?)\nPY", text, re.S)
+          assert len(blocks) == 3
+          for index, block in enumerate(blocks, 1):
+              compile(block, f'<cycle-012-v12-carrier-{index}>', 'exec')
+          PY
+          chmod 700 "$ROOT/carrier.sh"
+          "$ROOT/carrier.sh"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-preflight-v12-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-012-preflight-v12/payload
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-012-preflight-v12-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-012-preflight-v12
+            /tmp/doctor-who-cycle-012-preflight-v12-source
+            /tmp/doctor-who-cycle-012-preflight-v12-runner
+            /tmp/doctor-who-cycle-012-preflight-v12-v10-failure
+            /tmp/doctor-who-cycle-012-preflight-v12-v11-failure
+            /tmp/doctor-who-cycle-012-preflight-v12-carrier
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
