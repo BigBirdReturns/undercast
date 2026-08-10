@@ -1,0 +1,267 @@
+name: doctor-who-cycle-011-rastel-current-main-recomposition-v3
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/doctor-who-cycle-011-rastel-current-main-recomposition-v3.yml"
+
+permissions: {}
+
+concurrency:
+  group: doctor-who-cycle-011-rastel-current-main-recomposition-v3
+  cancel-in-progress: true
+
+env:
+  SOURCE_MAIN: 96abbacf2f033ff9bceef0205ea477cd17e45fcd
+  SOURCE_TREE: cd1f495acf79d8d8d24861cdfde84dd137fec386
+  SOURCE_V1_BRANCH: agent/doctor-who-cycle-011-rastel-current-main-recomposition-v1
+  SOURCE_V1_PATH: .github/workflows/doctor-who-cycle-011-rastel-current-main-recomposition-v1.yml
+  TARGET_STEM: doctor-who-cycle-011-rastel-current-main-recomposition-v3
+  BRANCH: agent/doctor-who-cycle-011-rastel-current-main-recomposition-v3
+  SELF: .github/workflows/doctor-who-cycle-011-rastel-current-main-recomposition-v3.yml
+  OUT: /tmp/doctor-who-cycle-011-rastel-current-main-recomposition-v3
+  REVIEW_PACKET: /tmp/doctor-who-cycle-011-rastel-current-main-recomposition-v3-review
+  WORKTREE: /tmp/doctor-who-cycle-011-rastel-current-main-recomposition-v3-worktree
+  REVIEW_BRANCH: agent/doctor-who-cycle-011-rastel-final-review-v1
+  REVIEW_WORKFLOW: doctor-who-cycle-011-rastel-final-review-v1
+  REVIEW_ARTIFACT_PREFIX: doctor-who-cycle-011-rastel-final-review-v1-
+  TASK_ID: ap_25277c8fbe9e5369ed2e3d81
+  WALL_ID: UC-1356
+  EXPECTED_LEASE: lease_20eea426f818ecf4732fce39
+  PORTRAIT_SHA256: 42412f0f18ebf8f3ba536e633ac9777a19fa4f81277aad1086d410ea03501f4a
+
+jobs:
+  recompose:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-011-rastel-current-main-recomposition-v3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CARRIER_PR: "${{ github.event.pull_request.number }}"
+      CARRIER_HEAD: ${{ github.event.pull_request.head.sha }}
+      CURRENT_MAIN: ${{ github.event.pull_request.base.sha }}
+      BOOTSTRAP: /tmp/doctor-who-cycle-011-rastel-current-main-recomposition-v3-bootstrap
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Recover exact V1 source and apply two closed repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$BOOTSTRAP"
+          mkdir -p "$BOOTSTRAP/jobs"
+          python3 - <<'PY'
+          import base64,hashlib,json,os,subprocess
+          from pathlib import Path
+          root=Path(os.environ['BOOTSTRAP'])
+          repo=os.environ['GITHUB_REPOSITORY']
+          branch=os.environ['SOURCE_V1_BRANCH']
+          path=os.environ['SOURCE_V1_PATH']
+          source_stem='doctor-who-cycle-011-rastel-current-main-recomposition-v1'
+          target=os.environ['TARGET_STEM']
+          commits=json.loads(subprocess.check_output(
+              ['gh','api',f'/repos/{repo}/commits?sha={branch}&per_page=20'],
+              text=True,
+          ))
+          candidates=[]
+          census=[]
+          for row in commits:
+              response=subprocess.run(
+                  ['gh','api',f'/repos/{repo}/contents/{path}?ref={row["sha"]}'],
+                  capture_output=True,
+                  text=True,
+              )
+              if response.returncode:
+                  census.append({'commit':row['sha'],'status':'path-absent'})
+                  continue
+              payload=json.loads(response.stdout)
+              data=base64.b64decode(payload['content'])
+              text=data.decode('utf-8','replace')
+              eligible=(
+                  len(data)>20000
+                  and f'name: {source_stem}' in text
+                  and '\n  recompose:\n' in text
+                  and 'cycle-011-rastel-current-main-recomposition-qualified-v1' in text
+              )
+              census.append({
+                  'commit':row['sha'],
+                  'git_blob':payload['sha'],
+                  'bytes':len(data),
+                  'sha256':hashlib.sha256(data).hexdigest(),
+                  'eligible':eligible,
+              })
+              if eligible:
+                  candidates.append((row['sha'],payload['sha'],data))
+          assert len(candidates)==1,census
+          source_commit,source_blob,raw=candidates[0]
+          text=raw.decode('utf-8').replace(source_stem,target)
+
+          env_old="python3 - <<'PY' > \"$OUT/product/commit-env.sh\""
+          env_new="SOURCE_PRODUCT=\"$source_product\" python3 - <<'PY' > \"$OUT/product/commit-env.sh\""
+          assert text.count(env_old)==1
+          text=text.replace(env_old,env_new)
+
+          merged_old="row['merged'] is False"
+          merged_new="row.get('merged_at') is None"
+          assert text.count(merged_old)==1
+          text=text.replace(merged_old,merged_new)
+
+          dollar='$'
+          for expression,value in (
+              (dollar+'{{ github.event.pull_request.head.sha }}','$CARRIER_HEAD'),
+              (dollar+'{{ github.event.pull_request.number }}','$CARRIER_PR'),
+              (dollar+'{{ github.event.pull_request.base.sha }}','$CURRENT_MAIN'),
+          ):
+              for quote in ("'",'"'):
+                  oldq=quote+expression+quote
+                  text=text.replace(oldq,'"'+value+'"')
+
+          lines=text.splitlines(keepends=True)
+          start=next(i for i,line in enumerate(lines) if line=='  recompose:\n')
+          block=lines[start:]
+          scripts=[]
+          i=0
+          while i<len(block):
+              if block[i]=='        run: |\n':
+                  i+=1
+                  body=[]
+                  while i<len(block):
+                      line=block[i]
+                      if line.strip() and len(line)-len(line.lstrip(' '))<10:
+                          break
+                      if line.startswith('          '):
+                          body.append(line[10:])
+                      elif not line.strip():
+                          body.append('\n')
+                      else:
+                          break
+                      i+=1
+                  script=''.join(body)
+                  assert dollar+'{{' not in script
+                  scripts.append(script)
+                  continue
+              i+=1
+          assert len(scripts)==5,len(scripts)
+
+          job_dir=root/'jobs'
+          script_rows=[]
+          for index,script in enumerate(scripts,1):
+              p=job_dir/f'{index:02d}.sh'
+              p.write_text(script)
+              subprocess.run(['bash','-n',str(p)],check=True)
+              script_rows.append({
+                  'path':p.relative_to(root).as_posix(),
+                  'bytes':p.stat().st_size,
+                  'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
+              })
+
+          patched=text.encode('utf-8')
+          (root/'source-v1.yml').write_bytes(raw)
+          (root/'patched-v3.yml').write_bytes(patched)
+          receipt={
+              'status':'cycle-011-rastel-current-main-recomposition-v3-source-recovered',
+              'version':3,
+              'source':{
+                  'branch':branch,
+                  'commit':source_commit,
+                  'git_blob':source_blob,
+                  'path':path,
+                  'bytes':len(raw),
+                  'sha256':hashlib.sha256(raw).hexdigest(),
+              },
+              'target':{
+                  'bytes':len(patched),
+                  'sha256':hashlib.sha256(patched).hexdigest(),
+              },
+              'repairs':[
+                  {
+                      'name':'export-source-product-to-commit-metadata-extractor',
+                      'old':env_old,
+                      'new':env_new,
+                      'occurrences':1,
+                  },
+                  {
+                      'name':'use-merged-at-for-pull-list-response',
+                      'old':merged_old,
+                      'new':merged_new,
+                      'occurrences':1,
+                  },
+              ],
+              'scripts':script_rows,
+              'bootstrap_outside_transaction_roots':True,
+              'commit_census':census,
+              'boundary':{
+                  'source_executed':False,
+                  'repository_write':False,
+                  'canonical_mutation':False,
+              },
+          }
+          receipt['identity']=hashlib.sha256(
+              json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()
+          ).hexdigest()
+          (root/'recovery.json').write_text(
+              json.dumps(receipt,indent=2,sort_keys=True)+'\n'
+          )
+          PY
+
+      - name: Execute exact repaired current-main recomposition
+        shell: bash
+        run: |
+          set -euo pipefail
+          apply_github_env() {
+            [ -f "$GITHUB_ENV" ] || return 0
+            while IFS= read -r row; do
+              [ -z "$row" ] && continue
+              case "$row" in
+                *'<<'*) echo "unsupported multiline GITHUB_ENV row" >&2; exit 1 ;;
+                *=*) export "$row" ;;
+              esac
+            done < "$GITHUB_ENV"
+          }
+          for script in "$BOOTSTRAP"/jobs/*.sh; do
+            bash "$script"
+            apply_github_env
+          done
+          cp "$BOOTSTRAP/recovery.json" "$OUT/v3-source-recovery.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-current-main-recomposition-v3-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/doctor-who-cycle-011-rastel-current-main-recomposition-v3
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-011-rastel-current-main-recomposition-v3-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            /tmp/doctor-who-cycle-011-rastel-current-main-recomposition-v3
+            /tmp/doctor-who-cycle-011-rastel-current-main-recomposition-v3-review
+            /tmp/doctor-who-cycle-011-rastel-current-main-recomposition-v3-bootstrap
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
