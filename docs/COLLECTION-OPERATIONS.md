@@ -25,6 +25,33 @@ active estate continues until its queue is exhausted or an operator pauses it. S
 and media refreshes continue after filing so better evidence can replace weaker
 material without erasing prior objects or rulings.
 
+## Thesis continuation rail
+
+[THESIS-CONTINUATION.md](THESIS-CONTINUATION.md) converts the permanent loop into one
+machine-selected next operation and a reusable worker prompt. It must be run before a
+new lease and whenever an active cycle stalls:
+
+```bash
+node scripts/thesis-rails.mjs validate
+node scripts/thesis-rails.mjs status
+node scripts/thesis-rails.mjs next --json
+node scripts/thesis-rails.mjs prompt --out .luna/THESIS-CONTINUATION.md
+```
+
+The rail reads the estate registry, Autopilot queue, media audit and every active
+scope's waterline. It first requires the current cycle, media debt and receipt debt to
+close. Only then does it expose the first compatible task in the highest-priority
+claimable estate. It is read-only and never issues the lease itself.
+
+Cycle 012 is grandfathered while Senstarg finishes; topology enforcement begins at cycle 013.
+
+The normal implementation topology is one candidate/product lane, one independent
+review and one receipt-bearing finalizer. Cycle-specific selectors, preflights,
+blueprints, censuses, transition controllers, finalizer censuses, observers and
+cleanup-writer chains are refused by the read-only `thesis-rails` workflow unless the
+pull request supplies the exact shared-mechanism exception and retirement receipts.
+Maker attribution remains source-bound and nonblocking.
+
 ## Rolling media search
 
 The scheduled search runs `retrieve.mjs` only in a detached temporary worktree. It may
@@ -78,4 +105,6 @@ npm run corpus -- validate
 npm run corpus -- status
 npm run corpus -- next
 npm run media:search:plan -- --limit 40 --out .corpus/media-plan.json
+node scripts/thesis-rails.mjs status
+node scripts/thesis-rails.mjs prompt --out .luna/THESIS-CONTINUATION.md
 ```
