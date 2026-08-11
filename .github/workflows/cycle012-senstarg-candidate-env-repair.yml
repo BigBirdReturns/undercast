@@ -37,7 +37,7 @@ jobs:
       SELF_HEAD: ${{ github.event.pull_request.head.sha }}
       SELF_PR: ${{ github.event.pull_request.number }}
     steps:
-      - name: Insert exact missing candidate environment binding and retire carrier
+      - name: Materialize corrected one-parent candidate commit and retire carrier
         shell: bash
         run: |
           set -euo pipefail
@@ -68,15 +68,16 @@ jobs:
           assert '      TARGET_SHA256:' not in text
           needle = '      DERIVATION_IDENTITY: "776cc1081f65b1f7eb6296d51195224a8c431af8a0844dc416655d531b7fded7"\n'
           assert text.count(needle) == 1
-          replacement = needle + f"      TARGET_SHA256: \"{os.environ['TARGET_SHA256']}\"\n"
-          repaired = text.replace(needle, replacement)
+          repaired = text.replace(
+              needle,
+              needle + f"      TARGET_SHA256: \"{os.environ['TARGET_SHA256']}\"\n",
+          )
           assert repaired.count('      TARGET_SHA256:') == 1
           assert repaired.count(os.environ['TARGET_SHA256']) == 1
-          Path('/tmp/repaired.yml').write_text(repaired)
           Path('/tmp/blob.json').write_text(json.dumps({'content': repaired, 'encoding': 'utf-8'}))
           PY
 
-          BLOB="$(gh api -X POST "/repos/$GITHUB_REPOSITORY/git/blobs" --input /tmp/blob.json --jq '.sha')"
+          export BLOB="$(gh api -X POST "/repos/$GITHUB_REPOSITORY/git/blobs" --input /tmp/blob.json --jq '.sha')"
           python3 - <<'PY'
           import json, os
           from pathlib import Path
@@ -90,28 +91,8 @@ jobs:
             }],
           }))
           PY
-        env:
-          BLOB: ${{ env.BLOB }}
 
-      - name: Materialize corrected one-parent candidate commit
-        shell: bash
-        run: |
-          set -euo pipefail
-          BLOB="$(gh api -X POST "/repos/$GITHUB_REPOSITORY/git/blobs" --input /tmp/blob.json --jq '.sha')"
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          Path('/tmp/tree.json').write_text(json.dumps({
-            'base_tree': os.environ['MAIN_TREE'],
-            'tree': [{
-              'path': os.environ['CANDIDATE_PATH'],
-              'mode': '100644',
-              'type': 'blob',
-              'sha': os.environ['BLOB'],
-            }],
-          }))
-          PY
-          TREE="$(BLOB="$BLOB" gh api -X POST "/repos/$GITHUB_REPOSITORY/git/trees" --input /tmp/tree.json --jq '.sha')"
+          export TREE="$(gh api -X POST "/repos/$GITHUB_REPOSITORY/git/trees" --input /tmp/tree.json --jq '.sha')"
           python3 - <<'PY'
           import json, os
           from pathlib import Path
@@ -121,20 +102,15 @@ jobs:
             'parents': [os.environ['MAIN']],
           }))
           PY
-          COMMIT="$(TREE="$TREE" gh api -X POST "/repos/$GITHUB_REPOSITORY/git/commits" --input /tmp/commit.json --jq '.sha')"
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          Path('/tmp/ref.json').write_text(json.dumps({'sha': os.environ['COMMIT'], 'force': True}))
-          PY
-          COMMIT="$COMMIT" gh api -X PATCH "/repos/$GITHUB_REPOSITORY/git/refs/heads/$CANDIDATE_BRANCH" --input /tmp/ref.json > /tmp/ref-result.json
-          test "$(jq -r '.object.sha' /tmp/ref-result.json)" = "$COMMIT"
-          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$MAIN"
+
+          export COMMIT="$(gh api -X POST "/repos/$GITHUB_REPOSITORY/git/commits" --input /tmp/commit.json --jq '.sha')"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/commits/$COMMIT" --jq '.tree.sha')" = "$TREE"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/commits/$COMMIT" --jq '.parents[0].sha')" = "$MAIN"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/commits/$COMMIT" --jq '.parents | length')" = "1"
+          printf 'CANDIDATE_REPAIRED_COMMIT=%s\n' "$COMMIT"
+          printf 'CANDIDATE_REPAIRED_TREE=%s\n' "$TREE"
+          printf 'CANDIDATE_REPAIRED_BLOB=%s\n' "$BLOB"
 
           gh api -X PATCH "/repos/$GITHUB_REPOSITORY/pulls/$SELF_PR" -f state=closed > /tmp/self-pr.json
           test "$(jq -r '.state' /tmp/self-pr.json)" = closed
           gh api -X DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$SELF_BRANCH"
-        env:
-          BLOB: ${{ env.BLOB }}
-          TREE: ${{ env.TREE }}
-          COMMIT: ${{ env.COMMIT }}
