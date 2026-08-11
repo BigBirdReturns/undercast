@@ -1,0 +1,68 @@
+name: cycle012-residual-cleanup-writer-v8-observer-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths: [".github/workflows/cycle012-residual-cleanup-writer-v8-observer-v1.yml"]
+
+permissions: {}
+concurrency:
+  group: cycle012-residual-cleanup-writer-v8-observer-v1
+  cancel-in-progress: true
+
+jobs:
+  observe:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'observer/cycle012-residual-cleanup-writer-v8-observer-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      WRITER_PATH: .github/workflows/doctor-who-cycle-012-selection-cleanup-writer-v8.yml
+      WRITER_NAME: doctor-who-cycle-012-selection-cleanup-writer-v8
+      FLOOR: 2026-08-11T03:35:00Z
+      RESIDUAL_PR: "917"
+      OUT: /tmp/cycle012-v8-writer-observer
+    steps:
+      - name: Observe V8 writer
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"; mkdir -p "$OUT"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/doctor-who-cycle-012-selection-cleanup-writer-v8.yml" > "$OUT/workflow.json"
+          workflow_id="$(jq -r '.id' "$OUT/workflow.json")"
+          test "$(jq -r '.name' "$OUT/workflow.json")" = "$WRITER_NAME"
+          test "$(jq -r '.path' "$OUT/workflow.json")" = "$WRITER_PATH"
+          selected=""
+          for attempt in $(seq 1 120); do
+            gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?event=workflow_run&per_page=30" > "$OUT/runs.json"
+            selected="$(jq -r --arg floor "$FLOOR" --arg name "$WRITER_NAME" '[.workflow_runs[]|select(.name==$name and .event=="workflow_run" and .created_at >= $floor)]|sort_by(.created_at,.id)|last|.id // empty' "$OUT/runs.json")"
+            if [ -n "$selected" ]; then
+              gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$selected" > "$OUT/run.json"
+              gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$selected/jobs?per_page=100" > "$OUT/jobs.json"
+              test "$(jq -r '.status' "$OUT/run.json")" != completed || break
+            fi
+            sleep 15
+          done
+          gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" > "$OUT/main.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$RESIDUAL_PR" > "$OUT/pr917.json"
+          gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/agent/doctor-who-cycle-012-" > "$OUT/agent-refs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/observer/doctor-who-cycle-012-" > "$OUT/observer-refs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/observer/doctor-who-cycle-011-rastel-cleanup-terminal-" > "$OUT/terminal-refs.json"
+          sha256sum "$OUT"/*.json | LC_ALL=C sort > "$OUT/SHA256SUMS"
+          printf '%s\n' "$selected" > "$OUT/WRITER_RUN_ID"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cycle012-residual-cleanup-writer-v8-observer-v1-${{ github.run_id }}
+          path: /tmp/cycle012-v8-writer-observer
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
