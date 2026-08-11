@@ -1,0 +1,140 @@
+name: cycle012-senstarg-candidate-env-repair
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/cycle012-senstarg-candidate-env-repair.yml"
+
+permissions: {}
+concurrency:
+  group: cycle012-senstarg-candidate-env-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'repair/cycle012-senstarg-candidate-env'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MAIN: 40ae7ff0bdc96c8ccb3c9c96d1358c7de91979c2
+      MAIN_TREE: 33b1ff1ea4f191ee42ce09afc9a88a01c7006e71
+      CANDIDATE_PR: "943"
+      CANDIDATE_BRANCH: agent/doctor-who-cycle-012-senstarg-candidate-v1
+      CANDIDATE_HEAD: 0598d2e128b395b924a5fe8d8a5540270bcf75b9
+      CANDIDATE_PATH: .github/workflows/doctor-who-cycle-012-senstarg-candidate-v1.yml
+      TARGET_SHA256: 715e853a7cecc300066460504e79c428810fc4f6d359fdd8fe0e1b0f2a4ba232
+      SELF_BRANCH: repair/cycle012-senstarg-candidate-env
+      SELF_HEAD: ${{ github.event.pull_request.head.sha }}
+      SELF_PR: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Insert exact missing candidate environment binding and retire carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$MAIN"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/commits/$MAIN" --jq '.tree.sha')" = "$MAIN_TREE"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$CANDIDATE_BRANCH" --jq '.object.sha')" = "$CANDIDATE_HEAD"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$SELF_BRANCH" --jq '.object.sha')" = "$SELF_HEAD"
+
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$CANDIDATE_PR" > /tmp/candidate-pr.json
+          gh api -X GET "/repos/$GITHUB_REPOSITORY/contents/$CANDIDATE_PATH" -f ref="$CANDIDATE_BRANCH" > /tmp/candidate-file.json
+
+          python3 - <<'PY'
+          import base64, json, os
+          from pathlib import Path
+
+          pr = json.loads(Path('/tmp/candidate-pr.json').read_text())
+          assert pr['state'] == 'open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['head']['ref'] == os.environ['CANDIDATE_BRANCH']
+          assert pr['head']['sha'] == os.environ['CANDIDATE_HEAD']
+          assert pr['base']['sha'] == os.environ['MAIN']
+          assert pr['commits'] == 1 and pr['changed_files'] == 1
+
+          row = json.loads(Path('/tmp/candidate-file.json').read_text())
+          text = base64.b64decode(row['content']).decode('utf-8')
+          assert row['path'] == os.environ['CANDIDATE_PATH']
+          assert text.startswith('name: doctor-who-cycle-012-senstarg-candidate-v1\n')
+          assert text.count("os.environ['TARGET_SHA256']") == 1
+          assert '      TARGET_SHA256:' not in text
+          needle = '      DERIVATION_IDENTITY: "776cc1081f65b1f7eb6296d51195224a8c431af8a0844dc416655d531b7fded7"\n'
+          assert text.count(needle) == 1
+          replacement = needle + f"      TARGET_SHA256: \"{os.environ['TARGET_SHA256']}\"\n"
+          repaired = text.replace(needle, replacement)
+          assert repaired.count('      TARGET_SHA256:') == 1
+          assert repaired.count(os.environ['TARGET_SHA256']) == 1
+          Path('/tmp/repaired.yml').write_text(repaired)
+          Path('/tmp/blob.json').write_text(json.dumps({'content': repaired, 'encoding': 'utf-8'}))
+          PY
+
+          BLOB="$(gh api -X POST "/repos/$GITHUB_REPOSITORY/git/blobs" --input /tmp/blob.json --jq '.sha')"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('/tmp/tree.json').write_text(json.dumps({
+            'base_tree': os.environ['MAIN_TREE'],
+            'tree': [{
+              'path': os.environ['CANDIDATE_PATH'],
+              'mode': '100644',
+              'type': 'blob',
+              'sha': os.environ['BLOB'],
+            }],
+          }))
+          PY
+        env:
+          BLOB: ${{ env.BLOB }}
+
+      - name: Materialize corrected one-parent candidate commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          BLOB="$(gh api -X POST "/repos/$GITHUB_REPOSITORY/git/blobs" --input /tmp/blob.json --jq '.sha')"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('/tmp/tree.json').write_text(json.dumps({
+            'base_tree': os.environ['MAIN_TREE'],
+            'tree': [{
+              'path': os.environ['CANDIDATE_PATH'],
+              'mode': '100644',
+              'type': 'blob',
+              'sha': os.environ['BLOB'],
+            }],
+          }))
+          PY
+          TREE="$(BLOB="$BLOB" gh api -X POST "/repos/$GITHUB_REPOSITORY/git/trees" --input /tmp/tree.json --jq '.sha')"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('/tmp/commit.json').write_text(json.dumps({
+            'message': 'Bind exact Senstarg materializer digest',
+            'tree': os.environ['TREE'],
+            'parents': [os.environ['MAIN']],
+          }))
+          PY
+          COMMIT="$(TREE="$TREE" gh api -X POST "/repos/$GITHUB_REPOSITORY/git/commits" --input /tmp/commit.json --jq '.sha')"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('/tmp/ref.json').write_text(json.dumps({'sha': os.environ['COMMIT'], 'force': True}))
+          PY
+          COMMIT="$COMMIT" gh api -X PATCH "/repos/$GITHUB_REPOSITORY/git/refs/heads/$CANDIDATE_BRANCH" --input /tmp/ref.json > /tmp/ref-result.json
+          test "$(jq -r '.object.sha' /tmp/ref-result.json)" = "$COMMIT"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$MAIN"
+
+          gh api -X PATCH "/repos/$GITHUB_REPOSITORY/pulls/$SELF_PR" -f state=closed > /tmp/self-pr.json
+          test "$(jq -r '.state' /tmp/self-pr.json)" = closed
+          gh api -X DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$SELF_BRANCH"
+        env:
+          BLOB: ${{ env.BLOB }}
+          TREE: ${{ env.TREE }}
+          COMMIT: ${{ env.COMMIT }}
