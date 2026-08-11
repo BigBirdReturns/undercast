@@ -1,0 +1,152 @@
+name: cycle012-senstarg-frontier-observer-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/cycle012-senstarg-frontier-observer-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: cycle012-senstarg-frontier-observer-v1
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'observer/cycle012-senstarg-census-transition-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CURRENT_MAIN: 40ae7ff0bdc96c8ccb3c9c96d1358c7de91979c2
+      CURRENT_TREE: 33b1ff1ea4f191ee42ce09afc9a88a01c7006e71
+      SELF_BRANCH: observer/cycle012-senstarg-census-transition-v1
+      SELF_PATH: .github/workflows/cycle012-senstarg-frontier-observer-v1.yml
+      AGENT_PREFIX: agent/doctor-who-cycle-012-
+      OUT: /tmp/cycle012-senstarg-frontier-observer-v1
+    steps:
+      - name: Observe exact live frontier
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,payload}
+          SELF_HEAD="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+          SELF_PR="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$SELF_PR" > "$OUT/api/self-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/compare/$CURRENT_MAIN...$SELF_HEAD" > "$OUT/api/self-compare.json"
+
+          terminal=false
+          for attempt in $(seq 1 180); do
+            gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" > "$OUT/api/main-ref.json"
+            gh api "/repos/$GITHUB_REPOSITORY/git/commits/$(jq -r '.object.sha' "$OUT/api/main-ref.json")" > "$OUT/api/main-commit.json"
+            gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$AGENT_PREFIX" > "$OUT/api/agent-refs.json" || printf '[]\n' > "$OUT/api/agent-refs.json"
+            for spec in \
+              'candidate|agent/doctor-who-cycle-012-senstarg-candidate-v1|doctor-who-cycle-012-senstarg-candidate-v1' \
+              'candidate_review|agent/doctor-who-cycle-012-senstarg-candidate-review-v1|doctor-who-cycle-012-senstarg-candidate-review-v1' \
+              'finalizer_census|agent/doctor-who-cycle-012-senstarg-finalizer-census-v1|doctor-who-cycle-012-senstarg-finalizer-census-v1'; do
+              label="${spec%%|*}"; rest="${spec#*|}"; branch="${rest%%|*}"; workflow="${rest#*|}"
+              encoded="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1],safe=""))' "$branch")"
+              gh api "/repos/$GITHUB_REPOSITORY/pulls?state=all&head=BigBirdReturns%3A$encoded&per_page=100" > "$OUT/api/$label-prs.json"
+              python3 - "$label" "$workflow" <<'PY'
+          import json,os,subprocess,sys
+          from pathlib import Path
+          label,workflow=sys.argv[1:]
+          root=Path(os.environ['OUT'])/'api'; prs=json.loads((root/f'{label}-prs.json').read_text())
+          row={'label':label,'workflow':workflow,'present':False,'pr':None,'head':None,'pr_state':None,'merged':None,'run':None,'run_status':None,'run_conclusion':None,'artifact':None,'artifact_digest':None}
+          if len(prs)==1:
+              pr=prs[0]; row.update({'present':True,'pr':pr['number'],'head':pr['head']['sha'],'pr_state':pr['state'],'merged':pr['merged_at'] is not None})
+              runs=json.loads(subprocess.check_output(['gh','api',f'/repos/{os.environ["GITHUB_REPOSITORY"]}/actions/runs?event=pull_request&head_sha={pr["head"]["sha"]}&per_page=100'],text=True))['workflow_runs']
+              runs=[r for r in runs if r['name']==workflow and r['head_sha']==pr['head']['sha']]
+              if runs:
+                  run=max(runs,key=lambda r:(r['run_number'],r['run_attempt'],r['id'])); row.update({'run':run['id'],'run_status':run['status'],'run_conclusion':run['conclusion']})
+                  if run['status']=='completed':
+                      arts=json.loads(subprocess.check_output(['gh','api',f'/repos/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{run["id"]}/artifacts?per_page=100'],text=True))['artifacts']
+                      good=[a for a in arts if 'diagnostics' not in a['name'] and a['expired'] is False]
+                      if len(good)==1: row.update({'artifact':good[0]['id'],'artifact_digest':good[0].get('digest')})
+          (root/f'{label}-status.json').write_text(json.dumps(row,indent=2,sort_keys=True)+'\n')
+          PY
+            done
+
+            state="$(python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT'])/'api'; rows={k:json.loads((root/f'{k}-status.json').read_text()) for k in ['candidate','candidate_review','finalizer_census']}
+          state='pending'
+          if rows['finalizer_census']['run_status']=='completed': state='finalizer_census_success' if rows['finalizer_census']['run_conclusion']=='success' else 'finalizer_census_failure'
+          elif rows['candidate_review']['run_status']=='completed': state='candidate_review_success' if rows['candidate_review']['run_conclusion']=='success' else 'candidate_review_failure'
+          elif rows['candidate']['run_status']=='completed': state='candidate_success' if rows['candidate']['run_conclusion']=='success' else 'candidate_failure'
+          print(state)
+          PY
+            )"
+            if [ "$state" != pending ]; then terminal=true; printf '%s\n' "$state" > "$OUT/api/frontier-state.txt"; break; fi
+            sleep 20
+          done
+          if [ "$terminal" != true ]; then printf 'pending_timeout\n' > "$OUT/api/frontier-state.txt"; fi
+
+          python3 - <<'PY'
+          import hashlib,json,os
+          from datetime import datetime,timezone
+          from pathlib import Path
+          root=Path(os.environ['OUT']); api=root/'api'; payload=root/'payload'
+          pr=json.loads((api/'self-pr.json').read_text()); cmp=json.loads((api/'self-compare.json').read_text()); main=json.loads((api/'main-ref.json').read_text()); commit=json.loads((api/'main-commit.json').read_text()); refs=json.loads((api/'agent-refs.json').read_text())
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False and pr['commits']==1 and pr['changed_files']==1 and pr['head']['ref']==os.environ['SELF_BRANCH']
+          assert cmp['status']=='ahead' and cmp['ahead_by']==1 and cmp['behind_by']==0 and cmp['total_commits']==1 and len(cmp['files'])==1 and cmp['files'][0]['filename']==os.environ['SELF_PATH']
+          stages={k:json.loads((api/f'{k}-status.json').read_text()) for k in ['candidate','candidate_review','finalizer_census']}
+          row={'status':'cycle-012-senstarg-frontier-observed-v1','version':1,'generated_at':datetime.now(timezone.utc).isoformat(),'frontier':(api/'frontier-state.txt').read_text().strip(),'canonical':{'main':main['object']['sha'],'tree':commit['tree']['sha'],'parents':[x['sha'] for x in commit['parents']]},'agent_refs':[{'branch':x['ref'].removeprefix('refs/heads/'),'head':x['object']['sha']} for x in refs],'stages':stages,'boundary':{'observer_only':True,'repository_write':False,'canonical_mutation':False,'cycle_receipt_written':False,'cycle_012_product_authority':False,'cycle_013_authority':False,'outside_human_dependency':False,'owner_physical_action_required':False}}
+          row['identity']=hashlib.sha256(json.dumps(row,sort_keys=True,separators=(',',':')).encode()).hexdigest(); (payload/'frontier.json').write_text(json.dumps(row,indent=2,sort_keys=True)+'\n'); (payload/'FRONTIER_COMPLETE').write_text(row['identity']+'\n')
+          rows=[]
+          for p in sorted(payload.iterdir()):
+              if p.is_file() and p.name not in {'SHA256SUMS.pre','SHA256SUMS'}: rows.append(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}")
+          (payload/'SHA256SUMS.pre').write_text('\n'.join(rows)+'\n'); (payload/'SHA256SUMS').write_text(hashlib.sha256((payload/'SHA256SUMS.pre').read_bytes()).hexdigest()+'  SHA256SUMS.pre\n')
+          PY
+          (cd "$OUT/payload" && sha256sum -c SHA256SUMS.pre && sha256sum -c SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cycle012-senstarg-frontier-observer-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/cycle012-senstarg-frontier-observer-v1/payload
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cycle012-senstarg-frontier-observer-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/cycle012-senstarg-frontier-observer-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
+
+  retire:
+    needs: observe
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: observer/cycle012-senstarg-census-transition-v1
+      HEAD: ${{ github.event.pull_request.head.sha }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Close and delete exact frontier observer
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --jq '.object.sha')" = "$HEAD"
+          gh api -X PATCH "/repos/$GITHUB_REPOSITORY/pulls/$PR" -f state=closed > /tmp/pr.json
+          test "$(jq -r '.state' /tmp/pr.json)" = closed
+          test "$(jq -r '.merged' /tmp/pr.json)" = false
+          gh api -X DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH"
