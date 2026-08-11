@@ -1,0 +1,226 @@
+name: cycle012-cleanup-writer-v7-run-census-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/cycle012-cleanup-writer-v7-run-census-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: cycle012-cleanup-writer-v7-run-census-v1
+  cancel-in-progress: true
+
+jobs:
+  census:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'observer/cycle012-cleanup-writer-v7-run-census-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUT: /tmp/cycle012-cleanup-writer-v7-run-census-v1
+      CURRENT_PR: ${{ github.event.pull_request.number }}
+      CURRENT_HEAD: ${{ github.event.pull_request.head.sha }}
+      CURRENT_BRANCH: observer/cycle012-cleanup-writer-v7-run-census-v1
+      SELF: .github/workflows/cycle012-cleanup-writer-v7-run-census-v1.yml
+      INSTALLED_MAIN: 820f21a613884d5a677de4fd099d49194d794198
+      EVIDENCE_RUN: "31451662156"
+      EVIDENCE_HEAD: ebb0ebad5de675b054af130374f65a530d93624c
+      EVIDENCE_PR: "911"
+      WRITER_NAME: doctor-who-cycle-012-selection-cleanup-writer-v7
+      WRITER_PATH: .github/workflows/doctor-who-cycle-012-selection-cleanup-writer-v7.yml
+      AGENT_PREFIX: agent/doctor-who-cycle-012-
+      OBSERVER_PREFIX: observer/doctor-who-cycle-012-
+      TERMINAL_PREFIX: observer/doctor-who-cycle-011-rastel-cleanup-terminal-
+
+    steps:
+      - name: Enumerate every post-evidence V7 writer run and current residual state
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,payload/runs}
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$CURRENT_PR" > "$OUT/api/own-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/compare/$INSTALLED_MAIN...$CURRENT_HEAD" > "$OUT/api/own-compare.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$EVIDENCE_RUN" > "$OUT/api/evidence-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/${WRITER_PATH##*/}" > "$OUT/api/writer-workflow.json"
+          writer_id="$(jq -r '.id' "$OUT/api/writer-workflow.json")"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/$writer_id/runs?event=workflow_run&per_page=100" > "$OUT/api/writer-runs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" > "$OUT/api/main-ref.json"
+          main="$(jq -r '.object.sha' "$OUT/api/main-ref.json")"
+          gh api "/repos/$GITHUB_REPOSITORY/git/commits/$main" > "$OUT/api/main-commit.json"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$EVIDENCE_PR" > "$OUT/api/evidence-pr.json"
+          for spec in "agent:$AGENT_PREFIX" "observer:$OBSERVER_PREFIX" "terminal:$TERMINAL_PREFIX"; do
+            label="${spec%%:*}"; prefix="${spec#*:}"
+            gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$prefix" > "$OUT/api/$label-refs.json" || printf '[]\n' > "$OUT/api/$label-refs.json"
+          done
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from datetime import datetime
+          from pathlib import Path
+
+          out=Path(os.environ['OUT'])
+          api=out/'api'
+          payload=out/'payload'
+          load=lambda p:json.loads(Path(p).read_text())
+
+          own=load(api/'own-pr.json')
+          compare=load(api/'own-compare.json')
+          assert own['number']==int(os.environ['CURRENT_PR'])
+          assert own['state']=='open' and own['draft'] is True and own['merged'] is False
+          assert own['head']['ref']==os.environ['CURRENT_BRANCH'] and own['head']['sha']==os.environ['CURRENT_HEAD']
+          assert own['base']['ref']=='main' and own['base']['sha']==os.environ['INSTALLED_MAIN']
+          assert own['commits']==1 and own['changed_files']==1
+          assert compare['status']=='ahead' and compare['ahead_by']==1 and compare['behind_by']==0 and compare['total_commits']==1
+          assert len(compare['files'])==1 and compare['files'][0]['filename']==os.environ['SELF'] and compare['files'][0]['status']=='added'
+
+          evidence=load(api/'evidence-run.json')
+          assert evidence['id']==int(os.environ['EVIDENCE_RUN'])
+          assert evidence['name']=='doctor-who-cycle-012-selection-cleanup-evidence-v7'
+          assert evidence['event']=='pull_request' and evidence['status']=='completed' and evidence['conclusion']=='success'
+          assert evidence['head_sha']==os.environ['EVIDENCE_HEAD']
+          cutoff=datetime.fromisoformat(evidence['created_at'].replace('Z','+00:00'))
+
+          workflow=load(api/'writer-workflow.json')
+          assert workflow['name']==os.environ['WRITER_NAME'] and workflow['path']==os.environ['WRITER_PATH']
+          all_runs=load(api/'writer-runs.json')['workflow_runs']
+          selected=[]
+          for run in all_runs:
+              created=datetime.fromisoformat(run['created_at'].replace('Z','+00:00'))
+              if run['event']!='workflow_run' or created<cutoff:
+                  continue
+              jobs=json.loads(subprocess.check_output([
+                  'gh','api',f'/repos/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{run["id"]}/jobs?per_page=100'
+              ],text=True))['jobs']
+              artifacts=json.loads(subprocess.check_output([
+                  'gh','api',f'/repos/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{run["id"]}/artifacts?per_page=100'
+              ],text=True))['artifacts']
+              row={
+                  'id':run['id'],'run_number':run['run_number'],'run_attempt':run['run_attempt'],
+                  'status':run['status'],'conclusion':run['conclusion'],'event':run['event'],
+                  'head_sha':run['head_sha'],'head_branch':run['head_branch'],
+                  'created_at':run['created_at'],'updated_at':run['updated_at'],
+                  'jobs':[
+                      {
+                          'id':job['id'],'name':job['name'],'status':job['status'],'conclusion':job['conclusion'],
+                          'steps':[
+                              {'number':step['number'],'name':step['name'],'status':step['status'],'conclusion':step['conclusion']}
+                              for step in (job.get('steps') or [])
+                          ],
+                      }
+                      for job in jobs
+                  ],
+                  'artifacts':[
+                      {
+                          'id':a['id'],'name':a['name'],'size_in_bytes':a['size_in_bytes'],
+                          'digest':a.get('digest'),'expired':a['expired'],
+                      }
+                      for a in artifacts
+                  ],
+              }
+              selected.append(row)
+              (payload/'runs'/f'{run["id"]}.json').write_text(json.dumps(row,indent=2,sort_keys=True)+'\n')
+          selected.sort(key=lambda row:(row['created_at'],row['id']))
+          assert selected
+
+          non_skipped=[]
+          for run in selected:
+              for job in run['jobs']:
+                  if job['name']=='write' and job['conclusion']!='skipped':
+                      non_skipped.append({'run':run['id'],'run_number':run['run_number'],'run_conclusion':run['conclusion'],'job':job})
+          assert non_skipped
+
+          main_ref=load(api/'main-ref.json')['object']['sha']
+          main_commit=load(api/'main-commit.json')
+          evidence_pr=load(api/'evidence-pr.json')
+          refs={name:load(api/f'{name}-refs.json') for name in ('agent','observer','terminal')}
+          residual={name:[{'ref':row['ref'],'sha':row['object']['sha']} for row in rows] for name,rows in refs.items()}
+
+          receipt={
+              'status':'cycle-012-cleanup-writer-v7-run-census-complete-v1',
+              'version':1,
+              'carrier':{'pr':int(os.environ['CURRENT_PR']),'branch':os.environ['CURRENT_BRANCH'],'head':os.environ['CURRENT_HEAD'],'base':os.environ['INSTALLED_MAIN']},
+              'evidence':{'run':int(os.environ['EVIDENCE_RUN']),'head':os.environ['EVIDENCE_HEAD'],'pr':int(os.environ['EVIDENCE_PR'])},
+              'writer':{'workflow_id':workflow['id'],'name':workflow['name'],'path':workflow['path'],'runs':selected,'non_skipped_write_jobs':non_skipped},
+              'current':{
+                  'main':main_ref,'main_parents':[p['sha'] for p in main_commit['parents']],
+                  'main_tree':main_commit['tree']['sha'],
+                  'evidence_pr_state':evidence_pr['state'],'evidence_pr_merged':evidence_pr['merged'],
+                  'residual_refs':residual,
+              },
+              'boundary':{
+                  'read_only':True,'cleanup_authority':False,'canonical_mutation':False,
+                  'lease_issued':False,'queue_mutated':False,'media_adopted':False,
+                  'cycle_receipt_written':False,'cycle_012_product_authority':False,
+              },
+          }
+          receipt['identity']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (payload/'census.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          (payload/'CENSUS_COMPLETE').write_text(receipt['identity']+'\n')
+          for name in ['writer-runs.json','main-ref.json','main-commit.json','evidence-pr.json','agent-refs.json','observer-refs.json','terminal-refs.json']:
+              (payload/name).write_bytes((api/name).read_bytes())
+          print(json.dumps({'identity':receipt['identity'],'runs':len(selected),'non_skipped':len(non_skipped),'residual_counts':{k:len(v) for k,v in residual.items()}},sort_keys=True))
+          PY
+          (
+            cd "$OUT/payload"
+            find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.pre -printf '%P\n' | LC_ALL=C sort | while read -r name; do sha256sum "$name"; done > SHA256SUMS.pre
+            sha256sum SHA256SUMS.pre > SHA256SUMS
+            sha256sum -c SHA256SUMS.pre
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cycle012-cleanup-writer-v7-run-census-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/cycle012-cleanup-writer-v7-run-census-v1/payload
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cycle012-cleanup-writer-v7-run-census-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/cycle012-cleanup-writer-v7-run-census-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
+
+  retire:
+    needs: census
+    if: needs.census.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CURRENT_PR: ${{ github.event.pull_request.number }}
+      CURRENT_HEAD: ${{ github.event.pull_request.head.sha }}
+      CURRENT_BRANCH: observer/cycle012-cleanup-writer-v7-run-census-v1
+    steps:
+      - name: Close and delete exact outside-prefix census carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr="$(gh api "/repos/$GITHUB_REPOSITORY/pulls/$CURRENT_PR")"
+          test "$(jq -r '.state' <<<"$pr")" = open
+          test "$(jq -r '.merged' <<<"$pr")" = false
+          test "$(jq -r '.head.ref' <<<"$pr")" = "$CURRENT_BRANCH"
+          test "$(jq -r '.head.sha' <<<"$pr")" = "$CURRENT_HEAD"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$CURRENT_BRANCH" --jq '.object.sha')" = "$CURRENT_HEAD"
+          gh api -X PATCH "/repos/$GITHUB_REPOSITORY/pulls/$CURRENT_PR" -f state=closed >/dev/null
+          gh api -X DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$CURRENT_BRANCH"
