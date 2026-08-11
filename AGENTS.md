@@ -52,6 +52,31 @@ never supersedes Active product law.
 or Luna may prepare evidence, but may not mark a second-desk or owner milestone
 complete, invent an owner decision, or replace an unknown metric with zero.
 
+## Thesis continuation rail — finish, return to collection, repeat
+
+Read [docs/THESIS-CONTINUATION.md](docs/THESIS-CONTINUATION.md). During an active
+cycle, and again after its terminal product reaches canonical `main`, run:
+
+```bash
+node scripts/thesis-rails.mjs validate
+node scripts/thesis-rails.mjs status
+node scripts/thesis-rails.mjs next --json
+node scripts/thesis-rails.mjs prompt --out .luna/THESIS-CONTINUATION.md
+```
+
+Follow the generated phase and exact operation. Do not free-select a franchise or
+role. A normal cycle has one candidate/product lane, one independent exact-product
+review, and one receipt-bearing finalizer. Do not create selector, preflight,
+blueprint, census, transition-controller, finalizer-census, observer, or
+cleanup-writer chains around an already selected task. Repair a concrete shared
+mechanism defect in place and retire the repair in the same terminal product.
+
+Cycle 012 is grandfathered while the active Senstarg transaction finishes. From cycle 013 onward, every cycle workflow pull request declares `Terminal-Product:` in its body. The
+cycle returns to zero in-flight work, zero media debt, zero unreceipted cycles,
+and zero temporary cycle refs before another claim. Maker attribution is valuable
+but nonblocking: add it only from exact source support and leave it explicitly
+unresolved otherwise.
+
 ## Default operating mode — collect, improve, expand
 
 The product surface is now frozen at v1 under DEC-0012. Before ordinary work run:
