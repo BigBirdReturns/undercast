@@ -22,33 +22,35 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: Recover reviewed finalizer
+      - name: Recover reviewed finalizer and checker template
         run: |
           set -euo pipefail
           test "$(git hash-object scripts/doctor-who-cycle-015-finalize.mjs)" = "0bf9a7b7fe9f034f76526cc34213d03a81fc47ff"
+          test "$(git hash-object scripts/doctor-who-cycle-015-checker-template.mjs)" = "59525b0951c41f2372723bd44e4aac239d0ade91"
           cp scripts/doctor-who-cycle-015-finalize.mjs /tmp/doctor-who-cycle-015-finalize.mjs
+          cp scripts/doctor-who-cycle-015-checker-template.mjs /tmp/doctor-who-cycle-015-checker-template.mjs
           python3 - /tmp/doctor-who-cycle-015-finalize.mjs <<'PY'
           from pathlib import Path
           import sys
 
           path = Path(sys.argv[1])
           text = path.read_text()
-
-          old_pretty = r'const sj=v=>JSON.stringify(stable(v)), pretty=v=>JSON.stringify(stable(v),null,2)+"\n";'
-          new_pretty = 'const sj=v=>JSON.stringify(stable(v)), pretty=v=>JSON.stringify(stable(v),null,2)+String.fromCharCode(10);'
-          if text.count(old_pretty) != 1:
-              raise SystemExit(f"generated-checker pretty target count was {text.count(old_pretty)}, expected 1")
-          text = text.replace(old_pretty, new_pretty)
-
-          old_gate = 'fs.writeFileSync(CHECKER, checkerSource(), { mode: 0o755 });\nconst checkerSha = sha(fs.readFileSync(CHECKER));'
-          new_gate = 'fs.writeFileSync(CHECKER, checkerSource(), { mode: 0o755 });\nrun(process.execPath, ["--check", CHECKER]);\nconst checkerSha = sha(fs.readFileSync(CHECKER));'
-          if text.count(old_gate) != 1:
-              raise SystemExit(f"generated-checker syntax-gate target count was {text.count(old_gate)}, expected 1")
-          text = text.replace(old_gate, new_gate)
-
-          path.write_text(text)
+          old = 'fs.writeFileSync(CHECKER, checkerSource(), { mode: 0o755 });\nconst checkerSha = sha(fs.readFileSync(CHECKER));'
+          new = '''const checkerTemplate = fs.readFileSync("/tmp/doctor-who-cycle-015-checker-template.mjs", "utf8")
+            .replaceAll("__PRIOR_CYCLE__", priorReceipt.reviewed_cycle.id)
+            .replaceAll("__PRIOR_RECEIPT_FILE_SHA__", priorReceiptFileSha)
+            .replaceAll("__PRIOR_RECEIPT_ID__", priorReceipt.receipt_sha256)
+            .replaceAll("__PRIOR_CHECKER_SHA__", priorCheckerSha);
+          ok(!checkerTemplate.includes("__PRIOR_"), "cycle 015 checker template placeholders remain unresolved");
+          fs.writeFileSync(CHECKER, checkerTemplate, { mode: 0o755 });
+          run(process.execPath, ["--check", CHECKER]);
+          const checkerSha = sha(fs.readFileSync(CHECKER));'''
+          if text.count(old) != 1:
+              raise SystemExit(f"static-checker writer target count was {text.count(old)}, expected 1")
+          path.write_text(text.replace(old, new))
           PY
           node --check /tmp/doctor-who-cycle-015-finalize.mjs
+          node --check /tmp/doctor-who-cycle-015-checker-template.mjs
       - name: Finalize exact candidate and fast-forward canonical main
         id: publish
         env:
