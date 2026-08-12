@@ -1,0 +1,42 @@
+#!/usr/bin/env node
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+const TASK='ap_870b903a6e8eb4189e949440', LEASE='lease_6958bf47e8a0b57c9914965c', WALL='UC-1358';
+const PERFORMER='Dan Starkey', ROLE='Shallo', SOURCE='https://tardis.fandom.com/wiki/Shallo', FP='b24fb8f9fea0d833b5f85da0d57c19d42384cfe9d152ee880d12c867ac9119d2';
+const STILL='images/uc-1358-still.webp', STILL_SHA='17696947aea3f1528db5821bccaa1ad72dcf274870e91a854bc52ddc274bd427';
+const PORTRAIT='images/uc-1358-portrait.jpg', PORTRAIT_SHA='87014c528d1a4f83a0fb31e88c0f7bb20f2556ad42b17905d8655289c457e107';
+const BASIS='cycle-013-shallo-selection-v1:39f1d836be28dfef74aa3e0dd90478845ac33d74398ec29104bbd37679e469c7';
+const sha=v=>crypto.createHash('sha256').update(v).digest('hex');
+const read=f=>JSON.parse(fs.readFileSync(f,'utf8'));
+const jsonl=f=>fs.readFileSync(f,'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse);
+const ok=(v,m)=>{if(!v) throw Error(m)};
+const same=(a,b,m)=>ok(JSON.stringify(a)===JSON.stringify(b),m);
+const ap=read('data/AUTOPILOT.json'), jobs=ap.jobs.filter(x=>x.scope==='doctor-who'), job=jobs.find(x=>x.id===TASK);
+ok(jobs.length===316,'Doctor Who denominator drifted');
+ok(job?.status==='resolved'&&job.performer===PERFORMER&&job.character===ROLE&&job.source_fingerprint===FP,'Shallo task drifted');
+same(job.wall_ids,[WALL],'Shallo wall binding drifted');
+ok(job.outcome?.kind==='audited-wall'&&job.outcome?.review_sha256==='2e2dbe6814ce8cec6636859008add528d9875e46638dd03c19492d47f25d3952','Shallo review receipt drifted');
+ok(job.outcome?.media_review?.lease_id===LEASE&&job.outcome?.media_review?.records?.[0]?.wall_id===WALL,'Shallo post-merge media custody drifted');
+same({queued:jobs.filter(x=>x.status==='queued').length,resolved:jobs.filter(x=>x.status==='resolved').length,in_flight:jobs.filter(x=>['leased','drafted','merged'].includes(x.status)).length},{queued:303,resolved:13,in_flight:0},'cycle 013 queue drifted');
+const card=read('data/specimens.json').find(x=>x.id===WALL);
+ok(card&&card.actor===PERFORMER&&card.character===ROLE&&card.production==='The Vanquishers'&&card.universe==='Doctor Who'&&card.years==='2021'&&card.kind==='face'&&card.transform===5&&card.designer==='—'&&card.link===SOURCE,'Shallo card drifted');
+ok(card.reveal.includes('source-named character still')&&card.reveal.includes('does not identify'),'Shallo evidence boundary drifted');
+ok(card.still?.src===STILL&&card.portrait?.src===PORTRAIT,'Shallo media paths drifted');
+ok(sha(fs.readFileSync(STILL))===STILL_SHA&&sha(fs.readFileSync(PORTRAIT))===PORTRAIT_SHA,'Shallo media bytes drifted');
+const src=read('data/SOURCES.json').find(x=>x.id===WALL); same(src.still,card.still,'Shallo source still drifted'); same(src.portrait,card.portrait,'Shallo source portrait drifted');
+const facets=read('data/MEDIA-AUDIT.json').items.filter(x=>x.wall_id===WALL);
+ok(facets.length===2,'Shallo media facet denominator drifted');
+const still=facets.find(x=>x.side==='still'), portrait=facets.find(x=>x.side==='portrait');
+ok(still?.status==='verified'&&still.asset?.sha256===STILL_SHA&&still.claims?.identity?.value==='expected'&&still.claims?.presentation?.value==='character-depiction','Shallo still review drifted');
+ok(portrait?.status==='verified'&&portrait.asset?.sha256===PORTRAIT_SHA&&portrait.claims?.identity?.value==='expected'&&portrait.claims?.presentation?.value==='neutral-human','Shallo portrait review drifted');
+const journal=jsonl('data/journal/autopilot.jsonl');
+const claim=journal.filter(x=>x.op==='lease.claimed'&&x.lease_id===LEASE&&x.task_id===TASK);
+ok(claim.length===1&&claim[0].selection_basis===BASIS&&claim[0].readiness_token==='282a013eb9ce501b80a2e548b78f48915cb3e1e21df3c25c664382fcf975046e','Shallo claim custody drifted');
+for(const row of claim){const body={...row};delete body.id;ok(row.id===`apj_${sha(JSON.stringify(body)).slice(0,24)}`,'Shallo claim is not content-addressed')}
+const events=journal.filter(x=>x.task_id===TASK).map(x=>x.op);
+for(const op of ['lease.claimed','task.drafted','task.merged','task.media-verified']) ok(events.includes(op),`Shallo missing ${op}`);
+const accept=jsonl('data/journal/candidates.jsonl').filter(x=>x.op==='draft.accept'&&x.specimen===WALL);
+ok(accept.length===1&&accept[0].character===ROLE&&accept[0].verification==='autopilot-source-receipt','Shallo acceptance drifted');
+const water=read('data/WATERLINE-STATE.json'); ok(!water.cycles.some(x=>x.lease_id===LEASE),'candidate must remain unreceipted until independent qualification');
+const hashes=new Map(); for(const c of read('data/specimens.json')) for(const side of ['still','portrait']) if(c[side]?.src&&fs.existsSync(c[side].src)){const h=sha(fs.readFileSync(c[side].src)); const old=hashes.get(h); ok(!old||old.id===c.id,`cross-card duplicate ${old?.id || 'unknown'}/${c.id}`); hashes.set(h,{id:c.id,side});}
+console.log('doctor-who-cycle-013-candidate: PASS — Shallo exact-role card, separate reviewed media, unresolved maker boundary, audited wall closure, and one-cycle isolation are intact');
