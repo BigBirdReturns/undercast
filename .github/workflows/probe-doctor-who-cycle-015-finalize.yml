@@ -1,0 +1,162 @@
+name: doctor-who-cycle-015-skar-final-publication
+
+on:
+  push:
+    branches: [probe-doctor-who-cycle-015-finalize-20260812]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: doctor-who-cycle-015-skar-final-publication
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Recover reviewed finalizer
+        run: |
+          set -euo pipefail
+          test "$(git hash-object scripts/doctor-who-cycle-015-finalize.mjs)" = "0bf9a7b7fe9f034f76526cc34213d03a81fc47ff"
+          test "$(sha256sum scripts/doctor-who-cycle-015-finalize.mjs | cut -d' ' -f1)" = "a7a5a95a7ffca1a7aaf1172a7e9070d8905bbca20e2b1dc6a35091f29daa959b"
+          cp scripts/doctor-who-cycle-015-finalize.mjs /tmp/doctor-who-cycle-015-finalize.mjs
+          node --check /tmp/doctor-who-cycle-015-finalize.mjs
+      - name: Finalize exact candidate and fast-forward canonical main
+        id: publish
+        env:
+          EXPECTED_MAIN: 7468046568f74b94630d8bfdc966bad23dcbd4a4
+          CANDIDATE_COMMIT: 5c0c0f251b62eff51c88c9307ab17976d719784a
+          CANDIDATE_TREE: 49c4474904bfcf70a0a5046063a32c4c63a9b5c8
+          FINAL_BRANCH: agent/doctor-who-cycle-015-skar-final-v1
+          REVIEWED_AT: 2026-08-12T16:20:00.000Z
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main "$CANDIDATE_COMMIT"
+          test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse "$CANDIDATE_COMMIT^")" = "$EXPECTED_MAIN"
+          test "$(git rev-parse "$CANDIDATE_COMMIT^{tree}")" = "$CANDIDATE_TREE"
+          test "$(git rev-list --count "$EXPECTED_MAIN".."$CANDIDATE_COMMIT")" = 1
+          test -z "$(git rev-list --merges "$EXPECTED_MAIN".."$CANDIDATE_COMMIT")"
+          git checkout --detach "$CANDIDATE_COMMIT"
+          node scripts/doctor-who-cycle-015-candidate.mjs
+          node scripts/media-audit.mjs gate --scope doctor-who
+          node scripts/validate.mjs
+          node /tmp/doctor-who-cycle-015-finalize.mjs | tee /tmp/cycle-015-finalizer.log
+          git diff --check
+          node scripts/doctor-who-cycle-015.mjs
+          node scripts/waterline.mjs validate --scope doctor-who
+          node scripts/media-audit.mjs gate --scope doctor-who
+          node scripts/validate.mjs
+          cat > /tmp/expected-final-paths.txt <<'PATHS'
+          data/AUTOPILOT.json
+          data/CENSUS-COVERAGE.json
+          data/CENSUS-FERENGI-TEST.json
+          data/CENSUS-GAPS.json
+          data/CENSUS-SUMMARY.json
+          data/ESTATE-REGISTRY.json
+          data/MEDIA-AUDIT.json
+          data/SOURCES.json
+          data/WATERLINE-STATE.json
+          data/archive.json
+          data/entities.json
+          data/index.json
+          data/journal/autopilot.jsonl
+          data/journal/candidates.jsonl
+          data/journal/media-audit.jsonl
+          data/journal/waterline.jsonl
+          data/quality.json
+          data/review/adapter-sdk/BASELINE.json
+          data/review/adapter-sdk/doctor-who-cycle-015-skar.json
+          data/search/2.json
+          data/search/a.json
+          data/search/b.json
+          data/search/c.json
+          data/search/d.json
+          data/search/e.json
+          data/search/f.json
+          data/search/g.json
+          data/search/i.json
+          data/search/j.json
+          data/search/m.json
+          data/search/manifest.json
+          data/search/n.json
+          data/search/o.json
+          data/search/p.json
+          data/search/r.json
+          data/search/s.json
+          data/search/t.json
+          data/search/v.json
+          data/search/w.json
+          data/shard-manifest.json
+          data/shards/0001.json
+          data/species.json
+          data/specimens.json
+          images/uc-1360-portrait.jpg
+          images/uc-1360-still.webp
+          package.json
+          scripts/doctor-who-cycle-015-candidate.mjs
+          scripts/doctor-who-cycle-015.mjs
+          sitemap.xml
+          PATHS
+          LC_ALL=C sort -o /tmp/expected-final-paths.txt /tmp/expected-final-paths.txt
+          git diff --name-only "$EXPECTED_MAIN" | LC_ALL=C sort -u > /tmp/actual-final-paths.txt
+          diff -u /tmp/expected-final-paths.txt /tmp/actual-final-paths.txt
+          test "$(wc -l < /tmp/actual-final-paths.txt | tr -d ' ')" = 49
+          test -z "$(grep '^\.github/' /tmp/actual-final-paths.txt || true)"
+          test -z "$(grep 'doctor-who-cycle-015-finalize' /tmp/actual-final-paths.txt || true)"
+          git config user.name "undercast-cycle-015-publisher"
+          git config user.email "cycle-015-publisher@users.noreply.github.com"
+          git add -A
+          final_tree="$(git write-tree)"
+          export GIT_AUTHOR_NAME="undercast-cycle-015-publisher"
+          export GIT_AUTHOR_EMAIL="cycle-015-publisher@users.noreply.github.com"
+          export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+          export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+          export GIT_AUTHOR_DATE="$REVIEWED_AT"
+          export GIT_COMMITTER_DATE="$REVIEWED_AT"
+          final_commit="$(printf '%s\n' 'Doctor Who: publish cycle 015 Skar' | git commit-tree "$final_tree" -p "$EXPECTED_MAIN")"
+          test "$(git rev-parse "$final_commit^")" = "$EXPECTED_MAIN"
+          test "$(git rev-parse "$final_commit^{tree}")" = "$final_tree"
+          test "$(git rev-list --count "$EXPECTED_MAIN".."$final_commit")" = 1
+          test -z "$(git rev-list --merges "$EXPECTED_MAIN".."$final_commit")"
+          git checkout --detach "$final_commit"
+          node scripts/doctor-who-cycle-015.mjs
+          node scripts/waterline.mjs validate --scope doctor-who
+          node scripts/media-audit.mjs gate --scope doctor-who
+          node scripts/validate.mjs
+          git diff --name-only "$EXPECTED_MAIN" | LC_ALL=C sort -u > /tmp/clean-final-paths.txt
+          diff -u /tmp/expected-final-paths.txt /tmp/clean-final-paths.txt
+          git push --force origin "$final_commit:refs/heads/$FINAL_BRANCH"
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN"
+          git push origin "$final_commit:refs/heads/main"
+          mkdir -p /tmp/final-receipt
+          printf '%s\n' "$EXPECTED_MAIN" > /tmp/final-receipt/parent.txt
+          printf '%s\n' "$CANDIDATE_COMMIT" > /tmp/final-receipt/candidate-commit.txt
+          printf '%s\n' "$CANDIDATE_TREE" > /tmp/final-receipt/candidate-tree.txt
+          printf '%s\n' "$final_commit" > /tmp/final-receipt/final-commit.txt
+          printf '%s\n' "$final_tree" > /tmp/final-receipt/final-tree.txt
+          cp /tmp/clean-final-paths.txt /tmp/final-receipt/paths.txt
+          cp /tmp/cycle-015-finalizer.log /tmp/final-receipt/finalizer.log
+          cp data/review/adapter-sdk/doctor-who-cycle-015-skar.json /tmp/final-receipt/
+          sha256sum data/review/adapter-sdk/doctor-who-cycle-015-skar.json scripts/doctor-who-cycle-015.mjs images/uc-1360-still.webp images/uc-1360-portrait.jpg > /tmp/final-receipt/key-sha256.txt
+          printf 'final_commit=%s\n' "$final_commit" >> "$GITHUB_OUTPUT"
+          printf 'final_tree=%s\n' "$final_tree" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-015-skar-final-product-receipt
+          path: /tmp/final-receipt/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Publication summary
+        run: |
+          echo "final commit: ${{ steps.publish.outputs.final_commit }}"
+          echo "final tree:   ${{ steps.publish.outputs.final_tree }}"
