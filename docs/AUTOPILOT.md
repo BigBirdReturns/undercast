@@ -418,3 +418,12 @@ The eighth bounded Doctor Who cycle is receipted by `data/review/adapter-sdk/doc
 - Queue: 305 queued / 11 resolved / 0 in flight.
 - The byte-distinct Dan Starkey portrait is verified at `images/uc-1356-portrait.jpg`; the Rastel character still remains honestly absent.
 - Reviewed cycle: `cycle_74cdc938b028a932a766d209` at `2026-08-09T20:30:00Z`; cycle 012 remains unauthorized.
+
+
+## Doctor Who cycle 012 — Senstarg
+
+- Task `ap_8965086737382df0e88366db` is resolved as Dan Starkey's physical-prosthetic face performance as Senstarg in *The Vanquishers* (2021).
+- Queue: 304 queued / 12 resolved / 0 in flight.
+- The exact Senstarg still and independent Dan Starkey portrait are separately verified.
+- Maker attribution remains unresolved and nonblocking.
+- Reviewed cycle: `cycle_f05bd15801eff66c85868f52` at `2026-08-12T01:30:00.000Z`; cycle 013 remains unauthorized.
