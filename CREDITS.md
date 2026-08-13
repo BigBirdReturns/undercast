@@ -285,6 +285,7 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **Fred Tatasciore** (UC-1364) — Super Festivals from Ft. Lauderdale, USA, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Fred_Tatasciore_(52261767885).jpg)
 - **James Doohan** (UC-1365) — NASA, Public domain — [source](https://commons.wikimedia.org/wiki/File:Doohan_James_NASA_19670413.jpg)
 - **James Doohan** (UC-1366) — C Thomas, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:James_Doohan_Actor.jpg)
+- **James Doohan** (UC-1367) — Gestumblindi, Public domain — [source](https://commons.wikimedia.org/wiki/File:Doohan-portraet1.jpg)
 - **Vaughn Armstrong** (UC-140) — AFroese, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Vaughn_Armstrong.JPG)
 - **Suzie Plakson** (UC-141) — Eva Rinaldi, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Suzie_Plakson_in_2012.jpg)
 - **Carel Struycken** (UC-142) — Miguel Discart, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Carel_Struycken_March_2016.jpg)
@@ -769,8 +770,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **739**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **994**
+- Free-licensed portraits (attributed above): **740**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **995**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
 email and any specific asset comes down.
