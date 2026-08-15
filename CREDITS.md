@@ -288,6 +288,7 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **James Doohan** (UC-1367) — Gestumblindi, Public domain — [source](https://commons.wikimedia.org/wiki/File:Doohan-portraet1.jpg)
 - **James Doohan** (UC-1368) — Donald Huebler, Public domain — [source](https://commons.wikimedia.org/wiki/File:ACTOR_JIM_DOOHAN_-_SCOTTY_ON_TELEVISION_SERIES_STAR_TREK_-_VISITING_THE_8X6_FOOT_WIND_TUNNEL_-_NARA_-_17471823.jpg)
 - **James Doohan** (UC-1369) — NASA Goddard Space Flight Center, Public domain — [source](https://commons.wikimedia.org/wiki/File%3A%27Engineer_of_the_Future%27-_Star_Trek%27s_%27Scotty%2C%27_James_Doohan%2C_Presents_at_NASA_Goddard_%28James_Doohan_at_GSFC_1992%29.webm)
+- **James Doohan** (UC-1370) — NASA, Public domain — [source](https://commons.wikimedia.org/wiki/File:Space_shuttle_enterprise_star_trek-cropcast.jpg)
 - **Vaughn Armstrong** (UC-140) — AFroese, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Vaughn_Armstrong.JPG)
 - **Suzie Plakson** (UC-141) — Eva Rinaldi, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Suzie_Plakson_in_2012.jpg)
 - **Carel Struycken** (UC-142) — Miguel Discart, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Carel_Struycken_March_2016.jpg)
@@ -772,8 +773,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **742**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **997**
+- Free-licensed portraits (attributed above): **743**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **998**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
 email and any specific asset comes down.
