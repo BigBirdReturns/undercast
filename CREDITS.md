@@ -291,6 +291,7 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **James Doohan** (UC-1370) — NASA, Public domain — [source](https://commons.wikimedia.org/wiki/File:Space_shuttle_enterprise_star_trek-cropcast.jpg)
 - **Dee Bradley Baker** (UC-1371) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Dee_Bradley_Baker_by_Gage_Skidmore.jpg)
 - **Dee Bradley Baker** (UC-1372) — Gage Skidmore, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Dee_Bradley_Baker_(53771747217)_cropped.jpg)
+- **Dee Bradley Baker** (UC-1373) — Gage Skidmore, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:Dee_Bradley_Baker_by_Gage_Skidmore_2.jpg)
 - **Vaughn Armstrong** (UC-140) — AFroese, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Vaughn_Armstrong.JPG)
 - **Suzie Plakson** (UC-141) — Eva Rinaldi, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Suzie_Plakson_in_2012.jpg)
 - **Carel Struycken** (UC-142) — Miguel Discart, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Carel_Struycken_March_2016.jpg)
@@ -775,8 +776,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **745**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **1000**
+- Free-licensed portraits (attributed above): **746**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **1001**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
 email and any specific asset comes down.
