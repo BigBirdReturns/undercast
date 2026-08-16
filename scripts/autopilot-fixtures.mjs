@@ -199,6 +199,14 @@ const mediaReview = {
 const completed = completeReviews({ state: acceptedDraft.state, reviewDoc: mediaReview, sourceLedger, corpusSha256: "e".repeat(64), readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3 });
 assert.equal(completed.state.jobs.find((job) => job.id === bruntTask.id).status, "resolved", "post-merge visual receipt closes the task");
 assert.equal(completed.state.jobs.find((job) => job.id === bruntTask.id).outcome.kind, "audited-wall");
+const aliasSourceLedger = [{ ...sourceLedger[0], character: "Liquidator Brunt" }];
+const aliasSpecimens = [{
+  id: "UC-999", actor: "Jeffrey Combs", character: "Liquidator Brunt",
+  performances: [{ character: "Brunt", references: [{ source: bruntTask.sources[0] }] }],
+}];
+assert.throws(() => completeReviews({ state: acceptedDraft.state, reviewDoc: mediaReview, sourceLedger: aliasSourceLedger, corpusSha256: "e".repeat(64), readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3 }), /identity does not match/, "display aliases require a specimen-bound exact performance receipt");
+const aliasCompleted = completeReviews({ state: acceptedDraft.state, reviewDoc: mediaReview, sourceLedger: aliasSourceLedger, specimens: aliasSpecimens, corpusSha256: "e".repeat(64), readinessTokens: { "star-trek": readiness("star-trek").lease_token }, now: T3 });
+assert.equal(aliasCompleted.state.jobs.find((job) => job.id === bruntTask.id).status, "resolved", "a source-backed exact performance alias may close on an existing display record");
 assert.throws(() => completeReviews({ state: acceptedDraft.state, reviewDoc: mediaReview, sourceLedger, corpusSha256: "e".repeat(64), readinessTokens: { "star-trek": "7".repeat(64) }, now: T3 }), /no longer current/, "media closure cannot bypass a stale producer snapshot");
 const wrongSubjectReview = structuredClone(mediaReview);
 wrongSubjectReview.reviews[0].records[0].portrait.subject = "The Orion constellation";

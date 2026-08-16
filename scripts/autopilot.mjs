@@ -492,15 +492,17 @@ async function completeCommand() {
       readFile(specimensPath),
       loadQueueInputs({ downstream: false }),
     ]);
-    let sourceLedger;
+    let sourceLedger, specimens;
     try { sourceLedger = JSON.parse(sourcesBytes); }
     catch (error) { throw new Error(`cannot parse ${sourcesPath}: ${error.message}`); }
+    try { specimens = JSON.parse(specimensBytes); }
+    catch (error) { throw new Error(`cannot parse ${specimensPath}: ${error.message}`); }
     const corpusSha256 = sha256(Buffer.concat([specimensBytes, Buffer.from("\n"), sourcesBytes]));
     const readinessTokens = Object.fromEntries(inputs.readiness
       .filter((row) => row.effective_status === "active" && row.lease_token)
       .map((row) => [row.scope_id, row.lease_token]));
     const result = completeReviews({
-      state, reviewDoc, sourceLedger, corpusSha256, readinessTokens,
+      state, reviewDoc, sourceLedger, specimens, corpusSha256, readinessTokens,
       now: option("now", new Date().toISOString()),
     });
     await atomicJson(statePath, result.state);

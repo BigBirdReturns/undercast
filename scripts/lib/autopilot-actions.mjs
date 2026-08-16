@@ -359,17 +359,34 @@ function validateMediaFacet(job, ledger, report, kind) {
   };
 }
 
-export function completeReviews({ state, reviewDoc, sourceLedger, corpusSha256, readinessTokens = {}, now = new Date().toISOString() }) {
+function sourceIdentityMatchesFiledRole(job, ledger, specimen) {
+  if (normalize(ledger?.actor) !== normalize(job.performer)) return false;
+  if (normalize(ledger?.character) === normalize(job.character)) return true;
+  if (!specimen || specimen.id !== ledger.id) return false;
+  if (normalize(specimen.actor) !== normalize(job.performer)) return false;
+  if (normalize(specimen.character) !== normalize(ledger.character)) return false;
+  const taskSources = new Set((job.sources || []).map(sourceKey));
+  const performances = Array.isArray(specimen.performances) ? specimen.performances : [];
+  return performances.some((performance) =>
+    normalize(performance?.character) === normalize(job.character)
+    && Array.isArray(performance?.references)
+    && performance.references.some((reference) => taskSources.has(sourceKey(reference?.source)))
+  );
+}
+
+export function completeReviews({ state, reviewDoc, sourceLedger, specimens = [], corpusSha256, readinessTokens = {}, now = new Date().toISOString() }) {
   if (!reviewDoc || reviewDoc.version !== AUTOPILOT_VERSION) throw new Error("invalid media review document version");
   if (!/^[a-zA-Z0-9._-]{2,64}$/.test(reviewDoc.reviewed_by || "")) throw new Error("media review needs reviewed_by");
   if (!reviewDoc.lease_id) throw new Error("media review needs the originating lease_id");
   if (!Array.isArray(reviewDoc.reviews) || !reviewDoc.reviews.length) throw new Error("media review needs a reviews array");
   if (!Array.isArray(sourceLedger)) throw new Error("data/SOURCES.json must be an array");
+  if (!Array.isArray(specimens)) throw new Error("data/specimens.json must be an array");
   if (!/^[0-9a-f]{64}$/i.test(corpusSha256 || "")) throw new Error("media review needs a corpus SHA-256 receipt");
 
   const next = copyJson(state);
   const jobs = new Map(next.jobs.map((job) => [job.id, job]));
   const ledgerById = new Map(sourceLedger.map((row) => [row?.id, row]));
+  const specimenById = new Map(specimens.map((row) => [row?.id, row]));
   const seen = new Set();
   const events = [];
 
@@ -398,7 +415,8 @@ export function completeReviews({ state, reviewDoc, sourceLedger, corpusSha256, 
       const ledger = ledgerById.get(record.wall_id);
       if (!ledger) throw new Error(`task ${job.id}: SOURCES has no row for ${record.wall_id}`);
       if (!ledger.fetched_at) throw new Error(`task ${job.id}/${record.wall_id}: SOURCES lacks fetched_at`);
-      if (normalize(ledger.actor) !== normalize(job.performer) || normalize(ledger.character) !== normalize(job.character)) {
+      const specimen = specimenById.get(record.wall_id);
+      if (!sourceIdentityMatchesFiledRole(job, ledger, specimen)) {
         throw new Error(`task ${job.id}/${record.wall_id}: SOURCES identity does not match performer-role`);
       }
       records.push({

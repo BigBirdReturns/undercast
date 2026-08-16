@@ -667,7 +667,7 @@ derivative work: Hic et nunc, CC BY-SA 3.0 — [source](https://commons.wikimedi
 - **Jason Marsden** (UC-678) — https://www.flickr.com/photos/greg2600, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Jason_Marsden_(43904363590).jpg)
 - **Jim Martin** (UC-681) — Nightscream, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:10.9.10JimMartinByLuigiNovi1.jpg)
 - **Brian Henson** (UC-683) — Billbarretta19, CC BY-SA 4.0 — [source](https://commons.wikimedia.org/wiki/File:BillBarrettaBrianHenson1982_(cropped).jpg)
-- **James Doohan** (UC-684) — NASA, Public domain — [source](https://commons.wikimedia.org/wiki/File:Doohan_James_NASA_19670413.jpg)
+- **James Doohan** (UC-684) — Donald Huebler, Public domain — [source](https://commons.wikimedia.org/wiki/File:J_DOOHAN_-_ACTOR_WHO_PLAYED_THE_ENGINEER_ON_THE_STAR_TREK_TELEVISION_SERIES_-_DURING_VISIT_TO_THE_ELECTRIC_PROPULSION_LABORATORY_EPL_WITH_JIM_BURNETT_NASA_-_NARA_-_17466960.jpg)
 - **James Sloyan** (UC-685) — ABC Television
 
 Uploaded by We hope at en.wikipedia, Public domain — [source](https://commons.wikimedia.org/wiki/File:James_Sloyan.jpg)
