@@ -12,10 +12,10 @@ permissions:
 jobs:
   monitor:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
-      TARGET_HEAD: 974ea1668633a56f1ad1b39e95adfb5cfe7fa799
+      TARGET_HEAD: 60776081a5e47b7d923c83afb3e9bc60c2a1b159
       RESULT_BRANCH: agent/star-trek-cadmar-monitor-result-v1
       EXPECTED_MAIN: 62076ebd77b5834700b7a0b26b2907285c580fe0
     steps:
@@ -27,10 +27,21 @@ jobs:
           set -euo pipefail
           rm -rf /tmp/cadmar-monitor
           mkdir -p /tmp/cadmar-monitor
-          gh api "/repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$TARGET_HEAD&per_page=100" > /tmp/cadmar-monitor/runs.json
-          run_id="$(jq -r '[.workflow_runs[] | select(.head_sha==env.TARGET_HEAD) | select(.path==".github/workflows/star-trek-cadmar-cycle-v1.yml")][0].id // empty' /tmp/cadmar-monitor/runs.json)"
+          run_id=
+          for attempt in $(seq 1 60); do
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$TARGET_HEAD&per_page=100" > /tmp/cadmar-monitor/runs.json
+            run_id="$(jq -r '[.workflow_runs[] | select(.head_sha==env.TARGET_HEAD) | select(.path==".github/workflows/star-trek-cadmar-cycle-v1.yml")][0].id // empty' /tmp/cadmar-monitor/runs.json)"
+            if [ -n "$run_id" ]; then break; fi
+            sleep 2
+          done
           test -n "$run_id"
-          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > /tmp/cadmar-monitor/run.json
+          for attempt in $(seq 1 240); do
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > /tmp/cadmar-monitor/run.json
+            status="$(jq -r '.status' /tmp/cadmar-monitor/run.json)"
+            if [ "$status" = completed ]; then break; fi
+            sleep 3
+          done
+          test "$(jq -r '.status' /tmp/cadmar-monitor/run.json)" = completed
           gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > /tmp/cadmar-monitor/jobs.json
           gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > /tmp/cadmar-monitor/artifacts.json
           job_id="$(jq -r '.jobs[0].id // empty' /tmp/cadmar-monitor/jobs.json)"
@@ -39,7 +50,7 @@ jobs:
           gh run view "$run_id" --log-failed > /tmp/cadmar-monitor/job-failed.log 2>&1 || true
           gh run view "$run_id" --log > /tmp/cadmar-monitor/job-full.log 2>&1 || true
           grep -nE "Error:|##\[error\]|failed \(|failed with|AssertionError|ERR_|drifted|missing|mismatch|Process completed" /tmp/cadmar-monitor/job-full.log > /tmp/cadmar-monitor/error-lines.txt || true
-          tail -n 300 /tmp/cadmar-monitor/job-full.log > /tmp/cadmar-monitor/job-tail.log || true
+          tail -n 400 /tmp/cadmar-monitor/job-full.log > /tmp/cadmar-monitor/job-tail.log || true
           export run_id job_id
           python3 - <<'PY'
           import json, os
@@ -87,5 +98,5 @@ jobs:
           git config user.name undercast-cadmar-monitor
           git config user.email cadmar-monitor@users.noreply.github.com
           git add transport/cadmar-cycle-monitor
-          git commit -m 'Cadmar: publish detailed cycle failure receipt'
+          git commit -m 'Cadmar: publish final cycle monitor receipt'
           git push --force origin "HEAD:refs/heads/$RESULT_BRANCH"
