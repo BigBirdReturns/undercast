@@ -20,7 +20,7 @@ CANDIDATES = [
     {
         "id": "dryden-doohan",
         "title": "File:Star Trek Cast and Crew Visit NASA Dryden in 1967 (Doohan).jpg",
-        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bb/Star_Trek_Cast_and_Crew_Visit_NASA_Dryden_in_1967_%28Doohan%29.jpg/1200px-Star_Trek_Cast_and_Crew_Visit_NASA_Dryden_in_1967_%28Doohan%29.jpg",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bb/Star_Trek_Cast_and_Crew_Visit_NASA_Dryden_in_1967_%28Doohan%29.jpg/1024px-Star_Trek_Cast_and_Crew_Visit_NASA_Dryden_in_1967_%28Doohan%29.jpg",
         "origin_url": "https://upload.wikimedia.org/wikipedia/commons/b/bb/Star_Trek_Cast_and_Crew_Visit_NASA_Dryden_in_1967_%28Doohan%29.jpg",
         "page": "https://commons.wikimedia.org/wiki/File:Star_Trek_Cast_and_Crew_Visit_NASA_Dryden_in_1967_(Doohan).jpg",
         "author": "NASA",
