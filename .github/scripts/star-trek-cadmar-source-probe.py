@@ -44,8 +44,9 @@ def write(name: str, value: Any) -> None:
 
 def api(host: str, params: dict[str, Any]) -> dict[str, Any]:
     query = urllib.parse.urlencode(params, doseq=True)
+    api_path = "/w/api.php" if host == "commons.wikimedia.org" else "/api.php"
     request = urllib.request.Request(
-        f"https://{host}/api.php?{query}",
+        f"https://{host}{api_path}?{query}",
         headers={"User-Agent": "undercast-cadmar-source-probe/1.0"},
     )
     with urllib.request.urlopen(request, timeout=60) as response:
