@@ -6,7 +6,7 @@ on:
       - agent/star-trek-cadmar-media-prep-v1
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 jobs:
@@ -18,6 +18,7 @@ jobs:
       EXPECTED_MAIN: 62076ebd77b5834700b7a0b26b2907285c580fe0
       SOURCE_DIR: /tmp/cadmar-source-probe
       SCOUT_DIR: /tmp/cadmar-media-scout
+      PRODUCT_BRANCH: agent/star-trek-cadmar-media-product-v1
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,3 +48,45 @@ jobs:
           path: /tmp/star-trek-cadmar-media/
           if-no-files-found: error
           retention-days: 30
+      - name: Publish temporary media read-back branch
+        run: |
+          set -euo pipefail
+          artifact_id=
+          artifact_digest=
+          for attempt in $(seq 1 30); do
+            row="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" --jq '.artifacts[] | select(.name=="star-trek-cadmar-media") | [.id,.digest] | @tsv' | head -n1)"
+            if [ -n "$row" ]; then
+              artifact_id="$(printf '%s' "$row" | cut -f1)"
+              artifact_digest="$(printf '%s' "$row" | cut -f2)"
+              break
+            fi
+            sleep 2
+          done
+          test -n "$artifact_id"
+          git fetch origin main --depth=1
+          git checkout --detach "$EXPECTED_MAIN"
+          git checkout -B "$PRODUCT_BRANCH"
+          rm -rf transport/cadmar-media
+          mkdir -p transport/cadmar-media
+          cp -a /tmp/star-trek-cadmar-media/. transport/cadmar-media/
+          export artifact_id artifact_digest
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          payload = {
+              "version": 1,
+              "transaction": "STAR-TREK-CADMAR-MEDIA-READBACK",
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "job": os.environ["GITHUB_JOB"],
+              "head_sha": os.environ["GITHUB_SHA"],
+              "canonical_parent": os.environ["EXPECTED_MAIN"],
+              "artifact_id": int(os.environ["artifact_id"]),
+              "artifact_digest": os.environ["artifact_digest"],
+          }
+          Path("transport/cadmar-media/run.json").write_text(json.dumps(payload, indent=2) + "\n")
+          PY
+          git config user.name undercast-cadmar-media
+          git config user.email cadmar-media@users.noreply.github.com
+          git add transport/cadmar-media
+          git commit -m 'Cadmar: publish media read-back carrier'
+          git push --force origin "HEAD:refs/heads/${PRODUCT_BRANCH}"
