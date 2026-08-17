@@ -40,7 +40,7 @@ def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def commons_image(title: str, width: int = 1200) -> dict[str, Any]:
+def commons_image(title: str, width: int = 768) -> dict[str, Any]:
     query = urllib.parse.urlencode({
         "action": "query",
         "format": "json",
@@ -96,7 +96,7 @@ if remote_main != EXPECTED_MAIN:
 
 rows: list[dict[str, Any]] = []
 for candidate in CANDIDATES:
-    resolved = commons_image(candidate["title"], 1200)
+    resolved = commons_image(candidate["title"], 768)
     info = resolved["info"]
     target = OUT / f"{candidate['id']}.jpg"
     download(info["thumburl"], target)
@@ -180,7 +180,7 @@ for index, tile in enumerate(tiles):
 sheet.save(OUT / "contact-sheet.jpg", quality=92)
 
 manifest = {
-    "version": 3,
+    "version": 4,
     "transaction": "STAR-TREK-CADMAR-MEDIA-SCOUT",
     "canonical_parent": EXPECTED_MAIN,
     "items": rows,
