@@ -1,0 +1,112 @@
+name: star-trek-cadmar-terminalizer
+
+on:
+  push:
+    branches:
+      - agent/star-trek-cadmar-terminalizer-v1
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  terminalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_HEAD: 60776081a5e47b7d923c83afb3e9bc60c2a1b159
+      EXPECTED_PARENT: 62076ebd77b5834700b7a0b26b2907285c580fe0
+      RESULT_BRANCH: agent/star-trek-cadmar-terminal-readback-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Recover exact Cadmar workflow outcome
+        run: |
+          set -euo pipefail
+          OUT=/tmp/cadmar-terminal-readback
+          rm -rf "$OUT"
+          mkdir -p "$OUT/artifacts"
+          run_id=
+          for attempt in $(seq 1 60); do
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$TARGET_HEAD&per_page=100" > "$OUT/runs.json"
+            run_id="$(jq -r '[.workflow_runs[] | select(.head_sha==env.TARGET_HEAD) | select(.path==".github/workflows/star-trek-cadmar-cycle-v1.yml")][0].id // empty' "$OUT/runs.json")"
+            if [ -n "$run_id" ]; then break; fi
+            sleep 2
+          done
+          test -n "$run_id"
+          for attempt in $(seq 1 300); do
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$OUT/run.json"
+            status="$(jq -r '.status' "$OUT/run.json")"
+            if [ "$status" = completed ]; then break; fi
+            sleep 3
+          done
+          test "$(jq -r '.status' "$OUT/run.json")" = completed
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$OUT/jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$OUT/artifacts.json"
+          job_id="$(jq -r '.jobs[0].id // empty' "$OUT/jobs.json")"
+          test -n "$job_id"
+          gh run view "$run_id" --log > "$OUT/job-full.log" 2>&1 || true
+          gh run view "$run_id" --log-failed > "$OUT/job-failed.log" 2>&1 || true
+          grep -nE 'Error:|##\[error\]|failed \(|failed with|AssertionError|ERR_|drifted|missing|mismatch|Process completed' "$OUT/job-full.log" > "$OUT/error-lines.txt" || true
+          conclusion="$(jq -r '.conclusion' "$OUT/run.json")"
+          if [ "$conclusion" = success ]; then
+            for name in unitcadmar-candidate-product unitcadmar-independent-review star-trek-cadmar-final-product-receipt star-trek-cadmar-controller-source; do
+              row="$(jq -r --arg name "$name" '.artifacts[] | select(.name==$name) | [.id,.digest] | @tsv' "$OUT/artifacts.json" | head -n1)"
+              test -n "$row"
+              artifact_id="$(printf '%s' "$row" | cut -f1)"
+              artifact_digest="$(printf '%s' "$row" | cut -f2 | sed 's/^sha256://')"
+              gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$OUT/artifacts/$name.zip"
+              actual="$(sha256sum "$OUT/artifacts/$name.zip" | cut -d' ' -f1)"
+              test "$actual" = "$artifact_digest"
+            done
+          fi
+          gh api "/repos/$GITHUB_REPOSITORY/branches/main" > "$OUT/main.json"
+          main_sha="$(jq -r '.commit.sha' "$OUT/main.json")"
+          gh api "/repos/$GITHUB_REPOSITORY/commits/$main_sha" > "$OUT/main-commit.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/pages.yml/runs?head_sha=$main_sha&per_page=100" > "$OUT/pages-runs.json" || true
+          export OUT run_id job_id main_sha
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          out=Path(os.environ['OUT'])
+          run=json.loads((out/'run.json').read_text())
+          jobs=json.loads((out/'jobs.json').read_text())
+          artifacts=json.loads((out/'artifacts.json').read_text())
+          main=json.loads((out/'main.json').read_text())
+          commit=json.loads((out/'main-commit.json').read_text())
+          pages_payload=json.loads((out/'pages-runs.json').read_text()) if (out/'pages-runs.json').exists() else {'workflow_runs':[]}
+          pages=sorted(pages_payload.get('workflow_runs',[]),key=lambda x:x.get('created_at',''))[-1] if pages_payload.get('workflow_runs') else None
+          files=[]
+          for p in sorted((out/'artifacts').glob('*.zip')):
+              files.append({'file':p.name,'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()})
+          main_sha=main['commit']['sha']
+          expected_parent=os.environ['EXPECTED_PARENT']
+          success=(run.get('status')=='completed' and run.get('conclusion')=='success' and commit.get('commit',{}).get('message')=='Star Trek: publish Cadmar cycle' and len(commit.get('parents',[]))==1 and commit['parents'][0].get('sha')==expected_parent and pages is not None and pages.get('status')=='completed' and pages.get('conclusion')=='success' and pages.get('head_sha')==main_sha and len(files)==4)
+          summary={'version':1,'transaction':'STAR-TREK-CADMAR-TERMINAL-READBACK','carrier_head':os.environ['TARGET_HEAD'],'workflow':{k:run.get(k) for k in ['id','name','path','head_sha','status','conclusion','created_at','updated_at','run_attempt']},'job_id':int(os.environ['job_id']),'jobs':[{k:j.get(k) for k in ['id','name','status','conclusion','started_at','completed_at']}|{'steps':j.get('steps',[])} for j in jobs.get('jobs',[])],'workflow_artifacts':[{k:a.get(k) for k in ['id','name','size_in_bytes','digest','expired','created_at','expires_at']} for a in artifacts.get('artifacts',[])],'downloaded_artifacts':files,'main':{'sha':main_sha,'tree':commit.get('commit',{}).get('tree',{}).get('sha'),'message':commit.get('commit',{}).get('message'),'parents':[p.get('sha') for p in commit.get('parents',[])]},'pages':None if pages is None else {k:pages.get(k) for k in ['id','name','path','head_sha','status','conclusion','created_at','updated_at']},'canonical_success':success}
+          (out/'summary.json').write_text(json.dumps(summary,indent=2)+'\n')
+          report=['# Star Trek Cadmar terminal read-back','']
+          if success:
+              report += ['**Cadmar completed the canonical publication workflow.**','',f'Live main is `{main_sha}` with tree `{summary["main"]["tree"]}` and sole parent `{expected_parent}`.',f'Workflow run `{run["id"]}` and Pages run `{pages["id"]}` both completed successfully against the exact product commit.','']
+          else:
+              report += ['**Cadmar did not complete the canonical publication workflow.**','',f'Workflow run `{run["id"]}` concluded `{run.get("conclusion")}`. Live main is `{main_sha}` with message `{summary["main"]["message"]}`.','']
+          report += ['## Artifact custody','']+[f'- `{x["file"]}`: `{x["sha256"]}` ({x["bytes"]} bytes)' for x in files]
+          (out/'report.md').write_text('\n'.join(report)+'\n')
+          PY
+      - name: Publish terminal read-back branch
+        run: |
+          set -euo pipefail
+          OUT=/tmp/cadmar-terminal-readback
+          main_sha="$(jq -r '.main.sha' "$OUT/summary.json")"
+          git fetch origin main --depth=1
+          git checkout --detach "$main_sha"
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/cadmar-terminal-readback
+          mkdir -p transport/cadmar-terminal-readback
+          cp -a "$OUT"/. transport/cadmar-terminal-readback/
+          git config user.name undercast-cadmar-terminalizer
+          git config user.email cadmar-terminalizer@users.noreply.github.com
+          git add transport/cadmar-terminal-readback
+          git commit -m 'Cadmar: publish terminal read-back'
+          git push --force origin "HEAD:refs/heads/$RESULT_BRANCH"
