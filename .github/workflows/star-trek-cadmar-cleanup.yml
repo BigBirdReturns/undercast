@@ -1,0 +1,115 @@
+name: star-trek-cadmar-cleanup
+
+on:
+  push:
+    branches:
+      - agent/star-trek-cadmar-cleanup-v1
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CLEANUP_BRANCH: agent/star-trek-cadmar-cleanup-v1
+      READBACK_BRANCH: agent/star-trek-cadmar-terminal-readback-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Verify canonical Cadmar product and retire carriers
+        run: |
+          set -euo pipefail
+          OUT=/tmp/star-trek-cadmar-cleanup
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+
+          git fetch origin main --depth=1
+          git fetch origin "$READBACK_BRANCH" --depth=1
+          git show FETCH_HEAD:transport/cadmar-terminal-readback/summary.json > "$OUT/terminal-summary.json"
+          test "$(jq -r '.canonical_success' "$OUT/terminal-summary.json")" = true
+          product="$(jq -r '.main.sha' "$OUT/terminal-summary.json")"
+          test "$(git rev-parse origin/main)" = "$product"
+          test "$(jq -r '.main.message' "$OUT/terminal-summary.json")" = 'Star Trek: publish Cadmar cycle'
+          test "$(jq -r '.pages.conclusion' "$OUT/terminal-summary.json")" = success
+          test "$(jq -r '.pages.head_sha' "$OUT/terminal-summary.json")" = "$product"
+
+          git checkout --detach origin/main
+          node scripts/star-trek-cadmar-cycle.mjs
+
+          gh api --paginate "/repos/$GITHUB_REPOSITORY/branches?per_page=100" --jq '.[].name' | sort > "$OUT/branches-before.txt"
+          cat > "$OUT/requested-refs.txt" <<'REFS'
+          agent/star-trek-cadmar-source-probe-v1
+          agent/star-trek-cadmar-media-scout-v1
+          agent/star-trek-cadmar-media-prep-v1
+          agent/star-trek-cadmar-media-product-v1
+          agent/star-trek-cadmar-cycle-v1
+          agent/star-trek-cadmar-candidate-v1
+          agent/star-trek-cadmar-monitor-v1
+          agent/star-trek-cadmar-monitor-result-v1
+          agent/star-trek-cadmar-terminalizer-v1
+          agent/star-trek-cadmar-terminal-readback-v1
+          REFS
+          sed -i 's/^          //' "$OUT/requested-refs.txt"
+
+          : > "$OUT/deleted-refs.txt"
+          : > "$OUT/already-absent-refs.txt"
+          while IFS= read -r ref; do
+            [ -n "$ref" ] || continue
+            if grep -Fxq "$ref" "$OUT/branches-before.txt"; then
+              git push origin --delete "$ref"
+              echo "$ref" >> "$OUT/deleted-refs.txt"
+            else
+              echo "$ref" >> "$OUT/already-absent-refs.txt"
+            fi
+          done < "$OUT/requested-refs.txt"
+
+          gh api --paginate "/repos/$GITHUB_REPOSITORY/branches?per_page=100" --jq '.[].name' | sort > "$OUT/branches-after-external.txt"
+          if grep -Ei '(^|/)cadmar([-/]|$)' "$OUT/branches-after-external.txt" | grep -Fvx "$CLEANUP_BRANCH" > "$OUT/unexpected-cadmar-refs.txt"; then
+            cat "$OUT/unexpected-cadmar-refs.txt"
+            exit 1
+          fi
+          : > "$OUT/unexpected-cadmar-refs.txt"
+
+          export OUT product
+          python3 - <<'PY'
+          import hashlib, json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+          out=Path(os.environ['OUT'])
+          def lines(name):
+              return [x for x in (out/name).read_text().splitlines() if x]
+          payload={
+              'version':1,
+              'transaction':'STAR-TREK-CADMAR-CLEANUP',
+              'verified_at':datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00','Z'),
+              'canonical_product_commit':os.environ['product'],
+              'cleanup_run':int(os.environ['GITHUB_RUN_ID']),
+              'cleanup_job':os.environ['GITHUB_JOB'],
+              'deleted_refs':lines('deleted-refs.txt'),
+              'already_absent_refs':lines('already-absent-refs.txt'),
+              'unexpected_external_cadmar_refs':lines('unexpected-cadmar-refs.txt'),
+              'self_ref_pending_deletion':os.environ['CLEANUP_BRANCH'],
+              'in_flight':0,
+              'media_debt':0,
+              'unreceipted_cycles':0,
+              'success_before_self_delete':True,
+          }
+          body=json.dumps(payload,indent=2)+'\n'
+          (out/'cleanup.json').write_text(body)
+          (out/'cleanup-sha256.txt').write_text(hashlib.sha256(body.encode()).hexdigest()+'  cleanup.json\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-cadmar-cleanup
+          path: /tmp/star-trek-cadmar-cleanup/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Delete cleanup carrier
+        run: |
+          set -euo pipefail
+          git push origin --delete "$CLEANUP_BRANCH"
