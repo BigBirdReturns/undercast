@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 import subprocess
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -18,52 +20,46 @@ CANDIDATES = [
     {
         "id": "dryden-doohan",
         "title": "File:Star Trek Cast and Crew Visit NASA Dryden in 1967 (Doohan).jpg",
-        "url": "https://upload.wikimedia.org/wikipedia/commons/b/bb/Star_Trek_Cast_and_Crew_Visit_NASA_Dryden_in_1967_%28Doohan%29.jpg",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bb/Star_Trek_Cast_and_Crew_Visit_NASA_Dryden_in_1967_%28Doohan%29.jpg/1200px-Star_Trek_Cast_and_Crew_Visit_NASA_Dryden_in_1967_%28Doohan%29.jpg",
+        "origin_url": "https://upload.wikimedia.org/wikipedia/commons/b/bb/Star_Trek_Cast_and_Crew_Visit_NASA_Dryden_in_1967_%28Doohan%29.jpg",
         "page": "https://commons.wikimedia.org/wiki/File:Star_Trek_Cast_and_Crew_Visit_NASA_Dryden_in_1967_(Doohan).jpg",
         "author": "NASA",
         "license": "Public domain",
     },
     {
-        "id": "doohan-1997",
-        "title": "File:Doohan-portraet1.jpg",
-        "url": "https://upload.wikimedia.org/wikipedia/commons/8/89/Doohan-portraet1.jpg",
-        "page": "https://commons.wikimedia.org/wiki/File:Doohan-portraet1.jpg",
-        "author": "Gestumblindi",
-        "license": "Public domain",
-    },
-    {
-        "id": "doohan-actor",
-        "title": "File:James Doohan Actor.jpg",
-        "url": "https://upload.wikimedia.org/wikipedia/commons/0/06/James_Doohan_Actor.jpg",
-        "page": "https://commons.wikimedia.org/wiki/File:James_Doohan_Actor.jpg",
-        "author": "C Thomas",
-        "license": "CC BY 2.0",
-    },
-    {
         "id": "doohan-2009",
         "title": "File:James Doohan, Scotty from Star Trek (3543379539).jpg",
-        "url": "https://upload.wikimedia.org/wikipedia/commons/e/e1/James_Doohan%2C_Scotty_from_Star_Trek_%283543379539%29.jpg",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/James_Doohan%2C_Scotty_from_Star_Trek_%283543379539%29.jpg/800px-James_Doohan%2C_Scotty_from_Star_Trek_%283543379539%29.jpg",
+        "origin_url": "https://upload.wikimedia.org/wikipedia/commons/e/e1/James_Doohan%2C_Scotty_from_Star_Trek_%283543379539%29.jpg",
         "page": "https://commons.wikimedia.org/wiki/File:James_Doohan,_Scotty_from_Star_Trek_(3543379539).jpg",
         "author": "Derek Hatfield",
         "license": "CC BY 2.0",
     },
 ]
-STILL = {
-    "id": "cadmar-still",
-    "title": "File:Cadmar.jpg",
-    "url": "https://static.wikia.nocookie.net/memoryalpha/images/a/ac/Cadmar.jpg/revision/latest?cb=20061128011223&path-prefix=en",
-    "page": "https://memory-alpha.fandom.com/wiki/File:Cadmar.jpg",
-}
 
 def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 def download(url: str, path: Path) -> None:
-    request = urllib.request.Request(
-        url, headers={"User-Agent": "undercast-cadmar-media-scout/1.0"}
-    )
-    with urllib.request.urlopen(request, timeout=120) as response:
-        path.write_bytes(response.read())
+    last = None
+    for attempt in range(1, 9):
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "undercast-cadmar-media-scout/1.0",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                path.write_bytes(response.read())
+            return
+        except urllib.error.HTTPError as exc:
+            last = exc
+            if exc.code != 429:
+                raise
+            time.sleep(attempt * 5)
+    raise RuntimeError(f"download remained rate-limited: {url}: {last}")
 
 remote_main = subprocess.check_output(
     ["git", "ls-remote", "origin", "refs/heads/main"], text=True
@@ -72,7 +68,7 @@ if remote_main != EXPECTED_MAIN:
     raise RuntimeError(f"main moved: expected {EXPECTED_MAIN}, got {remote_main}")
 
 rows = []
-for candidate in [STILL, *CANDIDATES]:
+for candidate in CANDIDATES:
     target = OUT / f"{candidate['id']}.jpg"
     download(candidate["url"], target)
     with Image.open(target) as image:
@@ -104,6 +100,7 @@ for name, box in crops.items():
         "id": name,
         "title": "Derived visual-review crop only",
         "url": CANDIDATES[0]["url"],
+        "origin_url": CANDIDATES[0]["origin_url"],
         "page": CANDIDATES[0]["page"],
         "author": "NASA",
         "license": "Public domain",
@@ -138,7 +135,7 @@ for index, tile in enumerate(tiles):
 sheet.save(OUT / "contact-sheet.jpg", quality=92)
 
 (OUT / "manifest.json").write_text(json.dumps({
-    "version": 1,
+    "version": 2,
     "transaction": "STAR-TREK-CADMAR-MEDIA-SCOUT",
     "canonical_parent": EXPECTED_MAIN,
     "items": rows,
