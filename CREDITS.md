@@ -301,6 +301,7 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **Fred Tatasciore** (UC-1380) — Gage Skidmore, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:2023_San_Diego_Comic-Con_International_by_Gage_Skidmore,_251.jpg)
 - **James Doohan** (UC-1381) — Donald Huebler, Public domain — [source](https://commons.wikimedia.org/wiki/File:ACTOR_JIM_DOOHAN_-_SCOTTY_ON_TELEVISION_SERIES_STAR_TREK_-_VISITING_THE_8X6_FOOT_WIND_TUNNEL_-_NARA_-_17471824.jpg)
 - **James Doohan** (UC-1382) — Donald Huebler, Public domain — [source](https://commons.wikimedia.org/wiki/File:ACTOR_JIM_DOOHAN_-_SCOTTY_ON_TELEVISION_SERIES_STAR_TREK_-_VISITING_THE_8X6_FOOT_WIND_TUNNEL_-_NARA_-_17471825.jpg)
+- **James Doohan** (UC-1383) — Donald Huebler, Public domain — [source](https://commons.wikimedia.org/wiki/File:ACTOR_JIM_DOOHAN_-_SCOTTY_ON_TELEVISION_SERIES_STAR_TREK_-_VISITING_THE_8X6_FOOT_WIND_TUNNEL_-_NARA_-_17471826.jpg)
 - **Vaughn Armstrong** (UC-140) — AFroese, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Vaughn_Armstrong.JPG)
 - **Suzie Plakson** (UC-141) — Eva Rinaldi, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Suzie_Plakson_in_2012.jpg)
 - **Carel Struycken** (UC-142) — Miguel Discart, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Carel_Struycken_March_2016.jpg)
@@ -785,8 +786,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **755**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **1009**
+- Free-licensed portraits (attributed above): **756**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **1010**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
 email and any specific asset comes down.
