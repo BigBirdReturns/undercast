@@ -1,0 +1,61 @@
+name: star-trek-cadmar-program-diagnostic
+
+on:
+  push:
+    branches:
+      - agent/star-trek-cadmar-program-diagnostic-v1
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      EXPECTED_MAIN: 62076ebd77b5834700b7a0b26b2907285c580fe0
+      LOCATOR_BRANCH: agent/star-trek-cadmar-program-diagnostic-locator-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Publish diagnostic locator
+        run: |
+          set -euo pipefail
+          remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test "$remote_main" = "$EXPECTED_MAIN"
+          mkdir -p /tmp/cadmar-program-diagnostic
+          cat > /tmp/cadmar-program-diagnostic/run.json <<JSON
+          {"run_id":$GITHUB_RUN_ID,"head_sha":"$GITHUB_SHA","canonical_parent":"$EXPECTED_MAIN"}
+          JSON
+          git fetch origin main --depth=1
+          git checkout --detach "$EXPECTED_MAIN"
+          git checkout -B "$LOCATOR_BRANCH"
+          mkdir -p transport/cadmar-program-diagnostic
+          cp /tmp/cadmar-program-diagnostic/run.json transport/cadmar-program-diagnostic/run.json
+          git config user.name undercast-cadmar-program-diagnostic
+          git config user.email cadmar-program-diagnostic@users.noreply.github.com
+          git add transport/cadmar-program-diagnostic/run.json
+          git commit -m 'Cadmar: publish program diagnostic locator'
+          git push --force origin "HEAD:refs/heads/$LOCATOR_BRANCH"
+          git checkout -B agent/star-trek-cadmar-program-diagnostic-v1 "$GITHUB_SHA"
+      - name: Extract actual Cadmar program values
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/cadmar-program-diagnostic/extracted
+          stat -c 'TAR_BYTES=%s' .github/cadmar-programs.tar.xz | tee /tmp/cadmar-program-diagnostic/values.txt
+          sha256sum .github/cadmar-programs.tar.xz | tee -a /tmp/cadmar-program-diagnostic/values.txt
+          tar -xJvf .github/cadmar-programs.tar.xz -C /tmp/cadmar-program-diagnostic/extracted | tee -a /tmp/cadmar-program-diagnostic/values.txt
+          find /tmp/cadmar-program-diagnostic/extracted -maxdepth 2 -type f -print -exec stat -c 'BYTES=%s' {} \; -exec sha256sum {} \; | tee -a /tmp/cadmar-program-diagnostic/values.txt
+          bash -n /tmp/cadmar-program-diagnostic/extracted/unitcadmar-controller.sh
+          node --check /tmp/cadmar-program-diagnostic/extracted/unitcadmar-stage.mjs
+          node --check /tmp/cadmar-program-diagnostic/extracted/unitcadmar-review.mjs
+          node --check /tmp/cadmar-program-diagnostic/extracted/unitcadmar-prior-phase.mjs
+          node --check /tmp/cadmar-program-diagnostic/extracted/unitcadmar-finalize.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-cadmar-program-diagnostic
+          path: /tmp/cadmar-program-diagnostic/
+          if-no-files-found: error
+          retention-days: 30
