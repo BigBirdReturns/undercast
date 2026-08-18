@@ -1,0 +1,91 @@
+name: star-trek-cadmar-program-recovery-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-cadmar-program-recovery-v2
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      EXPECTED_MAIN: 62076ebd77b5834700b7a0b26b2907285c580fe0
+      PRODUCT_BRANCH: agent/star-trek-cadmar-program-recovery-product-v2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Extract and verify Cadmar programs
+        run: |
+          set -euo pipefail
+          remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test "$remote_main" = "$EXPECTED_MAIN"
+          test "$(wc -c < .github/cadmar-programs.tar.xz | tr -d ' ')" = 17720
+          rm -rf /tmp/cadmar-program-recovery
+          mkdir -p /tmp/cadmar-program-recovery/programs
+          tar -xJf .github/cadmar-programs.tar.xz -C /tmp/cadmar-program-recovery/programs
+          printf '%s\n' \
+            '7b549fc412b66be406588b23ca81da7469fb0c3fcad411c0ca586a63623c7f3d  /tmp/cadmar-program-recovery/programs/unitcadmar-controller.sh' \
+            '2cb0ec7a81b6695270b7416acb689bedcb2b8ba6cd75b4f0d6b6c451f3191c2f  /tmp/cadmar-program-recovery/programs/unitcadmar-finalize.mjs' \
+            '46e713136579ff26a2da6cac98c63a3464cb9e01dc8c1c17779a3b8a061d0d56  /tmp/cadmar-program-recovery/programs/unitcadmar-prior-phase.mjs' \
+            '06cdff6e5ba6694bdafe775ccd211bc14ff2c1b5762c947d060e8c5e66fe8326  /tmp/cadmar-program-recovery/programs/unitcadmar-review.mjs' \
+            '67ca84cf6118775f9687da831d9e19048d426f2afc7a0188f5cef8354716b910  /tmp/cadmar-program-recovery/programs/unitcadmar-stage.mjs' > /tmp/cadmar-program-recovery/expected-sha256.txt
+          sha256sum -c /tmp/cadmar-program-recovery/expected-sha256.txt
+          bash -n /tmp/cadmar-program-recovery/programs/unitcadmar-controller.sh
+          node --check /tmp/cadmar-program-recovery/programs/unitcadmar-stage.mjs
+          node --check /tmp/cadmar-program-recovery/programs/unitcadmar-review.mjs
+          node --check /tmp/cadmar-program-recovery/programs/unitcadmar-prior-phase.mjs
+          node --check /tmp/cadmar-program-recovery/programs/unitcadmar-finalize.mjs
+          sha256sum .github/cadmar-programs.tar.xz > /tmp/cadmar-program-recovery/tar-sha256.txt
+          sha256sum /tmp/cadmar-program-recovery/programs/* > /tmp/cadmar-program-recovery/program-sha256.txt
+          export remote_main
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path('/tmp/cadmar-program-recovery')
+          tar_path = Path('.github/cadmar-programs.tar.xz')
+          files = []
+          for path in sorted((root / 'programs').iterdir()):
+              files.append({
+                  'path': path.name,
+                  'bytes': path.stat().st_size,
+                  'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+              })
+          payload = {
+              'version': 1,
+              'transaction': 'STAR-TREK-CADMAR-PROGRAM-RECOVERY-V2',
+              'run_id': int(os.environ['GITHUB_RUN_ID']),
+              'head_sha': os.environ['GITHUB_SHA'],
+              'canonical_parent': os.environ['remote_main'],
+              'tar_bytes': tar_path.stat().st_size,
+              'tar_sha256': hashlib.sha256(tar_path.read_bytes()).hexdigest(),
+              'files': files,
+          }
+          (root / 'manifest.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-cadmar-program-recovery-v2
+          path: /tmp/cadmar-program-recovery/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish recovered programs for read-back
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=1
+          git checkout --detach "$EXPECTED_MAIN"
+          git checkout -B "$PRODUCT_BRANCH"
+          rm -rf transport/cadmar-program-recovery-v2
+          mkdir -p transport/cadmar-program-recovery-v2
+          cp -a /tmp/cadmar-program-recovery/programs/. transport/cadmar-program-recovery-v2/
+          cp /tmp/cadmar-program-recovery/manifest.json transport/cadmar-program-recovery-v2/manifest.json
+          git config user.name undercast-cadmar-program-recovery
+          git config user.email cadmar-program-recovery@users.noreply.github.com
+          git add transport/cadmar-program-recovery-v2
+          git commit -m 'Cadmar: publish verified controller programs'
+          git push --force origin "HEAD:refs/heads/$PRODUCT_BRANCH"
