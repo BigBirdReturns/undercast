@@ -6,13 +6,16 @@ on:
       - agent/star-trek-cadmar-program-recovery-v1
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 jobs:
   recover:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      EXPECTED_MAIN: 62076ebd77b5834700b7a0b26b2907285c580fe0
+      PRODUCT_BRANCH: agent/star-trek-cadmar-program-recovery-product-v1
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,16 +24,59 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin 974ea1668633a56f1ad1b39e95adfb5cfe7fa799 --depth=1
-          mkdir -p /tmp/cadmar-program-recovery
+          rm -rf /tmp/cadmar-program-recovery
+          mkdir -p /tmp/cadmar-program-recovery/extracted
           git show 974ea1668633a56f1ad1b39e95adfb5cfe7fa799:.github/cadmar-programs.tar.xz > /tmp/cadmar-program-recovery/cadmar-programs.tar.xz
           sha256sum /tmp/cadmar-program-recovery/cadmar-programs.tar.xz | tee /tmp/cadmar-program-recovery/cadmar-programs.tar.xz.sha256
           wc -c /tmp/cadmar-program-recovery/cadmar-programs.tar.xz | tee /tmp/cadmar-program-recovery/cadmar-programs.tar.xz.bytes
-          mkdir -p /tmp/cadmar-program-recovery/extracted
           tar -xJf /tmp/cadmar-program-recovery/cadmar-programs.tar.xz -C /tmp/cadmar-program-recovery/extracted
           find /tmp/cadmar-program-recovery/extracted -maxdepth 2 -type f -print -exec sha256sum {} \; | tee /tmp/cadmar-program-recovery/extracted-files.txt
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path('/tmp/cadmar-program-recovery')
+          files = []
+          import hashlib
+          for path in sorted((root / 'extracted').rglob('*')):
+              if path.is_file():
+                  files.append({
+                      'path': str(path.relative_to(root)),
+                      'bytes': path.stat().st_size,
+                      'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                  })
+          payload = {
+              'version': 1,
+              'transaction': 'STAR-TREK-CADMAR-PROGRAM-RECOVERY',
+              'run_id': int(os.environ['GITHUB_RUN_ID']),
+              'head_sha': os.environ['GITHUB_SHA'],
+              'canonical_parent': os.environ['EXPECTED_MAIN'],
+              'source_commit': '974ea1668633a56f1ad1b39e95adfb5cfe7fa799',
+              'tar_bytes': (root / 'cadmar-programs.tar.xz').stat().st_size,
+              'tar_sha256': hashlib.sha256((root / 'cadmar-programs.tar.xz').read_bytes()).hexdigest(),
+              'files': files,
+          }
+          (root / 'manifest.json').write_text(json.dumps(payload, indent=2) + '\n')
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: star-trek-cadmar-program-recovery
           path: /tmp/cadmar-program-recovery/
           if-no-files-found: error
           retention-days: 30
+      - name: Publish recovered Cadmar programs for read-back
+        run: |
+          set -euo pipefail
+          remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test "$remote_main" = "$EXPECTED_MAIN"
+          git fetch origin main --depth=1
+          git checkout --detach "$EXPECTED_MAIN"
+          git checkout -B "$PRODUCT_BRANCH"
+          rm -rf transport/cadmar-program-recovery
+          mkdir -p transport/cadmar-program-recovery
+          cp -a /tmp/cadmar-program-recovery/extracted/. transport/cadmar-program-recovery/
+          cp /tmp/cadmar-program-recovery/manifest.json transport/cadmar-program-recovery/manifest.json
+          git config user.name undercast-cadmar-program-recovery
+          git config user.email cadmar-program-recovery@users.noreply.github.com
+          git add transport/cadmar-program-recovery
+          git commit -m 'Cadmar: publish recovered controller programs'
+          git push --force origin "HEAD:refs/heads/$PRODUCT_BRANCH"
