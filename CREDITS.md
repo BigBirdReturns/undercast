@@ -305,6 +305,7 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **James Doohan** (UC-1384) — NASA, Public domain — [source](https://commons.wikimedia.org/wiki/File:Star_Trek_Cast_and_Crew_Visit_NASA_Dryden_in_1967_(Doohan).jpg)
 - **James Doohan** (UC-1385) — NBC Television, Public domain — [source](https://commons.wikimedia.org/wiki/File:James_Doohan_Scotty_Star_Trek.JPG)
 - **James Doohan** (UC-1386) — Gestumblindi, Public domain — [source](https://commons.wikimedia.org/wiki/File:Doohan-portraet1.jpg)
+- **James Doohan** (UC-1387) — NASA, Public domain — [source](https://commons.wikimedia.org/wiki/File:Star_Trek_Cast_and_Crew_Visit_NASA_Dryden_in_1967.jpg)
 - **Vaughn Armstrong** (UC-140) — AFroese, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Vaughn_Armstrong.JPG)
 - **Suzie Plakson** (UC-141) — Eva Rinaldi, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Suzie_Plakson_in_2012.jpg)
 - **Carel Struycken** (UC-142) — Miguel Discart, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Carel_Struycken_March_2016.jpg)
@@ -789,8 +790,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **759**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **1013**
+- Free-licensed portraits (attributed above): **760**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **1014**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
 email and any specific asset comes down.
