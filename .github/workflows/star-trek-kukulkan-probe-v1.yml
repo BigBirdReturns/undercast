@@ -1,0 +1,285 @@
+name: star-trek-kukulkan-probe-v1
+
+on:
+  pull_request:
+    branches:
+      - agent/star-trek-kukulkan-probe-base-v1
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-kukulkan-probe
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: unitkukulkan-probe-v1
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_MAIN: af8c0891b38275889bc90ca76af763ce6dd9b59c
+      BUILDER_SOURCE_HEAD: 4e6fd81330fcb48ae26d5733fbbbba7e9de4c580
+      V4_WORKFLOW_COMMIT: 193426eb567a0843883cea9ffdac5e5c3d59b0cf
+      TEMPLATE_RUN: '32307192027'
+      TEMPLATE_ARTIFACT_ID: '9385129837'
+      TEMPLATE_ARTIFACT_DIGEST: 62b47d4491705bfc7beb60c0c0232d5a6965afc1f09e1abb1692f185eb5f0c63
+      TASK_ID: ap_8aa8780eda59987cb5a1de36
+      TASK_FINGERPRINT: 050c02df1dfe3bc8adfdef43a45d340d5256bc8c27986b4545cc2fb6bc63c3e2
+      TARGET_CHARACTER: Kukulkan
+      TARGET_PERFORMER: James Doohan
+      TARGET_SOURCE: https://memory-alpha.fandom.com/wiki/Kukulkan
+      TARGET_SLUG: kukulkan
+      TARGET_UNIT: kukulkan
+      TARGET_UPPER: KUKULKAN
+      RESULT_BRANCH: agent/star-trek-kukulkan-probe-result-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Preserve probe programs and select exact rail obligation
+        run: |
+          set -euo pipefail
+          cp .github/recovery/generalize-doohan-builder-v1.py /tmp/generalize-doohan-builder-v1.py
+          cp .github/recovery/patch-next-doohan-transform-v1.py /tmp/patch-next-doohan-transform-v1.py
+          python3 -m py_compile /tmp/generalize-doohan-builder-v1.py /tmp/patch-next-doohan-transform-v1.py
+          carrier_head="$(git rev-parse HEAD)"
+
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_MAIN"
+          git checkout --detach "$EXPECTED_MAIN"
+          node scripts/star-trek-kol-tai-cycle.mjs
+          node scripts/thesis-rails.mjs next --json > /tmp/kukulkan-next.json
+          test "$(jq -r .phase /tmp/kukulkan-next.json)" = ready-for-one-cycle
+          test "$(jq -r .candidate.task_id /tmp/kukulkan-next.json)" = "$TASK_ID"
+          test "$(jq -r .candidate.source_fingerprint /tmp/kukulkan-next.json)" = "$TASK_FINGERPRINT"
+          test "$(jq -r .candidate.character /tmp/kukulkan-next.json)" = "$TARGET_CHARACTER"
+          test "$(jq -r .candidate.performer /tmp/kukulkan-next.json)" = "$TARGET_PERFORMER"
+
+          task="$(jq -c --arg id "$TASK_ID" '.jobs[] | select(.id==$id)' data/AUTOPILOT.json)"
+          test -n "$task"
+          test "$(jq -r .status <<<"$task")" = queued
+          test "$(jq -r .source_fingerprint <<<"$task")" = "$TASK_FINGERPRINT"
+          test "$(jq -r .character <<<"$task")" = "$TARGET_CHARACTER"
+          test "$(jq -r .performer <<<"$task")" = "$TARGET_PERFORMER"
+          test "$(jq -r '.performance_modes | length' <<<"$task")" = 1
+          test "$(jq -r .performance_modes[0] <<<"$task")" = voice-animation
+          test "$(jq -r '.sources | length' <<<"$task")" = 1
+          test "$(jq -r .sources[0] <<<"$task")" = "$TARGET_SOURCE"
+          test "$(jq -r '.source_receipts | length' <<<"$task")" = 1
+
+          TASK_PRIORITY="$(jq -r .priority <<<"$task")"
+          TASK_REVISION="$(jq -r .source_receipts[0].revision <<<"$task")"
+          TASK_CONTENT_SHA256="$(jq -r .source_receipts[0].content_sha256 <<<"$task")"
+          WALL_ID="$(python3 - <<'PY'
+          import json,re
+          rows=json.load(open('data/specimens.json'))
+          values=[]
+          def walk(value):
+              if isinstance(value,dict):
+                  for item in value.values(): walk(item)
+              elif isinstance(value,list):
+                  for item in value: walk(item)
+              elif isinstance(value,str):
+                  match=re.fullmatch(r'UC-(\d+)',value)
+                  if match: values.append(int(match.group(1)))
+          walk(rows)
+          print(f'UC-{max(values)+1}')
+          PY
+          )"
+          test "$WALL_ID" = UC-1390
+          printf 'TASK_PRIORITY=%s\nTASK_REVISION=%s\nTASK_CONTENT_SHA256=%s\nWALL_ID=%s\n' \
+            "$TASK_PRIORITY" "$TASK_REVISION" "$TASK_CONTENT_SHA256" "$WALL_ID" >> "$GITHUB_ENV"
+
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/kukulkan-probe-v1
+          mkdir -p transport/kukulkan-probe-v1
+          jq -n \
+            --argjson version 1 \
+            --arg transaction STAR-TREK-KUKULKAN-PROBE-RUN-START-V1 \
+            --arg status started \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$carrier_head" \
+            --arg canonical_parent "$EXPECTED_MAIN" \
+            --arg task_id "$TASK_ID" \
+            --arg source_fingerprint "$TASK_FINGERPRINT" \
+            --arg character "$TARGET_CHARACTER" \
+            --arg performer "$TARGET_PERFORMER" \
+            --arg wall_id "$WALL_ID" \
+            '{version:$version,transaction:$transaction,status:$status,run_id:$run_id,head_sha:$head_sha,canonical_parent:$canonical_parent,task_id:$task_id,source_fingerprint:$source_fingerprint,character:$character,performer:$performer,wall_id:$wall_id}' \
+            > transport/kukulkan-probe-v1/run-start.json
+          git config user.name undercast-star-trek-kukulkan-probe
+          git config user.email star-trek-kukulkan-probe@users.noreply.github.com
+          git add transport/kukulkan-probe-v1/run-start.json
+          git commit -m 'Kukulkan: publish exact probe locator'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
+          git checkout --detach "$EXPECTED_MAIN"
+
+      - name: Recover and generalize exact source and media builder
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/contents/.github/workflows/star-trek-kol-tai-repair-v4.yml?ref=${V4_WORKFLOW_COMMIT}" --jq .content \
+            | tr -d '\n' | base64 -d > /tmp/star-trek-kol-tai-repair-v4.yml
+          test -s /tmp/star-trek-kol-tai-repair-v4.yml
+          python3 -m pip install --disable-pip-version-check --no-input PyYAML==6.0.2
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          source = Path('/tmp/star-trek-kol-tai-repair-v4.yml')
+          workflow = yaml.safe_load(source.read_text())
+          steps = workflow['jobs']['repair']['steps']
+          name = 'Regenerate exact Kol-Tai source and media from frozen custody'
+          matches = [step for step in steps if step.get('name') == name]
+          if len(matches) != 1 or not isinstance(matches[0].get('run'), str):
+              raise SystemExit(f'source run block drifted: {matches}')
+          text = matches[0]['run'].rstrip() + '\n'
+          old_test = 'test "$(jq -r .candidate.character /tmp/kol-tai-next-v4.json)" = \'Kol-Tai\''
+          new_test = 'test "$(jq -r .candidate.character /tmp/kol-tai-next-v4.json)" = "$TARGET_CHARACTER"'
+          if text.count(old_test) != 1:
+              raise SystemExit(f'candidate character assertion drifted: {text.count(old_test)}')
+          text = text.replace(old_test, new_test, 1)
+          marker = '          python3 /tmp/build-kol-tai-prep-v4.py\n'
+          insertion = (
+              '          export BUILDER_PATH=/tmp/build-kol-tai-prep-v4.py\n'
+              '          python3 /tmp/generalize-doohan-builder-v1.py /tmp/build-kol-tai-prep-v4.py\n'
+              + marker
+          )
+          if text.count(marker) != 1:
+              raise SystemExit(f'builder execution marker drifted: {text.count(marker)}')
+          text = text.replace(marker, insertion, 1)
+          Path('/tmp/kukulkan-source-run.sh').write_text(text)
+          PY
+          chmod +x /tmp/kukulkan-source-run.sh
+          grep -F 'generalize-doohan-builder-v1.py' /tmp/kukulkan-source-run.sh >/dev/null
+
+      - name: Freeze exact Kukulkan source and media
+        env:
+          SOURCE_HEAD: ${{ env.BUILDER_SOURCE_HEAD }}
+        run: |
+          set -euo pipefail
+          bash /tmp/kukulkan-source-run.sh
+          cp /tmp/kukulkan-next.json /tmp/kol-tai-prep-v4/thesis-next.json
+          jq -e --arg id "$TASK_ID" --arg parent "$EXPECTED_MAIN" --arg character "$TARGET_CHARACTER" --arg wall "$WALL_ID" '.task_id==$id and .canonical_parent==$parent and .character==$character and .wall_id==$wall and .maker_attribution=="unresolved" and .media_review.verdict=="pass" and (.facets|length)==2 and .source_collision==false and .byte_collision==false and .cross_facet_substitution==false' /tmp/kol-tai-prep-v4/media-preparation.json >/dev/null
+          jq -e --arg id "$TASK_ID" --arg source "$TARGET_SOURCE" '.id==$id and .sources==[$source] and .performance_modes==["voice-animation"] and .status=="queued"' /tmp/kol-tai-prep-v4/task.json >/dev/null
+          jq -e '.performance_mode=="voice-only" and .maker_attribution=="unresolved" and .kol_tai_role_not_conflated==true and .karl_four_role_not_conflated==true and .physical_performance=="not attributed to James Doohan"' /tmp/kol-tai-prep-v4/source-receipt.json >/dev/null
+
+      - name: Upload exact Kukulkan source and media
+        id: prep_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kukulkan-media-v1
+          path: /tmp/kol-tai-prep-v4/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Generate prior-bound Kukulkan controller
+        env:
+          PREP_ARTIFACT_ID: ${{ steps.prep_artifact.outputs.artifact-id }}
+          PREP_ARTIFACT_DIGEST: ${{ steps.prep_artifact.outputs.artifact-digest }}
+          PREP_RUN: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          PREP_JOB="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" --jq '.jobs[] | select(.name=="unitkukulkan-probe-v1") | .id' | head -n1)"
+          test -n "$PREP_JOB"
+          export PREP_JOB
+
+          template_meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${TEMPLATE_ARTIFACT_ID}")"
+          test "$(jq -r .expired <<<"$template_meta")" = false
+          test "$(jq -r .name <<<"$template_meta")" = star-trek-kol-tai-controller-source-v4
+          test "$(jq -r .workflow_run.id <<<"$template_meta")" = "$TEMPLATE_RUN"
+          test "$(jq -r .digest <<<"$template_meta")" = "sha256:${TEMPLATE_ARTIFACT_DIGEST}"
+          rm -rf /tmp/kol-tai-controller-template /tmp/kukulkan-controller-v1
+          mkdir -p /tmp/kol-tai-controller-template
+          gh run download "$TEMPLATE_RUN" -n star-trek-kol-tai-controller-source-v4 -D /tmp/kol-tai-controller-template
+
+          gh api "/repos/${GITHUB_REPOSITORY}/contents/.github/recovery/transform-kol-tai-controller-v1.base.py?ref=${BUILDER_SOURCE_HEAD}" --jq .content \
+            | tr -d '\n' | base64 -d > /tmp/transform-next-controller.py
+          test -s /tmp/transform-next-controller.py
+          export TRANSFORM_PATH=/tmp/transform-next-controller.py
+          python3 /tmp/patch-next-doohan-transform-v1.py /tmp/transform-next-controller.py
+          python3 -m py_compile /tmp/transform-next-controller.py
+
+          export TEMPLATE_ROOT=/tmp/kol-tai-controller-template
+          export PREP_ROOT=/tmp/kol-tai-prep-v4
+          export OUTPUT_ROOT=/tmp/kukulkan-controller-v1
+          export TEMPLATE_ARTIFACT_ID TEMPLATE_ARTIFACT_DIGEST PREP_ARTIFACT_ID PREP_ARTIFACT_DIGEST PREP_RUN PREP_JOB EXPECTED_MAIN
+          python3 /tmp/transform-next-controller.py
+          chmod +x /tmp/kukulkan-controller-v1/programs/*
+          bash -n /tmp/kukulkan-controller-v1/programs/unitkukulkan-controller.sh
+          node --check /tmp/kukulkan-controller-v1/programs/unitkukulkan-stage.mjs
+          node --check /tmp/kukulkan-controller-v1/programs/unitkukulkan-review.mjs
+          node --check /tmp/kukulkan-controller-v1/programs/unitkukulkan-prior-phase.mjs
+          node --check /tmp/kukulkan-controller-v1/programs/unitkukulkan-finalize.mjs
+          grep -R -F 'Star Trek: publish Kukulkan cycle' /tmp/kukulkan-controller-v1/programs >/dev/null
+          grep -R -F 'UC-1390' /tmp/kukulkan-controller-v1/programs >/dev/null
+          grep -R -F 'kol_tai_role_not_conflated' /tmp/kukulkan-controller-v1/programs >/dev/null
+          grep -R -F '1,806 tasks remain queued' /tmp/kukulkan-controller-v1/programs/unitkukulkan-prior-phase.mjs >/dev/null
+          grep -R -F '1,805 tasks remain queued' /tmp/kukulkan-controller-v1/programs/unitkukulkan-finalize.mjs >/dev/null
+          if grep -R -E 'ap_9e3a49dc256ff237dd30611b|0476f56a4959105661f22140254bf364c76c4ace7ac513c111233c75e99cf9d2|UC-1389|uc-1389-' /tmp/kukulkan-controller-v1/programs; then
+            echo 'Kukulkan controller retained current-product residue' >&2
+            exit 1
+          fi
+
+      - name: Upload exact Kukulkan controller source
+        id: controller_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kukulkan-controller-source-v1
+          path: /tmp/kukulkan-controller-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Seal non-mutating Kukulkan probe
+        env:
+          PREP_ARTIFACT_ID: ${{ steps.prep_artifact.outputs.artifact-id }}
+          PREP_ARTIFACT_DIGEST: ${{ steps.prep_artifact.outputs.artifact-digest }}
+          CONTROLLER_ARTIFACT_ID: ${{ steps.controller_artifact.outputs.artifact-id }}
+          CONTROLLER_ARTIFACT_DIGEST: ${{ steps.controller_artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$EXPECTED_MAIN"
+          rm -rf /tmp/kukulkan-probe-receipt-v1
+          mkdir -p /tmp/kukulkan-probe-receipt-v1
+          cp /tmp/kol-tai-prep-v4/source-receipt.json /tmp/kukulkan-probe-receipt-v1/
+          cp /tmp/kol-tai-prep-v4/media-preparation.json /tmp/kukulkan-probe-receipt-v1/
+          cp /tmp/kukulkan-controller-v1/controller-source-manifest.json /tmp/kukulkan-probe-receipt-v1/
+          cp /tmp/kukulkan-next.json /tmp/kukulkan-probe-receipt-v1/thesis-next.json
+          jq -n \
+            --argjson version 1 \
+            --arg transaction STAR-TREK-KUKULKAN-PROBE-V1 \
+            --arg status success \
+            --argjson workflow_run "$GITHUB_RUN_ID" \
+            --arg workflow_head "$GITHUB_SHA" \
+            --arg canonical_parent "$EXPECTED_MAIN" \
+            --arg task_id "$TASK_ID" \
+            --arg source_fingerprint "$TASK_FINGERPRINT" \
+            --arg character "$TARGET_CHARACTER" \
+            --arg performer "$TARGET_PERFORMER" \
+            --arg wall_id "$WALL_ID" \
+            --argjson prep_artifact "$PREP_ARTIFACT_ID" \
+            --arg prep_digest "$PREP_ARTIFACT_DIGEST" \
+            --argjson controller_artifact "$CONTROLLER_ARTIFACT_ID" \
+            --arg controller_digest "$CONTROLLER_ARTIFACT_DIGEST" \
+            '{version:$version,transaction:$transaction,status:$status,workflow_run:$workflow_run,workflow_head:$workflow_head,canonical_parent:$canonical_parent,task_id:$task_id,source_fingerprint:$source_fingerprint,character:$character,performer:$performer,wall_id:$wall_id,artifacts:{preparation:{id:$prep_artifact,digest:$prep_digest},controller:{id:$controller_artifact,digest:$controller_digest}},canonical_mutation:false,lease_taken:false}' \
+            > /tmp/kukulkan-probe-receipt-v1/kukulkan-probe-v1.json
+
+      - name: Upload sealed Kukulkan probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kukulkan-probe-v1
+          path: /tmp/kukulkan-probe-receipt-v1/
+          if-no-files-found: error
+          retention-days: 30
