@@ -1,0 +1,476 @@
+name: star-trek-doohan-rail-custodian-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-doohan-rail-custodian-v2
+
+concurrency:
+  group: star-trek-doohan-rail-custodian-v2
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  custody:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CUSTODIAN_BRANCH: agent/star-trek-doohan-rail-custodian-v2
+      RESULT_BRANCH: agent/star-trek-doohan-rail-custodian-result-v2
+      TERMINAL_STATE_BRANCH: agent/star-trek-continuation-terminal-result-v1
+      NEXT_RAIL_BRANCH: agent/star-trek-doohan-rail-next-v1
+      NEXT_RESULT_BRANCH: agent/star-trek-doohan-rail-next-result-v1
+      KARL_FOUR_COMMIT: 31832ca882b9b8d2a76f4a7f2d679844d7bde5ba
+      MAX_CYCLES: '12'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Publish rail-custodian run locator
+        run: |
+          set -euo pipefail
+          carrier_head="$(git rev-parse HEAD)"
+          live_sha="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$live_sha"
+          git checkout --detach "$live_sha"
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/doohan-rail-custodian-v2
+          mkdir -p transport/doohan-rail-custodian-v2
+          jq -n \
+            --argjson version 2 \
+            --arg transaction STAR-TREK-DOOHAN-RAIL-CUSTODIAN-RUN-START-V2 \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --arg workflow_head "$carrier_head" \
+            --arg observed_main "$live_sha" \
+            --arg status started \
+            '{version:$version,transaction:$transaction,run_id:$run_id,workflow_head:$workflow_head,observed_main:$observed_main,status:$status}' \
+            > transport/doohan-rail-custodian-v2/run-start.json
+          git config user.name undercast-star-trek-rail-custodian
+          git config user.email star-trek-rail-custodian@users.noreply.github.com
+          git add transport/doohan-rail-custodian-v2/run-start.json
+          git commit -m 'Star Trek: publish Doohan rail-custodian v2 locator'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
+          git checkout --detach "$carrier_head"
+
+      - name: Run guarded deterministic rail
+        id: custodian
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          root=/tmp/doohan-rail-custodian-v2
+          state="$root/final-state.json"
+          ledger="$root/iterations.jsonl"
+          mkdir -p "$root"
+          : > "$ledger"
+          jq -n \
+            --argjson version 2 \
+            --arg transaction STAR-TREK-DOOHAN-RAIL-CUSTODIAN-V2 \
+            --arg status running \
+            --argjson workflow_run "$GITHUB_RUN_ID" \
+            --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{version:$version,transaction:$transaction,status:$status,workflow_run:$workflow_run,started_at:$started_at,iterations:[]}' \
+            > "$state"
+          deadline=$((SECONDS + 20500))
+
+          write_status() {
+            local status="$1"
+            local reason="$2"
+            local current_main="${3:-}"
+            local current_character="${4:-}"
+            local next_task="${5:-}"
+            jq \
+              --arg status "$status" \
+              --arg reason "$reason" \
+              --arg current_main "$current_main" \
+              --arg current_character "$current_character" \
+              --arg next_task "$next_task" \
+              --arg sealed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              --slurpfile rows "$ledger" \
+              '.status=$status | .reason=$reason | .current_main=$current_main | .current_character=$current_character | .next_task_id=$next_task | .sealed_at=$sealed_at | .iterations=$rows' \
+              "$state" > "$state.tmp"
+            mv "$state.tmp" "$state"
+          }
+
+          block() {
+            local reason="$1"
+            write_status blocked "$reason" "${current_main:-}" "${current_character:-}" "${target_task_id:-}"
+            printf 'status=blocked\n' >> "$GITHUB_OUTPUT"
+            printf 'reason=%s\n' "$reason" >> "$GITHUB_OUTPUT"
+            exit 1
+          }
+
+          boundary() {
+            local reason="$1"
+            write_status boundary "$reason" "${current_main:-}" "${current_character:-}" "${target_task_id:-}"
+            printf 'status=boundary\n' >> "$GITHUB_OUTPUT"
+            printf 'reason=%s\n' "$reason" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          trap 'rc=$?; if test $rc -ne 0 && test "$(jq -r .status "$state" 2>/dev/null || echo running)" = running; then write_status blocked "unexpected shell failure at line ${LINENO}" "${current_main:-}" "${current_character:-}" "${target_task_id:-}"; printf "status=blocked\nreason=unexpected shell failure at line %s\n" "$LINENO" >> "$GITHUB_OUTPUT"; fi; exit $rc' ERR
+
+          decode_terminal() {
+            local encoded
+            encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/transport/continuation-terminal-v1/terminal-state.json?ref=${TERMINAL_STATE_BRANCH}" --jq .content 2>/dev/null || true)"
+            test -n "$encoded" || return 1
+            printf '%s' "$encoded" | tr -d '\n' | base64 -d
+          }
+
+          verify_product_checkout() {
+            local commit="$1"
+            local character="$2"
+            local slug
+            slug="$(python3 -c 'import re,sys; print(re.sub(r"[^a-z0-9]+", "-", sys.argv[1].lower()).strip("-"))' "$character")"
+            git fetch --filter=blob:none --no-tags origin "$commit"
+            git checkout --detach FETCH_HEAD
+            test -f "scripts/star-trek-${slug}-cycle.mjs"
+            node "scripts/star-trek-${slug}-cycle.mjs"
+            node scripts/thesis-rails-fixtures.mjs
+            node scripts/thesis-rails.mjs validate --json
+            node scripts/thesis-rails.mjs next --json > "$root/next-${cycle_index}.json"
+          }
+
+          find_execution_custody() {
+            local product="$1"
+            local out_receipt="$2"
+            local artifacts artifact_id meta digest receipt
+            artifacts="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/artifacts" -f per_page=100)"
+            jq -r '[.artifacts[] | select(.expired == false and (.name | ascii_downcase | contains("execution")))] | sort_by(.created_at) | reverse | .[].id' <<<"$artifacts" > "$root/execution-artifact-ids.txt"
+            while IFS= read -r artifact_id; do
+              test -n "$artifact_id" || continue
+              rm -rf "$root/execution-probe"
+              rm -f "$root/execution-probe.zip"
+              mkdir -p "$root/execution-probe"
+              meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}" 2>/dev/null || true)"
+              test -n "$meta" || continue
+              test "$(jq -r .expired <<<"$meta")" = false || continue
+              digest="$(jq -r .digest <<<"$meta" | sed 's/^sha256://')"
+              gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$root/execution-probe.zip" 2>/dev/null || continue
+              echo "$digest  $root/execution-probe.zip" | sha256sum -c - >/dev/null 2>&1 || continue
+              unzip -q "$root/execution-probe.zip" -d "$root/execution-probe" || continue
+              while IFS= read -r receipt; do
+                if jq -e --arg product "$product" '.status == "success" and .product.commit == $product and (.artifacts.controller.id | type == "number") and .artifacts.controller.id > 0' "$receipt" >/dev/null 2>&1; then
+                  controller_id="$(jq -r .artifacts.controller.id "$receipt")"
+                  controller_meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${controller_id}" 2>/dev/null || true)"
+                  test -n "$controller_meta" || continue
+                  test "$(jq -r .expired <<<"$controller_meta")" = false || continue
+                  cp "$receipt" "$out_receipt"
+                  execution_artifact_id="$artifact_id"
+                  return 0
+                fi
+              done < <(find "$root/execution-probe" -type f -name '*.json' | sort)
+            done < "$root/execution-artifact-ids.txt"
+            return 1
+          }
+
+          find_pages() {
+            local product="$1"
+            local runs page_run conclusion deployments deployment_id statuses state_value
+            pages_kind=''
+            pages_id=''
+            runs="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" -f head_sha="$product" -f per_page=100)"
+            page_run="$(jq -c '[.workflow_runs[] | select((((.name // "") | ascii_downcase | contains("pages")) or (((.path // "") | ascii_downcase | contains("pages")))))] | sort_by(.created_at) | last // empty' <<<"$runs")"
+            if test -n "$page_run"; then
+              conclusion="$(jq -r .conclusion <<<"$page_run")"
+              if test "$conclusion" = success; then
+                pages_kind=actions
+                pages_id="$(jq -r .id <<<"$page_run")"
+                return 0
+              fi
+              if test "$conclusion" = failure || test "$conclusion" = cancelled || test "$conclusion" = timed_out; then
+                return 2
+              fi
+            fi
+            deployments="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/deployments" -f sha="$product" -f environment=github-pages -f per_page=20 2>/dev/null || printf '[]')"
+            deployment_id="$(jq -r 'sort_by(.created_at) | last | .id // empty' <<<"$deployments")"
+            if test -n "$deployment_id"; then
+              statuses="$(gh api "/repos/${GITHUB_REPOSITORY}/deployments/${deployment_id}/statuses?per_page=20")"
+              state_value="$(jq -r 'sort_by(.created_at) | last | .state // empty' <<<"$statuses")"
+              if test "$state_value" = success; then
+                pages_kind=deployment
+                pages_id="$deployment_id"
+                return 0
+              fi
+              if test "$state_value" = failure || test "$state_value" = error || test "$state_value" = inactive; then
+                return 2
+              fi
+            fi
+            return 1
+          }
+
+          publish_terminal_state() {
+            local product="$1"
+            local tree="$2"
+            local character="$3"
+            local predecessor="$4"
+            local next_file="$5"
+            git fetch --filter=blob:none --no-tags origin "$product"
+            git checkout --detach FETCH_HEAD
+            git checkout -B "$TERMINAL_STATE_BRANCH"
+            rm -rf transport/continuation-terminal-v1
+            mkdir -p transport/continuation-terminal-v1
+            jq -n \
+              --argjson version 1 \
+              --arg transaction STAR-TREK-CONTINUATION-TERMINAL-STATE-V1 \
+              --arg status completed \
+              --arg reason 'Product, checker, Pages, and execution custody verified by Doohan rail custodian v2' \
+              --arg current_main "$product" \
+              --arg current_tree "$tree" \
+              --arg current_character "$character" \
+              --arg predecessor "$predecessor" \
+              --arg pages_kind "$pages_kind" \
+              --arg pages_id "$pages_id" \
+              --argjson execution_artifact "$execution_artifact_id" \
+              --argjson controller_artifact "$controller_id" \
+              --slurpfile next "$next_file" \
+              '{version:$version,transaction:$transaction,status:$status,reason:$reason,current_main:$current_main,current_tree:$current_tree,current_character:$current_character,predecessor:$predecessor,pages:{kind:$pages_kind,id:$pages_id},execution_artifact:$execution_artifact,controller_artifact:$controller_artifact,next:$next[0]}' \
+              > transport/continuation-terminal-v1/terminal-state.json
+            git config user.name undercast-star-trek-rail-custodian
+            git config user.email star-trek-rail-custodian@users.noreply.github.com
+            git add transport/continuation-terminal-v1/terminal-state.json
+            git commit -m "Star Trek: publish ${character} continuation custody"
+            git push --force origin "HEAD:refs/heads/${TERMINAL_STATE_BRANCH}"
+          }
+
+          # Do not compete with the Kol-Tai product runner. Start only after
+          # Kol-Tai or a later verified descendant is both live and terminally receipted.
+          current_main=''
+          current_character=''
+          while test "$SECONDS" -lt "$deadline"; do
+            live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+            live_sha="$(jq -r .sha <<<"$live")"
+            if test "$live_sha" = "$KARL_FOUR_COMMIT"; then
+              sleep 15
+              continue
+            fi
+            terminal="$(decode_terminal 2>/dev/null || true)"
+            if test -n "$terminal" \
+              && test "$(jq -r .status <<<"$terminal")" = completed \
+              && test "$(jq -r .current_main <<<"$terminal")" = "$live_sha" \
+              && test "$(jq -r .current_character <<<"$terminal")" != 'Karl Four'; then
+              current_main="$live_sha"
+              current_character="$(jq -r .current_character <<<"$terminal")"
+              break
+            fi
+            sleep 15
+          done
+          test -n "$current_main" || block 'timed out waiting for verified Kol-Tai-or-later terminal custody'
+
+          cycle_index=0
+          while test "$cycle_index" -lt "$MAX_CYCLES"; do
+            cycle_index=$((cycle_index + 1))
+            test "$SECONDS" -lt "$deadline" || block 'global rail-custodian deadline reached'
+            live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+            test "$(jq -r .sha <<<"$live")" = "$current_main" || block 'live main moved outside the verified terminal-state lease'
+            verify_product_checkout "$current_main" "$current_character" || block "current product checker or thesis rail failed for ${current_character}"
+            if test "$cycle_index" = 1; then
+              test -f scripts/star-trek-kol-tai-cycle.mjs || block 'Kol-Tai checker absent from first verified continuation product'
+              node scripts/star-trek-kol-tai-cycle.mjs || block 'Kol-Tai predecessor custody failed before rail continuation'
+            fi
+
+            next_file="$root/next-${cycle_index}.json"
+            phase="$(jq -r '.phase // empty' "$next_file")"
+            if test "$phase" != ready-for-one-cycle; then
+              boundary "thesis rail phase is ${phase:-unset} after ${current_character}"
+            fi
+            target_task_id="$(jq -r '.candidate.task_id // empty' "$next_file")"
+            target_fingerprint="$(jq -r '.candidate.source_fingerprint // empty' "$next_file")"
+            target_character="$(jq -r '.candidate.character // empty' "$next_file")"
+            target_performer="$(jq -r '.candidate.performer // empty' "$next_file")"
+            target_scope="$(jq -r '.candidate.scope // .scope // empty' "$next_file")"
+            test -n "$target_task_id" || boundary "thesis rail returned no next task after ${current_character}"
+            task="$(jq -c --arg id "$target_task_id" '.jobs[] | select(.id == $id)' data/AUTOPILOT.json)"
+            test -n "$task" || block "next task ${target_task_id} is absent from Autopilot"
+            test "$(jq -r .status <<<"$task")" = queued || block "next task ${target_task_id} is not queued"
+            test "$(jq -r .source_fingerprint <<<"$task")" = "$target_fingerprint" || block "next task fingerprint drifted for ${target_task_id}"
+            if test "$target_performer" != 'James Doohan' \
+              || test "$target_scope" != star-trek \
+              || test "$(jq -r '.performance_modes | length' <<<"$task")" != 1 \
+              || test "$(jq -r '.performance_modes[0]' <<<"$task")" != voice-animation; then
+              boundary "next identity is outside the bounded Star Trek James Doohan voice-animation lane: ${target_character} / ${target_performer} / ${target_scope}"
+            fi
+
+            # Reuse a trigger already emitted by the independent post-success
+            # custodian. Otherwise add exactly one transport-only trigger.
+            git fetch --filter=blob:none --no-tags origin "$NEXT_RAIL_BRANCH" || block 'generic Doohan rail branch is unavailable'
+            git checkout -B "$NEXT_RAIL_BRANCH" FETCH_HEAD
+            existing="$(python3 - "$current_main" "$target_task_id" <<'PY'
+          from pathlib import Path
+          import json,sys
+          parent,task=sys.argv[1:]
+          rows=[]
+          root=Path('transport/doohan-rail-next-v1')
+          if root.exists():
+              for path in sorted(root.glob('*.json')):
+                  try: data=json.loads(path.read_text())
+                  except Exception: continue
+                  if data.get('canonical_parent') == parent or data.get('task_id') == task:
+                      rows.append(str(path))
+          print(rows[-1] if rows else '')
+          PY
+            )"
+            if test -z "$existing"; then
+              trigger_path="transport/doohan-rail-next-v1/custodian-${GITHUB_RUN_ID}-${cycle_index}.json"
+              mkdir -p "$(dirname "$trigger_path")"
+              jq -n \
+                --argjson version 2 \
+                --arg transaction STAR-TREK-DOOHAN-RAIL-CUSTODIAN-TRIGGER-V2 \
+                --argjson custodian_run "$GITHUB_RUN_ID" \
+                --argjson iteration "$cycle_index" \
+                --arg canonical_parent "$current_main" \
+                --arg prior_character "$current_character" \
+                --arg task_id "$target_task_id" \
+                --arg source_fingerprint "$target_fingerprint" \
+                --arg character "$target_character" \
+                --arg status requested \
+                '{version:$version,transaction:$transaction,custodian_run:$custodian_run,iteration:$iteration,canonical_parent:$canonical_parent,prior_character:$prior_character,task_id:$task_id,source_fingerprint:$source_fingerprint,character:$character,status:$status}' \
+                > "$trigger_path"
+              git config user.name undercast-star-trek-rail-custodian
+              git config user.email star-trek-rail-custodian@users.noreply.github.com
+              git add "$trigger_path"
+              git commit -m "Star Trek: trigger ${target_character} deterministic rail"
+              git push origin "HEAD:refs/heads/${NEXT_RAIL_BRANCH}" || block "failed to publish unique rail trigger for ${target_character}"
+            fi
+
+            # Bind the exact generic workflow run through its own locator.
+            generic_run_id=''
+            while test "$SECONDS" -lt "$deadline"; do
+              encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/transport/doohan-rail-next-v1/run-start.json?ref=${NEXT_RESULT_BRANCH}" --jq .content 2>/dev/null || true)"
+              if test -n "$encoded"; then
+                locator="$(printf '%s' "$encoded" | tr -d '\n' | base64 -d)"
+                if test "$(jq -r '.canonical_parent // empty' <<<"$locator")" = "$current_main" \
+                  && test "$(jq -r '.task_id // empty' <<<"$locator")" = "$target_task_id" \
+                  && test "$(jq -r '.character // empty' <<<"$locator")" = "$target_character"; then
+                  generic_run_id="$(jq -r .run_id <<<"$locator")"
+                  break
+                fi
+              fi
+              sleep 10
+            done
+            test -n "$generic_run_id" || block "timed out waiting for the exact generic rail run for ${target_character}"
+
+            new_main=''
+            generic_conclusion=''
+            while test "$SECONDS" -lt "$deadline"; do
+              live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+              live_sha="$(jq -r .sha <<<"$live")"
+              run="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${generic_run_id}" 2>/dev/null || true)"
+              if test "$live_sha" != "$current_main"; then
+                new_main="$live_sha"
+              fi
+              if test -n "$run" && test "$(jq -r .status <<<"$run")" = completed; then
+                generic_conclusion="$(jq -r .conclusion <<<"$run")"
+                if test -n "$new_main"; then break; fi
+                if test "$generic_conclusion" = failure || test "$generic_conclusion" = cancelled || test "$generic_conclusion" = timed_out; then
+                  break
+                fi
+              fi
+              sleep 10
+            done
+            test -n "$new_main" || block "generic rail run ${generic_run_id} ended without publishing ${target_character}; conclusion=${generic_conclusion:-unknown}"
+
+            new_commit="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/${new_main}")"
+            test "$(jq -r .commit.message <<<"$new_commit")" = "Star Trek: publish ${target_character} cycle" || block "new main has an unexpected product message after ${current_character}"
+            test "$(jq -r '.parents | length' <<<"$new_commit")" = 1 || block "${target_character} product is not single-parent"
+            test "$(jq -r '.parents[0].sha' <<<"$new_commit")" = "$current_main" || block "${target_character} product parent is not ${current_character}"
+            new_tree="$(jq -r .commit.tree.sha <<<"$new_commit")"
+            predecessor="$current_main"
+            previous_character="$current_character"
+            current_main="$new_main"
+            current_character="$target_character"
+            verify_product_checkout "$current_main" "$current_character" || block "published ${current_character} checker or thesis rail failed"
+            verified_next="$root/next-${cycle_index}.json"
+
+            execution_artifact_id=''
+            controller_id=''
+            pages_kind=''
+            pages_id=''
+            custody_receipt="$root/execution-${cycle_index}.json"
+            while test "$SECONDS" -lt "$deadline"; do
+              test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$current_main" || block "main moved before ${current_character} custody closed"
+              pages_rc=1
+              find_pages "$current_main" || pages_rc=$?
+              test "$pages_rc" != 2 || block "Pages failed for ${current_character}"
+              execution_rc=1
+              find_execution_custody "$current_main" "$custody_receipt" || execution_rc=$?
+              if test "$pages_rc" = 0 && test "$execution_rc" = 0; then break; fi
+              sleep 10
+            done
+            test -n "$pages_kind" || block "timed out waiting for Pages publication for ${current_character}"
+            test -n "$execution_artifact_id" || block "timed out waiting for execution custody for ${current_character}"
+            test "$controller_id" -gt 0 || block "execution custody has no live controller artifact for ${current_character}"
+
+            publish_terminal_state "$current_main" "$new_tree" "$current_character" "$predecessor" "$verified_next"
+            jq -n \
+              --argjson iteration "$cycle_index" \
+              --arg predecessor_commit "$predecessor" \
+              --arg predecessor_character "$previous_character" \
+              --arg task_id "$target_task_id" \
+              --arg character "$current_character" \
+              --arg product_commit "$current_main" \
+              --arg product_tree "$new_tree" \
+              --argjson generic_run "$generic_run_id" \
+              --arg generic_conclusion "$generic_conclusion" \
+              --arg pages_kind "$pages_kind" \
+              --arg pages_id "$pages_id" \
+              --argjson execution_artifact "$execution_artifact_id" \
+              --argjson controller_artifact "$controller_id" \
+              --arg status verified \
+              '{iteration:$iteration,predecessor:{commit:$predecessor_commit,character:$predecessor_character},task_id:$task_id,character:$character,product:{commit:$product_commit,tree:$product_tree},generic_run:{id:$generic_run,conclusion:$generic_conclusion},pages:{kind:$pages_kind,id:$pages_id},execution_artifact:$execution_artifact,controller_artifact:$controller_artifact,status:$status}' \
+              >> "$ledger"
+          done
+
+          boundary "bounded custodian cycle cap ${MAX_CYCLES} reached after ${current_character}"
+
+      - name: Upload rail-custodian terminal package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-doohan-rail-custodian-v2
+          path: /tmp/doohan-rail-custodian-v2/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Seal rail-custodian result branch
+        if: always()
+        run: |
+          set -euo pipefail
+          test -f /tmp/doohan-rail-custodian-v2/final-state.json
+          git fetch --filter=blob:none --no-tags origin "$RESULT_BRANCH"
+          git checkout --detach FETCH_HEAD
+          cp /tmp/doohan-rail-custodian-v2/final-state.json transport/doohan-rail-custodian-v2/final-state.json
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          start_path=Path('transport/doohan-rail-custodian-v2/run-start.json')
+          final_path=Path('transport/doohan-rail-custodian-v2/final-state.json')
+          start=json.loads(start_path.read_text())
+          final=json.loads(final_path.read_text())
+          start['status']=final.get('status')
+          start['reason']=final.get('reason')
+          start['current_main']=final.get('current_main')
+          start['current_character']=final.get('current_character')
+          start['next_task_id']=final.get('next_task_id')
+          start['sealed_at']=final.get('sealed_at')
+          start_path.write_text(json.dumps(start,indent=2)+'\n')
+          PY
+          git config user.name undercast-star-trek-rail-custodian
+          git config user.email star-trek-rail-custodian@users.noreply.github.com
+          git add transport/doohan-rail-custodian-v2
+          git commit -m 'Star Trek: seal Doohan rail-custodian v2 state'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+      - name: Fail closed on blocked custody
+        if: steps.custodian.outcome == 'failure'
+        run: exit 1
