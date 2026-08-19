@@ -1,0 +1,329 @@
+name: kol-tai-lean-executor-v1
+
+on:
+  pull_request:
+    branches:
+      - agent/kol-tai-lean-base-v1
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: kol-tai-exact-product
+  cancel-in-progress: false
+
+jobs:
+  execute:
+    name: unitkoltai-repair-v4
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_MAIN: 31832ca882b9b8d2a76f4a7f2d679844d7bde5ba
+      V4_WORKFLOW_COMMIT: 193426eb567a0843883cea9ffdac5e5c3d59b0cf
+      SOURCE_HEAD: 4e6fd81330fcb48ae26d5733fbbbba7e9de4c580
+      SOURCE_RUN: '32214946121'
+      TASK_ID: ap_9e3a49dc256ff237dd30611b
+      TASK_FINGERPRINT: 0476f56a4959105661f22140254bf364c76c4ace7ac513c111233c75e99cf9d2
+      WALL_ID: UC-1389
+      TEMP_BRANCH: agent/star-trek-kol-tai-repair-v4
+      CANDIDATE_BRANCH: agent/star-trek-kol-tai-candidate-v4
+      RESULT_BRANCH: agent/star-trek-kol-tai-result-v4
+      SOURCE_RESULT_BRANCH: agent/star-trek-kol-tai-result-v1
+      PREP_ARTIFACT_NAME: star-trek-kol-tai-media-v4
+      PREP_HEAD_BRANCH: agent/star-trek-kol-tai-repair-v4
+      TEMPLATE_ARTIFACT_ID: '9348091288'
+      TEMPLATE_ARTIFACT_DIGEST: 25c34f3e6d278c605a4f876584df9588684a3dda34b67b3879d97855e800b49b
+      TEMPLATE_RUN: '32202774107'
+      LEAN_RESULT_BRANCH: agent/kol-tai-lean-result-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Publish lean executor run locator
+        run: |
+          set -euo pipefail
+          carrier_head="$(git rev-parse HEAD)"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_MAIN"
+          git checkout --detach "$EXPECTED_MAIN"
+          git checkout -B "$LEAN_RESULT_BRANCH"
+          rm -rf transport/kol-tai-lean-executor-v1
+          mkdir -p transport/kol-tai-lean-executor-v1
+          jq -n \
+            --argjson version 1 \
+            --arg transaction KOL-TAI-LEAN-EXECUTOR-RUN-START-V1 \
+            --arg status started \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$carrier_head" \
+            --arg canonical_parent "$EXPECTED_MAIN" \
+            --arg source_head "$SOURCE_HEAD" \
+            --arg task_id "$TASK_ID" \
+            '{version:$version,transaction:$transaction,status:$status,run_id:$run_id,head_sha:$head_sha,canonical_parent:$canonical_parent,source_head:$source_head,task_id:$task_id}' \
+            > transport/kol-tai-lean-executor-v1/run-start.json
+          git config user.name undercast-kol-tai-lean-executor
+          git config user.email kol-tai-lean-executor@users.noreply.github.com
+          git add transport/kol-tai-lean-executor-v1/run-start.json
+          git commit -m 'Kol-Tai: publish lean executor locator'
+          git push --force origin "HEAD:refs/heads/${LEAN_RESULT_BRANCH}"
+          git checkout --detach "$carrier_head"
+
+      - name: Cancel legacy carriers and recover exact v4 run programs
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$EXPECTED_MAIN"
+          rm -f /tmp/kol-tai-legacy-runs.txt
+          for status in in_progress queued; do
+            gh api --paginate "/repos/${GITHUB_REPOSITORY}/actions/runs?status=${status}&per_page=100" \
+              | jq -r '.workflow_runs[] | select((.head_branch // "") | test("^agent/star-trek-kol-tai-(cycle|repair)")) | .id' \
+              >> /tmp/kol-tai-legacy-runs.txt
+          done
+          touch /tmp/kol-tai-legacy-runs.txt
+          LC_ALL=C sort -nu /tmp/kol-tai-legacy-runs.txt -o /tmp/kol-tai-legacy-runs.txt
+          while IFS= read -r run_id; do
+            test -n "$run_id" || continue
+            if test "$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .status)" != completed; then
+              gh api --method POST "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null
+            fi
+          done < /tmp/kol-tai-legacy-runs.txt
+          for i in $(seq 1 120); do
+            remaining=0
+            while IFS= read -r run_id; do
+              test -n "$run_id" || continue
+              test "$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .status)" = completed || remaining=$((remaining + 1))
+            done < /tmp/kol-tai-legacy-runs.txt
+            test "$remaining" -eq 0 && break
+            sleep 5
+          done
+          while IFS= read -r run_id; do
+            test -n "$run_id" || continue
+            test "$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .status)" = completed
+          done < /tmp/kol-tai-legacy-runs.txt
+
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_MAIN"
+          git checkout --detach "$EXPECTED_MAIN"
+          node scripts/star-trek-karl-four-cycle.mjs
+
+          gh api "/repos/${GITHUB_REPOSITORY}/contents/.github/workflows/star-trek-kol-tai-repair-v4.yml?ref=${V4_WORKFLOW_COMMIT}" --jq .content \
+            | tr -d '\n' | base64 -d > /tmp/star-trek-kol-tai-repair-v4.yml
+          test -s /tmp/star-trek-kol-tai-repair-v4.yml
+          python3 -m pip install --disable-pip-version-check --no-input PyYAML==6.0.2
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          workflow = yaml.safe_load(Path('/tmp/star-trek-kol-tai-repair-v4.yml').read_text())
+          steps = workflow['jobs']['repair']['steps']
+          wanted = {
+              'Regenerate exact Kol-Tai source and media from frozen custody': '/tmp/kol-tai-prep-run.sh',
+              'Regenerate exact Kol-Tai controller with complete rebinding': '/tmp/kol-tai-controller-run.sh',
+          }
+          for name, destination in wanted.items():
+              matches = [step for step in steps if step.get('name') == name]
+              if len(matches) != 1 or not isinstance(matches[0].get('run'), str):
+                  raise SystemExit(f'workflow run block drifted for {name}: {matches}')
+              Path(destination).write_text(matches[0]['run'].rstrip() + '\n')
+          PY
+          chmod +x /tmp/kol-tai-prep-run.sh /tmp/kol-tai-controller-run.sh
+          grep -F 'python3 /tmp/build-kol-tai-prep-v4.py' /tmp/kol-tai-prep-run.sh >/dev/null
+          grep -F 'python3 /tmp/transform-kol-tai-controller-v4.py' /tmp/kol-tai-controller-run.sh >/dev/null
+
+      - name: Regenerate exact Kol-Tai source and media from frozen custody
+        run: bash /tmp/kol-tai-prep-run.sh
+
+      - name: Upload exact Kol-Tai preparation
+        id: prep_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kol-tai-media-v4
+          path: /tmp/kol-tai-prep-v4/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Regenerate exact Kol-Tai controller with complete rebinding
+        env:
+          PREP_ARTIFACT_ID: ${{ steps.prep_artifact.outputs.artifact-id }}
+          PREP_ARTIFACT_DIGEST: ${{ steps.prep_artifact.outputs.artifact-digest }}
+          PREP_RUN: ${{ github.run_id }}
+        run: bash /tmp/kol-tai-controller-run.sh
+
+      - name: Upload exact Kol-Tai controller source
+        id: controller_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kol-tai-controller-source-v4
+          path: /tmp/kol-tai-controller-v4/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stage exact Kol-Tai candidate
+        id: stage
+        run: bash /tmp/kol-tai-controller-v4/programs/unitkoltai-controller.sh stage
+
+      - name: Upload exact Kol-Tai candidate
+        id: candidate_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unitkoltai-candidate-product-v4
+          path: /tmp/unitkoltai-candidate-artifact/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Review exact Kol-Tai candidate independently
+        run: bash /tmp/kol-tai-controller-v4/programs/unitkoltai-controller.sh review
+
+      - name: Upload exact independent Kol-Tai review
+        id: review_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unitkoltai-independent-review-v4
+          path: /tmp/unitkoltai-review-artifact/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish exact reviewed Kol-Tai product
+        id: publish
+        run: bash /tmp/kol-tai-controller-v4/programs/unitkoltai-controller.sh publish
+
+      - name: Upload exact Kol-Tai final product receipt
+        id: final_receipt_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kol-tai-final-product-receipt-v4
+          path: /tmp/unitkoltai-final-product-receipt/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Seal exact Kol-Tai execution
+        env:
+          CANDIDATE_COMMIT: ${{ steps.stage.outputs.commit }}
+          CANDIDATE_TREE: ${{ steps.stage.outputs.tree }}
+          CANDIDATE_PATH_COUNT: ${{ steps.stage.outputs.path_count }}
+          CANDIDATE_PATH_SHA256: ${{ steps.stage.outputs.path_sha256 }}
+          PRODUCT_COMMIT: ${{ steps.publish.outputs.product_commit }}
+          PRODUCT_TREE: ${{ steps.publish.outputs.product_tree }}
+          PAGES_RUN: ${{ steps.publish.outputs.pages_run }}
+          CONTROLLER_ARTIFACT_ID: ${{ steps.controller_artifact.outputs.artifact-id }}
+          CONTROLLER_ARTIFACT_DIGEST: ${{ steps.controller_artifact.outputs.artifact-digest }}
+          CANDIDATE_ARTIFACT_ID: ${{ steps.candidate_artifact.outputs.artifact-id }}
+          CANDIDATE_ARTIFACT_DIGEST: ${{ steps.candidate_artifact.outputs.artifact-digest }}
+          REVIEW_ARTIFACT_ID: ${{ steps.review_artifact.outputs.artifact-id }}
+          REVIEW_ARTIFACT_DIGEST: ${{ steps.review_artifact.outputs.artifact-digest }}
+          FINAL_RECEIPT_ARTIFACT_ID: ${{ steps.final_receipt_artifact.outputs.artifact-id }}
+          FINAL_RECEIPT_ARTIFACT_DIGEST: ${{ steps.final_receipt_artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          main_after="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$main_after")" = "$PRODUCT_COMMIT"
+          test "$(jq -r '.parents | length' <<<"$main_after")" = 1
+          test "$(jq -r '.parents[0].sha' <<<"$main_after")" = "$EXPECTED_MAIN"
+          test "$(jq -r '.commit.tree.sha' <<<"$main_after")" = "$PRODUCT_TREE"
+          test "$(jq -r '.commit.message' <<<"$main_after")" = 'Star Trek: publish Kol-Tai cycle'
+          rm -rf /tmp/kol-tai-execution-v4
+          mkdir -p /tmp/kol-tai-execution-v4
+          printf '%s\n' "$main_after" | jq . > /tmp/kol-tai-execution-v4/main-after.json
+          cp /tmp/kol-tai-controller-v4/controller-source-manifest.json /tmp/kol-tai-execution-v4/
+          cp /tmp/kol-tai-prep-v4/source-receipt.json /tmp/kol-tai-execution-v4/
+          cp /tmp/kol-tai-prep-v4/media-preparation.json /tmp/kol-tai-execution-v4/
+          cp /tmp/unitkoltai-final-product-receipt/thesis-next.json /tmp/kol-tai-execution-v4/
+          cp /tmp/unitkoltai-final-product-receipt/thesis-status.json /tmp/kol-tai-execution-v4/
+          jq -n \
+            --argjson version 1 \
+            --arg transaction STAR-TREK-KOL-TAI-LEAN-EXECUTION-V1 \
+            --arg status success \
+            --argjson workflow_run "$GITHUB_RUN_ID" \
+            --argjson source_run "$SOURCE_RUN" \
+            --arg workflow_head "$GITHUB_SHA" \
+            --arg canonical_parent "$EXPECTED_MAIN" \
+            --arg source_head "$SOURCE_HEAD" \
+            --arg task_id "$TASK_ID" \
+            --arg candidate_commit "$CANDIDATE_COMMIT" \
+            --arg candidate_tree "$CANDIDATE_TREE" \
+            --argjson candidate_path_count "$CANDIDATE_PATH_COUNT" \
+            --arg candidate_path_ledger_sha256 "$CANDIDATE_PATH_SHA256" \
+            --arg product_commit "$PRODUCT_COMMIT" \
+            --arg product_tree "$PRODUCT_TREE" \
+            --argjson pages_run "$PAGES_RUN" \
+            --argjson prep_artifact "${{ steps.prep_artifact.outputs.artifact-id }}" \
+            --arg prep_digest "${{ steps.prep_artifact.outputs.artifact-digest }}" \
+            --argjson controller_artifact "$CONTROLLER_ARTIFACT_ID" \
+            --arg controller_digest "$CONTROLLER_ARTIFACT_DIGEST" \
+            --argjson candidate_artifact "$CANDIDATE_ARTIFACT_ID" \
+            --arg candidate_digest "$CANDIDATE_ARTIFACT_DIGEST" \
+            --argjson review_artifact "$REVIEW_ARTIFACT_ID" \
+            --arg review_digest "$REVIEW_ARTIFACT_DIGEST" \
+            --argjson final_receipt_artifact "$FINAL_RECEIPT_ARTIFACT_ID" \
+            --arg final_receipt_digest "$FINAL_RECEIPT_ARTIFACT_DIGEST" \
+            '{version:$version,transaction:$transaction,status:$status,workflow_run:$workflow_run,source_run:$source_run,workflow_head:$workflow_head,canonical_parent:$canonical_parent,source_head:$source_head,task_id:$task_id,candidate:{commit:$candidate_commit,tree:$candidate_tree,path_count:$candidate_path_count,path_ledger_sha256:$candidate_path_ledger_sha256},product:{commit:$product_commit,tree:$product_tree,parent:$canonical_parent,pages_run:$pages_run},artifacts:{preparation:{id:$prep_artifact,digest:$prep_digest},controller:{id:$controller_artifact,digest:$controller_digest},candidate:{id:$candidate_artifact,digest:$candidate_digest},review:{id:$review_artifact,digest:$review_digest},final_receipt:{id:$final_receipt_artifact,digest:$final_receipt_digest}}}' \
+            > /tmp/kol-tai-execution-v4/kol-tai-lean-execution-v1.json
+
+      - name: Upload sealed Kol-Tai execution
+        id: execution_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kol-tai-lean-execution-v1
+          path: /tmp/kol-tai-execution-v4/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retire every Kol-Tai ref after exact success
+        if: success()
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/kol-tai-cleanup-v4
+          mkdir -p /tmp/kol-tai-cleanup-v4
+          git ls-remote --heads origin \
+            | awk '$2 ~ /^refs\/heads\/agent\/(star-trek-kol-tai|kol-tai|rail-next-after-karl-four)/ {print $2}' \
+            | sed 's#^refs/heads/##' \
+            | LC_ALL=C sort -u \
+            > /tmp/kol-tai-cleanup-v4/branches-before.txt
+          while IFS= read -r branch; do
+            test -z "$branch" || git push origin --delete "$branch"
+          done < /tmp/kol-tai-cleanup-v4/branches-before.txt
+          git ls-remote --heads origin \
+            | awk '$2 ~ /^refs\/heads\/agent\/(star-trek-kol-tai|kol-tai|rail-next-after-karl-four)/ {print $2}' \
+            | sed 's#^refs/heads/##' \
+            | LC_ALL=C sort -u \
+            > /tmp/kol-tai-cleanup-v4/branches-after.txt
+          test ! -s /tmp/kol-tai-cleanup-v4/branches-after.txt
+          jq -Rn '[inputs | select(length > 0)]' < /tmp/kol-tai-cleanup-v4/branches-before.txt > /tmp/kol-tai-cleanup-v4/branches-before.json
+          main_now="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .commit.message <<<"$main_now")" = 'Star Trek: publish Kol-Tai cycle'
+          test "$(jq -r '.parents[0].sha' <<<"$main_now")" = "$EXPECTED_MAIN"
+          jq -n \
+            --argjson version 1 \
+            --arg transaction STAR-TREK-KOL-TAI-CLEANUP-LEAN-V1 \
+            --arg status success \
+            --argjson workflow_run "$GITHUB_RUN_ID" \
+            --arg product_commit "$(jq -r .sha <<<"$main_now")" \
+            --slurpfile before /tmp/kol-tai-cleanup-v4/branches-before.json \
+            '{version:$version,transaction:$transaction,status:$status,workflow_run:$workflow_run,product_commit:$product_commit,deleted_branches:$before[0],remaining_branches:[]}' \
+            > /tmp/kol-tai-cleanup-v4/kol-tai-cleanup-lean-v1.json
+
+      - name: Upload Kol-Tai cleanup receipt
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kol-tai-cleanup-lean-v1
+          path: /tmp/kol-tai-cleanup-v4/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retire failed candidate and legacy carrier refs
+        if: failure()
+        run: |
+          set +e
+          git push origin --delete "$CANDIDATE_BRANCH" >/dev/null 2>&1 || true
+          git push origin --delete "$TEMP_BRANCH" >/dev/null 2>&1 || true
