@@ -1,13 +1,21 @@
-name: kol-tai-lock-breaker-v1
+name: kol-tai-lock-breaker-v2
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/kol-tai-lock-breaker-v1
+      - agent/kol-tai-lock-breaker-base-v1
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
   actions: write
   contents: write
+
+concurrency:
+  group: kol-tai-lock-breaker
+  cancel-in-progress: true
 
 jobs:
   break-lock:
@@ -35,8 +43,8 @@ jobs:
           rm -rf transport/kol-tai-lock-breaker-v1
           mkdir -p transport/kol-tai-lock-breaker-v1
           jq -n \
-            --argjson version 1 \
-            --arg transaction KOL-TAI-LOCK-BREAKER-RUN-START-V1 \
+            --argjson version 2 \
+            --arg transaction KOL-TAI-LOCK-BREAKER-RUN-START-V2 \
             --arg status started \
             --argjson run_id "$GITHUB_RUN_ID" \
             --arg head_sha "$carrier_head" \
@@ -47,7 +55,7 @@ jobs:
           git config user.name undercast-kol-tai-lock-breaker
           git config user.email kol-tai-lock-breaker@users.noreply.github.com
           git add transport/kol-tai-lock-breaker-v1/run-start.json
-          git commit -m 'Kol-Tai: publish bounded lock-breaker locator'
+          git commit -m 'Kol-Tai: publish bounded lock-breaker locator v2'
           git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
           git checkout --detach "$carrier_head"
 
@@ -58,7 +66,9 @@ jobs:
           rm -f /tmp/kol-tai-active-runs.txt /tmp/kol-tai-cancelled-runs.txt
           for status in in_progress queued; do
             gh api --paginate "/repos/${GITHUB_REPOSITORY}/actions/runs?status=${status}&per_page=100" \
-              --jq '.workflow_runs[] | select((.head_branch // "") | test("^agent/star-trek-kol-tai-(cycle|repair)")) | .id' \
+              --argjson self "$GITHUB_RUN_ID" \
+              --arg carrier "$CARRIER_BRANCH" \
+              --jq '.workflow_runs[] | select((.id != $self) and ((((.head_branch // "") | test("^agent/star-trek-kol-tai-(cycle|repair)"))) or ((.head_branch // "") == $carrier))) | .id' \
               >> /tmp/kol-tai-active-runs.txt
           done
           printf '%s\n' "$TARGET_RUN" >> /tmp/kol-tai-active-runs.txt
