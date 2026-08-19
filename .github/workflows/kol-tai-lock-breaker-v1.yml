@@ -1,0 +1,140 @@
+name: kol-tai-lock-breaker-v1
+
+on:
+  push:
+    branches:
+      - agent/kol-tai-lock-breaker-v1
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  break-lock:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_MAIN: 31832ca882b9b8d2a76f4a7f2d679844d7bde5ba
+      TARGET_RUN: '32227819333'
+      CARRIER_BRANCH: agent/kol-tai-lock-breaker-v1
+      RESULT_BRANCH: agent/kol-tai-lock-breaker-result-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Publish bounded lock-breaker locator
+        run: |
+          set -euo pipefail
+          carrier_head="$(git rev-parse HEAD)"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_MAIN"
+          git checkout --detach "$EXPECTED_MAIN"
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/kol-tai-lock-breaker-v1
+          mkdir -p transport/kol-tai-lock-breaker-v1
+          jq -n \
+            --argjson version 1 \
+            --arg transaction KOL-TAI-LOCK-BREAKER-RUN-START-V1 \
+            --arg status started \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$carrier_head" \
+            --arg canonical_parent "$EXPECTED_MAIN" \
+            --argjson target_run "$TARGET_RUN" \
+            '{version:$version,transaction:$transaction,status:$status,run_id:$run_id,head_sha:$head_sha,canonical_parent:$canonical_parent,target_run:$target_run}' \
+            > transport/kol-tai-lock-breaker-v1/run-start.json
+          git config user.name undercast-kol-tai-lock-breaker
+          git config user.email kol-tai-lock-breaker@users.noreply.github.com
+          git add transport/kol-tai-lock-breaker-v1/run-start.json
+          git commit -m 'Kol-Tai: publish bounded lock-breaker locator'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
+          git checkout --detach "$carrier_head"
+
+      - name: Cancel duplicate bounded carriers and restart exact v4 run
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$EXPECTED_MAIN"
+          rm -f /tmp/kol-tai-active-runs.txt /tmp/kol-tai-cancelled-runs.txt
+          for status in in_progress queued; do
+            gh api --paginate "/repos/${GITHUB_REPOSITORY}/actions/runs?status=${status}&per_page=100" \
+              --jq '.workflow_runs[] | select((.head_branch // "") | test("^agent/star-trek-kol-tai-(cycle|repair)")) | .id' \
+              >> /tmp/kol-tai-active-runs.txt
+          done
+          printf '%s\n' "$TARGET_RUN" >> /tmp/kol-tai-active-runs.txt
+          LC_ALL=C sort -nu /tmp/kol-tai-active-runs.txt -o /tmp/kol-tai-active-runs.txt
+          test -s /tmp/kol-tai-active-runs.txt
+
+          while IFS= read -r run_id; do
+            test -n "$run_id" || continue
+            run="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            if test "$(jq -r .status <<<"$run")" != completed; then
+              gh api --method POST "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null
+              printf '%s\n' "$run_id" >> /tmp/kol-tai-cancelled-runs.txt
+            fi
+          done < /tmp/kol-tai-active-runs.txt
+          touch /tmp/kol-tai-cancelled-runs.txt
+
+          for i in $(seq 1 120); do
+            remaining=0
+            while IFS= read -r run_id; do
+              test -n "$run_id" || continue
+              status="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .status)"
+              if test "$status" != completed; then
+                remaining=$((remaining + 1))
+              fi
+            done < /tmp/kol-tai-cancelled-runs.txt
+            test "$remaining" -eq 0 && break
+            sleep 5
+          done
+
+          while IFS= read -r run_id; do
+            test -n "$run_id" || continue
+            test "$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .status)" = completed
+          done < /tmp/kol-tai-cancelled-runs.txt
+
+          live_active=0
+          for status in in_progress queued; do
+            count="$(gh api --paginate "/repos/${GITHUB_REPOSITORY}/actions/runs?status=${status}&per_page=100" \
+              --jq '[.workflow_runs[] | select((.head_branch // "") | test("^agent/star-trek-kol-tai-(cycle|repair)"))] | length' \
+              | awk '{sum += $1} END {print sum + 0}')"
+            live_active=$((live_active + count))
+          done
+          test "$live_active" -eq 0
+
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/actions/runs/${TARGET_RUN}/rerun" >/dev/null
+          target_attempt=''
+          for i in $(seq 1 60); do
+            target="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${TARGET_RUN}")"
+            target_status="$(jq -r .status <<<"$target")"
+            target_attempt="$(jq -r .run_attempt <<<"$target")"
+            if test "$target_attempt" -ge 3 && test "$target_status" != completed; then
+              break
+            fi
+            sleep 2
+          done
+          test -n "$target_attempt"
+          test "$target_attempt" -ge 3
+
+          git fetch --filter=blob:none --no-tags origin "$RESULT_BRANCH"
+          git checkout --detach FETCH_HEAD
+          locator=transport/kol-tai-lock-breaker-v1/run-start.json
+          python3 - "$target_attempt" <<'PY'
+          from pathlib import Path
+          import json
+          import sys
+
+          path = Path('transport/kol-tai-lock-breaker-v1/run-start.json')
+          data = json.loads(path.read_text())
+          cancelled = [int(line) for line in Path('/tmp/kol-tai-cancelled-runs.txt').read_text().splitlines() if line]
+          data['status'] = 'success'
+          data['cancelled_runs'] = cancelled
+          data['target_attempt'] = int(sys.argv[1])
+          data['restart_mechanism'] = 'GitHub Actions rerun after bounded duplicate-carrier cancellation'
+          path.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+          git config user.name undercast-kol-tai-lock-breaker
+          git config user.email kol-tai-lock-breaker@users.noreply.github.com
+          git add "$locator"
+          git commit -m 'Kol-Tai: seal bounded lock break and v4 restart'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
