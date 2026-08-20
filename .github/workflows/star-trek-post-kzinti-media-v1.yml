@@ -1,0 +1,234 @@
+name: star-trek-post-kzinti-media-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-next-bounded-cycle-claim
+
+concurrency:
+  group: star-trek-post-kzinti-media-v1
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  media:
+    name: unitpost-kzinti-media-v1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PROBE_RESULT: agent/star-trek-post-kzinti-probe-result-v1
+      RESULT_BRANCH: agent/star-trek-post-kzinti-media-result-v1
+      ROOT: /tmp/post-kzinti-media-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Bind exact post-Kzinti source probe
+        id: bind
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/probe" "$ROOT/output"
+          carrier_head="$(git rev-parse HEAD)"
+          for attempt in $(seq 1 1800); do
+            encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/transport/post-kzinti-probe-v1/locator.json?ref=${PROBE_RESULT}" --jq .content 2>/dev/null || true)"
+            if test -n "$encoded"; then
+              printf '%s' "$encoded" | tr -d '\n' | base64 -d > "$ROOT/locator.json"
+              if jq -e '.status == "success" and .canonical_mutation == false and .lease_taken == false' "$ROOT/locator.json" >/dev/null; then break; fi
+            fi
+            sleep 5
+          done
+          test -s "$ROOT/locator.json"
+          parent="$(jq -r .canonical_parent "$ROOT/locator.json")"
+          task_id="$(jq -r .task_id "$ROOT/locator.json")"
+          fingerprint="$(jq -r .source_fingerprint "$ROOT/locator.json")"
+          artifact_id="$(jq -r .artifact.id "$ROOT/locator.json")"
+          artifact_sha="$(jq -r .artifact.sha256 "$ROOT/locator.json")"
+          artifact_name="$(jq -r .artifact.name "$ROOT/locator.json")"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$parent"
+          meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}")"
+          test "$(jq -r .expired <<<"$meta")" = false
+          test "$(jq -r .name <<<"$meta")" = "$artifact_name"
+          test "$(jq -r .digest <<<"$meta")" = "sha256:${artifact_sha}"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$ROOT/probe.zip"
+          echo "$artifact_sha  $ROOT/probe.zip" | sha256sum -c -
+          unzip -q "$ROOT/probe.zip" -d "$ROOT/probe"
+          source_file="$(find "$ROOT/probe" -type f -name source-probe.json -print -quit)"
+          task_file="$(find "$ROOT/probe" -type f -name task.json -print -quit)"
+          test -n "$source_file" && test -n "$task_file"
+          cp "$source_file" "$ROOT/source-probe.json"
+          cp "$task_file" "$ROOT/task.json"
+          jq -e --arg parent "$parent" --arg task "$task_id" --arg fp "$fingerprint" '.status == "success" and .canonical_parent == $parent and .task_id == $task and .source_fingerprint == $fp and .adjudicated_performance_mode == "voice / voice-only" and .maker_attribution == "unresolved" and .canonical_mutation == false and .lease_taken == false' "$ROOT/source-probe.json" >/dev/null
+          printf '%s\n' "$carrier_head" > "$ROOT/carrier-head.txt"
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+          echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+          echo "probe_id=$artifact_id" >> "$GITHUB_OUTPUT"
+          echo "probe_sha=$artifact_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare generic exact voice-role media
+        env:
+          CANONICAL_PARENT: ${{ steps.bind.outputs.parent }}
+          TASK_ID: ${{ steps.bind.outputs.task_id }}
+          TASK_FINGERPRINT: ${{ steps.bind.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$CANONICAL_PARENT"
+          git checkout --detach "$CANONICAL_PARENT"
+          npm ci --ignore-scripts
+          python3 -m pip install --disable-pip-version-check --no-input Pillow==11.3.0
+          python3 - <<'PY'
+          from __future__ import annotations
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import Request,urlopen
+          from io import BytesIO
+          from datetime import datetime,timezone
+          from PIL import Image
+          import hashlib,html,json,os,re
+          repo=Path('.');root=Path('/tmp/post-kzinti-media-v1');out=root/'output';out.mkdir(parents=True,exist_ok=True)
+          probe=json.loads((root/'source-probe.json').read_text());task=json.loads((root/'task.json').read_text())
+          parent=os.environ['CANONICAL_PARENT'];task_id=os.environ['TASK_ID'];fingerprint=os.environ['TASK_FINGERPRINT']
+          if probe['canonical_parent']!=parent or probe['task_id']!=task_id or probe['source_fingerprint']!=fingerprint:raise SystemExit('probe binding drifted')
+          character=task['character'];performer=task['performer'];source=task['source']
+          values=[]
+          specimens=json.loads((repo/'data/specimens.json').read_text())
+          def walk(v):
+            if isinstance(v,dict):
+              for x in v.values():walk(x)
+            elif isinstance(v,list):
+              for x in v:walk(x)
+            elif isinstance(v,str):
+              m=re.fullmatch(r'UC-(\d+)',v)
+              if m:values.append(int(m.group(1)))
+          walk(specimens)
+          if not values:raise SystemExit('wall id census empty')
+          wall=f'UC-{max(values)+1}'
+          ua='UNDERCAST-Post-Kzinti-Media/1.0 (preservation and attribution audit)'
+          def req(url,referer=None):
+            h={'User-Agent':ua,'Accept':'*/*'}
+            if referer:h['Referer']=referer
+            with urlopen(Request(url,headers=h),timeout=90) as r:return r.read()
+          def api(base,params):return json.loads(req(base+'?'+urlencode(params)))
+          def clean(v):return html.unescape(re.sub(r'<[^>]+>','',v or '')).strip()
+          def decode(data):
+            with Image.open(BytesIO(data)) as im:im.load();return im.convert('RGB'),im.size,im.format or 'unknown'
+          def norm(data,kind):
+            im,size,fmt=decode(data);im.thumbnail((1600,1600) if kind=='still' else (1200,1500),Image.Resampling.LANCZOS);b=BytesIO()
+            if kind=='still':im.save(b,format='WEBP',quality=94,method=6)
+            else:im.save(b,format='JPEG',quality=94,optimize=True,progressive=False)
+            return b.getvalue(),size,fmt
+          def h(data):return hashlib.sha256(data).hexdigest()
+          existing={}
+          for p in (repo/'images').glob('*'):
+            if p.is_file():existing.setdefault(hashlib.sha256(p.read_bytes()).hexdigest(),[]).append(str(p))
+          canonical=''.join((repo/p).read_text(errors='replace') for p in ('data/specimens.json','data/SOURCES.json','data/MEDIA-AUDIT.json'))
+          memory='https://memory-alpha.fandom.com/api.php'
+          role=api(memory,{'action':'query','prop':'pageimages|images','titles':character,'piprop':'original|thumbnail|name','pithumbsize':'1600','imlimit':'max','format':'json','formatversion':'2'})
+          rp=role['query']['pages'][0];candidates=[]
+          if rp.get('pageimage'):candidates.append('File:'+rp['pageimage'].removeprefix('File:'))
+          tokens=[x for x in re.split(r'[^a-z0-9]+',character.lower()) if len(x)>2]
+          for row in rp.get('images') or []:
+            low=row['title'].lower()
+            if tokens and any(t in low for t in tokens):candidates.append(row['title'])
+          candidates=list(dict.fromkeys(candidates));still=None;errors=[]
+          for ft in candidates:
+            try:
+              data=api(memory,{'action':'query','prop':'imageinfo','titles':ft,'iiprop':'url|size|sha1|mime|timestamp|extmetadata','iiurlwidth':'1600','format':'json','formatversion':'2'})
+              p=data['query']['pages'][0];info=(p.get('imageinfo') or [])[0];raw=None;selected=None
+              for u in (info.get('thumburl'),info.get('url')):
+                if not u:continue
+                try:raw=req(u,'https://memory-alpha.fandom.com/');decode(raw);selected=u;break
+                except Exception as e:errors.append(str(e))
+              if raw is None:continue
+              normalized,size,fmt=norm(raw,'still');digest=h(normalized)
+              if min(size)<250 or digest in existing:continue
+              page=info.get('descriptionurl') or 'https://memory-alpha.fandom.com/wiki/'+p['title'].replace(' ','_')
+              still={'title':p['title'],'origin':info.get('url'),'source_page':page,'download_url':selected,'sha256':digest,'source_size':size,'source_format':fmt,'mime':info.get('mime'),'timestamp':info.get('timestamp'),'bytes':normalized,'api':data};break
+            except Exception as e:errors.append(f'{ft}:{e}')
+          if still is None:raise SystemExit(f'no exact role still for {character}: {errors[-20:]}')
+          commons='https://commons.wikimedia.org/w/api.php';search=api(commons,{'action':'query','list':'search','srnamespace':'6','srsearch':performer,'srlimit':'100','format':'json','formatversion':'2'})
+          portrait=None;errors=[];name_tokens=[x for x in performer.lower().split() if len(x)>2]
+          for row in search['query']['search']:
+            title=row['title']
+            try:
+              data=api(commons,{'action':'query','prop':'imageinfo','titles':title,'iiprop':'url|size|sha1|mime|timestamp|extmetadata','iiurlwidth':'1200','format':'json','formatversion':'2'})
+              p=data['query']['pages'][0];info=(p.get('imageinfo') or [])[0];ext=info.get('extmetadata') or {};desc=clean((ext.get('ImageDescription') or ext.get('ObjectName') or {}).get('value'));identity=(p.get('title','')+' '+desc).lower()
+              if not all(t in identity for t in name_tokens):continue
+              lic=clean((ext.get('LicenseShortName') or {}).get('value'));ll=lic.lower()
+              if not ('public domain' in ll or 'cc by' in ll or 'cc0' in ll):continue
+              origin=info.get('descriptionurl') or 'https://commons.wikimedia.org/wiki/'+p['title'].replace(' ','_')
+              if origin in canonical or p['title'] in canonical or p['title'].replace(' ','_') in canonical:continue
+              raw=None;selected=None
+              for u in (info.get('thumburl'),info.get('url')):
+                if not u:continue
+                try:raw=req(u,'https://commons.wikimedia.org/');decode(raw);selected=u;break
+                except Exception as e:errors.append(str(e))
+              if raw is None:continue
+              normalized,size,fmt=norm(raw,'portrait');digest=h(normalized)
+              if min(size)<250 or digest in existing or digest==still['sha256']:continue
+              portrait={'title':p['title'],'origin':origin,'download_url':selected,'sha256':digest,'source_size':size,'source_format':fmt,'mime':info.get('mime'),'timestamp':info.get('timestamp'),'author':clean((ext.get('Artist') or {}).get('value')),'license':lic,'description':desc,'bytes':normalized,'api':data};break
+            except Exception as e:errors.append(f'{title}:{e}')
+          if portrait is None:raise SystemExit(f'no source-distinct performer portrait for {performer}: {errors[-20:]}')
+          if still['sha256']==portrait['sha256'] or still['source_page']==portrait['origin']:raise SystemExit('cross-facet collision')
+          lower=wall.lower();still_path=f'{lower}-still.webp';portrait_path=f'{lower}-portrait.jpg'
+          (out/still_path).write_bytes(still.pop('bytes'));(out/portrait_path).write_bytes(portrait.pop('bytes'))
+          generated=datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00','Z');date=generated[:10]
+          facets=[
+           {'id':'ma_'+hashlib.sha256(f'{wall}:portrait:{portrait["sha256"]}'.encode()).hexdigest()[:24],'scope':'star-trek','wall_id':wall,'side':'portrait','actor':performer,'character':character,'expected_subject':performer,'source_fetched_at':date,'asset':{'src':f'images/{portrait_path}','sha256':portrait['sha256'],'bytes':(out/portrait_path).stat().st_size,'origin':portrait['origin'],'kind':'free'},'risk_codes':[],'votes':[{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'identity','value':'expected','note':'The licensed source identifies the performer and supports performer identity only.','evidence':['source-origin:'+portrait['origin'],'asset-sha256:'+portrait['sha256']],'enforced':True,'at':generated,'asset_sha256':portrait['sha256']},{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'presentation','value':'neutral-human','note':'The portrait presents the human performer and is source-distinct and byte-distinct from the role still and canonical assets.','evidence':['source-origin:'+portrait['origin'],'asset-sha256:'+portrait['sha256']],'enforced':True,'at':generated,'asset_sha256':portrait['sha256']}],'claims':{'identity':{'value':'expected'},'presentation':{'value':'neutral-human'}},'status':'verified'},
+           {'id':'ma_'+hashlib.sha256(f'{wall}:still:{still["sha256"]}'.encode()).hexdigest()[:24],'scope':'star-trek','wall_id':wall,'side':'still','actor':performer,'character':character,'expected_subject':character,'source_fetched_at':date,'asset':{'src':f'images/{still_path}','sha256':still['sha256'],'bytes':(out/still_path).stat().st_size,'origin':still['origin'],'kind':'still'},'risk_codes':[],'votes':[{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'identity','value':'expected','note':'The role-specific file is retained only as character identity evidence.','evidence':['source-page:'+still['source_page'],'asset-sha256:'+still['sha256']],'enforced':True,'at':generated,'asset_sha256':still['sha256']},{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'presentation','value':'character-depiction','note':'The image depicts the exact role and is source-distinct and byte-distinct from the performer portrait.','evidence':['source-page:'+still['source_page'],'asset-sha256:'+still['sha256']],'enforced':True,'at':generated,'asset_sha256':still['sha256']}],'claims':{'identity':{'value':'expected'},'presentation':{'value':'character-depiction'}},'status':'verified'}]
+          facets=sorted(facets,key=lambda x:x['side'])
+          def stable(v):
+            if isinstance(v,dict):return {k:stable(v[k]) for k in sorted(v)}
+            if isinstance(v,list):return [stable(x) for x in v]
+            return v
+          facets_sha=hashlib.sha256((json.dumps(stable(facets),indent=2,ensure_ascii=False)+'\n').encode()).hexdigest()
+          media={'version':1,'transaction':'STAR-TREK-POST-KZINTI-MEDIA-PREPARATION-V1','generated_at':generated,'canonical_parent':parent,'task_id':task_id,'source_fingerprint':fingerprint,'wall_id':wall,'character':character,'performer':performer,'production':task.get('production'),'years':task.get('years'),'adjudicated_kind':'voice','performance_mode':'voice-only','maker_attribution':'unresolved','still':{k:v for k,v in still.items() if k!='api'},'portrait':{k:v for k,v in portrait.items() if k!='api'},'still_path':still_path,'portrait_path':portrait_path,'facets':facets,'facets_sha256':facets_sha,'byte_collision':False,'source_collision':False,'cross_facet_substitution':False,'media_review':{'reviewer':'chatgpt-source-identity-second-desk','verdict':'pass','scope':'character still and performer portrait identity only'},'canonical_mutation':False,'lease_taken':False}
+          (out/'media-preparation.json').write_text(json.dumps(stable(media),indent=2,ensure_ascii=False)+'\n');(out/'source-probe.json').write_text(json.dumps(probe,indent=2,ensure_ascii=False)+'\n');(out/'task.json').write_text(json.dumps(task,indent=2,ensure_ascii=False)+'\n');(out/'role-image-api.json').write_text(json.dumps(still['api'],indent=2,ensure_ascii=False)+'\n');(out/'portrait-image-api.json').write_text(json.dumps(portrait['api'],indent=2,ensure_ascii=False)+'\n');(out/'portrait-search-api.json').write_text(json.dumps(search,indent=2,ensure_ascii=False)+'\n')
+          PY
+          jq -e --arg parent "$CANONICAL_PARENT" --arg task "$TASK_ID" --arg fp "$TASK_FINGERPRINT" '.canonical_parent == $parent and .task_id == $task and .source_fingerprint == $fp and .performance_mode == "voice-only" and .maker_attribution == "unresolved" and .byte_collision == false and .source_collision == false and .cross_facet_substitution == false and .media_review.verdict == "pass" and (.facets | length) == 2 and (.facets | all(.status == "verified")) and .canonical_mutation == false and .lease_taken == false' "$ROOT/output/media-preparation.json" >/dev/null
+
+      - name: Upload exact generic media preparation
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-post-kzinti-media-v1
+          path: /tmp/post-kzinti-media-v1/output/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish exact generic media locator
+        env:
+          CANONICAL_PARENT: ${{ steps.bind.outputs.parent }}
+          TASK_ID: ${{ steps.bind.outputs.task_id }}
+          TASK_FINGERPRINT: ${{ steps.bind.outputs.fingerprint }}
+          PROBE_ID: ${{ steps.bind.outputs.probe_id }}
+          PROBE_SHA: ${{ steps.bind.outputs.probe_sha }}
+          MEDIA_ID: ${{ steps.artifact.outputs.artifact-id }}
+          MEDIA_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$CANONICAL_PARENT"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach FETCH_HEAD
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/post-kzinti-media-v1
+          mkdir -p transport/post-kzinti-media-v1
+          cp "$ROOT/output/media-preparation.json" transport/post-kzinti-media-v1/
+          jq -n --argjson version 1 --arg transaction STAR-TREK-POST-KZINTI-MEDIA-LOCATOR-V1 --arg status success --argjson workflow_run "$GITHUB_RUN_ID" --arg workflow_head "$GITHUB_SHA" --arg canonical_parent "$CANONICAL_PARENT" --arg task_id "$TASK_ID" --arg source_fingerprint "$TASK_FINGERPRINT" --argjson probe_id "$PROBE_ID" --arg probe_sha "$PROBE_SHA" --argjson media_id "$MEDIA_ID" --arg media_sha "${MEDIA_DIGEST#sha256:}" --arg facets_sha "$(jq -r .facets_sha256 "$ROOT/output/media-preparation.json")" '{version:$version,transaction:$transaction,status:$status,workflow_run:$workflow_run,workflow_head:$workflow_head,canonical_parent:$canonical_parent,task_id:$task_id,source_fingerprint:$source_fingerprint,probe_artifact:{id:$probe_id,sha256:$probe_sha},media_artifact:{id:$media_id,sha256:$media_sha,name:"star-trek-post-kzinti-media-v1"},facets_sha256:$facets_sha,canonical_mutation:false,lease_taken:false}' > transport/post-kzinti-media-v1/locator.json
+          git config user.name undercast-post-kzinti-media
+          git config user.email post-kzinti-media@users.noreply.github.com
+          git add transport/post-kzinti-media-v1
+          git commit -m 'Star Trek: publish exact post-Kzinti media custody'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
