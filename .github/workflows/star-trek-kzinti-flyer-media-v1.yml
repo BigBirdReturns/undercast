@@ -1,0 +1,242 @@
+name: star-trek-kzinti-flyer-media-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-next-bounded-cycle-claim
+
+concurrency:
+  group: star-trek-kzinti-flyer-media-v1
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  media:
+    name: unitkzinti-flyer-media-v1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PROBE_RESULT_V2: agent/star-trek-kzinti-flyer-probe-result-v2
+      PROBE_RESULT_V1: agent/star-trek-kzinti-flyer-probe-result-v1
+      MEDIA_RESULT: agent/star-trek-kzinti-flyer-media-result-v1
+      ROOT: /tmp/kzinti-flyer-media-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Bind exact successful source probe
+        id: probe
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/probe" "$ROOT/output"
+          carrier_head="$(git rev-parse HEAD)"
+          selected=''
+          locator=''
+          for attempt in $(seq 1 720); do
+            for branch in "$PROBE_RESULT_V2" "$PROBE_RESULT_V1"; do
+              if gh api "/repos/${GITHUB_REPOSITORY}/branches/${branch//\//%2F}" >/dev/null 2>&1; then
+                if test "$branch" = "$PROBE_RESULT_V2"; then path=transport/kzinti-flyer-probe-v2/locator.json; else path=transport/kzinti-flyer-probe-v1/locator.json; fi
+                encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${branch}" --jq .content 2>/dev/null || true)"
+                if test -n "$encoded"; then
+                  printf '%s' "$encoded" | tr -d '\n' | base64 -d > "$ROOT/locator.json"
+                  if jq -e '.status == "success" and .task_id == "ap_8f2b1b123aa02bbbb27d00b4" and .canonical_mutation == false and .lease_taken == false' "$ROOT/locator.json" >/dev/null; then
+                    selected="$branch"; locator="$path"; break 2
+                  fi
+                fi
+              fi
+            done
+            sleep 5
+          done
+          test -n "$selected"
+          parent="$(jq -r .canonical_parent "$ROOT/locator.json")"
+          artifact_id="$(jq -r .artifact.id "$ROOT/locator.json")"
+          artifact_sha="$(jq -r .artifact.sha256 "$ROOT/locator.json")"
+          artifact_name="$(jq -r .artifact.name "$ROOT/locator.json")"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$parent"
+          meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}")"
+          test "$(jq -r .expired <<<"$meta")" = false
+          test "$(jq -r .name <<<"$meta")" = "$artifact_name"
+          test "$(jq -r .digest <<<"$meta")" = "sha256:${artifact_sha}"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$ROOT/probe.zip"
+          echo "$artifact_sha  $ROOT/probe.zip" | sha256sum -c -
+          unzip -q "$ROOT/probe.zip" -d "$ROOT/probe"
+          source_probe="$(find "$ROOT/probe" -type f -name source-probe.json -print -quit)"
+          thesis_next="$(find "$ROOT/probe" -type f -name thesis-next.json -print -quit)"
+          test -n "$source_probe" && test -n "$thesis_next"
+          cp "$source_probe" "$ROOT/source-probe.json"
+          cp "$thesis_next" "$ROOT/thesis-next.json"
+          jq -e --arg parent "$parent" '.status == "success" and .canonical_parent == $parent and .task_id == "ap_8f2b1b123aa02bbbb27d00b4" and .character == "Kzinti Flyer" and .performer == "James Doohan" and .adjudicated_performance_mode == "voice / voice-only" and .maker_attribution == "unresolved" and .canonical_mutation == false and .lease_taken == false' "$ROOT/source-probe.json" >/dev/null
+          printf '%s\n' "$carrier_head" > "$ROOT/carrier-head.txt"
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+          echo "probe_artifact=$artifact_id" >> "$GITHUB_OUTPUT"
+          echo "probe_sha=$artifact_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare exact source-distinct media with bounded review
+        env:
+          CANONICAL_PARENT: ${{ steps.probe.outputs.parent }}
+        run: |
+          set -euo pipefail
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$CANONICAL_PARENT"
+          git checkout --detach "$CANONICAL_PARENT"
+          npm ci --ignore-scripts
+          python3 -m pip install --disable-pip-version-check --no-input Pillow==11.3.0
+          python3 - <<'PY'
+          from __future__ import annotations
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import Request,urlopen
+          from io import BytesIO
+          from datetime import datetime,timezone
+          from PIL import Image
+          import hashlib,html,json,os,re
+          repo=Path('.')
+          root=Path('/tmp/kzinti-flyer-media-v1')
+          out=root/'output'; out.mkdir(parents=True,exist_ok=True)
+          probe=json.loads((root/'source-probe.json').read_text())
+          task_id='ap_8f2b1b123aa02bbbb27d00b4'; parent=os.environ['CANONICAL_PARENT']; wall='UC-1391'
+          if probe['canonical_parent']!=parent or probe['task_id']!=task_id: raise SystemExit('probe binding drifted')
+          ua='UNDERCAST-Kzinti-Flyer-Media/1.0 (preservation and attribution audit)'
+          def req(url,referer=None):
+            headers={'User-Agent':ua,'Accept':'*/*'}
+            if referer: headers['Referer']=referer
+            with urlopen(Request(url,headers=headers),timeout=90) as r:return r.read()
+          def api(base,params):return json.loads(req(base+'?'+urlencode(params)))
+          def sha(b):return hashlib.sha256(b).hexdigest()
+          def clean(v):return html.unescape(re.sub(r'<[^>]+>','',v or '')).strip()
+          def image(data):
+            with Image.open(BytesIO(data)) as im: im.load(); return im.convert('RGB'),im.size,im.format or 'unknown'
+          def norm_still(data):
+            im,size,fmt=image(data); im.thumbnail((1600,1600),Image.Resampling.LANCZOS); b=BytesIO(); im.save(b,format='WEBP',quality=94,method=6); return b.getvalue(),size,fmt
+          def norm_portrait(data):
+            im,size,fmt=image(data); im.thumbnail((1200,1500),Image.Resampling.LANCZOS); b=BytesIO(); im.save(b,format='JPEG',quality=94,optimize=True,progressive=False); return b.getvalue(),size,fmt
+          existing_hashes={}
+          for p in (repo/'images').glob('*'):
+            if p.is_file(): existing_hashes.setdefault(hashlib.sha256(p.read_bytes()).hexdigest(),[]).append(str(p))
+          canonical_text=''
+          for p in [repo/'data/specimens.json',repo/'data/SOURCES.json',repo/'data/MEDIA-AUDIT.json']:
+            canonical_text+=p.read_text(errors='replace')
+          memory='https://memory-alpha.fandom.com/api.php'
+          role=api(memory,{'action':'query','prop':'pageimages|images','titles':'Kzinti Flyer','piprop':'original|thumbnail|name','pithumbsize':'1600','imlimit':'max','format':'json','formatversion':'2'})
+          pages=role['query']['pages'];
+          if len(pages)!=1 or pages[0].get('missing'): raise SystemExit(f'Kzinti Flyer page missing: {pages}')
+          rp=pages[0]; title=rp.get('pageimage')
+          candidates=[]
+          if title:candidates.append('File:'+title.removeprefix('File:'))
+          candidates.extend(x['title'] for x in (rp.get('images') or []) if 'kzinti' in x['title'].lower() and ('fly' in x['title'].lower() or 'pilot' in x['title'].lower()))
+          candidates=list(dict.fromkeys(candidates))
+          still=None; still_errors=[]
+          for ft in candidates:
+            try:
+              data=api(memory,{'action':'query','prop':'imageinfo','titles':ft,'iiprop':'url|size|sha1|mime|timestamp|extmetadata','iiurlwidth':'1600','format':'json','formatversion':'2'})
+              p=data['query']['pages'][0]; info=(p.get('imageinfo') or [])[0]
+              raw=None; selected=None
+              for u in (info.get('thumburl'),info.get('url')):
+                if not u:continue
+                try: raw=req(u,'https://memory-alpha.fandom.com/'); image(raw); selected=u;break
+                except Exception as e:still_errors.append(f'{u}: {e}')
+              if raw is None:continue
+              normalized,size,fmt=norm_still(raw)
+              if min(size)<250:continue
+              h=sha(normalized)
+              if h in existing_hashes:continue
+              origin=info.get('descriptionurl') or 'https://memory-alpha.fandom.com/wiki/'+p['title'].replace(' ','_')
+              still={'title':p['title'],'origin':info.get('url'),'source_page':origin,'download_url':selected,'bytes':normalized,'sha256':h,'source_size':size,'source_format':fmt,'mime':info.get('mime'),'timestamp':info.get('timestamp'),'api':data}
+              break
+            except Exception as e:still_errors.append(f'{ft}: {type(e).__name__}: {e}')
+          if still is None:raise SystemExit(f'no exact Kzinti Flyer still: {still_errors}')
+          commons='https://commons.wikimedia.org/w/api.php'
+          search=api(commons,{'action':'query','list':'search','srnamespace':'6','srsearch':'James Doohan','srlimit':'100','format':'json','formatversion':'2'})
+          portrait=None; portrait_errors=[]
+          for row in search['query']['search']:
+            title=row['title']
+            if 'doohan' not in title.lower():continue
+            try:
+              data=api(commons,{'action':'query','prop':'imageinfo','titles':title,'iiprop':'url|size|sha1|mime|timestamp|extmetadata','iiurlwidth':'1200','format':'json','formatversion':'2'})
+              p=data['query']['pages'][0]; info=(p.get('imageinfo') or [])[0]; ext=info.get('extmetadata') or {}
+              desc=clean((ext.get('ImageDescription') or ext.get('ObjectName') or {}).get('value')); identity=(p.get('title','')+' '+desc).lower()
+              if 'james doohan' not in identity and not ('james' in identity and 'doohan' in identity):continue
+              lic=clean((ext.get('LicenseShortName') or {}).get('value')); ll=lic.lower()
+              if not ('public domain' in ll or 'cc by' in ll or 'cc0' in ll):continue
+              origin=info.get('descriptionurl') or 'https://commons.wikimedia.org/wiki/'+p['title'].replace(' ','_')
+              if origin in canonical_text or p['title'] in canonical_text or p['title'].replace(' ','_') in canonical_text:continue
+              raw=None;selected=None
+              for u in (info.get('thumburl'),info.get('url')):
+                if not u:continue
+                try:raw=req(u,'https://commons.wikimedia.org/');image(raw);selected=u;break
+                except Exception as e:portrait_errors.append(f'{u}: {e}')
+              if raw is None:continue
+              normalized,size,fmt=norm_portrait(raw)
+              if min(size)<250:continue
+              h=sha(normalized)
+              if h in existing_hashes or h==still['sha256']:continue
+              portrait={'title':p['title'],'origin':origin,'download_url':selected,'bytes':normalized,'sha256':h,'source_size':size,'source_format':fmt,'mime':info.get('mime'),'timestamp':info.get('timestamp'),'author':clean((ext.get('Artist') or {}).get('value')),'license':lic,'description':desc,'api':data}
+              break
+            except Exception as e:portrait_errors.append(f'{title}: {type(e).__name__}: {e}')
+          if portrait is None:raise SystemExit(f'no source-distinct James Doohan portrait: {portrait_errors[-20:]}')
+          if still['sha256']==portrait['sha256'] or still['source_page']==portrait['origin']:raise SystemExit('cross-facet collision')
+          (out/'uc-1391-still.webp').write_bytes(still.pop('bytes'))
+          (out/'uc-1391-portrait.jpg').write_bytes(portrait.pop('bytes'))
+          generated=datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00','Z'); date=generated[:10]
+          facets=[
+            {'id':'ma_'+hashlib.sha256(f'{wall}:portrait:{portrait["sha256"]}'.encode()).hexdigest()[:24],'scope':'star-trek','wall_id':wall,'side':'portrait','actor':'James Doohan','character':'Kzinti Flyer','expected_subject':'James Doohan','source_fetched_at':date,'asset':{'src':'images/uc-1391-portrait.jpg','sha256':portrait['sha256'],'bytes':(out/'uc-1391-portrait.jpg').stat().st_size,'origin':portrait['origin'],'kind':'free'},'risk_codes':[],'votes':[{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'identity','value':'expected','note':'The Commons record identifies James Doohan and supports performer identity only; it is not character, animation, processing, or maker evidence.','evidence':['source-origin:'+portrait['origin'],'asset-sha256:'+portrait['sha256']],'enforced':True,'at':generated,'asset_sha256':portrait['sha256']},{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'presentation','value':'neutral-human','note':'The licensed portrait presents Doohan as the human performer and is source-distinct and byte-distinct from the role still and canonical assets.','evidence':['source-origin:'+portrait['origin'],'asset-sha256:'+portrait['sha256']],'enforced':True,'at':generated,'asset_sha256':portrait['sha256']}],'claims':{'identity':{'value':'expected'},'presentation':{'value':'neutral-human'}},'status':'verified'},
+            {'id':'ma_'+hashlib.sha256(f'{wall}:still:{still["sha256"]}'.encode()).hexdigest()[:24],'scope':'star-trek','wall_id':wall,'side':'still','actor':'James Doohan','character':'Kzinti Flyer','expected_subject':'Kzinti Flyer','source_fetched_at':date,'asset':{'src':'images/uc-1391-still.webp','sha256':still['sha256'],'bytes':(out/'uc-1391-still.webp').stat().st_size,'origin':still['origin'],'kind':'still'},'risk_codes':[],'votes':[{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'identity','value':'expected','note':'The role-specific Memory Alpha file is retained only as Kzinti Flyer character evidence and is not performer or maker evidence.','evidence':['source-page:'+still['source_page'],'asset-sha256:'+still['sha256']],'enforced':True,'at':generated,'asset_sha256':still['sha256']},{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'presentation','value':'character-depiction','note':'The image depicts the animated Kzinti Flyer role and remains source-distinct and byte-distinct from the performer portrait.','evidence':['source-page:'+still['source_page'],'asset-sha256:'+still['sha256']],'enforced':True,'at':generated,'asset_sha256':still['sha256']}],'claims':{'identity':{'value':'expected'},'presentation':{'value':'character-depiction'}},'status':'verified'}]
+          facets=sorted(facets,key=lambda x:x['side'])
+          def stable(v):
+            if isinstance(v,dict):return {k:stable(v[k]) for k in sorted(v)}
+            if isinstance(v,list):return [stable(x) for x in v]
+            return v
+          facets_sha=hashlib.sha256((json.dumps(stable(facets),indent=2,ensure_ascii=False)+'\n').encode()).hexdigest()
+          media={'version':1,'transaction':'STAR-TREK-KZINTI-FLYER-MEDIA-PREPARATION-V1','generated_at':generated,'canonical_parent':parent,'task_id':task_id,'source_fingerprint':probe['source_fingerprint'],'wall_id':wall,'character':'Kzinti Flyer','performer':'James Doohan','adjudicated_kind':'voice','performance_mode':'voice-only','maker_attribution':'unresolved','still':{k:v for k,v in still.items() if k!='api'},'portrait':{k:v for k,v in portrait.items() if k!='api'},'facets':facets,'facets_sha256':facets_sha,'byte_collision':False,'source_collision':False,'cross_facet_substitution':False,'media_review':{'reviewer':'chatgpt-source-identity-second-desk','verdict':'pass','scope':'character still and performer portrait identity only'},'canonical_mutation':False,'lease_taken':False}
+          (out/'media-preparation.json').write_text(json.dumps(stable(media),indent=2,ensure_ascii=False)+'\n')
+          (out/'role-image-api.json').write_text(json.dumps(still['api'],indent=2,ensure_ascii=False)+'\n')
+          (out/'portrait-image-api.json').write_text(json.dumps(portrait['api'],indent=2,ensure_ascii=False)+'\n')
+          (out/'portrait-search-api.json').write_text(json.dumps(search,indent=2,ensure_ascii=False)+'\n')
+          (out/'source-probe.json').write_text(json.dumps(probe,indent=2,ensure_ascii=False)+'\n')
+          PY
+          jq -e --arg parent "$CANONICAL_PARENT" '.canonical_parent == $parent and .task_id == "ap_8f2b1b123aa02bbbb27d00b4" and .wall_id == "UC-1391" and .character == "Kzinti Flyer" and .performer == "James Doohan" and .performance_mode == "voice-only" and .maker_attribution == "unresolved" and .byte_collision == false and .source_collision == false and .cross_facet_substitution == false and .media_review.verdict == "pass" and (.facets | length) == 2 and (.facets | all(.status == "verified")) and .canonical_mutation == false and .lease_taken == false' "$ROOT/output/media-preparation.json" >/dev/null
+          test "$(sha256sum "$ROOT/output/uc-1391-still.webp" | cut -d' ' -f1)" = "$(jq -r .still.sha256 "$ROOT/output/media-preparation.json")"
+          test "$(sha256sum "$ROOT/output/uc-1391-portrait.jpg" | cut -d' ' -f1)" = "$(jq -r .portrait.sha256 "$ROOT/output/media-preparation.json")"
+
+      - name: Upload exact Kzinti Flyer media preparation
+        id: media_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kzinti-flyer-media-v1
+          path: /tmp/kzinti-flyer-media-v1/output/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish exact media locator without canonical mutation
+        env:
+          CANONICAL_PARENT: ${{ steps.probe.outputs.parent }}
+          PROBE_ARTIFACT: ${{ steps.probe.outputs.probe_artifact }}
+          PROBE_SHA: ${{ steps.probe.outputs.probe_sha }}
+          MEDIA_ID: ${{ steps.media_artifact.outputs.artifact-id }}
+          MEDIA_DIGEST: ${{ steps.media_artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$CANONICAL_PARENT"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach FETCH_HEAD
+          git checkout -B "$MEDIA_RESULT"
+          rm -rf transport/kzinti-flyer-media-v1
+          mkdir -p transport/kzinti-flyer-media-v1
+          cp "$ROOT/output/media-preparation.json" transport/kzinti-flyer-media-v1/
+          jq -n --argjson version 1 --arg transaction STAR-TREK-KZINTI-FLYER-MEDIA-LOCATOR-V1 --arg status success --argjson workflow_run "$GITHUB_RUN_ID" --arg workflow_head "$GITHUB_SHA" --arg canonical_parent "$CANONICAL_PARENT" --arg task_id ap_8f2b1b123aa02bbbb27d00b4 --argjson probe_artifact "$PROBE_ARTIFACT" --arg probe_sha256 "$PROBE_SHA" --argjson media_artifact "$MEDIA_ID" --arg media_sha256 "${MEDIA_DIGEST#sha256:}" --arg facets_sha256 "$(jq -r .facets_sha256 "$ROOT/output/media-preparation.json")" '{version:$version,transaction:$transaction,status:$status,workflow_run:$workflow_run,workflow_head:$workflow_head,canonical_parent:$canonical_parent,task_id:$task_id,probe_artifact:{id:$probe_artifact,sha256:$probe_sha256},media_artifact:{id:$media_artifact,sha256:$media_sha256,name:"star-trek-kzinti-flyer-media-v1"},facets_sha256:$facets_sha256,canonical_mutation:false,lease_taken:false}' > transport/kzinti-flyer-media-v1/locator.json
+          git config user.name undercast-kzinti-flyer-media
+          git config user.email kzinti-flyer-media@users.noreply.github.com
+          git add transport/kzinti-flyer-media-v1
+          git commit -m 'Kzinti Flyer: publish exact non-mutating media custody'
+          git push --force origin "HEAD:refs/heads/${MEDIA_RESULT}"
