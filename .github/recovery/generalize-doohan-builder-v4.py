@@ -74,6 +74,47 @@ if depiction_prefix in text:
         "rather than Kol-Tai, Karl Four, Cadmar, Cheeron, Ari bn Bem",
     )
 
+# Kukulkan's frozen role page carries both the canonical TAS episode and a
+# later Lower Decks appearance. The generic score can therefore select a
+# semantically related but wrong episode. Pin only after the exact TAS title
+# is proved present in the role page's enumerated episode-link set.
+if target_character == "Kukulkan":
+    selector = (
+        "episode_title = sorted(episode_titles, key=episode_score, reverse=True)[0]\n"
+        "episode_name = episode_title.removesuffix(' (episode)')\n"
+    )
+    replacement = (
+        "expected_episode_title = \"How Sharper Than a Serpent's Tooth (episode)\"\n"
+        "if expected_episode_title not in episode_titles:\n"
+        "    raise SystemExit(f'Kukulkan exact TAS episode link missing: {episode_titles}')\n"
+        "episode_title = expected_episode_title\n"
+        "episode_name = episode_title.removesuffix(' (episode)')\n"
+    )
+    if text.count(selector) != 1:
+        raise SystemExit(f"Kukulkan episode selector marker drifted: {text.count(selector)}")
+    text = text.replace(selector, replacement, 1)
+
+    airdate_before = (
+        "airdate = infobox_field(episode_text, ('airdate', 'original airdate', 'first aired'))\n"
+    )
+    airdate_after = (
+        "airdate = infobox_field(episode_text, ("
+        "'airdate', 'date', 'originalairdate', 'original airdate', "
+        "'firstaired', 'first aired'))\n"
+    )
+    if text.count(airdate_before) != 1:
+        raise SystemExit(f"Kukulkan airdate marker drifted: {text.count(airdate_before)}")
+    text = text.replace(airdate_before, airdate_after, 1)
+
+    receipt_anchor = "episode_receipts = [{\n"
+    year_guard = (
+        "if year != '1974':\n"
+        "    raise SystemExit(f'Kukulkan exact TAS episode year drifted: {year}')\n\n"
+    )
+    if text.count(receipt_anchor) != 1:
+        raise SystemExit(f"Kukulkan episode receipt marker drifted: {text.count(receipt_anchor)}")
+    text = text.replace(receipt_anchor, year_guard + receipt_anchor, 1)
+
 required = (
     target_character,
     target_source,
@@ -99,11 +140,16 @@ for needle in forbidden:
 path.write_text(text)
 print(
     {
-        "status": "generalized-v4",
+        "status": "generalized-v5",
         "target": target_character,
         "wall_id": wall_id,
         "priority": priority,
         "role_flag_insertions": flag_changes,
         "boundary_sentence_insertions": anchor_count,
+        "episode_binding": (
+            "How Sharper Than a Serpent's Tooth (episode)"
+            if target_character == "Kukulkan"
+            else "generic"
+        ),
     }
 )
