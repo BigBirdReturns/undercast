@@ -1,0 +1,184 @@
+name: star-trek-kzinti-flyer-supervisor-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-next-bounded-cycle-claim
+
+concurrency:
+  group: star-trek-kzinti-flyer-supervisor-v1
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  supervise:
+    name: unitkzinti-flyer-supervisor-v1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KUKULKAN: 47296e8a7947384b04275962b8f6a125e5306680
+      RESULT_BRANCH: agent/star-trek-kzinti-flyer-terminal-result-v1
+      ROOT: /tmp/kzinti-flyer-supervisor-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Reconcile duplicate bounded runs
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          carrier_head="$(git rev-parse HEAD)"
+          printf '%s\n' "$carrier_head" > "$ROOT/carrier-head.txt"
+          runs="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" -f branch=agent/star-trek-next-bounded-cycle-claim -f per_page=100)"
+          printf '%s\n' "$runs" | jq . > "$ROOT/control-runs-before.json"
+          for name in \
+            star-trek-kzinti-flyer-probe-v1 \
+            star-trek-kzinti-flyer-probe-v2 \
+            star-trek-kzinti-flyer-media-v1 \
+            star-trek-kzinti-flyer-cycle-v1; do
+            mapfile -t ids < <(jq -r --arg name "$name" '[.workflow_runs[] | select(.name == $name and .status != "completed")] | sort_by(.created_at) | reverse | .[].id' <<<"$runs")
+            keep=true
+            for id in "${ids[@]}"; do
+              if $keep; then keep=false; continue; fi
+              gh run cancel "$id" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
+            done
+          done
+
+      - name: Wait for canonical Lwaxana rejection
+        id: rejection
+        run: |
+          set -euo pipefail
+          rejection=''
+          for attempt in $(seq 1 720); do
+            live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+            sha="$(jq -r .sha <<<"$live")"
+            if test "$sha" != "$KUKULKAN"; then
+              test "$(jq -r '.parents | length' <<<"$live")" = 1
+              test "$(jq -r .parents[0].sha <<<"$live")" = "$KUKULKAN"
+              test "$(jq -r .commit.message <<<"$live" | grep -Eic 'Lwaxana.*(reject|eligib|boundary)')" -ge 1
+              rejection="$sha"
+              printf '%s\n' "$live" | jq . > "$ROOT/lwaxana-product.json"
+              break
+            fi
+            sleep 5
+          done
+          test -n "$rejection"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$rejection"
+          git checkout --detach "$rejection"
+          npm ci --ignore-scripts
+          node scripts/star-trek-kukulkan-cycle.mjs
+          checker="$(find scripts -maxdepth 1 -type f -name 'star-trek-lwaxana*.mjs' -print | LC_ALL=C sort | tail -1)"
+          test -n "$checker"
+          node "$checker" | tee "$ROOT/lwaxana-checker.log"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/after-lwaxana-next.json"
+          jq -e '.phase == "ready-for-one-cycle" and .candidate.character == "Kzinti Flyer" and .candidate.performer == "James Doohan" and .candidate.task_id == "ap_8f2b1b123aa02bbbb27d00b4"' "$ROOT/after-lwaxana-next.json" >/dev/null
+          echo "commit=$rejection" >> "$GITHUB_OUTPUT"
+
+      - name: Monitor bounded Kzinti Flyer stages and retry one failed run
+        env:
+          REJECTION_COMMIT: ${{ steps.rejection.outputs.commit }}
+        run: |
+          set -euo pipefail
+          declare -A retried
+          names=(star-trek-kzinti-flyer-probe-v2 star-trek-kzinti-flyer-media-v1 star-trek-kzinti-flyer-cycle-v1)
+          for attempt in $(seq 1 1440); do
+            live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+            test "$live" = "$REJECTION_COMMIT" || break
+            runs="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" -f branch=agent/star-trek-next-bounded-cycle-claim -f per_page=100)"
+            for name in "${names[@]}"; do
+              row="$(jq -c --arg name "$name" '[.workflow_runs[] | select(.name == $name)] | sort_by(.created_at) | last // empty' <<<"$runs")"
+              test -n "$row" || continue
+              id="$(jq -r .id <<<"$row")"
+              status="$(jq -r .status <<<"$row")"
+              conclusion="$(jq -r '.conclusion // ""' <<<"$row")"
+              if test "$status" = completed && test "$conclusion" = failure && test -z "${retried[$name]:-}"; then
+                gh run rerun "$id" --failed --repo "$GITHUB_REPOSITORY" >/dev/null
+                retried[$name]=1
+              fi
+            done
+            sleep 10
+          done
+          runs="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" -f branch=agent/star-trek-next-bounded-cycle-claim -f per_page=100)"
+          printf '%s\n' "$runs" | jq . > "$ROOT/control-runs-after.json"
+
+      - name: Verify exact Kzinti Flyer product and Pages
+        id: terminal
+        env:
+          REJECTION_COMMIT: ${{ steps.rejection.outputs.commit }}
+        run: |
+          set -euo pipefail
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          product="$(jq -r .sha <<<"$live")"
+          test "$product" != "$REJECTION_COMMIT"
+          test "$(jq -r '.parents | length' <<<"$live")" = 1
+          test "$(jq -r .parents[0].sha <<<"$live")" = "$REJECTION_COMMIT"
+          test "$(jq -r .commit.message <<<"$live")" = 'Star Trek: publish Kzinti Flyer cycle'
+          tree="$(jq -r .commit.tree.sha <<<"$live")"
+          printf '%s\n' "$live" | jq . > "$ROOT/kzinti-product.json"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$product"
+          git checkout --detach "$product"
+          npm ci --ignore-scripts
+          checker="$(find scripts -maxdepth 1 -type f -name 'star-trek-kzinti-flyer*.mjs' -print | LC_ALL=C sort | tail -1)"
+          prior="$(find scripts -maxdepth 1 -type f -name 'star-trek-lwaxana*.mjs' -print | LC_ALL=C sort | tail -1)"
+          test -n "$checker" && test -n "$prior"
+          node "$checker" | tee "$ROOT/kzinti-checker.log"
+          node "$prior" | tee "$ROOT/lwaxana-readback-checker.log"
+          node scripts/star-trek-kukulkan-cycle.mjs
+          node scripts/thesis-rails.mjs validate --json > "$ROOT/thesis-status.json"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          node scripts/media-audit.mjs gate --scope star-trek
+          node scripts/waterline.mjs validate
+          node scripts/corpus-ops.mjs validate
+          pages=''
+          for attempt in $(seq 1 720); do
+            page_runs="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/workflows/pages.yml/runs" -f branch=main -f per_page=100)"
+            pages="$(jq -c --arg sha "$product" '[.workflow_runs[] | select(.head_sha == $sha and .status == "completed" and .conclusion == "success")] | sort_by(.created_at) | last // empty' <<<"$page_runs")"
+            test -n "$pages" && break
+            sleep 5
+          done
+          test -n "$pages"
+          printf '%s\n' "$pages" | jq . > "$ROOT/pages-run.json"
+          jq -n --argjson version 1 --arg transaction STAR-TREK-KZINTI-FLYER-TERMINAL-V1 --arg status success --argjson supervisor_run "$GITHUB_RUN_ID" --arg supervisor_head "$(cat "$ROOT/carrier-head.txt")" --arg rejection_commit "$REJECTION_COMMIT" --arg product_commit "$product" --arg product_tree "$tree" --argjson pages_run "$(jq -r .id "$ROOT/pages-run.json")" --slurpfile next "$ROOT/thesis-next.json" '{version:$version,transaction:$transaction,status:$status,supervisor_run:$supervisor_run,supervisor_head:$supervisor_head,product:{commit:$product_commit,tree:$product_tree,parent:$rejection_commit,pages_run:$pages_run},checks:{product_checker:"pass",rejection_predecessor:"pass",kukulkan_custody:"pass",thesis:"pass",media:"pass",waterline:"pass",corpus:"pass",pages:"success"},next:$next[0]}' > "$ROOT/terminal.json"
+          (cd "$ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -print0 | sort -z | xargs -0 sha256sum > manifest.sha256 && sha256sum -c manifest.sha256)
+          echo "product=$product" >> "$GITHUB_OUTPUT"
+
+      - name: Publish terminal receipt and next obligation
+        env:
+          PRODUCT_COMMIT: ${{ steps.terminal.outputs.product }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$PRODUCT_COMMIT"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach FETCH_HEAD
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/kzinti-flyer-terminal-v1
+          mkdir -p transport/kzinti-flyer-terminal-v1
+          cp "$ROOT/terminal.json" transport/kzinti-flyer-terminal-v1/
+          cp "$ROOT/thesis-next.json" transport/kzinti-flyer-terminal-v1/
+          cp "$ROOT/manifest.sha256" transport/kzinti-flyer-terminal-v1/
+          git config user.name undercast-kzinti-flyer-supervisor
+          git config user.email kzinti-flyer-supervisor@users.noreply.github.com
+          git add transport/kzinti-flyer-terminal-v1
+          git commit -m 'Kzinti Flyer: publish terminal verification and next obligation'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+      - name: Upload terminal verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kzinti-flyer-terminal-v1
+          path: /tmp/kzinti-flyer-supervisor-v1/
+          if-no-files-found: error
+          retention-days: 30
