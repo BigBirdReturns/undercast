@@ -1,0 +1,191 @@
+name: star-trek-post-kzinti-continuation-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-post-kzinti-continuation-v1
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-post-kzinti-continuation-v1
+  cancel-in-progress: true
+
+jobs:
+  continue:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1440
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RESULT_BRANCH: agent/star-trek-post-kzinti-continuation-result-v1
+      ROOT: /tmp/star-trek-post-kzinti-continuation-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Trigger one uniquely qualified carrier or preserve the boundary
+        run: |
+          set -euo pipefail
+          supervisor_head="$(git rev-parse HEAD)"
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          locator=''
+          for attempt in $(seq 1 17280); do
+            encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/transport/post-kzinti-doohan-probe-v1/locator.json?ref=agent/star-trek-post-kzinti-doohan-probe-result-v1" --jq .content 2>/dev/null || true)"
+            if test -n "$encoded"; then locator="$(printf '%s' "$encoded" | tr -d '\n' | base64 -d)"; break; fi
+            sleep 5
+          done
+          test -n "$locator"
+          printf '%s\n' "$locator" | jq . > "$ROOT/probe-locator.json"
+          parent="$(jq -r .canonical_parent <<<"$locator")"
+          locator_status="$(jq -r .status <<<"$locator")"
+          boundary="$(jq -r .boundary <<<"$locator")"
+          task_id="$(jq -r '.candidate.task_id // empty' <<<"$locator")"
+          fingerprint="$(jq -r '.candidate.source_fingerprint // empty' <<<"$locator")"
+          character="$(jq -r '.candidate.character // empty' <<<"$locator")"
+          performer="$(jq -r '.candidate.performer // empty' <<<"$locator")"
+          probe_id="$(jq -r .artifact.id <<<"$locator")"
+          probe_sha="$(jq -r .artifact.sha256 <<<"$locator")"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$parent"
+
+          publish_result() {
+            local status="$1"
+            local reason="$2"
+            local selected_branch="${3:-}"
+            local selected_workflow="${4:-}"
+            local transition_run="${5:-}"
+            local product_commit="${6:-}"
+            local product_tree="${7:-}"
+            git fetch --filter=blob:none --no-tags origin main
+            git checkout --detach FETCH_HEAD
+            git checkout -B "$RESULT_BRANCH"
+            rm -rf transport/post-kzinti-continuation-v1
+            mkdir -p transport/post-kzinti-continuation-v1
+            cp -a "$ROOT"/. transport/post-kzinti-continuation-v1/
+            jq -n --argjson version 1 --arg transaction STAR-TREK-POST-KZINTI-CONTINUATION-V1 --arg status "$status" --arg reason "$reason" --argjson workflow_run "$GITHUB_RUN_ID" --arg workflow_head "$supervisor_head" --arg predecessor_commit "$parent" --arg task_id "$task_id" --arg source_fingerprint "$fingerprint" --arg character "$character" --arg performer "$performer" --argjson probe_artifact "$probe_id" --arg probe_sha256 "$probe_sha" --arg selected_branch "$selected_branch" --arg selected_workflow "$selected_workflow" --arg transition_run "$transition_run" --arg product_commit "$product_commit" --arg product_tree "$product_tree" '{version:$version,transaction:$transaction,status:$status,reason:$reason,workflow_run:$workflow_run,workflow_head:$workflow_head,predecessor:{commit:$predecessor_commit,character:"Kzinti Flyer"},candidate:{task_id:($task_id|select(length>0)),source_fingerprint:($source_fingerprint|select(length>0)),character:($character|select(length>0)),performer:($performer|select(length>0)),probe_artifact:{id:$probe_artifact,sha256:$probe_sha256}},selected:{branch:($selected_branch|select(length>0)),workflow:($selected_workflow|select(length>0)),transition_run:($transition_run|select(length>0))},product:{commit:($product_commit|select(length>0)),tree:($product_tree|select(length>0))}}' > transport/post-kzinti-continuation-v1/result.json
+            git config user.name undercast-post-kzinti-continuation
+            git config user.email post-kzinti-continuation@users.noreply.github.com
+            git add transport/post-kzinti-continuation-v1
+            git commit -m "Star Trek: publish post-Kzinti continuation ${status}"
+            git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
+          }
+
+          if test "$boundary" = true || test "$locator_status" = boundary; then
+            publish_result boundary "$(jq -r '.reason // "The exact next task is outside the bounded James Doohan voice-animation probe lane."' "$ROOT/probe-locator.json")"
+            exit 0
+          fi
+          test "$locator_status" = success
+          test -n "$task_id" && test -n "$fingerprint" && test -n "$character" && test "$performer" = 'James Doohan'
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach FETCH_HEAD
+          npm ci --ignore-scripts
+          node scripts/star-trek-kzinti-flyer-cycle.mjs
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          jq -e --arg task "$task_id" --arg fingerprint "$fingerprint" --arg character "$character" '.phase=="ready-for-one-cycle" and .candidate.task_id==$task and .candidate.source_fingerprint==$fingerprint and .candidate.character==$character and .candidate.performer=="James Doohan"' "$ROOT/thesis-next.json" >/dev/null
+
+          refs='[]'
+          for prefix in \
+            agent/star-trek-doohan-rail-custodian \
+            agent/star-trek-next-bounded-cycle-claim \
+            agent/star-trek-continuation \
+            agent/star-trek-generic; do
+            rows="$(gh api "/repos/${GITHUB_REPOSITORY}/git/matching-refs/heads/${prefix}" 2>/dev/null || printf '[]')"
+            refs="$(jq -s 'add | unique_by(.ref)' <(printf '%s\n' "$refs") <(printf '%s\n' "$rows"))"
+          done
+          printf '%s\n' "$refs" | jq '[.[]|{ref,sha:.object.sha}]' > "$ROOT/candidate-branches.json"
+          exact='[]'
+          while IFS=$'\t' read -r ref sha; do
+            test -n "$ref" || continue
+            branch="${ref#refs/heads/}"
+            workflows="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/.github/workflows?ref=${branch}" 2>/dev/null || printf '[]')"
+            while IFS=$'\t' read -r path name; do
+              encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${branch}" --jq .content 2>/dev/null || true)"
+              test -n "$encoded" || continue
+              content="$(printf '%s' "$encoded" | tr -d '\n' | base64 -d)"
+              printf '%s\n' "$content" > /tmp/post-kzinti-carrier.txt
+              dynamic=false
+              grep -Fq 'thesis-rails.mjs next' /tmp/post-kzinti-carrier.txt \
+                && grep -Eq '(--limit[[:space:]]+1|limit:[[:space:]]*1)' /tmp/post-kzinti-carrier.txt \
+                && grep -Fq 'source_fingerprint' /tmp/post-kzinti-carrier.txt \
+                && grep -Fqi 'review' /tmp/post-kzinti-carrier.txt \
+                && grep -Fqi 'publish' /tmp/post-kzinti-carrier.txt \
+                && grep -Fq 'commits/main' /tmp/post-kzinti-carrier.txt \
+                && dynamic=true
+              test "$dynamic" = true || continue
+              stale=false
+              while IFS= read -r value; do test -z "$value" || test "$value" = "$parent" || stale=true; done < <(grep -Eo 'EXPECTED_MAIN:[[:space:]]*[0-9a-f]{40}' /tmp/post-kzinti-carrier.txt | grep -Eo '[0-9a-f]{40}' || true)
+              while IFS= read -r value; do test -z "$value" || test "$value" = "$task_id" || stale=true; done < <(grep -Eo 'TASK_ID:[[:space:]]*ap_[A-Za-z0-9_]+' /tmp/post-kzinti-carrier.txt | awk '{print $2}' || true)
+              while IFS= read -r value; do test -z "$value" || test "$value" = "$fingerprint" || stale=true; done < <(grep -Eo 'TASK_FINGERPRINT:[[:space:]]*[0-9a-f]{64}' /tmp/post-kzinti-carrier.txt | grep -Eo '[0-9a-f]{64}' || true)
+              test "$stale" = false || continue
+              media_bound=false
+              grep -Fq "$probe_id" /tmp/post-kzinti-carrier.txt && media_bound=true
+              grep -Fq 'star-trek-post-kzinti-doohan-probe-v1' /tmp/post-kzinti-carrier.txt && media_bound=true
+              if grep -Fq 'actions/artifacts' /tmp/post-kzinti-carrier.txt && grep -Fq 'candidate.task_id' /tmp/post-kzinti-carrier.txt && grep -Fqi 'probe' /tmp/post-kzinti-carrier.txt; then media_bound=true; fi
+              test "$media_bound" = true || continue
+              exact="$(jq --arg branch "$branch" --arg sha "$sha" --arg workflow "$path" --arg name "$name" '.+[{branch:$branch,sha:$sha,workflow:$workflow,name:$name}]' <<<"$exact")"
+            done < <(jq -r '.[]|select(.type=="file" and (.name|endswith(".yml") or endswith(".yaml")))|[.path,.name]|@tsv' <<<"$workflows")
+          done < <(jq -r '.[]|[.ref,.sha]|@tsv' "$ROOT/candidate-branches.json")
+          printf '%s\n' "$exact" | jq . > "$ROOT/exact-carriers.json"
+          count="$(jq 'length' "$ROOT/exact-carriers.json")"
+          if test "$count" = 0; then
+            publish_result boundary 'No existing dynamic carrier is provably bound to the exact post-Kzinti parent, task, fingerprint, and probe artifact; no lease was taken.'
+            exit 0
+          fi
+          if test "$count" != 1; then
+            publish_result boundary 'Multiple qualifying carriers remain; unique mutation authority is not proved.'
+            exit 0
+          fi
+          selected_branch="$(jq -r '.[0].branch' "$ROOT/exact-carriers.json")"
+          selected_workflow="$(jq -r '.[0].workflow' "$ROOT/exact-carriers.json")"
+          git fetch --filter=blob:none --no-tags origin "$selected_branch"
+          git checkout -B "$selected_branch" FETCH_HEAD
+          trigger="transport/post-kzinti-continuation-v1/trigger-${GITHUB_RUN_ID}.json"
+          mkdir -p "$(dirname "$trigger")"
+          jq -n --argjson version 1 --arg transaction STAR-TREK-POST-KZINTI-EXACT-CARRIER-TRIGGER-V1 --argjson supervisor_run "$GITHUB_RUN_ID" --arg canonical_parent "$parent" --arg task_id "$task_id" --arg source_fingerprint "$fingerprint" --arg character "$character" --argjson probe_artifact "$probe_id" --arg probe_sha256 "$probe_sha" --arg status requested '{version:$version,transaction:$transaction,supervisor_run:$supervisor_run,canonical_parent:$canonical_parent,task_id:$task_id,source_fingerprint:$source_fingerprint,character:$character,probe_artifact:{id:$probe_artifact,sha256:$probe_sha256},status:$status}' > "$trigger"
+          git config user.name undercast-post-kzinti-continuation
+          git config user.email post-kzinti-continuation@users.noreply.github.com
+          git add "$trigger"
+          git commit -m "Star Trek: trigger exact ${character} carrier"
+          trigger_head="$(git rev-parse HEAD)"
+          git push origin "HEAD:refs/heads/${selected_branch}"
+          transition_run=''
+          for attempt in $(seq 1 240); do
+            runs="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" -f branch="$selected_branch" -f head_sha="$trigger_head" -f per_page=100)"
+            transition_run="$(jq -r --arg head "$trigger_head" '[.workflow_runs[]|select(.head_sha==$head)]|sort_by(.created_at)|last|.id // empty' <<<"$runs")"
+            test -n "$transition_run" && break
+            sleep 5
+          done
+          test -n "$transition_run" || { publish_result blocked 'Exact post-Kzinti carrier trigger produced no Actions run.' "$selected_branch" "$selected_workflow"; exit 1; }
+          conclusion=''
+          for attempt in $(seq 1 8640); do
+            row="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${transition_run}")"
+            if test "$(jq -r .status <<<"$row")" = completed; then conclusion="$(jq -r .conclusion <<<"$row")"; break; fi
+            sleep 5
+          done
+          if test "$conclusion" != success; then
+            publish_result blocked "Exact post-Kzinti carrier run ${transition_run} concluded ${conclusion:-unknown}." "$selected_branch" "$selected_workflow" "$transition_run"
+            exit 1
+          fi
+          new_live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          product_commit="$(jq -r .sha <<<"$new_live")"
+          product_tree="$(jq -r .commit.tree.sha <<<"$new_live")"
+          test "$product_commit" != "$parent"
+          test "$(jq -r '.parents|length' <<<"$new_live")" = 1
+          test "$(jq -r .parents[0].sha <<<"$new_live")" = "$parent"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach FETCH_HEAD
+          checker="$(git diff-tree --no-commit-id --name-only -r "$product_commit" | grep '^scripts/star-trek-.*-cycle\.mjs$' | tail -1)"
+          test -n "$checker"
+          node "$checker"
+          node scripts/thesis-rails.mjs validate
+          pages="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/workflows/pages.yml/runs" -f per_page=100)"
+          test "$(jq --arg head "$product_commit" '[.workflow_runs[]|select(.head_sha==$head and .status=="completed" and .conclusion=="success")]|length' <<<"$pages")" -ge 1
+          publish_result completed "One exact prepared ${character} transition completed with single-parent, checker, and Pages custody." "$selected_branch" "$selected_workflow" "$transition_run" "$product_commit" "$product_tree"
