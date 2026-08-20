@@ -115,6 +115,39 @@ if target_character == "Kukulkan":
         raise SystemExit(f"Kukulkan episode receipt marker drifted: {text.count(receipt_anchor)}")
     text = text.replace(receipt_anchor, year_guard + receipt_anchor, 1)
 
+    # Source labels alone are insufficient because renamed Commons files can
+    # serialize to the exact bytes already used by a canonical card. Hash the
+    # deterministically normalized JPEG before accepting a portrait candidate.
+    portrait_anchor = (
+        "        selected = (portrait_title, portrait_data, portrait_page, portrait_info, ext, artist, "
+        "license_short, description, portrait_origin, portrait_download_url, portrait_original, "
+        "portrait_transport_size, portrait_transport_format)\n"
+        "        break\n"
+    )
+    portrait_replacement = (
+        "        candidate_buffer = BytesIO()\n"
+        "        with Image.open(BytesIO(portrait_original)) as candidate_image:\n"
+        "            candidate_portrait = candidate_image.convert('RGB')\n"
+        "            candidate_portrait.thumbnail((1200, 1500), Image.Resampling.LANCZOS)\n"
+        "            candidate_portrait.save(candidate_buffer, format='JPEG', quality=94, optimize=True, progressive=False)\n"
+        "        candidate_portrait_sha = h_bytes(candidate_buffer.getvalue())\n"
+        "        canonical_portrait_collisions = [\n"
+        "            canonical_path.name\n"
+        "            for canonical_path in (repo / 'images').glob('*-portrait.*')\n"
+        "            if canonical_path.is_file() and h_file(canonical_path) == candidate_portrait_sha\n"
+        "        ]\n"
+        "        if canonical_portrait_collisions:\n"
+        "            selection_errors.append({\n"
+        "                'title': portrait_title,\n"
+        "                'error': f'canonical portrait byte collision: {canonical_portrait_collisions}',\n"
+        "            })\n"
+        "            continue\n"
+        + portrait_anchor
+    )
+    if text.count(portrait_anchor) != 1:
+        raise SystemExit(f"Kukulkan portrait selection marker drifted: {text.count(portrait_anchor)}")
+    text = text.replace(portrait_anchor, portrait_replacement, 1)
+
 required = (
     target_character,
     target_source,
@@ -140,7 +173,7 @@ for needle in forbidden:
 path.write_text(text)
 print(
     {
-        "status": "generalized-v5",
+        "status": "generalized-v6",
         "target": target_character,
         "wall_id": wall_id,
         "priority": priority,
@@ -148,6 +181,11 @@ print(
         "boundary_sentence_insertions": anchor_count,
         "episode_binding": (
             "How Sharper Than a Serpent's Tooth (episode)"
+            if target_character == "Kukulkan"
+            else "generic"
+        ),
+        "portrait_gate": (
+            "canonical-normalized-byte-exclusion"
             if target_character == "Kukulkan"
             else "generic"
         ),
