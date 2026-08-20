@@ -1,0 +1,156 @@
+name: star-trek-post-kzinti-probe-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-next-bounded-cycle-claim
+
+concurrency:
+  group: star-trek-post-kzinti-probe-v1
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  probe:
+    name: unitpost-kzinti-probe-v1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RESULT_BRANCH: agent/star-trek-post-kzinti-probe-result-v1
+      ROOT: /tmp/post-kzinti-probe-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Bind live Kzinti Flyer product and exact successor
+        id: bind
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          carrier_head="$(git rev-parse HEAD)"
+          product=''
+          for attempt in $(seq 1 1800); do
+            live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+            message="$(jq -r .commit.message <<<"$live")"
+            if test "$message" = 'Star Trek: publish Kzinti Flyer cycle'; then
+              product="$(jq -r .sha <<<"$live")"
+              printf '%s\n' "$live" | jq . > "$ROOT/predecessor-product.json"
+              break
+            fi
+            sleep 5
+          done
+          test -n "$product"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$product"
+          git checkout --detach "$product"
+          npm ci --ignore-scripts
+          checker="$(find scripts -maxdepth 1 -type f -name 'star-trek-kzinti-flyer*.mjs' -print | LC_ALL=C sort | tail -1)"
+          test -n "$checker"
+          node "$checker" | tee "$ROOT/predecessor-checker.log"
+          node scripts/thesis-rails.mjs validate --json > "$ROOT/thesis-status.json"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          phase="$(jq -r '.phase // empty' "$ROOT/thesis-next.json")"
+          test "$phase" = ready-for-one-cycle
+          task_id="$(jq -r .candidate.task_id "$ROOT/thesis-next.json")"
+          fingerprint="$(jq -r .candidate.source_fingerprint "$ROOT/thesis-next.json")"
+          character="$(jq -r .candidate.character "$ROOT/thesis-next.json")"
+          performer="$(jq -r .candidate.performer "$ROOT/thesis-next.json")"
+          test -n "$task_id" && test -n "$fingerprint" && test -n "$character" && test -n "$performer"
+          jq --arg id "$task_id" '.jobs[] | select(.id == $id)' data/AUTOPILOT.json > "$ROOT/task.json"
+          jq -e --arg fp "$fingerprint" '.status == "queued" and .source_fingerprint == $fp' "$ROOT/task.json" >/dev/null
+          printf '%s\n' "$carrier_head" > "$ROOT/carrier-head.txt"
+          echo "product=$product" >> "$GITHUB_OUTPUT"
+          echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      - name: Freeze successor source and preserve evidence boundary
+        env:
+          PRODUCT_COMMIT: ${{ steps.bind.outputs.product }}
+          TASK_ID: ${{ steps.bind.outputs.task_id }}
+          TASK_FINGERPRINT: ${{ steps.bind.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import Request,urlopen
+          from datetime import datetime,timezone
+          import hashlib,json,os,re
+          root=Path('/tmp/post-kzinti-probe-v1')
+          task=json.loads((root/'task.json').read_text())
+          source=task['source']; title=source.rsplit('/',1)[-1].replace('_',' ')
+          url='https://memory-alpha.fandom.com/api.php?'+urlencode({'action':'query','prop':'revisions|pageimages','titles':title,'rvprop':'ids|timestamp|content','rvslots':'main','piprop':'original|name','format':'json','formatversion':'2'})
+          req=Request(url,headers={'User-Agent':'UNDERCAST-Post-Kzinti-Probe/1.0','Accept':'application/json'})
+          with urlopen(req,timeout=90) as r:data=json.load(r)
+          pages=data['query']['pages'];
+          if len(pages)!=1 or pages[0].get('missing'): raise SystemExit(f'source missing: {pages}')
+          page=pages[0]; revs=page.get('revisions') or []
+          if len(revs)!=1: raise SystemExit('revision cardinality drifted')
+          rev=revs[0]; text=rev['slots']['main']['content']; low=text.lower()
+          performer=task['performer']; character=task['character']; modes=task.get('performance_modes') or []
+          if performer.lower() not in low: raise SystemExit('performer attribution absent from frozen source')
+          queued_voice='voice-animation' in modes
+          voice_wording=any(x in low for x in ('voice','voiced by','voice actor'))
+          queued_physical='physical-prosthetic' in modes or 'physical-and-voice' in modes
+          physical_wording=any(x in low for x in ('portrayed by','played by','suit performer','physical performer'))
+          if queued_voice and voice_wording:
+            adjudicated_kind='voice'; adjudicated_mode='voice / voice-only'
+          elif queued_physical and physical_wording:
+            adjudicated_kind='face'; adjudicated_mode='physical / live-action'
+          else:
+            adjudicated_kind='unresolved'; adjudicated_mode='unresolved'
+          receipt={'version':1,'transaction':'STAR-TREK-POST-KZINTI-SOURCE-PROBE-V1','status':'success','generated_at':datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00','Z'),'canonical_parent':os.environ['PRODUCT_COMMIT'],'task_id':os.environ['TASK_ID'],'source_fingerprint':os.environ['TASK_FINGERPRINT'],'character':character,'performer':performer,'production':task.get('production'),'years':task.get('years'),'source':source,'pageid':page['pageid'],'revision':rev['revid'],'revision_timestamp':rev['timestamp'],'content_sha256':hashlib.sha256(text.encode()).hexdigest(),'page_image':page.get('original'),'queued_mode_hint':modes,'source_voice_wording':voice_wording,'source_physical_wording':physical_wording,'adjudicated_kind':adjudicated_kind,'adjudicated_performance_mode':adjudicated_mode,'maker_attribution':'unresolved','animation_maker_attribution':'unresolved','character_design_maker_attribution':'unresolved','makeup_maker_attribution':'unresolved','costume_maker_attribution':'unresolved','voice_direction_attribution':'unresolved','editing_attribution':'unresolved','sound_processing_attribution':'unresolved','production_shop_attribution':'unresolved','vocal_transformation_measured':False,'canonical_mutation':False,'lease_taken':False}
+          def stable(v):
+            if isinstance(v,dict):return {k:stable(v[k]) for k in sorted(v)}
+            if isinstance(v,list):return [stable(x) for x in v]
+            return v
+          body=json.dumps(stable(receipt),indent=2,ensure_ascii=False)+'\n';receipt['receipt_sha256']=hashlib.sha256(body.encode()).hexdigest()
+          (root/'source-probe.json').write_text(json.dumps(stable(receipt),indent=2,ensure_ascii=False)+'\n')
+          (root/'frozen-source.wikitext').write_text(text)
+          (root/'frozen-source-api.json').write_text(json.dumps(data,indent=2,ensure_ascii=False)+'\n')
+          PY
+          jq -e --arg parent "$PRODUCT_COMMIT" --arg task "$TASK_ID" --arg fp "$TASK_FINGERPRINT" '.status == "success" and .canonical_parent == $parent and .task_id == $task and .source_fingerprint == $fp and .maker_attribution == "unresolved" and .canonical_mutation == false and .lease_taken == false' "$ROOT/source-probe.json" >/dev/null
+
+      - name: Upload exact successor source probe
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-post-kzinti-source-probe-v1
+          path: /tmp/post-kzinti-probe-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish exact successor locator
+        env:
+          PRODUCT_COMMIT: ${{ steps.bind.outputs.product }}
+          TASK_ID: ${{ steps.bind.outputs.task_id }}
+          TASK_FINGERPRINT: ${{ steps.bind.outputs.fingerprint }}
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$PRODUCT_COMMIT"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach FETCH_HEAD
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/post-kzinti-probe-v1
+          mkdir -p transport/post-kzinti-probe-v1
+          cp "$ROOT/source-probe.json" transport/post-kzinti-probe-v1/
+          cp "$ROOT/thesis-next.json" transport/post-kzinti-probe-v1/
+          jq -n --argjson version 1 --arg transaction STAR-TREK-POST-KZINTI-PROBE-LOCATOR-V1 --arg status success --argjson workflow_run "$GITHUB_RUN_ID" --arg workflow_head "$GITHUB_SHA" --arg canonical_parent "$PRODUCT_COMMIT" --arg task_id "$TASK_ID" --arg source_fingerprint "$TASK_FINGERPRINT" --argjson artifact_id "$ARTIFACT_ID" --arg artifact_sha256 "${ARTIFACT_DIGEST#sha256:}" --arg source_receipt_sha256 "$(jq -r .receipt_sha256 "$ROOT/source-probe.json")" '{version:$version,transaction:$transaction,status:$status,workflow_run:$workflow_run,workflow_head:$workflow_head,canonical_parent:$canonical_parent,task_id:$task_id,source_fingerprint:$source_fingerprint,artifact:{id:$artifact_id,sha256:$artifact_sha256,name:"star-trek-post-kzinti-source-probe-v1"},source_receipt_sha256:$source_receipt_sha256,canonical_mutation:false,lease_taken:false}' > transport/post-kzinti-probe-v1/locator.json
+          git config user.name undercast-post-kzinti-probe
+          git config user.email post-kzinti-probe@users.noreply.github.com
+          git add transport/post-kzinti-probe-v1
+          git commit -m 'Star Trek: publish exact post-Kzinti source probe'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
