@@ -6,142 +6,16 @@ on:
       - agent/star-trek-post-kzinti-doohan-probe-v1
 
 permissions:
-  actions: read
-  contents: write
+  contents: read
 
 concurrency:
   group: star-trek-post-kzinti-doohan-probe-v1
   cancel-in-progress: true
 
 jobs:
-  probe:
+  park:
     runs-on: ubuntu-24.04
-    timeout-minutes: 1440
-    env:
-      GH_TOKEN: ${{ github.token }}
-      RESULT_BRANCH: agent/star-trek-post-kzinti-doohan-probe-result-v1
-      OUTPUT_ROOT: /tmp/star-trek-post-kzinti-doohan-probe-v1
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-
-      - name: Read exact next obligation and prepare only a compatible Doohan voice role
-        id: prepare
-        run: |
-          set -euo pipefail
-          cp .github/recovery/star-trek-post-kzinti-doohan-probe-v1.py /tmp/star-trek-post-kzinti-doohan-probe-v1.py
-          python3 -m py_compile /tmp/star-trek-post-kzinti-doohan-probe-v1.py
-          carrier_head="$(git rev-parse HEAD)"
-          terminal=''
-          for attempt in $(seq 1 17280); do
-            encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/transport/kzinti-flyer-terminal-v1/terminal.json?ref=agent/star-trek-kzinti-flyer-terminal-result-v1" --jq .content 2>/dev/null || true)"
-            if test -n "$encoded"; then terminal="$(printf '%s' "$encoded" | tr -d '\n' | base64 -d)"; break; fi
-            sleep 5
-          done
-          test -n "$terminal"
-          test "$(jq -r .status <<<"$terminal")" = success
-          parent="$(jq -r .product.commit <<<"$terminal")"
-          task_id="$(jq -r '.next_deterministic_obligation.task_id // empty' <<<"$terminal")"
-          fingerprint="$(jq -r '.next_deterministic_obligation.source_fingerprint // empty' <<<"$terminal")"
-          character="$(jq -r '.next_deterministic_obligation.character // empty' <<<"$terminal")"
-          performer="$(jq -r '.next_deterministic_obligation.performer // empty' <<<"$terminal")"
-          rm -rf "$OUTPUT_ROOT"
-          mkdir -p "$OUTPUT_ROOT"
-          printf '%s\n' "$terminal" | jq . > "$OUTPUT_ROOT/kzinti-terminal.json"
-          if test -z "$task_id" || test -z "$fingerprint"; then
-            jq -n --argjson version 1 --arg transaction STAR-TREK-POST-KZINTI-DOOHAN-PROBE-V1 --arg status boundary --arg reason 'The thesis rail did not authorize another one-cycle candidate.' --arg canonical_parent "$parent" '{version:$version,transaction:$transaction,status:$status,reason:$reason,canonical_parent:$canonical_parent,canonical_mutation:false,lease_taken:false}' > "$OUTPUT_ROOT/probe.json"
-            echo 'boundary=true' >> "$GITHUB_OUTPUT"
-            echo "parent=$parent" >> "$GITHUB_OUTPUT"
-            echo "carrier_head=$carrier_head" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$parent"
-          git fetch --filter=blob:none --no-tags origin main
-          test "$(git rev-parse FETCH_HEAD)" = "$parent"
-          git checkout --detach "$parent"
-          npm ci --ignore-scripts
-          node scripts/star-trek-kzinti-flyer-cycle.mjs
-          node scripts/thesis-rails.mjs next --json > "$OUTPUT_ROOT/thesis-next.json"
-          task="$(jq -c --arg id "$task_id" '.jobs[]|select(.id==$id)' data/AUTOPILOT.json)"
-          test -n "$task"
-          source="$(jq -r .source <<<"$task")"
-          modes="$(jq -r '.performance_modes|join(",")' <<<"$task")"
-          if test "$performer" != 'James Doohan' || test "$modes" != voice-animation; then
-            jq -n --argjson version 1 --arg transaction STAR-TREK-POST-KZINTI-DOOHAN-PROBE-V1 --arg status boundary --arg reason "The exact next task is ${character} by ${performer} with mode ${modes}; the bounded James Doohan voice-animation probe is incompatible." --arg canonical_parent "$parent" --arg task_id "$task_id" --arg source_fingerprint "$fingerprint" --arg character "$character" --arg performer "$performer" --arg modes "$modes" '{version:$version,transaction:$transaction,status:$status,reason:$reason,canonical_parent:$canonical_parent,candidate:{task_id:$task_id,source_fingerprint:$source_fingerprint,character:$character,performer:$performer,performance_modes:($modes|split(","))},canonical_mutation:false,lease_taken:false}' > "$OUTPUT_ROOT/probe.json"
-            echo 'boundary=true' >> "$GITHUB_OUTPUT"
-            echo "parent=$parent" >> "$GITHUB_OUTPUT"
-            echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
-            echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
-            echo "character=$character" >> "$GITHUB_OUTPUT"
-            echo "performer=$performer" >> "$GITHUB_OUTPUT"
-            echo "carrier_head=$carrier_head" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          wall_id="$(jq -r '[.[]|.id|select(test("^UC-[0-9]+$"))|sub("UC-";"")|tonumber]|max+1|"UC-"+tostring' data/specimens.json)"
-          test "$wall_id" = UC-1392
-          python3 -m pip install --disable-pip-version-check --no-input Pillow==11.3.0
-          REPO_ROOT="$PWD" OUTPUT_ROOT="$OUTPUT_ROOT" EXPECTED_MAIN="$parent" TASK_ID="$task_id" TASK_FINGERPRINT="$fingerprint" CHARACTER="$character" PERFORMER="$performer" SOURCE="$source" WALL_ID="$wall_id" python3 /tmp/star-trek-post-kzinti-doohan-probe-v1.py
-          jq -e --arg parent "$parent" --arg task "$task_id" --arg fingerprint "$fingerprint" --arg character "$character" '.status=="success" and .canonical_parent==$parent and .task_id==$task and .source_fingerprint==$fingerprint and .character==$character and .performer=="James Doohan" and .wall_id=="UC-1392" and .adjudicated_performance_mode=="voice / voice-only" and .canonical_mutation==false and .lease_taken==false' "$OUTPUT_ROOT/probe.json" >/dev/null
-          echo 'boundary=false' >> "$GITHUB_OUTPUT"
-          echo "parent=$parent" >> "$GITHUB_OUTPUT"
-          echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
-          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
-          echo "character=$character" >> "$GITHUB_OUTPUT"
-          echo "performer=$performer" >> "$GITHUB_OUTPUT"
-          echo "wall_id=$wall_id" >> "$GITHUB_OUTPUT"
-          echo "carrier_head=$carrier_head" >> "$GITHUB_OUTPUT"
-
-      - name: Upload exact probe package
-        id: artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: star-trek-post-kzinti-doohan-probe-v1
-          path: /tmp/star-trek-post-kzinti-doohan-probe-v1/
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Publish probe or boundary locator
-        env:
-          BOUNDARY: ${{ steps.prepare.outputs.boundary }}
-          PARENT: ${{ steps.prepare.outputs.parent }}
-          TASK_ID: ${{ steps.prepare.outputs.task_id }}
-          FINGERPRINT: ${{ steps.prepare.outputs.fingerprint }}
-          CHARACTER: ${{ steps.prepare.outputs.character }}
-          PERFORMER: ${{ steps.prepare.outputs.performer }}
-          WALL_ID: ${{ steps.prepare.outputs.wall_id }}
-          CARRIER_HEAD: ${{ steps.prepare.outputs.carrier_head }}
-          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
-          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
-        run: |
-          set -euo pipefail
-          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$PARENT"
-          git fetch --filter=blob:none --no-tags origin main
-          git checkout --detach FETCH_HEAD
-          git checkout -B "$RESULT_BRANCH"
-          rm -rf transport/post-kzinti-doohan-probe-v1
-          mkdir -p transport/post-kzinti-doohan-probe-v1
-          cp "$OUTPUT_ROOT/probe.json" transport/post-kzinti-doohan-probe-v1/
-          test ! -f "$OUTPUT_ROOT/source-receipt.json" || cp "$OUTPUT_ROOT/source-receipt.json" transport/post-kzinti-doohan-probe-v1/
-          test ! -f "$OUTPUT_ROOT/media-preparation.json" || cp "$OUTPUT_ROOT/media-preparation.json" transport/post-kzinti-doohan-probe-v1/
-          jq -n --argjson version 1 --arg transaction STAR-TREK-POST-KZINTI-DOOHAN-PROBE-LOCATOR-V1 --arg status "$(jq -r .status "$OUTPUT_ROOT/probe.json")" --arg boundary "$BOUNDARY" --argjson workflow_run "$GITHUB_RUN_ID" --arg workflow_head "$CARRIER_HEAD" --arg canonical_parent "$PARENT" --arg task_id "$TASK_ID" --arg source_fingerprint "$FINGERPRINT" --arg character "$CHARACTER" --arg performer "$PERFORMER" --arg wall_id "$WALL_ID" --argjson artifact_id "$ARTIFACT_ID" --arg artifact_sha256 "${ARTIFACT_DIGEST#sha256:}" --arg probe_receipt_sha256 "$(jq -r '.receipt_sha256 // empty' "$OUTPUT_ROOT/probe.json")" '{version:$version,transaction:$transaction,status:$status,boundary:($boundary=="true"),workflow_run:$workflow_run,workflow_head:$workflow_head,canonical_parent:$canonical_parent,candidate:{task_id:($task_id|select(length>0)),source_fingerprint:($source_fingerprint|select(length>0)),character:($character|select(length>0)),performer:($performer|select(length>0)),wall_id:($wall_id|select(length>0))},artifact:{id:$artifact_id,name:"star-trek-post-kzinti-doohan-probe-v1",sha256:$artifact_sha256},probe_receipt_sha256:($probe_receipt_sha256|select(length>0)),canonical_mutation:false,lease_taken:false}' > transport/post-kzinti-doohan-probe-v1/locator.json
-          git config user.name undercast-post-kzinti-doohan-probe
-          git config user.email post-kzinti-doohan-probe@users.noreply.github.com
-          git add transport/post-kzinti-doohan-probe-v1
-          git commit -m "Star Trek: publish post-Kzinti Doohan probe $(jq -r .status transport/post-kzinti-doohan-probe-v1/locator.json)"
-          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
-          git push origin --delete agent/star-trek-post-kzinti-doohan-probe-v1 >/dev/null 2>&1 || true
-
-      - name: Upload post-Kzinti probe failure package
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: star-trek-post-kzinti-doohan-probe-v1-failure-${{ github.run_id }}
-          path: /tmp/star-trek-post-kzinti-doohan-probe-v1/
-          if-no-files-found: warn
-          retention-days: 30
+      - name: Park until Kzinti Flyer terminal custody exists
+        run: echo 'Post-Kzinti Doohan probe parked; original carrier is preserved in branch history.'
