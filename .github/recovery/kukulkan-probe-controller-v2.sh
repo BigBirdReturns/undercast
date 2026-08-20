@@ -20,6 +20,28 @@ gh api "/repos/${GITHUB_REPOSITORY}/contents/.github/recovery/transform-kol-tai-
 test -s /tmp/transform-kukulkan-controller-v2.py
 export TRANSFORM_PATH=/tmp/transform-kukulkan-controller-v2.py
 python3 /tmp/patch-next-doohan-transform-v1.py /tmp/transform-kukulkan-controller-v2.py
+
+# The inherited transform applies formatted replacements sequentially. Keep
+# the decrement map in descending source order so 1,807 becomes 1,806 once,
+# while 1,806 becomes 1,805 once, without a cascading double decrement.
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path('/tmp/transform-kukulkan-controller-v2.py')
+text = path.read_text()
+old = """formatted_map = {
+    '1,807': '1,806', '1,806': '1,805',
+}
+"""
+new = """formatted_map = {
+    '1,806': '1,805', '1,807': '1,806',
+}
+"""
+if text.count(old) != 1:
+    raise SystemExit(f'Kukulkan formatted queue map marker drifted: {text.count(old)}')
+path.write_text(text.replace(old, new, 1))
+PY
+
 python3 -m py_compile /tmp/transform-kukulkan-controller-v2.py
 
 export TEMPLATE_ROOT=/tmp/kol-tai-controller-template
