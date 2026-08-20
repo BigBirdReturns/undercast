@@ -1,0 +1,140 @@
+name: star-trek-kzinti-flyer-probe-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-next-bounded-cycle-claim
+
+concurrency:
+  group: star-trek-kzinti-flyer-probe-v2
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  probe:
+    name: unitkzinti-flyer-probe-v2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KUKULKAN_PARENT: 47296e8a7947384b04275962b8f6a125e5306680
+      EXPECTED_TASK: ap_8f2b1b123aa02bbbb27d00b4
+      RESULT_BRANCH: agent/star-trek-kzinti-flyer-probe-result-v2
+      ROOT: /tmp/kzinti-flyer-probe-v2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Bind semantic Lwaxana rejection predecessor
+        id: predecessor
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          carrier_head="$(git rev-parse HEAD)"
+          live=''
+          for attempt in $(seq 1 720); do
+            commit="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+            live="$(jq -r .sha <<<"$commit")"
+            if test "$live" != "$KUKULKAN_PARENT"; then
+              test "$(jq -r '.parents | length' <<<"$commit")" = 1
+              test "$(jq -r .parents[0].sha <<<"$commit")" = "$KUKULKAN_PARENT"
+              test "$(jq -r .commit.message <<<"$commit" | grep -Eic 'Lwaxana.*(reject|eligib|boundary)')" -ge 1
+              break
+            fi
+            sleep 5
+          done
+          test -n "$live" && test "$live" != "$KUKULKAN_PARENT"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$live"
+          git checkout --detach "$live"
+          npm ci --ignore-scripts
+          node scripts/star-trek-kukulkan-cycle.mjs
+          checker="$(find scripts -maxdepth 1 -type f -name 'star-trek-lwaxana*.mjs' -print | LC_ALL=C sort | tail -1)"
+          test -n "$checker"
+          node "$checker" | tee "$ROOT/predecessor-checker.log"
+          node scripts/thesis-rails.mjs validate --json > "$ROOT/thesis-status.json"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          jq -e --arg task "$EXPECTED_TASK" '.phase == "ready-for-one-cycle" and .candidate.task_id == $task and .candidate.character == "Kzinti Flyer" and .candidate.performer == "James Doohan" and (.candidate.performance_modes | index("voice-animation")) != null' "$ROOT/thesis-next.json" >/dev/null
+          jq --arg task "$EXPECTED_TASK" '.jobs[] | select(.id == $task)' data/AUTOPILOT.json > "$ROOT/task.json"
+          jq -e '.status == "queued" and .character == "Kzinti Flyer" and .performer == "James Doohan"' "$ROOT/task.json" >/dev/null
+          printf '%s\n' "$live" > "$ROOT/canonical-parent.txt"
+          printf '%s\n' "$carrier_head" > "$ROOT/carrier-head.txt"
+          echo "commit=$live" >> "$GITHUB_OUTPUT"
+
+      - name: Freeze exact source and adjudicate voice-only scope
+        env:
+          CANONICAL_PARENT: ${{ steps.predecessor.outputs.commit }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import Request,urlopen
+          from datetime import datetime,timezone
+          import hashlib,json,re,os
+          root=Path('/tmp/kzinti-flyer-probe-v2')
+          task=json.loads((root/'task.json').read_text())
+          source=task['source']; title=source.rsplit('/',1)[-1].replace('_',' ')
+          url='https://memory-alpha.fandom.com/api.php?'+urlencode({'action':'query','prop':'revisions|pageimages','titles':title,'rvprop':'ids|timestamp|content','rvslots':'main','piprop':'original|name','format':'json','formatversion':'2'})
+          req=Request(url,headers={'User-Agent':'UNDERCAST-Kzinti-Flyer-Probe/2.0','Accept':'application/json'})
+          with urlopen(req,timeout=90) as r:data=json.load(r)
+          pages=data['query']['pages'];
+          if len(pages)!=1 or pages[0].get('missing'): raise SystemExit(f'source missing: {pages}')
+          page=pages[0]; revs=page.get('revisions') or []
+          if len(revs)!=1: raise SystemExit('revision cardinality drifted')
+          rev=revs[0]; text=rev['slots']['main']['content']; low=text.lower()
+          if 'james doohan' not in low: raise SystemExit('James Doohan attribution absent')
+          if not any(x in low for x in ('voice','voiced by','voice actor')): raise SystemExit('voice wording absent')
+          parent=(root/'canonical-parent.txt').read_text().strip()
+          receipt={'version':2,'transaction':'STAR-TREK-KZINTI-FLYER-SOURCE-PROBE-V2','status':'success','generated_at':datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00','Z'),'canonical_parent':parent,'task_id':'ap_8f2b1b123aa02bbbb27d00b4','source_fingerprint':task['source_fingerprint'],'character':'Kzinti Flyer','performer':'James Doohan','source':source,'pageid':page['pageid'],'revision':rev['revid'],'revision_timestamp':rev['timestamp'],'content_sha256':hashlib.sha256(text.encode()).hexdigest(),'page_image':page.get('original'),'queued_mode_hint':task.get('performance_modes'),'adjudicated_kind':'voice','adjudicated_performance_mode':'voice / voice-only','performance_scope':'James Doohan vocal performance as Kzinti Flyer only','physical_performance':'not attributed to James Doohan','maker_attribution':'unresolved','animation_maker_attribution':'unresolved','character_design_maker_attribution':'unresolved','voice_direction_attribution':'unresolved','editing_attribution':'unresolved','sound_processing_attribution':'unresolved','production_shop_attribution':'unresolved','vocal_transformation_measured':False,'canonical_mutation':False,'lease_taken':False}
+          def stable(v):
+            if isinstance(v,dict):return {k:stable(v[k]) for k in sorted(v)}
+            if isinstance(v,list):return [stable(x) for x in v]
+            return v
+          body=json.dumps(stable(receipt),indent=2,ensure_ascii=False)+'\n'; receipt['receipt_sha256']=hashlib.sha256(body.encode()).hexdigest()
+          (root/'source-probe.json').write_text(json.dumps(stable(receipt),indent=2,ensure_ascii=False)+'\n')
+          (root/'frozen-source.wikitext').write_text(text)
+          (root/'frozen-source-api.json').write_text(json.dumps(data,indent=2,ensure_ascii=False)+'\n')
+          PY
+          jq -e '.status == "success" and .character == "Kzinti Flyer" and .performer == "James Doohan" and .adjudicated_performance_mode == "voice / voice-only" and .maker_attribution == "unresolved" and .canonical_mutation == false and .lease_taken == false' "$ROOT/source-probe.json" >/dev/null
+
+      - name: Upload exact source probe
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kzinti-flyer-source-probe-v2
+          path: /tmp/kzinti-flyer-probe-v2/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish exact probe locator
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+          CANONICAL_PARENT: ${{ steps.predecessor.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$CANONICAL_PARENT"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach FETCH_HEAD
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/kzinti-flyer-probe-v2
+          mkdir -p transport/kzinti-flyer-probe-v2
+          cp "$ROOT/source-probe.json" transport/kzinti-flyer-probe-v2/
+          cp "$ROOT/thesis-next.json" transport/kzinti-flyer-probe-v2/
+          jq -n --argjson version 2 --arg transaction STAR-TREK-KZINTI-FLYER-PROBE-LOCATOR-V2 --arg status success --argjson workflow_run "$GITHUB_RUN_ID" --arg workflow_head "$GITHUB_SHA" --arg canonical_parent "$CANONICAL_PARENT" --arg task_id "$EXPECTED_TASK" --argjson artifact_id "$ARTIFACT_ID" --arg artifact_sha256 "${ARTIFACT_DIGEST#sha256:}" --arg source_receipt_sha256 "$(jq -r .receipt_sha256 "$ROOT/source-probe.json")" '{version:$version,transaction:$transaction,status:$status,workflow_run:$workflow_run,workflow_head:$workflow_head,canonical_parent:$canonical_parent,task_id:$task_id,artifact:{id:$artifact_id,sha256:$artifact_sha256,name:"star-trek-kzinti-flyer-source-probe-v2"},source_receipt_sha256:$source_receipt_sha256,canonical_mutation:false,lease_taken:false}' > transport/kzinti-flyer-probe-v2/locator.json
+          git config user.name undercast-kzinti-flyer-probe
+          git config user.email kzinti-flyer-probe@users.noreply.github.com
+          git add transport/kzinti-flyer-probe-v2
+          git commit -m 'Kzinti Flyer: publish exact non-mutating source probe v2'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
