@@ -10,7 +10,7 @@ execution_meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${EXECUT
 test "$(jq -r .expired <<<"$execution_meta")" = false
 test "$(jq -r .name <<<"$execution_meta")" = star-trek-kukulkan-cycle-execution-v1
 test "$(jq -r .workflow_run.id <<<"$execution_meta")" = "$GITHUB_RUN_ID"
-test "$(jq -r .digest <<<"$execution_meta")" = "$EXECUTION_DIGEST"
+test "$(jq -r .digest <<<"$execution_meta")" = "sha256:${EXECUTION_DIGEST#sha256:}"
 
 rm -rf /tmp/unitkukulkan-cleanup
 mkdir -p /tmp/unitkukulkan-cleanup
