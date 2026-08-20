@@ -1,0 +1,273 @@
+name: star-trek-kzinti-flyer-cycle-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-next-bounded-cycle-claim
+
+concurrency:
+  group: star-trek-kzinti-flyer-canonical-cycle
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  cycle:
+    name: unitkzinti-flyer-cycle-v1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TASK_ID: ap_8f2b1b123aa02bbbb27d00b4
+      WALL_ID: UC-1391
+      MEDIA_RESULT: agent/star-trek-kzinti-flyer-media-result-v1
+      CANDIDATE_BRANCH: agent/star-trek-kzinti-flyer-candidate-v1
+      CONTROLLER_SOURCE_RUN: '32320408106'
+      CONTROLLER_SOURCE_ARTIFACT: '9389559695'
+      CONTROLLER_SOURCE_SHA: 549b8d37c3fc780ed59d0fa94e185341f306f3c95c8148f78c61681326766e67
+      ROOT: /tmp/kzinti-flyer-cycle-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Bind exact media custody and install rebound controller
+        id: bind
+        run: |
+          set -euo pipefail
+          cp .github/recovery/kzinti-flyer-cycle-controller-rebind-v1.py /tmp/kzinti-flyer-cycle-controller-rebind-v1.py
+          python3 -m py_compile /tmp/kzinti-flyer-cycle-controller-rebind-v1.py
+          rm -rf "$ROOT" /tmp/kzinti-controller-source /tmp/kzinti-controller-exec /tmp/unitkzinti-flyer-programs /tmp/unitkzinti-flyer-cycle-preflight
+          rm -f /tmp/kzinti-media.zip /tmp/kzinti-controller-source.zip
+          mkdir -p "$ROOT/media" /tmp/kzinti-controller-source /tmp/unitkzinti-flyer-cycle-preflight
+          carrier_head="$(git rev-parse HEAD)"
+
+          locator=''
+          for attempt in $(seq 1 900); do
+            encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/transport/kzinti-flyer-media-v1/locator.json?ref=${MEDIA_RESULT}" --jq .content 2>/dev/null || true)"
+            if test -n "$encoded"; then
+              printf '%s' "$encoded" | tr -d '\n' | base64 -d > "$ROOT/media-locator.json"
+              if jq -e '.status == "success" and .task_id == "ap_8f2b1b123aa02bbbb27d00b4" and .canonical_mutation == false and .lease_taken == false' "$ROOT/media-locator.json" >/dev/null; then locator=ready; break; fi
+            fi
+            sleep 5
+          done
+          test "$locator" = ready
+          parent="$(jq -r .canonical_parent "$ROOT/media-locator.json")"
+          media_id="$(jq -r .media_artifact.id "$ROOT/media-locator.json")"
+          media_sha="$(jq -r .media_artifact.sha256 "$ROOT/media-locator.json")"
+          media_name="$(jq -r .media_artifact.name "$ROOT/media-locator.json")"
+          probe_id="$(jq -r .probe_artifact.id "$ROOT/media-locator.json")"
+          probe_sha="$(jq -r .probe_artifact.sha256 "$ROOT/media-locator.json")"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$parent"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$parent"
+          git checkout --detach "$parent"
+          npm ci --ignore-scripts
+          node scripts/star-trek-kukulkan-cycle.mjs
+          prior_checker="$(find scripts -maxdepth 1 -type f -name 'star-trek-lwaxana*.mjs' -print | LC_ALL=C sort | tail -1)"
+          test -n "$prior_checker"
+          node "$prior_checker"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-before.json"
+          jq -e --arg task "$TASK_ID" '.phase == "ready-for-one-cycle" and .candidate.task_id == $task and .candidate.character == "Kzinti Flyer" and .candidate.performer == "James Doohan"' "$ROOT/thesis-before.json" >/dev/null
+
+          media_meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${media_id}")"
+          test "$(jq -r .expired <<<"$media_meta")" = false
+          test "$(jq -r .name <<<"$media_meta")" = "$media_name"
+          test "$(jq -r .digest <<<"$media_meta")" = "sha256:${media_sha}"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${media_id}/zip" > /tmp/kzinti-media.zip
+          echo "$media_sha  /tmp/kzinti-media.zip" | sha256sum -c -
+          unzip -q /tmp/kzinti-media.zip -d "$ROOT/media"
+          media_file="$(find "$ROOT/media" -type f -name media-preparation.json -print -quit)"
+          probe_file="$(find "$ROOT/media" -type f -name source-probe.json -print -quit)"
+          test -n "$media_file" && test -n "$probe_file"
+          cp "$media_file" "$ROOT/media-preparation.json"
+          cp "$probe_file" "$ROOT/source-probe.json"
+          jq -e --arg parent "$parent" '.canonical_parent == $parent and .task_id == "ap_8f2b1b123aa02bbbb27d00b4" and .wall_id == "UC-1391" and .character == "Kzinti Flyer" and .performer == "James Doohan" and .performance_mode == "voice-only" and .maker_attribution == "unresolved" and .byte_collision == false and .source_collision == false and .cross_facet_substitution == false and .media_review.verdict == "pass" and (.facets | length) == 2' "$ROOT/media-preparation.json" >/dev/null
+          test -s "$(find "$ROOT/media" -type f -name uc-1391-still.webp -print -quit)"
+          test -s "$(find "$ROOT/media" -type f -name uc-1391-portrait.jpg -print -quit)"
+
+          controller_meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${CONTROLLER_SOURCE_ARTIFACT}")"
+          test "$(jq -r .expired <<<"$controller_meta")" = false
+          test "$(jq -r .name <<<"$controller_meta")" = star-trek-kukulkan-controller-execution-v1
+          test "$(jq -r .workflow_run.id <<<"$controller_meta")" = "$CONTROLLER_SOURCE_RUN"
+          test "$(jq -r .digest <<<"$controller_meta")" = "sha256:${CONTROLLER_SOURCE_SHA}"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${CONTROLLER_SOURCE_ARTIFACT}/zip" > /tmp/kzinti-controller-source.zip
+          echo "$CONTROLLER_SOURCE_SHA  /tmp/kzinti-controller-source.zip" | sha256sum -c -
+          unzip -q /tmp/kzinti-controller-source.zip -d /tmp/kzinti-controller-source
+          source_programs="$(dirname "$(find /tmp/kzinti-controller-source -type f -name unitkukulkan-controller.sh -print -quit)")"
+          test -n "$source_programs"
+          python3 /tmp/kzinti-flyer-cycle-controller-rebind-v1.py "$source_programs" /tmp/kzinti-controller-exec "$ROOT" "$PWD"
+          cp -a /tmp/kzinti-controller-exec/programs /tmp/unitkzinti-flyer-programs
+          chmod +x /tmp/unitkzinti-flyer-programs/*
+          bash -n /tmp/unitkzinti-flyer-programs/unitkzinti-flyer-controller.sh
+          node --check /tmp/unitkzinti-flyer-programs/unitkzinti-flyer-stage.mjs
+          node --check /tmp/unitkzinti-flyer-programs/unitkzinti-flyer-review.mjs
+          node --check /tmp/unitkzinti-flyer-programs/unitkzinti-flyer-prior-phase.mjs
+          node --check /tmp/unitkzinti-flyer-programs/unitkzinti-flyer-finalize.mjs
+          cp "$ROOT/media-preparation.json" /tmp/unitkzinti-flyer-cycle-preflight/
+          cp "$ROOT/source-probe.json" /tmp/unitkzinti-flyer-cycle-preflight/
+          cp "$ROOT/media-locator.json" /tmp/unitkzinti-flyer-cycle-preflight/
+          cp "$ROOT/thesis-before.json" /tmp/unitkzinti-flyer-cycle-preflight/
+          cp /tmp/kzinti-controller-exec/controller-source-manifest.json /tmp/unitkzinti-flyer-cycle-preflight/
+          printf '%s\n' "$carrier_head" > /tmp/unitkzinti-flyer-cycle-preflight/carrier-head.txt
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+          echo "media_id=$media_id" >> "$GITHUB_OUTPUT"
+          echo "media_sha=$media_sha" >> "$GITHUB_OUTPUT"
+          echo "probe_id=$probe_id" >> "$GITHUB_OUTPUT"
+          echo "probe_sha=$probe_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact execution controller and preflight
+        id: controller_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kzinti-flyer-controller-execution-v1
+          path: |
+            /tmp/kzinti-controller-exec/
+            /tmp/unitkzinti-flyer-cycle-preflight/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stage exact Kzinti Flyer candidate
+        id: stage
+        env:
+          CANDIDATE_BRANCH: agent/star-trek-kzinti-flyer-candidate-v1
+        run: bash /tmp/unitkzinti-flyer-programs/unitkzinti-flyer-controller.sh stage
+
+      - name: Upload exact candidate product
+        id: candidate_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unitkzinti-flyer-candidate-product
+          path: /tmp/unitkzinti-flyer-candidate-artifact/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Review exact candidate independently
+        run: bash /tmp/unitkzinti-flyer-programs/unitkzinti-flyer-controller.sh review
+
+      - name: Upload exact independent review
+        id: review_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unitkzinti-flyer-independent-review
+          path: /tmp/unitkzinti-flyer-review-artifact/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish exact reviewed Kzinti Flyer product
+        id: publish
+        run: bash /tmp/unitkzinti-flyer-programs/unitkzinti-flyer-controller.sh publish
+
+      - name: Upload exact final product receipt
+        id: final_receipt_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kzinti-flyer-final-product-receipt-v1
+          path: /tmp/unitkzinti-flyer-final-product-receipt/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Seal exact product, Pages, and successor custody
+        id: seal
+        env:
+          CANONICAL_PARENT: ${{ steps.bind.outputs.parent }}
+          PRODUCT_COMMIT: ${{ steps.publish.outputs.product_commit }}
+          PRODUCT_TREE: ${{ steps.publish.outputs.product_tree }}
+          PAGES_RUN: ${{ steps.publish.outputs.pages_run }}
+          CANDIDATE_COMMIT: ${{ steps.stage.outputs.commit }}
+          CANDIDATE_TREE: ${{ steps.stage.outputs.tree }}
+          CONTROLLER_ID: ${{ steps.controller_artifact.outputs.artifact-id }}
+          CONTROLLER_DIGEST: ${{ steps.controller_artifact.outputs.artifact-digest }}
+          CANDIDATE_ID: ${{ steps.candidate_artifact.outputs.artifact-id }}
+          CANDIDATE_DIGEST: ${{ steps.candidate_artifact.outputs.artifact-digest }}
+          REVIEW_ID: ${{ steps.review_artifact.outputs.artifact-id }}
+          REVIEW_DIGEST: ${{ steps.review_artifact.outputs.artifact-digest }}
+          FINAL_ID: ${{ steps.final_receipt_artifact.outputs.artifact-id }}
+          FINAL_DIGEST: ${{ steps.final_receipt_artifact.outputs.artifact-digest }}
+          MEDIA_ID: ${{ steps.bind.outputs.media_id }}
+          MEDIA_SHA: ${{ steps.bind.outputs.media_sha }}
+          PROBE_ID: ${{ steps.bind.outputs.probe_id }}
+          PROBE_SHA: ${{ steps.bind.outputs.probe_sha }}
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCT_COMMIT" && test -n "$PRODUCT_TREE" && test -n "$PAGES_RUN"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$PRODUCT_COMMIT"
+          test "$(jq -r .commit.tree.sha <<<"$live")" = "$PRODUCT_TREE"
+          test "$(jq -r '.parents | length' <<<"$live")" = 1
+          test "$(jq -r .parents[0].sha <<<"$live")" = "$CANONICAL_PARENT"
+          test "$(jq -r .commit.message <<<"$live")" = 'Star Trek: publish Kzinti Flyer cycle'
+          test "$CANDIDATE_COMMIT" != "$PRODUCT_COMMIT"
+          test "$CANDIDATE_TREE" != "$PRODUCT_TREE"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$PRODUCT_COMMIT"
+          git checkout --detach "$PRODUCT_COMMIT"
+          checker="$(find scripts -maxdepth 1 -type f -name 'star-trek-kzinti-flyer*.mjs' -print | LC_ALL=C sort | tail -1)"
+          prior="$(find scripts -maxdepth 1 -type f -name 'star-trek-lwaxana*.mjs' -print | LC_ALL=C sort | tail -1)"
+          test -n "$checker" && test -n "$prior"
+          node "$checker"
+          node "$prior"
+          node scripts/star-trek-kukulkan-cycle.mjs
+          node scripts/thesis-rails.mjs validate --json > "$ROOT/thesis-status.json"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          node scripts/media-audit.mjs gate --scope star-trek
+          node scripts/waterline.mjs validate
+          node scripts/corpus-ops.mjs validate
+          pages="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${PAGES_RUN}")"
+          test "$(jq -r .status <<<"$pages")" = completed
+          test "$(jq -r .conclusion <<<"$pages")" = success
+          test "$(jq -r .head_sha <<<"$pages")" = "$PRODUCT_COMMIT"
+          printf '%s\n' "$pages" | jq . > "$ROOT/pages-run.json"
+          mkdir -p "$ROOT/sealed"
+          cp data/review/adapter-sdk/star-trek-kzinti-flyer-cycle.json "$ROOT/sealed/"
+          cp "$checker" "$ROOT/sealed/"
+          cp "$ROOT/media-preparation.json" "$ROOT/sealed/"
+          cp "$ROOT/source-probe.json" "$ROOT/sealed/"
+          cp "$ROOT/thesis-status.json" "$ROOT/sealed/"
+          cp "$ROOT/thesis-next.json" "$ROOT/sealed/"
+          cp "$ROOT/pages-run.json" "$ROOT/sealed/"
+          cp /tmp/kzinti-controller-exec/controller-source-manifest.json "$ROOT/sealed/"
+          jq -n --argjson version 1 --arg transaction STAR-TREK-KZINTI-FLYER-CYCLE-EXECUTION-V1 --arg status success --argjson workflow_run "$GITHUB_RUN_ID" --arg workflow_head "$GITHUB_SHA" --arg canonical_parent "$CANONICAL_PARENT" --arg product_commit "$PRODUCT_COMMIT" --arg product_tree "$PRODUCT_TREE" --arg candidate_commit "$CANDIDATE_COMMIT" --arg candidate_tree "$CANDIDATE_TREE" --argjson pages_run "$PAGES_RUN" --argjson probe_id "$PROBE_ID" --arg probe_sha "$PROBE_SHA" --argjson media_id "$MEDIA_ID" --arg media_sha "$MEDIA_SHA" --argjson controller_id "$CONTROLLER_ID" --arg controller_sha "${CONTROLLER_DIGEST#sha256:}" --argjson candidate_id "$CANDIDATE_ID" --arg candidate_sha "${CANDIDATE_DIGEST#sha256:}" --argjson review_id "$REVIEW_ID" --arg review_sha "${REVIEW_DIGEST#sha256:}" --argjson final_id "$FINAL_ID" --arg final_sha "${FINAL_DIGEST#sha256:}" '{version:$version,transaction:$transaction,status:$status,workflow_run:$workflow_run,workflow_head:$workflow_head,product:{commit:$product_commit,tree:$product_tree,parent:$canonical_parent,pages_run:$pages_run},candidate:{commit:$candidate_commit,tree:$candidate_tree,distinct_from_product:true},artifacts:{probe:{id:$probe_id,sha256:$probe_sha},media:{id:$media_id,sha256:$media_sha},controller:{id:$controller_id,sha256:$controller_sha},candidate:{id:$candidate_id,sha256:$candidate_sha},independent_review:{id:$review_id,sha256:$review_sha},final_product_receipt:{id:$final_id,sha256:$final_sha}}}' > "$ROOT/sealed/execution.json"
+          (cd "$ROOT/sealed" && find . -maxdepth 1 -type f ! -name manifest.sha256 -print0 | sort -z | xargs -0 sha256sum > manifest.sha256 && sha256sum -c manifest.sha256)
+          echo "product_commit=$PRODUCT_COMMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sealed Kzinti Flyer execution
+        id: execution_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kzinti-flyer-cycle-execution-v1
+          path: /tmp/kzinti-flyer-cycle-v1/sealed/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retire temporary Kzinti Flyer refs
+        env:
+          PRODUCT_COMMIT: ${{ steps.seal.outputs.product_commit }}
+          EXECUTION_ID: ${{ steps.execution_artifact.outputs.artifact-id }}
+          EXECUTION_DIGEST: ${{ steps.execution_artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$PRODUCT_COMMIT"
+          meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${EXECUTION_ID}")"
+          test "$(jq -r .expired <<<"$meta")" = false
+          test "$(jq -r .digest <<<"$meta")" = "$EXECUTION_DIGEST"
+          git ls-remote --heads origin 'refs/heads/agent/star-trek-kzinti-flyer*' | cut -f2 | sed 's#refs/heads/##' | LC_ALL=C sort -u > "$ROOT/refs-before-cleanup.txt"
+          while IFS= read -r branch; do test -z "$branch" || git push origin --delete "$branch" >/dev/null 2>&1 || true; done < "$ROOT/refs-before-cleanup.txt"
+          git ls-remote --heads origin 'refs/heads/agent/star-trek-kzinti-flyer*' > "$ROOT/refs-after-cleanup.txt"
+          test ! -s "$ROOT/refs-after-cleanup.txt"
+
+      - name: Remove failed candidate without masking failure
+        if: failure()
+        run: |
+          set +e
+          git push origin --delete "$CANDIDATE_BRANCH" >/dev/null 2>&1 || true
+          exit 0
