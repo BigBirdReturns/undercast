@@ -1,0 +1,166 @@
+name: star-trek-kukulkan-cycle-pr-v1
+
+on:
+  pull_request:
+    branches:
+      - agent/star-trek-kukulkan-probe-base-v1
+    types: [synchronize]
+
+concurrency:
+  group: star-trek-kukulkan-canonical-cycle
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  cycle:
+    if: github.event.pull_request.head.ref == 'agent/star-trek-kukulkan-probe-v1'
+    name: unitkukulkan-cycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_MAIN: af8c0891b38275889bc90ca76af763ce6dd9b59c
+      CANONICAL_PARENT: af8c0891b38275889bc90ca76af763ce6dd9b59c
+      TASK_ID: ap_8aa8780eda59987cb5a1de36
+      TASK_FINGERPRINT: 77f5acaf275c3880b0f0139d0726789eefeff1cf7de1710f00e9d1bca4427b9c
+      WALL_ID: UC-1390
+      CANDIDATE_BRANCH: agent/star-trek-kukulkan-candidate-v1
+      PROBE_RUN: 32319707151
+      PROBE_JOB: 96279260416
+      PROBE_RECEIPT_ARTIFACT: 9389338360
+      PROBE_RECEIPT_ARTIFACT_SHA: c709e51abea1ee40abee0c372ae07120d952eae6cbea8738ab24ca5e3c2905f4
+      MEDIA_PREP_RUN: 32319707151
+      MEDIA_PREP_JOB: 96279260416
+      MEDIA_PREP_ARTIFACT: 9389336811
+      MEDIA_PREP_ARTIFACT_SHA: f3451597601f150334c405b0cf5f336e46b6f796097c9e1711fe2703975ed100
+      CONTROLLER_ARTIFACT: 9389337488
+      CONTROLLER_ARTIFACT_SHA: 78d21efa06301f3bd8a47f976d7a25f0f5d4816a5cbca2dcc3dd650cdb7f73b6
+      SEALED_CONTROLLER_MANIFEST_SHA: cbcf44997e3a4989edc9bb2ae152a6e6e9c4d34bc3a9d556868c84d04032c3ec
+      SOURCE_RECEIPT_SHA: 8bd855653a81825dafe71625d0efd5bae08f6cffe69f72e68dce145f541c6fef
+      FACETS_SHA: 08ab416504ed4e8123fbbb0768202b9de333a0a326026f6e367363407ec394a1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Preserve canonical-cycle programs
+        run: |
+          set -euo pipefail
+          cp .github/recovery/kukulkan-cycle-controller-rebind-v1.py /tmp/kukulkan-cycle-controller-rebind-v1.py
+          cp .github/recovery/kukulkan-cycle-preflight-v1.sh /tmp/kukulkan-cycle-preflight-v1.sh
+          cp .github/recovery/kukulkan-cycle-seal-v1.sh /tmp/kukulkan-cycle-seal-v1.sh
+          cp .github/recovery/kukulkan-cycle-cleanup-v1.sh /tmp/kukulkan-cycle-cleanup-v1.sh
+          python3 -m py_compile /tmp/kukulkan-cycle-controller-rebind-v1.py
+          bash -n /tmp/kukulkan-cycle-preflight-v1.sh
+          bash -n /tmp/kukulkan-cycle-seal-v1.sh
+          bash -n /tmp/kukulkan-cycle-cleanup-v1.sh
+          chmod +x /tmp/kukulkan-cycle-preflight-v1.sh /tmp/kukulkan-cycle-seal-v1.sh /tmp/kukulkan-cycle-cleanup-v1.sh
+
+      - name: Bind successful probe and install exact execution controller
+        run: /tmp/kukulkan-cycle-preflight-v1.sh
+
+      - name: Upload exact execution controller and preflight
+        id: controller_execution_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kukulkan-controller-execution-v1
+          path: |
+            /tmp/kukulkan-controller-exec/
+            /tmp/unitkukulkan-cycle-preflight/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stage exact Kukulkan candidate
+        id: stage
+        run: bash /tmp/unitkukulkan-programs/unitkukulkan-controller.sh stage
+
+      - name: Upload exact Kukulkan candidate
+        id: candidate_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unitkukulkan-candidate-product
+          path: /tmp/unitkukulkan-candidate-artifact/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Review exact Kukulkan candidate independently
+        run: bash /tmp/unitkukulkan-programs/unitkukulkan-controller.sh review
+
+      - name: Upload exact independent Kukulkan review
+        id: review_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unitkukulkan-independent-review
+          path: /tmp/unitkukulkan-review-artifact/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish exact reviewed Kukulkan product
+        id: publish
+        run: bash /tmp/unitkukulkan-programs/unitkukulkan-controller.sh publish
+
+      - name: Upload exact Kukulkan final product receipt
+        id: final_receipt_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kukulkan-final-product-receipt-v1
+          path: /tmp/unitkukulkan-final-product-receipt/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Seal exact Kukulkan execution
+        id: seal
+        env:
+          PRODUCT_COMMIT: ${{ steps.publish.outputs.product_commit }}
+          PRODUCT_TREE: ${{ steps.publish.outputs.product_tree }}
+          PAGES_RUN: ${{ steps.publish.outputs.pages_run }}
+          CANDIDATE_COMMIT: ${{ steps.stage.outputs.commit }}
+          CANDIDATE_TREE: ${{ steps.stage.outputs.tree }}
+          CONTROLLER_EXECUTION_ARTIFACT: ${{ steps.controller_execution_artifact.outputs.artifact-id }}
+          CONTROLLER_EXECUTION_DIGEST: ${{ steps.controller_execution_artifact.outputs.artifact-digest }}
+          CANDIDATE_ARTIFACT: ${{ steps.candidate_artifact.outputs.artifact-id }}
+          CANDIDATE_DIGEST: ${{ steps.candidate_artifact.outputs.artifact-digest }}
+          REVIEW_ARTIFACT: ${{ steps.review_artifact.outputs.artifact-id }}
+          REVIEW_DIGEST: ${{ steps.review_artifact.outputs.artifact-digest }}
+          FINAL_RECEIPT_ARTIFACT: ${{ steps.final_receipt_artifact.outputs.artifact-id }}
+          FINAL_RECEIPT_DIGEST: ${{ steps.final_receipt_artifact.outputs.artifact-digest }}
+        run: /tmp/kukulkan-cycle-seal-v1.sh
+
+      - name: Upload sealed Kukulkan execution
+        id: execution_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kukulkan-cycle-execution-v1
+          path: /tmp/unitkukulkan-cycle-execution/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retire every temporary Kukulkan ref after exact success
+        env:
+          PRODUCT_COMMIT: ${{ steps.seal.outputs.product_commit }}
+          EXECUTION_ARTIFACT: ${{ steps.execution_artifact.outputs.artifact-id }}
+          EXECUTION_DIGEST: ${{ steps.execution_artifact.outputs.artifact-digest }}
+        run: /tmp/kukulkan-cycle-cleanup-v1.sh
+
+      - name: Upload Kukulkan cleanup receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-kukulkan-cleanup-v1
+          path: /tmp/unitkukulkan-cleanup/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove failed Kukulkan candidate ref without masking failure
+        if: failure()
+        run: |
+          set +e
+          git push origin --delete "$CANDIDATE_BRANCH" >/dev/null 2>&1 || true
+          exit 0
