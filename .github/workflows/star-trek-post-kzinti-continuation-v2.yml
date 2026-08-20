@@ -6,139 +6,16 @@ on:
       - agent/star-trek-post-kzinti-continuation-v2
 
 permissions:
-  actions: read
-  contents: write
+  contents: read
 
 concurrency:
   group: star-trek-post-kzinti-continuation-v2
   cancel-in-progress: true
 
 jobs:
-  classify:
+  park:
     runs-on: ubuntu-24.04
-    timeout-minutes: 1440
-    env:
-      GH_TOKEN: ${{ github.token }}
-      RESULT_BRANCH: agent/star-trek-post-kzinti-continuation-result-v1
-      ROOT: /tmp/star-trek-post-kzinti-continuation-v2
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-      - name: Accept only an already externally triggered exact carrier
-        run: |
-          set -euo pipefail
-          supervisor_head="$(git rev-parse HEAD)"
-          rm -rf "$ROOT"
-          mkdir -p "$ROOT"
-          locator=''
-          for attempt in $(seq 1 17280); do
-            encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/transport/post-kzinti-doohan-probe-v1/locator.json?ref=agent/star-trek-post-kzinti-doohan-probe-result-v1" --jq .content 2>/dev/null || true)"
-            if test -n "$encoded"; then locator="$(printf '%s' "$encoded" | tr -d '\n' | base64 -d)"; break; fi
-            sleep 5
-          done
-          test -n "$locator"
-          printf '%s\n' "$locator" | jq . > "$ROOT/probe-locator.json"
-          parent="$(jq -r .canonical_parent <<<"$locator")"
-          task_id="$(jq -r '.candidate.task_id // empty' <<<"$locator")"
-          fingerprint="$(jq -r '.candidate.source_fingerprint // empty' <<<"$locator")"
-          character="$(jq -r '.candidate.character // empty' <<<"$locator")"
-          performer="$(jq -r '.candidate.performer // empty' <<<"$locator")"
-          probe_id="$(jq -r .artifact.id <<<"$locator")"
-          probe_sha="$(jq -r .artifact.sha256 <<<"$locator")"
-          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$parent"
-          locator_status="$(jq -r .status <<<"$locator")"
-          locator_boundary="$(jq -r .boundary <<<"$locator")"
-          if test "$locator_status" = boundary || test "$locator_boundary" = true; then
-            status=boundary
-            reason="$(jq -r '.reason // "The next rail is outside the bounded post-Kzinti Doohan voice lane."' "$ROOT/probe-locator.json")"
-            selected='{}'
-            product_commit=''
-            product_tree=''
-          else
-            test "$locator_status" = success
-            test -n "$task_id" && test -n "$fingerprint"
-            refs='[]'
-            for prefix in agent/star-trek-doohan-rail-custodian agent/star-trek-next-bounded-cycle-claim agent/star-trek-continuation agent/star-trek-generic; do
-              rows="$(gh api "/repos/${GITHUB_REPOSITORY}/git/matching-refs/heads/${prefix}" 2>/dev/null || printf '[]')"
-              refs="$(jq -s 'add|unique_by(.ref)' <(printf '%s\n' "$refs") <(printf '%s\n' "$rows"))"
-            done
-            printf '%s\n' "$refs" | jq '[.[]|{ref,sha:.object.sha}]' > "$ROOT/candidate-branches.json"
-            exact='[]'
-            while IFS=$'\t' read -r ref sha; do
-              branch="${ref#refs/heads/}"
-              workflows="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/.github/workflows?ref=${branch}" 2>/dev/null || printf '[]')"
-              while IFS=$'\t' read -r path name; do
-                encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${branch}" --jq .content 2>/dev/null || true)"
-                test -n "$encoded" || continue
-                content="$(printf '%s' "$encoded" | tr -d '\n' | base64 -d)"
-                printf '%s\n' "$content" > /tmp/post-kzinti-external.txt
-                grep -Fq 'thesis-rails.mjs next' /tmp/post-kzinti-external.txt || continue
-                grep -Eq '(--limit[[:space:]]+1|limit:[[:space:]]*1)' /tmp/post-kzinti-external.txt || continue
-                grep -Fq 'source_fingerprint' /tmp/post-kzinti-external.txt || continue
-                grep -Fqi 'review' /tmp/post-kzinti-external.txt || continue
-                grep -Fqi 'publish' /tmp/post-kzinti-external.txt || continue
-                stale=false
-                while IFS= read -r value; do test -z "$value" || test "$value" = "$parent" || stale=true; done < <(grep -Eo 'EXPECTED_MAIN:[[:space:]]*[0-9a-f]{40}' /tmp/post-kzinti-external.txt | grep -Eo '[0-9a-f]{40}' || true)
-                while IFS= read -r value; do test -z "$value" || test "$value" = "$task_id" || stale=true; done < <(grep -Eo 'TASK_ID:[[:space:]]*ap_[A-Za-z0-9_]+' /tmp/post-kzinti-external.txt | awk '{print $2}' || true)
-                while IFS= read -r value; do test -z "$value" || test "$value" = "$fingerprint" || stale=true; done < <(grep -Eo 'TASK_FINGERPRINT:[[:space:]]*[0-9a-f]{64}' /tmp/post-kzinti-external.txt | grep -Eo '[0-9a-f]{64}' || true)
-                test "$stale" = false || continue
-                media_bound=false
-                grep -Fq "$probe_id" /tmp/post-kzinti-external.txt && media_bound=true
-                grep -Fq 'star-trek-post-kzinti-doohan-probe-v1' /tmp/post-kzinti-external.txt && media_bound=true
-                test "$media_bound" = true || continue
-                runs="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" -f branch="$branch" -f per_page=100)"
-                while IFS= read -r run_id; do
-                  row="$(jq -c --argjson id "$run_id" '.workflow_runs[]|select(.id==$id)' <<<"$runs")"
-                  event="$(jq -r .event <<<"$row")"
-                  case "$event" in workflow_dispatch|pull_request|pull_request_target|repository_dispatch|schedule) ;; *) continue;; esac
-                  exact="$(jq --arg branch "$branch" --arg sha "$sha" --arg workflow "$path" --arg name "$name" --argjson run_id "$run_id" --arg event "$event" '.+[{branch:$branch,sha:$sha,workflow:$workflow,name:$name,run_id:$run_id,event:$event}]' <<<"$exact")"
-                done < <(jq -r '.workflow_runs[]|select(.status!="completed")|.id' <<<"$runs")
-              done < <(jq -r '.[]|select(.type=="file" and (.name|endswith(".yml") or endswith(".yaml")))|[.path,.name]|@tsv' <<<"$workflows")
-            done < <(jq -r '.[]|[.ref,.sha]|@tsv' "$ROOT/candidate-branches.json")
-            printf '%s\n' "$exact" | jq . > "$ROOT/external-exact-runs.json"
-            count="$(jq 'length' "$ROOT/external-exact-runs.json")"
-            status=boundary
-            reason='No already externally triggered exact carrier exists. Workflow-token pushes are recursion-suppressed, so the prepared task remains unleased.'
-            selected='{}'
-            product_commit=''
-            product_tree=''
-            if test "$count" = 1; then
-              selected="$(jq -c '.[0]' "$ROOT/external-exact-runs.json")"
-              run_id="$(jq -r .run_id <<<"$selected")"
-              conclusion=''
-              for attempt in $(seq 1 17280); do
-                row="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
-                if test "$(jq -r .status <<<"$row")" = completed; then conclusion="$(jq -r '.conclusion // ""' <<<"$row")"; break; fi
-                sleep 5
-              done
-              if test "$conclusion" = success; then
-                new_live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
-                product_commit="$(jq -r .sha <<<"$new_live")"
-                product_tree="$(jq -r .commit.tree.sha <<<"$new_live")"
-                if test "$product_commit" != "$parent" && test "$(jq -r .parents[0].sha <<<"$new_live")" = "$parent"; then status=completed; reason='One already externally triggered exact carrier completed successfully.'; else product_commit=''; product_tree=''; fi
-              fi
-            elif test "$count" -gt 1; then
-              reason='Multiple externally triggered exact carriers remain; unique mutation authority is not proved.'
-            fi
-          fi
-          jq -n --argjson version 2 --arg transaction STAR-TREK-POST-KZINTI-CONTINUATION-V2 --arg status "$status" --arg reason "$reason" --argjson workflow_run "$GITHUB_RUN_ID" --arg workflow_head "$supervisor_head" --arg predecessor_commit "$parent" --arg task_id "$task_id" --arg source_fingerprint "$fingerprint" --arg character "$character" --arg performer "$performer" --argjson probe_artifact "$probe_id" --arg probe_sha256 "$probe_sha" --argjson selected "$selected" --arg product_commit "$product_commit" --arg product_tree "$product_tree" '{version:$version,transaction:$transaction,status:$status,reason:$reason,workflow_run:$workflow_run,workflow_head:$workflow_head,predecessor:{commit:$predecessor_commit,character:"Kzinti Flyer"},candidate:{task_id:($task_id|select(length>0)),source_fingerprint:($source_fingerprint|select(length>0)),character:($character|select(length>0)),performer:($performer|select(length>0)),probe_artifact:{id:$probe_artifact,sha256:$probe_sha256}},selected:($selected|select(length>0)),product:{commit:($product_commit|select(length>0)),tree:($product_tree|select(length>0))}}' > "$ROOT/result.json"
-          git fetch --filter=blob:none --no-tags origin main
-          git checkout --detach FETCH_HEAD
-          git checkout -B "$RESULT_BRANCH"
-          rm -rf transport/post-kzinti-continuation-v1
-          mkdir -p transport/post-kzinti-continuation-v1
-          cp -a "$ROOT"/. transport/post-kzinti-continuation-v1/
-          git config user.name undercast-post-kzinti-continuation
-          git config user.email post-kzinti-continuation@users.noreply.github.com
-          git add transport/post-kzinti-continuation-v1
-          git commit -m "Star Trek: publish externally triggered post-Kzinti classification ${status}"
-          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
-      - name: Upload post-Kzinti carrier-authority classification
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: star-trek-post-kzinti-continuation-v2-${{ github.run_id }}
-          path: /tmp/star-trek-post-kzinti-continuation-v2/
-          if-no-files-found: warn
-          retention-days: 30
+      - name: Park until Kzinti Flyer terminal custody exists
+        run: echo 'Post-Kzinti continuation v2 parked; original carrier is preserved in branch history.'
