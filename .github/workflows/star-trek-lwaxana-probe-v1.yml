@@ -1,0 +1,143 @@
+name: star-trek-lwaxana-probe-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-lwaxana-probe-v1
+
+concurrency:
+  group: star-trek-lwaxana-probe-v1
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  probe:
+    name: unitlwaxana-probe-v1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_MAIN: 47296e8a7947384b04275962b8f6a125e5306680
+      TASK_ID: ap_a65494e8328ca262d82a49c0
+      TASK_FINGERPRINT: f5b48cb2179b2192e0c02eedfb417a891278757693c31fd9dea19cb5351e132f
+      TEMP_BRANCH: agent/star-trek-lwaxana-probe-v1
+      RESULT_BRANCH: agent/star-trek-lwaxana-probe-result-v1
+      OUTPUT_ROOT: /tmp/lwaxana-probe-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Preserve probe program and publish exact run locator
+        run: |
+          set -euo pipefail
+          cp .github/recovery/lwaxana-probe-v1.py /tmp/lwaxana-probe-v1.py
+          python3 -m py_compile /tmp/lwaxana-probe-v1.py
+          carrier_head="$(git rev-parse HEAD)"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_MAIN"
+          git checkout --detach "$EXPECTED_MAIN"
+          node scripts/star-trek-kukulkan-cycle.mjs
+          node scripts/thesis-rails.mjs next --json > /tmp/lwaxana-next.json
+          test "$(jq -r .phase /tmp/lwaxana-next.json)" = ready-for-one-cycle
+          test "$(jq -r .candidate.task_id /tmp/lwaxana-next.json)" = "$TASK_ID"
+          test "$(jq -r .candidate.source_fingerprint /tmp/lwaxana-next.json)" = "$TASK_FINGERPRINT"
+          test "$(jq -r .candidate.character /tmp/lwaxana-next.json)" = 'Lwaxana Troi'
+          test "$(jq -r .candidate.performer /tmp/lwaxana-next.json)" = 'Majel Barrett'
+          test "$(jq -r '.candidate.performance_modes | join(",")' /tmp/lwaxana-next.json)" = physical-prosthetic
+
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/lwaxana-probe-v1
+          mkdir -p transport/lwaxana-probe-v1
+          jq -n \
+            --argjson version 1 \
+            --arg transaction STAR-TREK-LWAXANA-PROBE-RUN-START-V1 \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$carrier_head" \
+            --arg canonical_parent "$EXPECTED_MAIN" \
+            --arg task_id "$TASK_ID" \
+            --arg source_fingerprint "$TASK_FINGERPRINT" \
+            --arg status started \
+            '{version:$version,transaction:$transaction,run_id:$run_id,head_sha:$head_sha,canonical_parent:$canonical_parent,task_id:$task_id,source_fingerprint:$source_fingerprint,status:$status}' \
+            > transport/lwaxana-probe-v1/run-start.json
+          git config user.name undercast-lwaxana-probe
+          git config user.email lwaxana-probe@users.noreply.github.com
+          git add transport/lwaxana-probe-v1/run-start.json
+          git commit -m 'Lwaxana: publish exact probe run locator'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
+          git checkout --detach "$EXPECTED_MAIN"
+
+      - name: Freeze exact source and prepare bounded media
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MAIN"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$EXPECTED_MAIN"
+          rm -rf "$OUTPUT_ROOT"
+          python3 -m pip install --disable-pip-version-check --no-input Pillow==11.3.0
+          REPO_ROOT="$PWD" OUTPUT_ROOT="$OUTPUT_ROOT" EXPECTED_MAIN="$EXPECTED_MAIN" TASK_ID="$TASK_ID" TASK_FINGERPRINT="$TASK_FINGERPRINT" \
+            python3 /tmp/lwaxana-probe-v1.py
+          cp /tmp/lwaxana-next.json "$OUTPUT_ROOT/thesis-next.json"
+          jq -e --arg parent "$EXPECTED_MAIN" --arg task "$TASK_ID" --arg fingerprint "$TASK_FINGERPRINT" '.status == "success" and .canonical_parent == $parent and .task_id == $task and .source_fingerprint == $fingerprint and .character == "Lwaxana Troi" and .performer == "Majel Barrett" and .wall_id == "UC-1391" and .adjudicated_performance_mode == "physical / live-action" and .maker_attribution == "unresolved" and .canonical_mutation == false and .lease_taken == false' "$OUTPUT_ROOT/probe.json" >/dev/null
+          jq -e --arg parent "$EXPECTED_MAIN" --arg task "$TASK_ID" '.canonical_parent == $parent and .task_id == $task and .wall_id == "UC-1391" and .maker_attribution == "unresolved" and .byte_collision == false and .source_collision == false and .cross_facet_substitution == false and .media_review.verdict == "pass" and (.facets | length) == 2' "$OUTPUT_ROOT/media-preparation.json" >/dev/null
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$EXPECTED_MAIN"
+
+      - name: Upload exact Lwaxana probe
+        id: probe_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-lwaxana-probe-v1
+          path: /tmp/lwaxana-probe-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Seal non-mutating probe locator
+        env:
+          PROBE_ARTIFACT_ID: ${{ steps.probe_artifact.outputs.artifact-id }}
+          PROBE_ARTIFACT_DIGEST: ${{ steps.probe_artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          probe_sha="$(jq -r .receipt_sha256 "$OUTPUT_ROOT/probe.json")"
+          source_sha="$(jq -r .receipt_sha256 "$OUTPUT_ROOT/source-receipt.json")"
+          facets_sha="$(jq -r .facets_sha256 "$OUTPUT_ROOT/media-preparation.json")"
+          git fetch --filter=blob:none --no-tags origin "$RESULT_BRANCH"
+          git checkout --detach FETCH_HEAD
+          locator=transport/lwaxana-probe-v1/run-start.json
+          test -f "$locator"
+          python3 - "$PROBE_ARTIFACT_ID" "${PROBE_ARTIFACT_DIGEST#sha256:}" "$probe_sha" "$source_sha" "$facets_sha" <<'PY'
+          from pathlib import Path
+          import json, sys
+          path=Path('transport/lwaxana-probe-v1/run-start.json')
+          data=json.loads(path.read_text())
+          if data.get('status') != 'started': raise SystemExit('Lwaxana probe locator status drifted')
+          data.update({
+              'status':'success',
+              'artifact_id':int(sys.argv[1]),
+              'artifact_sha256':sys.argv[2],
+              'probe_receipt_sha256':sys.argv[3],
+              'source_receipt_sha256':sys.argv[4],
+              'facets_sha256':sys.argv[5],
+              'canonical_mutation':False,
+              'lease_taken':False,
+          })
+          path.write_text(json.dumps(data,indent=2)+'\n')
+          PY
+          git config user.name undercast-lwaxana-probe
+          git config user.email lwaxana-probe@users.noreply.github.com
+          git add "$locator"
+          git commit -m 'Lwaxana: seal exact non-mutating probe'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+      - name: Retire failed probe carrier without masking failure
+        if: failure()
+        run: |
+          set +e
+          git push origin --delete "$TEMP_BRANCH" >/dev/null 2>&1 || true
+          exit 0
