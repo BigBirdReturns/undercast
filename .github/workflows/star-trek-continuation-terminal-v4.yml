@@ -1,0 +1,69 @@
+name: star-trek-continuation-terminal-v4
+
+on:
+  push:
+    branches:
+      - agent/star-trek-continuation-terminal-v4
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-continuation-terminal-v4
+  cancel-in-progress: true
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1440
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Reuse a sealed v3 result or execute the final repaired reconciler
+        run: |
+          set -euo pipefail
+          existing="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/transport/star-trek-continuation-terminal-v3/terminal.json?ref=agent/star-trek-continuation-terminal-result-v3" --jq .content 2>/dev/null || true)"
+          if test -n "$existing" && test "$(printf '%s' "$existing" | tr -d '\n' | base64 -d | jq -r .status)" = success; then
+            mkdir -p /tmp/star-trek-continuation-terminal-v4
+            printf '%s' "$existing" | tr -d '\n' | base64 -d > /tmp/star-trek-continuation-terminal-v4/terminal.json
+            jq -n --argjson version 1 --arg transaction STAR-TREK-CONTINUATION-TERMINAL-V4 --arg status not-required --arg reason 'Structured terminal v3 is already sealed.' '{version:$version,transaction:$transaction,status:$status,reason:$reason}' > /tmp/star-trek-continuation-terminal-v4/recovery.json
+            exit 0
+          fi
+          encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/.github/recovery/star-trek-continuation-terminal-v3.py?ref=agent/star-trek-continuation-terminal-v3" --jq .content)"
+          printf '%s' "$encoded" | tr -d '\n' | base64 -d > /tmp/star-trek-continuation-terminal-v4.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('/tmp/star-trek-continuation-terminal-v4.py')
+          text=p.read_text()
+          text=text.replace("OUT = Path('/tmp/star-trek-continuation-terminal-v3')", "OUT = Path('/tmp/star-trek-continuation-terminal-v4')")
+          old='''def latest_cycle_checker(root: Path, commit: str) -> str:\n    paths = run(['git', 'diff-tree', '--no-commit-id', '--name-only', '-r', commit], cwd=root, capture=True).splitlines()\n    candidates = [path for path in paths if re.fullmatch(r'scripts/star-trek-.*-cycle\\.mjs', path)]\n    return candidates[-1] if candidates else 'scripts/star-trek-kzinti-flyer-cycle.mjs'\n'''
+          new='''def latest_cycle_checker(root: Path, commit: str) -> str:\n    history = run(['git', 'rev-list', '--first-parent', commit], cwd=root, capture=True).splitlines()\n    for row in history:\n        paths = run(['git', 'diff-tree', '--no-commit-id', '--name-only', '-r', row], cwd=root, capture=True).splitlines()\n        candidates = [path for path in paths if re.fullmatch(r'scripts/star-trek-.*-cycle\\.mjs', path)]\n        if candidates:\n            return candidates[-1]\n    return 'scripts/star-trek-kzinti-flyer-cycle.mjs'\n'''
+          if old not in text:
+              raise SystemExit('latest checker patch anchor drifted')
+          text=text.replace(old,new)
+          old_active='''    relevant_active = [row for row in active_rows if re.match(r'^agent/star-trek-(lwaxana|kzinti-flyer|post-lwaxana|post-kzinti|continuation-terminal)', row.get('head_branch') or '')]\n    if len(relevant_active) > 1:\n        fail(f'more than terminal reconciler remains active: {relevant_active}')\n'''
+          new_active='''    relevant_active = [\n        row for row in active_rows\n        if row.get('id') != RUN_ID\n        and re.match(r'^agent/star-trek-(lwaxana|kzinti-flyer|post-lwaxana|post-kzinti)', row.get('head_branch') or '')\n        and not re.search(r'(pipeline-monitor|terminal)', row.get('name') or '')\n    ]\n    deadline = time.time() + 900\n    while relevant_active and time.time() < deadline:\n        time.sleep(5)\n        active = gh_json(f'/repos/{REPOSITORY}/actions/runs?per_page=100').get('workflow_runs', [])\n        relevant_active = [\n            {key: row.get(key) for key in ('id','name','status','head_branch','head_sha','event','created_at')}\n            for row in active\n            if row.get('status') != 'completed'\n            and row.get('id') != RUN_ID\n            and re.match(r'^agent/star-trek-(lwaxana|kzinti-flyer|post-lwaxana|post-kzinti)', row.get('head_branch') or '')\n            and not re.search(r'(pipeline-monitor|terminal)', row.get('name') or '')\n        ]\n    if relevant_active:\n        fail(f'mutation work remains active after bounded drain: {relevant_active}')\n'''
+          if old_active not in text:
+              raise SystemExit('active-run patch anchor drifted')
+          text=text.replace(old_active,new_active)
+          text=text.replace("'refs/heads/agent/star-trek-continuation-terminal-v3',", "'refs/heads/agent/star-trek-continuation-terminal-v3',\n        'refs/heads/agent/star-trek-continuation-terminal-v4',")
+          p.write_text(text)
+          PY
+          python3 -m py_compile /tmp/star-trek-continuation-terminal-v4.py
+          python3 /tmp/star-trek-continuation-terminal-v4.py
+      - name: Upload final structured terminal package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-continuation-terminal-v4-${{ github.run_id }}
+          path: /tmp/star-trek-continuation-terminal-v4/
+          if-no-files-found: warn
+          retention-days: 30
