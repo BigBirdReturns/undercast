@@ -1,0 +1,110 @@
+name: star-trek-continuation-audit-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-next-bounded-cycle-claim
+
+concurrency:
+  group: star-trek-continuation-audit-v1
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  audit:
+    name: unitstar-trek-continuation-audit-v1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RESULT_BRANCH: agent/star-trek-continuation-audit-result-v1
+      ROOT: /tmp/star-trek-continuation-audit-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Wait for a stable bounded-stage snapshot
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/logs"
+          carrier_head="$(git rev-parse HEAD)"
+          names='["star-trek-lwaxana-rejection-publisher-v2","star-trek-lwaxana-rejection-rebuild-v3","star-trek-lwaxana-rejection-rebuild-v4","star-trek-kzinti-flyer-probe-v1","star-trek-kzinti-flyer-probe-v2","star-trek-kzinti-flyer-media-v1","star-trek-kzinti-flyer-cycle-v1","star-trek-kzinti-flyer-supervisor-v1","star-trek-post-kzinti-probe-v1","star-trek-post-kzinti-media-v1"]'
+          for attempt in $(seq 1 1080); do
+            all="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" -f per_page=100)"
+            relevant="$(jq --argjson names "$names" '[.workflow_runs[] | select(.name as $n | $names | index($n))]' <<<"$all")"
+            active="$(jq '[.[] | select(.status != "completed")] | length' <<<"$relevant")"
+            live_message="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .commit.message)"
+            terminal_ref="$(git ls-remote --heads origin refs/heads/agent/star-trek-kzinti-flyer-terminal-result-v1 | wc -l | tr -d ' ')"
+            post_ref="$(git ls-remote --heads origin refs/heads/agent/star-trek-post-kzinti-probe-result-v1 | wc -l | tr -d ' ')"
+            if test "$terminal_ref" = 1 && test "$post_ref" = 1; then break; fi
+            if test "$active" = 0 && test "$live_message" != 'Star Trek: publish Kukulkan cycle'; then break; fi
+            sleep 10
+          done
+          gh api "/repos/${GITHUB_REPOSITORY}/commits/main" | jq . > "$ROOT/live-main.json"
+          gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" -f per_page=100 | jq . > "$ROOT/all-runs.json"
+          jq --argjson names "$names" '[.workflow_runs[] | select(.name as $n | $names | index($n))] | sort_by(.created_at)' "$ROOT/all-runs.json" > "$ROOT/relevant-runs.json"
+          while IFS= read -r id; do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs?per_page=100" | jq . > "$ROOT/jobs-${id}.json" || true
+            run="$(jq -c --argjson id "$id" '.[] | select(.id == $id)' "$ROOT/relevant-runs.json")"
+            if test "$(jq -r .conclusion <<<"$run")" = failure; then
+              gh run view "$id" --repo "$GITHUB_REPOSITORY" --log-failed > "$ROOT/logs/${id}.log" 2>&1 || true
+            fi
+          done < <(jq -r '.[].id' "$ROOT/relevant-runs.json")
+          git ls-remote --heads origin 'refs/heads/agent/star-trek-lwaxana*' 'refs/heads/agent/star-trek-kzinti-flyer*' 'refs/heads/agent/star-trek-post-kzinti*' > "$ROOT/temporary-refs.txt"
+          live_sha="$(jq -r .sha "$ROOT/live-main.json")"
+          live_message="$(jq -r .commit.message "$ROOT/live-main.json")"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach FETCH_HEAD
+          npm ci --ignore-scripts
+          node scripts/thesis-rails.mjs validate --json > "$ROOT/thesis-status.json"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          node scripts/media-audit.mjs gate --scope star-trek > "$ROOT/media-gate.log"
+          node scripts/waterline.mjs validate > "$ROOT/waterline.log"
+          node scripts/corpus-ops.mjs validate > "$ROOT/corpus.log"
+          pages="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/workflows/pages.yml/runs" -f branch=main -f per_page=100)"
+          jq --arg sha "$live_sha" '[.workflow_runs[] | select(.head_sha == $sha)] | sort_by(.created_at) | last // null' <<<"$pages" > "$ROOT/pages-latest.json"
+          failures="$(jq '[.[] | select(.status == "completed" and .conclusion == "failure")] | length' "$ROOT/relevant-runs.json")"
+          active="$(jq '[.[] | select(.status != "completed")] | length' "$ROOT/relevant-runs.json")"
+          disposition=stable
+          if test "$active" != 0; then disposition=active; elif test "$failures" != 0; then disposition=failed-stage; fi
+          jq -n --argjson version 1 --arg transaction STAR-TREK-CONTINUATION-AUDIT-V1 --arg disposition "$disposition" --argjson audit_run "$GITHUB_RUN_ID" --arg audit_head "$carrier_head" --arg live_commit "$live_sha" --arg live_message "$live_message" --argjson failures "$failures" --argjson active "$active" --slurpfile next "$ROOT/thesis-next.json" --slurpfile pages "$ROOT/pages-latest.json" '{version:$version,transaction:$transaction,disposition:$disposition,audit_run:$audit_run,audit_head:$audit_head,live:{commit:$live_commit,message:$live_message},workflow_counts:{failed:$failures,active:$active},pages:$pages[0],next:$next[0]}' > "$ROOT/audit.json"
+          (cd "$ROOT" && find . -type f ! -name manifest.sha256 -print0 | sort -z | xargs -0 sha256sum > manifest.sha256 && sha256sum -c manifest.sha256)
+
+      - name: Publish independent audit result
+        run: |
+          set -euo pipefail
+          live="$(jq -r .live.commit "$ROOT/audit.json")"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$live"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach FETCH_HEAD
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/star-trek-continuation-audit-v1
+          mkdir -p transport/star-trek-continuation-audit-v1
+          cp "$ROOT/audit.json" transport/star-trek-continuation-audit-v1/
+          cp "$ROOT/thesis-next.json" transport/star-trek-continuation-audit-v1/
+          cp "$ROOT/relevant-runs.json" transport/star-trek-continuation-audit-v1/
+          cp "$ROOT/temporary-refs.txt" transport/star-trek-continuation-audit-v1/
+          cp "$ROOT/manifest.sha256" transport/star-trek-continuation-audit-v1/
+          git config user.name undercast-star-trek-continuation-auditor
+          git config user.email star-trek-continuation-auditor@users.noreply.github.com
+          git add transport/star-trek-continuation-audit-v1
+          git commit -m 'Star Trek: publish independent continuation audit'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+      - name: Upload complete audit package
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-continuation-audit-v1
+          path: /tmp/star-trek-continuation-audit-v1/
+          if-no-files-found: error
+          retention-days: 30
