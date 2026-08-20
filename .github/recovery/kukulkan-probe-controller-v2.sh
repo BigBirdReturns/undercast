@@ -50,6 +50,74 @@ export OUTPUT_ROOT=/tmp/kukulkan-controller-v2
 export TEMPLATE_ARTIFACT_ID TEMPLATE_ARTIFACT_DIGEST PREP_ARTIFACT_ID PREP_ARTIFACT_DIGEST PREP_RUN PREP_JOB EXPECTED_MAIN
 python3 /tmp/transform-kukulkan-controller-v2.py
 
+# The controller generator preserves evidence text exactly, but its template
+# serializes selected values inside single-quoted JavaScript literals. Escape
+# only strings actually present in the sealed preparation JSON, then rebuild
+# the controller manifest so its byte and hash ledger remains controlling.
+python3 - <<'PY'
+from pathlib import Path
+import hashlib
+import json
+
+root = Path('/tmp/kukulkan-controller-v2')
+prep = Path('/tmp/kol-tai-prep-v4')
+programs = root / 'programs'
+
+values = set()
+def collect(value):
+    if isinstance(value, dict):
+        for item in value.values():
+            collect(item)
+    elif isinstance(value, list):
+        for item in value:
+            collect(item)
+    elif isinstance(value, str) and "'" in value:
+        values.add(value)
+
+for name in ('task.json', 'source-receipt.json', 'media-preparation.json', 'episode-receipts.json'):
+    matches = list(prep.rglob(name))
+    if len(matches) != 1:
+        raise SystemExit(f'{name}: expected one sealed preparation file, found {matches}')
+    collect(json.loads(matches[0].read_text()))
+
+replacements = []
+for raw in sorted(values, key=len, reverse=True):
+    escaped = raw.replace('\\', '\\\\').replace("'", "\\'")
+    if raw != escaped:
+        replacements.append((raw, escaped))
+
+changed = {}
+for path in sorted(programs.glob('*.mjs')):
+    text = path.read_text()
+    count = 0
+    for raw, escaped in replacements:
+        occurrences = text.count(raw)
+        if occurrences:
+            text = text.replace(raw, escaped)
+            count += occurrences
+    path.write_text(text)
+    changed[path.name] = count
+
+if not any(changed.values()):
+    raise SystemExit('Kukulkan JavaScript evidence escaping made no changes')
+
+manifest_path = root / 'controller-source-manifest.json'
+manifest = json.loads(manifest_path.read_text())
+for row in manifest.get('files', []):
+    path = programs / row['file']
+    if not path.is_file():
+        raise SystemExit(f'missing controller program during manifest rebuild: {path}')
+    row['bytes'] = path.stat().st_size
+    row['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+manifest['javascript_evidence_escaping'] = {
+    'status': 'applied',
+    'source': 'sealed preparation JSON strings containing ASCII apostrophes',
+    'files': changed,
+}
+manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + '\n')
+print(json.dumps(manifest['javascript_evidence_escaping'], indent=2))
+PY
+
 chmod +x /tmp/kukulkan-controller-v2/programs/*
 bash -n /tmp/kukulkan-controller-v2/programs/unitkukulkan-controller.sh
 node --check /tmp/kukulkan-controller-v2/programs/unitkukulkan-stage.mjs
@@ -79,6 +147,8 @@ if manifest.get('canonical_parent') != 'af8c0891b38275889bc90ca76af763ce6dd9b59c
     raise SystemExit('controller canonical parent drifted')
 if len(manifest.get('files', [])) != 5:
     raise SystemExit('controller file cardinality drifted')
+if manifest.get('javascript_evidence_escaping', {}).get('status') != 'applied':
+    raise SystemExit('controller JavaScript evidence escaping receipt missing')
 for row in manifest['files']:
     path = root / 'programs' / row['file']
     if not path.is_file():
