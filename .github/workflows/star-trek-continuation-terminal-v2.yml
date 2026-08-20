@@ -1,0 +1,207 @@
+name: star-trek-continuation-terminal-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-continuation-terminal-v2
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-continuation-terminal-v2
+  cancel-in-progress: true
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1440
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RESULT_BRANCH: agent/star-trek-continuation-terminal-result-v2
+      ROOT: /tmp/star-trek-continuation-terminal-v2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Wait for bounded pipeline and reconcile the exact live state
+        run: |
+          set -euo pipefail
+          verifier_head="$(git rev-parse HEAD)"
+          rm -rf "$ROOT" /tmp/undercast-continuation-fresh-v2
+          mkdir -p "$ROOT/receipts" "$ROOT/logs"
+
+          fetch_optional() {
+            local path="$1"
+            local ref="$2"
+            local out="$3"
+            local encoded
+            encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${ref}" --jq .content 2>/dev/null || true)"
+            if test -n "$encoded"; then printf '%s' "$encoded" | tr -d '\n' | base64 -d > "$out"; return 0; fi
+            return 1
+          }
+
+          pipeline=''
+          for attempt in $(seq 1 17280); do
+            encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/transport/kzinti-flyer-pipeline-monitor-v1/status.json?ref=agent/star-trek-kzinti-flyer-pipeline-status-v1" --jq .content 2>/dev/null || true)"
+            if test -n "$encoded"; then
+              pipeline="$(printf '%s' "$encoded" | tr -d '\n' | base64 -d)"
+              disposition="$(jq -r .disposition <<<"$pipeline")"
+              if test "$disposition" = complete || test "$disposition" = terminal-failure || test "$disposition" = publication-failure || test "$disposition" = candidate-failure || test "$disposition" = timed-out; then break; fi
+            fi
+            sleep 5
+          done
+          test -n "$pipeline"
+          printf '%s\n' "$pipeline" | jq . > "$ROOT/pipeline-status.json"
+          disposition="$(jq -r .disposition <<<"$pipeline")"
+          if test "$disposition" != complete; then
+            jq -n --argjson version 1 --arg transaction STAR-TREK-CONTINUATION-TERMINAL-V2 --arg status failure --arg reason "The Kzinti bounded pipeline ended at ${disposition}: $(jq -r .reason <<<"$pipeline")" --argjson workflow_run "$GITHUB_RUN_ID" --arg verification_head "$verifier_head" --arg live_main "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" '{version:$version,transaction:$transaction,status:$status,reason:$reason,workflow_run:$workflow_run,verification_head:$verification_head,live_main:$live_main}' > "$ROOT/terminal.json"
+          else
+            fetch_optional transport/lwaxana-rejection-terminal-v1/terminal.json agent/star-trek-lwaxana-rejection-terminal-result-v1 "$ROOT/receipts/lwaxana-terminal.json"
+            fetch_optional transport/kzinti-flyer-terminal-v1/terminal.json agent/star-trek-kzinti-flyer-terminal-result-v1 "$ROOT/receipts/kzinti-terminal.json"
+            test "$(jq -r .status "$ROOT/receipts/lwaxana-terminal.json")" = success
+            test "$(jq -r .status "$ROOT/receipts/kzinti-terminal.json")" = success
+
+            post_probe=''
+            post_result=''
+            for attempt in $(seq 1 17280); do
+              if fetch_optional transport/post-kzinti-doohan-probe-v1/locator.json agent/star-trek-post-kzinti-doohan-probe-result-v1 "$ROOT/receipts/post-kzinti-probe.json"; then post_probe=ready; fi
+              if fetch_optional transport/post-kzinti-continuation-v1/result.json agent/star-trek-post-kzinti-continuation-result-v1 "$ROOT/receipts/post-kzinti-continuation.json"; then post_result=ready; fi
+              test -n "$post_probe" && test -n "$post_result" && break
+              sleep 5
+            done
+            test -n "$post_probe" && test -n "$post_result"
+            continuation_status="$(jq -r .status "$ROOT/receipts/post-kzinti-continuation.json")"
+            test "$continuation_status" = boundary || test "$continuation_status" = completed
+
+            live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+            live_sha="$(jq -r .sha <<<"$live")"
+            live_tree="$(jq -r .commit.tree.sha <<<"$live")"
+            live_parent="$(jq -r .parents[0].sha <<<"$live")"
+            live_message="$(jq -r .commit.message <<<"$live")"
+            printf '%s\n' "$live" | jq . > "$ROOT/live-main.json"
+            kzinti_commit="$(jq -r .product.commit "$ROOT/receipts/kzinti-terminal.json")"
+            if test "$continuation_status" = boundary; then
+              test "$live_sha" = "$kzinti_commit"
+              terminal_kind=post-kzinti-boundary
+              boundary_reason="$(jq -r .reason "$ROOT/receipts/post-kzinti-continuation.json")"
+            else
+              expected_product="$(jq -r .product.commit "$ROOT/receipts/post-kzinti-continuation.json")"
+              expected_tree="$(jq -r .product.tree "$ROOT/receipts/post-kzinti-continuation.json")"
+              test "$live_sha" = "$expected_product"
+              test "$live_tree" = "$expected_tree"
+              test "$(jq -r '.parents|length' <<<"$live")" = 1
+              test "$live_parent" = "$kzinti_commit"
+              terminal_kind=post-kzinti-product
+              boundary_reason=''
+            fi
+
+            git clone --filter=blob:none --no-checkout "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /tmp/undercast-continuation-fresh-v2
+            cd /tmp/undercast-continuation-fresh-v2
+            git checkout --detach "$live_sha"
+            npm ci
+            latest_checker="$(git log -1 --name-only --format= | grep '^scripts/star-trek-.*-cycle\.mjs$' | tail -1 || true)"
+            if test "$continuation_status" = boundary; then latest_checker=scripts/star-trek-kzinti-flyer-cycle.mjs; fi
+            test -n "$latest_checker" && test -f "$latest_checker"
+            node "$latest_checker" | tee "$ROOT/logs/latest-product-checker.log"
+            node scripts/star-trek-kzinti-flyer-cycle.mjs | tee "$ROOT/logs/kzinti-checker.log"
+            node scripts/star-trek-lwaxana-eligibility-rejection.mjs | tee "$ROOT/logs/lwaxana-checker.log"
+            node scripts/thesis-rails.mjs validate --json > "$ROOT/thesis-status.json"
+            node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+            node scripts/media-audit.mjs gate --scope star-trek | tee "$ROOT/logs/media-gate.log"
+            node scripts/waterline.mjs validate | tee "$ROOT/logs/waterline.log"
+            node scripts/corpus-ops.mjs validate | tee "$ROOT/logs/corpus.log"
+            node scripts/census-adapter.mjs check | tee "$ROOT/logs/adapter.log"
+            node scripts/validate.mjs | tee "$ROOT/logs/archive.log"
+            queue="$(jq '[.jobs[]|select(.scope=="star-trek")]|{total:length,queued:map(select(.status=="queued"))|length,resolved:map(select(.status=="resolved"))|length,rejected:map(select(.status=="rejected"))|length,blocked:map(select(.status=="blocked"))|length,in_flight:map(select(.status=="leased" or .status=="drafted" or .status=="merged"))|length}' data/AUTOPILOT.json)"
+            jq -e '.total==2228 and .rejected>=2 and .in_flight==0' <<<"$queue" >/dev/null
+            media="$(jq '[.items[]|select(.scope=="star-trek")]|{total_facets:length,verified:map(select(.status=="verified"))|length,review:map(select(.status=="review"))|length,attention:map(select(.status=="attention" or .status=="needs-attention"))|length,honest_absences:map(select(.status=="not-on-file" or .status=="not_on_file" or .status=="absent"))|length}' data/MEDIA-AUDIT.json)"
+            jq -e '.review==0 and .attention==0' <<<"$media" >/dev/null
+            waterline="$(jq '[.cycles[]|select(.scope_id=="star-trek")]|{cycles:length,open:map(select(.outcome!="completed" and .outcome!="aborted"))|length,duplicate_leases:(group_by(.lease_id)|map(select(length>1))|length)}' data/WATERLINE-STATE.json)"
+            jq -e '.open==0 and .duplicate_leases==0' <<<"$waterline" >/dev/null
+            printf '%s\n' "$queue" | jq . > "$ROOT/queue.json"
+            printf '%s\n' "$media" | jq . > "$ROOT/media.json"
+            printf '%s\n' "$waterline" | jq . > "$ROOT/waterline-state.json"
+
+            pages="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/workflows/pages.yml/runs" -f per_page=100)"
+            page="$(jq -c --arg head "$live_sha" '[.workflow_runs[]|select(.head_sha==$head and .status=="completed" and .conclusion=="success")]|sort_by(.created_at)|last // empty' <<<"$pages")"
+            test -n "$page"
+            pages_run="$(jq -r .id <<<"$page")"
+            printf '%s\n' "$page" | jq . > "$ROOT/pages-run.json"
+
+            runs="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" -f per_page=100)"
+            printf '%s\n' "$runs" | jq '[.workflow_runs[]|select(.status!="completed")|{id,name,status,head_branch,head_sha,event,created_at}]' > "$ROOT/active-runs-before-cleanup.json"
+            relevant_active="$(jq '[.[]|select((.head_branch // "")|test("^agent/star-trek-(lwaxana|kzinti-flyer|post-lwaxana|post-kzinti|continuation-terminal)"))]|length' "$ROOT/active-runs-before-cleanup.json")"
+            test "$relevant_active" -le 1
+
+            next_phase="$(jq -r '.phase // empty' "$ROOT/thesis-next.json")"
+            next_task="$(jq -r '.candidate.task_id // empty' "$ROOT/thesis-next.json")"
+            next_fingerprint="$(jq -r '.candidate.source_fingerprint // empty' "$ROOT/thesis-next.json")"
+            next_character="$(jq -r '.candidate.character // empty' "$ROOT/thesis-next.json")"
+            next_performer="$(jq -r '.candidate.performer // empty' "$ROOT/thesis-next.json")"
+            jq -n --argjson version 1 --arg transaction STAR-TREK-CONTINUATION-TERMINAL-V2 --arg status success --arg terminal_kind "$terminal_kind" --arg boundary_reason "$boundary_reason" --argjson workflow_run "$GITHUB_RUN_ID" --arg verification_head "$verifier_head" --arg live_commit "$live_sha" --arg live_tree "$live_tree" --arg live_parent "$live_parent" --arg live_message "$live_message" --argjson pages_run "$pages_run" --argjson queue "$queue" --argjson media "$media" --argjson waterline "$waterline" --arg continuation_status "$continuation_status" --arg next_phase "$next_phase" --arg next_task "$next_task" --arg next_fingerprint "$next_fingerprint" --arg next_character "$next_character" --arg next_performer "$next_performer" '{version:$version,transaction:$transaction,status:$status,terminal_kind:$terminal_kind,boundary_reason:($boundary_reason|select(length>0)),workflow_run:$workflow_run,verification_head:$verification_head,product:{commit:$live_commit,tree:$live_tree,parent:$live_parent,message:$live_message,pages_run:$pages_run},completed_products:[{character:"Lwaxana Troi",disposition:"eligibility rejection",commit:(input_filename|select(false))},{character:"Kzinti Flyer",disposition:"canonical card"}],post_kzinti_continuation:$continuation_status,queue:$queue,media:$media,waterline:$waterline,next_deterministic_obligation:{phase:$next_phase,task_id:($next_task|select(length>0)),source_fingerprint:($next_fingerprint|select(length>0)),character:($next_character|select(length>0)),performer:($next_performer|select(length>0))},checks:{fresh_clone:"pass",latest_product_checker:"pass",kzinti_checker:"pass",lwaxana_checker:"pass",thesis:"pass",media:"pass",waterline:"pass",corpus:"pass",adapter:"pass",archive:"pass",pages:"success",in_flight_zero:true,media_review_zero:true}}' > "$ROOT/terminal.json"
+            # Repair completed product identities with the sealed receipts instead of jq placeholders.
+            python3 - "$ROOT/terminal.json" "$ROOT/receipts/lwaxana-terminal.json" "$ROOT/receipts/kzinti-terminal.json" <<'PY'
+            from pathlib import Path
+            import json,sys
+            terminal=Path(sys.argv[1]); data=json.loads(terminal.read_text())
+            lw=json.loads(Path(sys.argv[2]).read_text()); kz=json.loads(Path(sys.argv[3]).read_text())
+            data['completed_products']=[
+              {'character':'Lwaxana Troi','disposition':'eligibility rejection','commit':lw['product']['commit'],'tree':lw['product']['tree'],'parent':lw['product']['parent'],'pages_run':lw['product']['pages_run']},
+              {'character':'Kzinti Flyer','disposition':'canonical card','commit':kz['product']['commit'],'tree':kz['product']['tree'],'parent':kz['product']['parent'],'pages_run':kz['product']['pages_run']},
+            ]
+            terminal.write_text(json.dumps(data,indent=2)+'\n')
+            PY
+          fi
+
+          cd /tmp/undercast-continuation-fresh-v2 2>/dev/null || {
+            git fetch --filter=blob:none --no-tags origin main
+            git checkout --detach FETCH_HEAD
+          }
+          test -f "$ROOT/terminal.json"
+          report_status="$(jq -r .status "$ROOT/terminal.json")"
+          live_now="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          test "$live_now" = "$(jq -r '.product.commit // .live_main' "$ROOT/terminal.json")"
+
+          git checkout -B "$RESULT_BRANCH" "$live_now"
+          rm -rf transport/star-trek-continuation-terminal-v2
+          mkdir -p transport/star-trek-continuation-terminal-v2
+          cp -a "$ROOT"/. transport/star-trek-continuation-terminal-v2/
+          git config user.name undercast-star-trek-continuation-terminal
+          git config user.email star-trek-continuation-terminal@users.noreply.github.com
+          git add transport/star-trek-continuation-terminal-v2
+          git commit -m "Star Trek: publish combined continuation terminal ${report_status}"
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+          if test "$report_status" = success; then
+            for pattern in \
+              'refs/heads/agent/star-trek-lwaxana*' \
+              'refs/heads/agent/star-trek-kzinti-flyer*' \
+              'refs/heads/agent/star-trek-post-lwaxana*' \
+              'refs/heads/agent/star-trek-post-kzinti*' \
+              'refs/heads/agent/star-trek-continuation-terminal-v2'; do
+              git ls-remote --heads origin "$pattern" | cut -f2 | sed 's#refs/heads/##' | while IFS= read -r branch; do
+                test -z "$branch" && continue
+                test "$branch" = "$RESULT_BRANCH" && continue
+                git push origin --delete "$branch" >/dev/null 2>&1 || true
+              done
+            done
+            remaining="$(git ls-remote --heads origin 'refs/heads/agent/star-trek-lwaxana*' 'refs/heads/agent/star-trek-kzinti-flyer*' 'refs/heads/agent/star-trek-post-lwaxana*' 'refs/heads/agent/star-trek-post-kzinti*' 'refs/heads/agent/star-trek-continuation-terminal-v2' | cut -f2 | sed 's#refs/heads/##' | grep -v "^${RESULT_BRANCH}$" || true)"
+            test -z "$remaining"
+          fi
+
+      - name: Upload combined terminal package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-continuation-terminal-v2-${{ github.run_id }}
+          path: /tmp/star-trek-continuation-terminal-v2/
+          if-no-files-found: warn
+          retention-days: 30
