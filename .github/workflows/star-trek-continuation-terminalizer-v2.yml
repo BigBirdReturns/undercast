@@ -1,0 +1,307 @@
+name: star-trek-continuation-terminalizer-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-continuation-terminalizer-v2
+
+concurrency:
+  group: star-trek-continuation-terminalizer-v2
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  terminalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RESULT_BRANCH: agent/star-trek-continuation-terminal-result-v2
+      LWAXANA_TERMINAL_BRANCH: agent/star-trek-lwaxana-terminal-result-v1
+      POST_BRANCH: agent/star-trek-post-lwaxana-continuation-result-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Consolidate exact continuation custody
+        id: terminal
+        run: |
+          set -Eeuo pipefail
+          root=/tmp/star-trek-continuation-terminal-v2
+          rm -rf "$root"
+          mkdir -p "$root"
+          carrier_head="$(git rev-parse HEAD)"
+
+          decode_file() {
+            local branch="$1"
+            local path="$2"
+            local destination="$3"
+            local encoded
+            encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${branch}" --jq .content)"
+            test -n "$encoded"
+            printf '%s' "$encoded" | tr -d '\n' | base64 -d > "$destination"
+            test -s "$destination"
+          }
+
+          decode_file "$LWAXANA_TERMINAL_BRANCH" transport/lwaxana-terminal-v1/terminal.json "$root/lwaxana-terminal.json"
+          decode_file "$LWAXANA_TERMINAL_BRANCH" transport/lwaxana-terminal-v1/execution.json "$root/lwaxana-execution.json"
+          decode_file "$LWAXANA_TERMINAL_BRANCH" transport/lwaxana-terminal-v1/cleanup.json "$root/lwaxana-cleanup.json"
+          decode_file "$LWAXANA_TERMINAL_BRANCH" transport/lwaxana-terminal-v1/pages-run.json "$root/lwaxana-pages-run.json"
+          decode_file "$LWAXANA_TERMINAL_BRANCH" transport/lwaxana-terminal-v1/thesis-status.json "$root/lwaxana-thesis-status.json"
+          decode_file "$LWAXANA_TERMINAL_BRANCH" transport/lwaxana-terminal-v1/thesis-next.json "$root/lwaxana-thesis-next.json"
+          decode_file "$POST_BRANCH" transport/post-lwaxana-continuation-v1/result.json "$root/post-lwaxana-result.json"
+          decode_file "$POST_BRANCH" transport/post-lwaxana-continuation-v1/thesis-status.json "$root/post-lwaxana-thesis-status.json"
+          decode_file "$POST_BRANCH" transport/post-lwaxana-continuation-v1/thesis-next.json "$root/post-lwaxana-thesis-next.json"
+
+          jq -e '.status == "success" and .checks.product_checker == "pass" and .checks.predecessor_checker == "pass" and .checks.pages == "success" and .checks.cleanup == "success"' "$root/lwaxana-terminal.json" >/dev/null
+          jq -e '.status == "success" and .candidate.expected_distinct_from_product_tree == true and (.artifacts.controller.id | type) == "number"' "$root/lwaxana-execution.json" >/dev/null
+          jq -e '.status == "success" and .remaining_ref_count == 0' "$root/lwaxana-cleanup.json" >/dev/null
+          jq -e '.status == "completed" and .conclusion == "success"' "$root/lwaxana-pages-run.json" >/dev/null
+
+          lwaxana_commit="$(jq -r .product.commit "$root/lwaxana-terminal.json")"
+          lwaxana_tree="$(jq -r .product.tree "$root/lwaxana-terminal.json")"
+          lwaxana_parent="$(jq -r .product.parent "$root/lwaxana-terminal.json")"
+          post_status="$(jq -r '.status // empty' "$root/post-lwaxana-result.json")"
+          post_reason="$(jq -r '.reason // empty' "$root/post-lwaxana-result.json")"
+          test -n "$post_status"
+
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          live_sha="$(jq -r .sha <<<"$live")"
+          live_tree="$(jq -r .commit.tree.sha <<<"$live")"
+          live_message="$(jq -r .commit.message <<<"$live")"
+          live_parent_count="$(jq -r '.parents | length' <<<"$live")"
+          live_parent="$(jq -r '.parents[0].sha // empty' <<<"$live")"
+          test "$live_parent_count" = 1
+
+          terminal_status=''
+          current_checker=''
+          current_receipt=''
+          transition_run=''
+          case "$post_status" in
+            boundary)
+              test "$live_sha" = "$lwaxana_commit"
+              test "$live_tree" = "$lwaxana_tree"
+              current_checker=scripts/star-trek-lwaxana-cycle.mjs
+              current_receipt=data/review/adapter-sdk/star-trek-lwaxana-cycle.json
+              terminal_status=boundary
+              ;;
+            completed)
+              post_product="$(jq -r '.product.commit // empty' "$root/post-lwaxana-result.json")"
+              post_tree="$(jq -r '.product.tree // empty' "$root/post-lwaxana-result.json")"
+              transition_run="$(jq -r '.selected.transition_run // empty' "$root/post-lwaxana-result.json")"
+              test -n "$post_product"
+              test -n "$post_tree"
+              test -n "$transition_run"
+              test "$live_sha" = "$post_product"
+              test "$live_tree" = "$post_tree"
+              test "$live_parent" = "$lwaxana_commit"
+              current_checker="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/${live_sha}" --jq '.files[] | select(.status == "added" and (.filename | startswith("scripts/star-trek-")) and (.filename | endswith("-cycle.mjs"))) | .filename' | tail -1)"
+              current_receipt="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/${live_sha}" --jq '.files[] | select(.status == "added" and (.filename | startswith("data/review/adapter-sdk/star-trek-")) and (.filename | endswith("-cycle.json"))) | .filename' | tail -1)"
+              test -n "$current_checker"
+              test -n "$current_receipt"
+              terminal_status=completed
+              ;;
+            *)
+              jq -n \
+                --argjson version 2 \
+                --arg transaction STAR-TREK-CONTINUATION-TERMINAL-V2 \
+                --arg status blocked \
+                --arg reason "post-Lwaxana continuation status is ${post_status:-unset}: ${post_reason:-no reason}" \
+                --argjson workflow_run "$GITHUB_RUN_ID" \
+                --arg workflow_head "$carrier_head" \
+                --arg live_main "$live_sha" \
+                --arg live_tree "$live_tree" \
+                --arg post_status "$post_status" \
+                --arg post_reason "$post_reason" \
+                '{version:$version,transaction:$transaction,status:$status,reason:$reason,workflow_run:$workflow_run,workflow_head:$workflow_head,current:{commit:$live_main,tree:$live_tree},post_lwaxana:{status:$post_status,reason:$post_reason}}' \
+                > "$root/terminal.json"
+              exit 1
+              ;;
+          esac
+
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$live_sha"
+          git checkout --detach "$live_sha"
+          npm ci --ignore-scripts
+          test -f "$current_checker"
+          test -f "$current_receipt"
+          node "$current_checker"
+          if test "$live_sha" != "$lwaxana_commit"; then
+            node scripts/star-trek-lwaxana-cycle.mjs
+          fi
+          node scripts/star-trek-kukulkan-cycle.mjs
+          node scripts/thesis-rails.mjs validate --json > "$root/current-thesis-status.json"
+          node scripts/thesis-rails.mjs next --json > "$root/current-thesis-next.json"
+          node scripts/media-audit.mjs gate --scope star-trek
+          node scripts/waterline.mjs validate
+          node scripts/corpus-ops.mjs validate
+          cp "$current_checker" "$root/current-cycle-checker.mjs"
+          cp "$current_receipt" "$root/current-cycle-receipt.json"
+
+          current_character="$(jq -r '.canonical.record.character // .task.role // .task.character // empty' "$root/current-cycle-receipt.json")"
+          current_task="$(jq -r '.task.id // empty' "$root/current-cycle-receipt.json")"
+          current_wall="$(jq -r '.canonical.wall_id // .canonical.record.id // empty' "$root/current-cycle-receipt.json")"
+          next_phase="$(jq -r '.phase // empty' "$root/current-thesis-next.json")"
+          next_task="$(jq -r '.candidate.task_id // empty' "$root/current-thesis-next.json")"
+          next_character="$(jq -r '.candidate.character // empty' "$root/current-thesis-next.json")"
+          next_performer="$(jq -r '.candidate.performer // empty' "$root/current-thesis-next.json")"
+          next_fingerprint="$(jq -r '.candidate.source_fingerprint // empty' "$root/current-thesis-next.json")"
+
+          jq -n \
+            --argjson version 2 \
+            --arg transaction STAR-TREK-CONTINUATION-TERMINAL-V2 \
+            --arg status "$terminal_status" \
+            --arg reason "$post_reason" \
+            --argjson workflow_run "$GITHUB_RUN_ID" \
+            --arg workflow_head "$carrier_head" \
+            --arg lwaxana_commit "$lwaxana_commit" \
+            --arg lwaxana_tree "$lwaxana_tree" \
+            --arg lwaxana_parent "$lwaxana_parent" \
+            --arg live_main "$live_sha" \
+            --arg live_tree "$live_tree" \
+            --arg live_parent "$live_parent" \
+            --arg live_message "$live_message" \
+            --arg current_checker "$current_checker" \
+            --arg current_receipt "$current_receipt" \
+            --arg current_character "$current_character" \
+            --arg current_task "$current_task" \
+            --arg current_wall "$current_wall" \
+            --arg post_status "$post_status" \
+            --arg post_reason "$post_reason" \
+            --arg transition_run "$transition_run" \
+            --arg next_phase "$next_phase" \
+            --arg next_task "$next_task" \
+            --arg next_character "$next_character" \
+            --arg next_performer "$next_performer" \
+            --arg next_fingerprint "$next_fingerprint" \
+            '{
+              version:$version,
+              transaction:$transaction,
+              status:$status,
+              reason:$reason,
+              workflow_run:$workflow_run,
+              workflow_head:$workflow_head,
+              lwaxana:{commit:$lwaxana_commit,tree:$lwaxana_tree,parent:$lwaxana_parent,terminal_verification:"success"},
+              post_lwaxana:{status:$post_status,reason:$post_reason,transition_run:($transition_run|select(length>0))},
+              current:{commit:$live_main,tree:$live_tree,parent:$live_parent,message:$live_message,character:$current_character,task_id:$current_task,wall_id:$current_wall,checker:$current_checker,receipt:$current_receipt},
+              next:{phase:$next_phase,task_id:$next_task,character:$next_character,performer:$next_performer,source_fingerprint:$next_fingerprint},
+              checks:{current_cycle:"pass",lwaxana_predecessor:"pass",kukulkan_predecessor:"pass",thesis_rails:"pass",media_gate:"pass",waterline:"pass",corpus:"pass"},
+              cleanup:{temporary_refs_pending:true,stable_result_branch:"agent/star-trek-continuation-terminal-result-v2"}
+            }' > "$root/terminal.json"
+
+          (
+            cd "$root"
+            find . -maxdepth 1 -type f ! -name manifest.sha256 -print0 \
+              | sort -z \
+              | xargs -0 sha256sum > manifest.sha256
+            sha256sum -c manifest.sha256
+          )
+
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/star-trek-continuation-terminal-v2
+          mkdir -p transport/star-trek-continuation-terminal-v2
+          cp "$root"/* transport/star-trek-continuation-terminal-v2/
+          git config user.name undercast-star-trek-continuation-terminalizer
+          git config user.email star-trek-continuation-terminalizer@users.noreply.github.com
+          git add transport/star-trek-continuation-terminal-v2
+          git commit -m 'Star Trek: publish continuation terminal state v2'
+          result_commit="$(git rev-parse HEAD)"
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
+          printf 'result_commit=%s\n' "$result_commit" >> "$GITHUB_OUTPUT"
+          printf 'terminal_status=%s\n' "$terminal_status" >> "$GITHUB_OUTPUT"
+          printf 'current_main=%s\n' "$live_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Retire every temporary continuation carrier
+        env:
+          RESULT_COMMIT: ${{ steps.terminal.outputs.result_commit }}
+          TERMINAL_STATUS: ${{ steps.terminal.outputs.terminal_status }}
+          CURRENT_MAIN: ${{ steps.terminal.outputs.current_main }}
+        run: |
+          set -euo pipefail
+          test -n "$RESULT_COMMIT"
+          test "$TERMINAL_STATUS" = boundary -o "$TERMINAL_STATUS" = completed
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$CURRENT_MAIN"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/${RESULT_BRANCH}" --jq .sha)" = "$RESULT_COMMIT"
+
+          : > /tmp/continuation-refs-before.txt
+          for pattern in \
+            'refs/heads/agent/star-trek-lwaxana*' \
+            'refs/heads/agent/star-trek-post-lwaxana*' \
+            'refs/heads/agent/star-trek-next-boundary*' \
+            'refs/heads/agent/star-trek-continuation-terminalizer-v2'; do
+            git ls-remote --heads origin "$pattern" | cut -f2 | sed 's#refs/heads/##' >> /tmp/continuation-refs-before.txt
+          done
+          LC_ALL=C sort -u /tmp/continuation-refs-before.txt -o /tmp/continuation-refs-before.txt
+          while IFS= read -r branch; do
+            test -n "$branch" || continue
+            test "$branch" != "$RESULT_BRANCH"
+            git push origin --delete "$branch"
+          done < /tmp/continuation-refs-before.txt
+
+          : > /tmp/continuation-refs-after.txt
+          for pattern in \
+            'refs/heads/agent/star-trek-lwaxana*' \
+            'refs/heads/agent/star-trek-post-lwaxana*' \
+            'refs/heads/agent/star-trek-next-boundary*' \
+            'refs/heads/agent/star-trek-continuation-terminalizer-v2'; do
+            git ls-remote --heads origin "$pattern" >> /tmp/continuation-refs-after.txt
+          done
+          test ! -s /tmp/continuation-refs-after.txt
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$CURRENT_MAIN"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/${RESULT_BRANCH}" --jq .sha)" = "$RESULT_COMMIT"
+
+          rm -rf /tmp/continuation-cleanup-v2
+          mkdir -p /tmp/continuation-cleanup-v2
+          cp /tmp/continuation-refs-before.txt /tmp/continuation-cleanup-v2/deleted-refs.txt
+          cp /tmp/continuation-refs-after.txt /tmp/continuation-cleanup-v2/remaining-refs.txt
+          jq -n \
+            --argjson version 2 \
+            --arg transaction STAR-TREK-CONTINUATION-CLEANUP-V2 \
+            --arg status success \
+            --arg terminal_status "$TERMINAL_STATUS" \
+            --arg current_main "$CURRENT_MAIN" \
+            --arg result_branch "$RESULT_BRANCH" \
+            --arg result_commit "$RESULT_COMMIT" \
+            --argjson deleted_count "$(wc -l < /tmp/continuation-refs-before.txt | tr -d ' ')" \
+            '{version:$version,transaction:$transaction,status:$status,terminal_status:$terminal_status,current_main:$current_main,result_branch:$result_branch,result_commit:$result_commit,deleted_ref_count:$deleted_count,remaining_ref_count:0}' \
+            > /tmp/continuation-cleanup-v2/cleanup.json
+
+          git fetch --filter=blob:none --no-tags origin "$RESULT_BRANCH"
+          git checkout --detach FETCH_HEAD
+          cp /tmp/continuation-cleanup-v2/cleanup.json transport/star-trek-continuation-terminal-v2/cleanup-v2.json
+          cp /tmp/continuation-cleanup-v2/deleted-refs.txt transport/star-trek-continuation-terminal-v2/deleted-refs.txt
+          cp /tmp/continuation-cleanup-v2/remaining-refs.txt transport/star-trek-continuation-terminal-v2/remaining-refs.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          path=Path('transport/star-trek-continuation-terminal-v2/terminal.json')
+          data=json.loads(path.read_text())
+          data['cleanup']={
+              'status':'success',
+              'temporary_refs_pending':False,
+              'stable_result_branch':'agent/star-trek-continuation-terminal-result-v2',
+              'remaining_ref_count':0,
+          }
+          path.write_text(json.dumps(data,indent=2)+'\n')
+          PY
+          (
+            cd transport/star-trek-continuation-terminal-v2
+            find . -maxdepth 1 -type f ! -name manifest.sha256 -print0 \
+              | sort -z \
+              | xargs -0 sha256sum > manifest.sha256
+            sha256sum -c manifest.sha256
+          )
+          git config user.name undercast-star-trek-continuation-terminalizer
+          git config user.email star-trek-continuation-terminalizer@users.noreply.github.com
+          git add transport/star-trek-continuation-terminal-v2
+          git commit -m 'Star Trek: seal continuation cleanup v2'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
