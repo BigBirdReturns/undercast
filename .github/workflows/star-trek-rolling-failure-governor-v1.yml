@@ -1,0 +1,73 @@
+name: star-trek-rolling-failure-governor-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-rolling-continuation-v1
+
+concurrency:
+  group: star-trek-rolling-failure-governor-v1
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  govern:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CONTROL_BRANCH: agent/star-trek-rolling-continuation-v1
+      STATE_PATH: transport/star-trek-rolling-continuation-v1/state.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Convert repeated exact-stage failures into a boundary
+        run: |
+          set -euo pipefail
+          test -f "$STATE_PATH"
+          status="$(jq -r .status "$STATE_PATH")"
+          stage="$(jq -r .stage "$STATE_PATH")"
+          expected=''
+          key=''
+          case "$stage" in
+            awaiting-predecessor|bootstrap) expected=star-trek-rolling-probe-v1; key=probe ;;
+            probe-ready) expected=star-trek-rolling-media-v1; key=media ;;
+            media-ready) expected=star-trek-rolling-cycle-v1; key=cycle ;;
+            *) exit 0 ;;
+          esac
+          test "$status" = bootstrap || test "$status" = running || exit 0
+
+          row=''
+          for attempt in $(seq 1 180); do
+            runs="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" -f branch="$CONTROL_BRANCH" -f head_sha="$GITHUB_SHA" -f per_page=50)"
+            row="$(jq -c --arg name "$expected" --arg sha "$GITHUB_SHA" '[.workflow_runs[] | select(.name == $name and .head_sha == $sha)] | sort_by(.created_at) | last // empty' <<<"$runs")"
+            if test -n "$row" && test "$(jq -r .status <<<"$row")" = completed; then break; fi
+            sleep 10
+          done
+          test -n "$row" || exit 0
+          test "$(jq -r .status <<<"$row")" = completed || exit 0
+          test "$(jq -r .conclusion <<<"$row")" = failure || exit 0
+          failed_run="$(jq -r .id <<<"$row")"
+
+          git fetch --filter=blob:none --no-tags origin "$CONTROL_BRANCH"
+          git checkout -B "$CONTROL_BRANCH" FETCH_HEAD
+          current_stage="$(jq -r .stage "$STATE_PATH")"
+          test "$current_stage" = "$stage" || exit 0
+          count="$(jq -r --arg key "$key" '.recovery.stage_failures[$key] // 0' "$STATE_PATH")"
+          tmp="$(mktemp)"
+          if test "$count" -lt 1; then
+            jq --arg key "$key" --argjson count "$((count + 1))" --argjson run "$failed_run" --arg workflow "$expected" '.recovery.stage_failures[$key]=$count | .recovery.last_failed_run=$run | .recovery.last_failed_workflow=$workflow | .recovery.heartbeat=((.recovery.heartbeat // 0)+1)' "$STATE_PATH" > "$tmp"
+          else
+            jq --arg key "$key" --argjson count "$((count + 1))" --argjson run "$failed_run" --arg workflow "$expected" --arg stage "$stage" '.recovery.stage_failures[$key]=$count | .status="boundary" | .stage="boundary" | .boundary={kind:($key+"-stage-failure"),stage:$stage,workflow:$workflow,workflow_run:$run,attempts:$count,canonical_mutation:false,lease_taken:false}' "$STATE_PATH" > "$tmp"
+          fi
+          mv "$tmp" "$STATE_PATH"
+          git config user.name undercast-star-trek-rolling-failure-governor
+          git config user.email rolling-failure-governor@users.noreply.github.com
+          git add "$STATE_PATH"
+          git commit -m "Star Trek rolling continuation: govern ${key} failure"
+          git push origin "HEAD:refs/heads/${CONTROL_BRANCH}"
