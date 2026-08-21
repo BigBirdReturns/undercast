@@ -1,0 +1,145 @@
+name: star-trek-lorot-source-probe-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-lorot-source-media-v1
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-lorot-source-probe-v1
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_MAIN: 640754cdeb5a7679790682ab6c28070c28ca9fae
+      EXPECTED_PRODUCT: 59ac6a46ff0cae175a5ab2ebe0cdeb03f2620bc8
+      TASK_ID: ap_9b7123237c640f1ce0a16ffe
+      FINGERPRINT: df893de8f597caf34517ccfc5b7da21953f2b05b21cf8d11dd4c387e9216bf8c
+      RESULT_BRANCH: agent/star-trek-lorot-source-media-result-v1
+      ROOT: /tmp/star-trek-lorot-source-probe-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify live predecessor and freeze Lorot evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$EXPECTED_MAIN"
+          test "$(jq -r '.parents|length' <<<"$live")" = 1
+          test "$(jq -r .parents[0].sha <<<"$live")" = "$EXPECTED_PRODUCT"
+          printf '%s\n' "$live" | jq . > "$ROOT/live-main.json"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_MAIN"
+          git checkout --detach "$EXPECTED_MAIN"
+          npm ci --ignore-scripts
+          node scripts/star-trek-kzinti-flyer-cycle.mjs | tee "$ROOT/predecessor-checker.log"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          jq -e --arg task "$TASK_ID" --arg fp "$FINGERPRINT" '.phase=="ready-for-one-cycle" and .scope_id=="star-trek" and .candidate.task_id==$task and .candidate.source_fingerprint==$fp and .candidate.character=="Lorot" and .candidate.performer=="Jeri Ryan"' "$ROOT/thesis-next.json" >/dev/null
+          jq --arg id "$TASK_ID" '.jobs[]|select(.id==$id)' data/AUTOPILOT.json > "$ROOT/task.json"
+          jq -e --arg fp "$FINGERPRINT" '.status=="queued" and .source_fingerprint==$fp and .performance_modes==["physical-prosthetic"]' "$ROOT/task.json" >/dev/null
+          python3 - <<'PY'
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import Request,urlopen
+          from datetime import datetime,timezone
+          import hashlib,html,json,os,re
+          root=Path(os.environ['ROOT']); task=json.loads((root/'task.json').read_text())
+          ua='UNDERCAST-Lorot-Probe/1.0'
+          def get(url):
+            with urlopen(Request(url,headers={'User-Agent':ua,'Accept':'application/json'}),timeout=90) as r:return json.load(r)
+          def api(base,params):return get(base+'?'+urlencode(params))
+          def clean(v):return html.unescape(re.sub(r'<[^>]+>','',v or '')).strip()
+          memory='https://memory-alpha.fandom.com/api.php'
+          source=api(memory,{'action':'query','prop':'revisions|images|pageimages','revids':'2743351','rvprop':'ids|timestamp|content','rvslots':'main','imlimit':'max','piprop':'original|name','format':'json','formatversion':'2'})
+          pages=source.get('query',{}).get('pages',[])
+          if len(pages)!=1 or pages[0].get('missing'):raise SystemExit('Lorot source missing')
+          page=pages[0]; revs=page.get('revisions') or []
+          if len(revs)!=1:raise SystemExit('Lorot revision cardinality')
+          rev=revs[0]; text=rev['slots']['main']['content']; sha=hashlib.sha256(text.encode()).hexdigest()
+          if page.get('pageid')!=9220 or rev.get('revid')!=2743351 or sha!='02804549a900349a73c4cd2ebd31f63f8a7b8d8bd9111f27ff85c246a89b4763':raise SystemExit('Lorot frozen receipt drifted')
+          if 'jeri ryan' not in text.lower() or 'lorot' not in text.lower():raise SystemExit('performer attribution absent')
+          role_titles=[]
+          for row in page.get('images') or []:
+            title=row.get('title','')
+            if 'lorot' in title.lower():role_titles.append(title)
+          search=api(memory,{'action':'query','list':'search','srnamespace':'6','srsearch':'Lorot','srlimit':'50','format':'json','formatversion':'2'})
+          for row in search.get('query',{}).get('search',[]):
+            title=row.get('title','')
+            if 'lorot' in title.lower():role_titles.append(title)
+          role_titles=list(dict.fromkeys(role_titles))
+          role_files=[]
+          for title in role_titles:
+            try:
+              data=api(memory,{'action':'query','prop':'imageinfo','titles':title,'iiprop':'url|size|sha1|mime|timestamp|extmetadata','iiurlwidth':'1600','format':'json','formatversion':'2'})
+              p=data['query']['pages'][0]; info=(p.get('imageinfo') or [])[0]; ext=info.get('extmetadata') or {}
+              role_files.append({'title':p.get('title'),'description':clean((ext.get('ImageDescription') or {}).get('value')),'description_url':info.get('descriptionurl'),'url':info.get('url'),'thumburl':info.get('thumburl'),'width':info.get('width'),'height':info.get('height'),'mime':info.get('mime'),'timestamp':info.get('timestamp')})
+            except Exception as e:role_files.append({'title':title,'error':str(e)})
+          commons='https://commons.wikimedia.org/w/api.php'
+          csearch=api(commons,{'action':'query','list':'search','srnamespace':'6','srsearch':'Jeri Ryan','srlimit':'100','format':'json','formatversion':'2'})
+          canonical='\n'.join(Path(p).read_text(errors='replace') for p in ('data/specimens.json','data/SOURCES.json','data/MEDIA-AUDIT.json','CREDITS.md'))
+          portraits=[]
+          for row in csearch.get('query',{}).get('search',[]):
+            title=row.get('title','')
+            try:
+              data=api(commons,{'action':'query','prop':'imageinfo','titles':title,'iiprop':'url|size|sha1|mime|timestamp|extmetadata','iiurlwidth':'1200','format':'json','formatversion':'2'})
+              p=data['query']['pages'][0]; info=(p.get('imageinfo') or [])[0]; ext=info.get('extmetadata') or {}; desc=clean((ext.get('ImageDescription') or ext.get('ObjectName') or {}).get('value')); ident=(p.get('title','')+' '+desc).lower(); lic=clean((ext.get('LicenseShortName') or {}).get('value')); origin=info.get('descriptionurl') or ''
+              if 'jeri' not in ident or 'ryan' not in ident:continue
+              if not any(x in lic.lower() for x in ('public domain','cc by','cc0')):continue
+              portraits.append({'title':p.get('title'),'description':desc,'origin':origin,'url':info.get('url'),'thumburl':info.get('thumburl'),'width':info.get('width'),'height':info.get('height'),'mime':info.get('mime'),'timestamp':info.get('timestamp'),'author':clean((ext.get('Artist') or {}).get('value')),'license':lic,'already_referenced':origin in canonical or p.get('title','') in canonical or p.get('title','').replace(' ','_') in canonical})
+            except Exception:pass
+          result={'version':1,'transaction':'STAR-TREK-LOROT-SOURCE-PROBE-V1','status':'success','generated_at':datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00','Z'),'canonical_parent':os.environ['EXPECTED_MAIN'],'task_id':os.environ['TASK_ID'],'source_fingerprint':os.environ['FINGERPRINT'],'source':task['sources'][0],'pageid':page['pageid'],'revision':rev['revid'],'revision_timestamp':rev['timestamp'],'content_sha256':sha,'character':'Lorot','performer':'Jeri Ryan','queued_mode_hint':task.get('performance_modes'),'adjudicated_kind':'physical','adjudicated_performance_mode':'physical / live-action under Seven of Nine’s Borg presentation','seven_of_nine_body_not_conflated_with_original_lorot_body':True,'maker_attribution':'unresolved','role_file_candidates':role_files,'portrait_candidates':portraits,'recommended_still_disposition':'verified' if role_files else 'honest-absence','recommended_portrait_candidates':[p for p in portraits if not p['already_referenced']][:10],'canonical_mutation':False,'lease_taken':False}
+          body=json.dumps(result,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode();result['receipt_sha256']=hashlib.sha256(body).hexdigest()
+          (root/'source-probe.json').write_text(json.dumps(result,indent=2,ensure_ascii=False)+'\n');(root/'frozen-source.wikitext').write_text(text);(root/'frozen-source-api.json').write_text(json.dumps(source,indent=2,ensure_ascii=False)+'\n')
+          PY
+          jq -e --arg parent "$EXPECTED_MAIN" --arg task "$TASK_ID" --arg fp "$FINGERPRINT" '.status=="success" and .canonical_parent==$parent and .task_id==$task and .source_fingerprint==$fp and .adjudicated_kind=="physical" and .maker_attribution=="unresolved" and .canonical_mutation==false and .lease_taken==false' "$ROOT/source-probe.json" >/dev/null
+      - name: Upload exact Lorot source probe
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-lorot-source-probe-v1
+          path: /tmp/star-trek-lorot-source-probe-v1/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish source-probe locator
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$EXPECTED_MAIN"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach "$EXPECTED_MAIN"
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/star-trek-lorot-source-probe-v1
+          mkdir -p transport/star-trek-lorot-source-probe-v1
+          cp "$ROOT/source-probe.json" transport/star-trek-lorot-source-probe-v1/
+          cp "$ROOT/thesis-next.json" transport/star-trek-lorot-source-probe-v1/
+          jq -n --argjson version 1 --arg transaction STAR-TREK-LOROT-SOURCE-PROBE-LOCATOR-V1 --arg status success --argjson workflow_run "$GITHUB_RUN_ID" --arg workflow_head "$GITHUB_SHA" --arg canonical_parent "$EXPECTED_MAIN" --arg task_id "$TASK_ID" --arg source_fingerprint "$FINGERPRINT" --argjson artifact_id "$ARTIFACT_ID" --arg artifact_sha256 "${ARTIFACT_DIGEST#sha256:}" --arg source_receipt_sha256 "$(jq -r .receipt_sha256 "$ROOT/source-probe.json")" '{version:$version,transaction:$transaction,status:$status,workflow_run:$workflow_run,workflow_head:$workflow_head,canonical_parent:$canonical_parent,task_id:$task_id,source_fingerprint:$source_fingerprint,artifact:{id:$artifact_id,name:"star-trek-lorot-source-probe-v1",sha256:$artifact_sha256},source_receipt_sha256:$source_receipt_sha256,canonical_mutation:false,lease_taken:false}' > transport/star-trek-lorot-source-probe-v1/locator.json
+          git config user.name undercast-lorot-source-probe
+          git config user.email lorot-source-probe@users.noreply.github.com
+          git add -- transport/star-trek-lorot-source-probe-v1
+          git commit -m 'Star Trek: publish exact Lorot source probe'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
