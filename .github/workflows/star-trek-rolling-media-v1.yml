@@ -1,0 +1,307 @@
+name: star-trek-rolling-media-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-rolling-continuation-v1
+
+concurrency:
+  group: star-trek-rolling-media-v1
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  media:
+    name: unitstar-trek-rolling-media-v1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CONTROL_BRANCH: agent/star-trek-rolling-continuation-v1
+      STATE_PATH: transport/star-trek-rolling-continuation-v1/state.json
+      ROOT: /tmp/star-trek-rolling-media-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Decide whether the media stage owns this state
+        id: plan
+        run: |
+          set -euo pipefail
+          test -f "$STATE_PATH"
+          cp "$STATE_PATH" /tmp/rolling-state-before-media.json
+          status="$(jq -r .status /tmp/rolling-state-before-media.json)"
+          stage="$(jq -r .stage /tmp/rolling-state-before-media.json)"
+          should=false
+          if test "$status" = running && test "$stage" = probe-ready; then should=true; fi
+          echo "should_run=$should" >> "$GITHUB_OUTPUT"
+
+      - name: Bind exact source-probe artifact and live predecessor
+        if: steps.plan.outputs.should_run == 'true'
+        id: bind
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/probe" "$ROOT/output"
+          carrier_head="$(git rev-parse HEAD)"
+          parent="$(jq -r .expected_predecessor /tmp/rolling-state-before-media.json)"
+          task_id="$(jq -r .current.task_id /tmp/rolling-state-before-media.json)"
+          fingerprint="$(jq -r .current.source_fingerprint /tmp/rolling-state-before-media.json)"
+          artifact_id="$(jq -r .probe.artifact_id /tmp/rolling-state-before-media.json)"
+          artifact_sha="$(jq -r .probe.artifact_sha256 /tmp/rolling-state-before-media.json)"
+          receipt_sha="$(jq -r .probe.receipt_sha256 /tmp/rolling-state-before-media.json)"
+          test -n "$parent" && test -n "$task_id" && test -n "$fingerprint"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$parent"
+          meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}")"
+          test "$(jq -r .expired <<<"$meta")" = false
+          test "$(jq -r .digest <<<"$meta")" = "sha256:${artifact_sha}"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$ROOT/probe.zip"
+          echo "$artifact_sha  $ROOT/probe.zip" | sha256sum -c -
+          unzip -q "$ROOT/probe.zip" -d "$ROOT/probe"
+          source_file="$(find "$ROOT/probe" -type f -name source-probe.json -print -quit)"
+          task_file="$(find "$ROOT/probe" -type f -name task.json -print -quit)"
+          test -n "$source_file" && test -n "$task_file"
+          cp "$source_file" "$ROOT/source-probe.json"
+          cp "$task_file" "$ROOT/task.json"
+          test "$(jq -r .receipt_sha256 "$ROOT/source-probe.json")" = "$receipt_sha"
+          jq -e --arg parent "$parent" --arg task "$task_id" --arg fp "$fingerprint" '.status == "success" and .canonical_parent == $parent and .task_id == $task and .source_fingerprint == $fp and .adjudicated_performance_mode == "voice / voice-only" and .maker_attribution == "unresolved" and .canonical_mutation == false and .lease_taken == false' "$ROOT/source-probe.json" >/dev/null
+          printf '%s\n' "$carrier_head" > "$ROOT/carrier-head.txt"
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+          echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+          echo "probe_id=$artifact_id" >> "$GITHUB_OUTPUT"
+          echo "probe_sha=$artifact_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare exact source-distinct character and performer media
+        if: steps.plan.outputs.should_run == 'true'
+        env:
+          CANONICAL_PARENT: ${{ steps.bind.outputs.parent }}
+          TASK_ID: ${{ steps.bind.outputs.task_id }}
+          TASK_FINGERPRINT: ${{ steps.bind.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$CANONICAL_PARENT"
+          git checkout --detach "$CANONICAL_PARENT"
+          npm ci --ignore-scripts
+          python3 -m pip install --disable-pip-version-check --no-input Pillow==11.3.0
+          python3 - <<'PY'
+          from __future__ import annotations
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+          from io import BytesIO
+          from datetime import datetime, timezone
+          from PIL import Image
+          import hashlib, html, json, os, re
+
+          repo=Path('.')
+          root=Path('/tmp/star-trek-rolling-media-v1')
+          out=root/'output'; out.mkdir(parents=True, exist_ok=True)
+          probe=json.loads((root/'source-probe.json').read_text())
+          task=json.loads((root/'task.json').read_text())
+          parent=os.environ['CANONICAL_PARENT']; task_id=os.environ['TASK_ID']; fingerprint=os.environ['TASK_FINGERPRINT']
+          if probe['canonical_parent'] != parent or probe['task_id'] != task_id or probe['source_fingerprint'] != fingerprint:
+              raise SystemExit('source-probe binding drifted')
+          character=task['character']; performer=task['performer']
+
+          values=[]
+          specimens=json.loads((repo/'data/specimens.json').read_text())
+          def walk(value):
+              if isinstance(value,dict):
+                  for item in value.values(): walk(item)
+              elif isinstance(value,list):
+                  for item in value: walk(item)
+              elif isinstance(value,str):
+                  match=re.fullmatch(r'UC-(\d+)', value)
+                  if match: values.append(int(match.group(1)))
+          walk(specimens)
+          if not values: raise SystemExit('wall id census is empty')
+          wall=f'UC-{max(values)+1}'
+
+          user_agent='UNDERCAST-Rolling-Media/1.0 (preservation and attribution audit)'
+          def request_bytes(url, referer=None):
+              headers={'User-Agent':user_agent,'Accept':'*/*'}
+              if referer: headers['Referer']=referer
+              with urlopen(Request(url,headers=headers),timeout=90) as response:
+                  return response.read()
+          def api_json(base, params):
+              return json.loads(request_bytes(base+'?'+urlencode(params)))
+          def clean(value):
+              return html.unescape(re.sub(r'<[^>]+>','',value or '')).strip()
+          def decode(data):
+              with Image.open(BytesIO(data)) as image:
+                  image.load(); return image.convert('RGB'), image.size, image.format or 'unknown'
+          def normalize(data, kind):
+              image,size,fmt=decode(data)
+              image.thumbnail((1600,1600) if kind=='still' else (1200,1500),Image.Resampling.LANCZOS)
+              buffer=BytesIO()
+              if kind=='still': image.save(buffer,format='WEBP',quality=94,method=6)
+              else: image.save(buffer,format='JPEG',quality=94,optimize=True,progressive=False)
+              return buffer.getvalue(),size,fmt
+          def digest(data): return hashlib.sha256(data).hexdigest()
+
+          existing={}
+          for path in (repo/'images').glob('*'):
+              if path.is_file(): existing.setdefault(hashlib.sha256(path.read_bytes()).hexdigest(),[]).append(str(path))
+          canonical=''.join((repo/path).read_text(errors='replace') for path in ('data/specimens.json','data/SOURCES.json','data/MEDIA-AUDIT.json'))
+
+          memory_api='https://memory-alpha.fandom.com/api.php'
+          role_data=api_json(memory_api,{
+              'action':'query','prop':'pageimages|images','titles':character,
+              'piprop':'original|thumbnail|name','pithumbsize':'1600','imlimit':'max',
+              'format':'json','formatversion':'2'
+          })
+          pages=role_data['query']['pages']
+          if len(pages)!=1 or pages[0].get('missing'): raise SystemExit(f'role page missing: {pages}')
+          role_page=pages[0]
+          candidates=[]
+          if role_page.get('pageimage'): candidates.append('File:'+role_page['pageimage'].removeprefix('File:'))
+          tokens=[token for token in re.split(r'[^a-z0-9]+',character.lower()) if len(token)>2]
+          for row in role_page.get('images') or []:
+              lower=row['title'].lower()
+              if tokens and any(token in lower for token in tokens): candidates.append(row['title'])
+          candidates=list(dict.fromkeys(candidates))
+          still=None; errors=[]
+          for file_title in candidates:
+              try:
+                  data=api_json(memory_api,{
+                      'action':'query','prop':'imageinfo','titles':file_title,
+                      'iiprop':'url|size|sha1|mime|timestamp|extmetadata','iiurlwidth':'1600',
+                      'format':'json','formatversion':'2'
+                  })
+                  page=data['query']['pages'][0]; infos=page.get('imageinfo') or []
+                  if len(infos)!=1: continue
+                  info=infos[0]; raw=None; selected=None
+                  for url in (info.get('thumburl'),info.get('url')):
+                      if not url: continue
+                      try:
+                          candidate=request_bytes(url,'https://memory-alpha.fandom.com/'); decode(candidate)
+                          raw=candidate; selected=url; break
+                      except Exception as exc: errors.append(f'{url}:{type(exc).__name__}:{exc}')
+                  if raw is None: continue
+                  normalized,size,fmt=normalize(raw,'still'); sha=digest(normalized)
+                  if min(size)<250 or sha in existing: continue
+                  source_page=info.get('descriptionurl') or 'https://memory-alpha.fandom.com/wiki/'+page['title'].replace(' ','_')
+                  still={'title':page['title'],'origin':info.get('url'),'source_page':source_page,'download_url':selected,'sha256':sha,'source_size':size,'source_format':fmt,'mime':info.get('mime'),'timestamp':info.get('timestamp'),'bytes':normalized,'api':data}
+                  break
+              except Exception as exc: errors.append(f'{file_title}:{type(exc).__name__}:{exc}')
+          if still is None: raise SystemExit(f'no exact role still for {character}: {errors[-20:]}')
+
+          commons_api='https://commons.wikimedia.org/w/api.php'
+          search=api_json(commons_api,{
+              'action':'query','list':'search','srnamespace':'6','srsearch':performer,
+              'srlimit':'100','format':'json','formatversion':'2'
+          })
+          portrait=None; errors=[]
+          name_tokens=[token for token in re.split(r'[^a-z0-9]+',performer.lower()) if len(token)>2]
+          for row in search['query']['search']:
+              title=row['title']
+              try:
+                  data=api_json(commons_api,{
+                      'action':'query','prop':'imageinfo','titles':title,
+                      'iiprop':'url|size|sha1|mime|timestamp|extmetadata','iiurlwidth':'1200',
+                      'format':'json','formatversion':'2'
+                  })
+                  page=data['query']['pages'][0]; infos=page.get('imageinfo') or []
+                  if len(infos)!=1: continue
+                  info=infos[0]; ext=info.get('extmetadata') or {}
+                  description=clean((ext.get('ImageDescription') or ext.get('ObjectName') or {}).get('value'))
+                  identity=(page.get('title','')+' '+description).lower()
+                  if name_tokens and not all(token in identity for token in name_tokens): continue
+                  license_name=clean((ext.get('LicenseShortName') or {}).get('value')); lower_license=license_name.lower()
+                  if not ('public domain' in lower_license or 'cc by' in lower_license or 'cc0' in lower_license): continue
+                  origin=info.get('descriptionurl') or 'https://commons.wikimedia.org/wiki/'+page['title'].replace(' ','_')
+                  if origin in canonical or page['title'] in canonical or page['title'].replace(' ','_') in canonical: continue
+                  raw=None; selected=None
+                  for url in (info.get('thumburl'),info.get('url')):
+                      if not url: continue
+                      try:
+                          candidate=request_bytes(url,'https://commons.wikimedia.org/'); decode(candidate)
+                          raw=candidate; selected=url; break
+                      except Exception as exc: errors.append(f'{url}:{type(exc).__name__}:{exc}')
+                  if raw is None: continue
+                  normalized,size,fmt=normalize(raw,'portrait'); sha=digest(normalized)
+                  if min(size)<250 or sha in existing or sha==still['sha256']: continue
+                  portrait={'title':page['title'],'origin':origin,'download_url':selected,'sha256':sha,'source_size':size,'source_format':fmt,'mime':info.get('mime'),'timestamp':info.get('timestamp'),'author':clean((ext.get('Artist') or {}).get('value')),'license':license_name,'description':description,'bytes':normalized,'api':data}
+                  break
+              except Exception as exc: errors.append(f'{title}:{type(exc).__name__}:{exc}')
+          if portrait is None: raise SystemExit(f'no source-distinct performer portrait for {performer}: {errors[-20:]}')
+          if still['sha256']==portrait['sha256'] or still['source_page']==portrait['origin']:
+              raise SystemExit('cross-facet substitution or source collision')
+
+          lower_wall=wall.lower(); still_name=f'{lower_wall}-still.webp'; portrait_name=f'{lower_wall}-portrait.jpg'
+          (out/still_name).write_bytes(still.pop('bytes')); (out/portrait_name).write_bytes(portrait.pop('bytes'))
+          generated=datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00','Z'); date=generated[:10]
+          facets=[
+              {'id':'ma_'+hashlib.sha256(f'{wall}:portrait:{portrait["sha256"]}'.encode()).hexdigest()[:24],'scope':'star-trek','wall_id':wall,'side':'portrait','actor':performer,'character':character,'expected_subject':performer,'source_fetched_at':date,'asset':{'src':f'images/{portrait_name}','sha256':portrait['sha256'],'bytes':(out/portrait_name).stat().st_size,'origin':portrait['origin'],'kind':'free'},'risk_codes':[],'votes':[{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'identity','value':'expected','note':'The licensed source identifies the performer and supports performer identity only; it is not character, processing, or maker evidence.','evidence':['source-origin:'+portrait['origin'],'asset-sha256:'+portrait['sha256']],'enforced':True,'at':generated,'asset_sha256':portrait['sha256']},{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'presentation','value':'neutral-human','note':'The portrait presents the human performer and is source-distinct and byte-distinct from the role still and all canonical assets.','evidence':['source-origin:'+portrait['origin'],'asset-sha256:'+portrait['sha256']],'enforced':True,'at':generated,'asset_sha256':portrait['sha256']}],'claims':{'identity':{'value':'expected'},'presentation':{'value':'neutral-human'}},'status':'verified'},
+              {'id':'ma_'+hashlib.sha256(f'{wall}:still:{still["sha256"]}'.encode()).hexdigest()[:24],'scope':'star-trek','wall_id':wall,'side':'still','actor':performer,'character':character,'expected_subject':character,'source_fetched_at':date,'asset':{'src':f'images/{still_name}','sha256':still['sha256'],'bytes':(out/still_name).stat().st_size,'origin':still['origin'],'kind':'still'},'risk_codes':[],'votes':[{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'identity','value':'expected','note':'The role-specific file is retained only as character identity evidence and is not performer or maker evidence.','evidence':['source-page:'+still['source_page'],'asset-sha256:'+still['sha256']],'enforced':True,'at':generated,'asset_sha256':still['sha256']},{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'presentation','value':'character-depiction','note':'The image depicts the exact role and is source-distinct and byte-distinct from the performer portrait.','evidence':['source-page:'+still['source_page'],'asset-sha256:'+still['sha256']],'enforced':True,'at':generated,'asset_sha256':still['sha256']}],'claims':{'identity':{'value':'expected'},'presentation':{'value':'character-depiction'}},'status':'verified'}
+          ]
+          facets=sorted(facets,key=lambda row:row['side'])
+          def stable(value):
+              if isinstance(value,dict): return {key:stable(value[key]) for key in sorted(value)}
+              if isinstance(value,list): return [stable(item) for item in value]
+              return value
+          facets_sha=hashlib.sha256((json.dumps(stable(facets),indent=2,ensure_ascii=False)+'\n').encode()).hexdigest()
+          media={'version':1,'transaction':'STAR-TREK-ROLLING-MEDIA-PREPARATION-V1','generated_at':generated,'canonical_parent':parent,'task_id':task_id,'source_fingerprint':fingerprint,'wall_id':wall,'character':character,'performer':performer,'production':task.get('production'),'years':task.get('years'),'adjudicated_kind':'voice','performance_mode':'voice-only','maker_attribution':'unresolved','animation_maker_attribution':'unresolved','character_design_maker_attribution':'unresolved','voice_direction_attribution':'unresolved','editing_attribution':'unresolved','sound_processing_attribution':'unresolved','production_shop_attribution':'unresolved','vocal_transformation_measured':False,'still':{key:value for key,value in still.items() if key!='api'},'portrait':{key:value for key,value in portrait.items() if key!='api'},'still_path':still_name,'portrait_path':portrait_name,'facets':facets,'facets_sha256':facets_sha,'byte_collision':False,'source_collision':False,'cross_facet_substitution':False,'media_review':{'reviewer':'chatgpt-source-identity-second-desk','verdict':'pass','scope':'character still and performer portrait identity only'},'canonical_mutation':False,'lease_taken':False}
+          (out/'media-preparation.json').write_text(json.dumps(stable(media),indent=2,ensure_ascii=False)+'\n')
+          (out/'source-probe.json').write_text(json.dumps(probe,indent=2,ensure_ascii=False)+'\n')
+          (out/'task.json').write_text(json.dumps(task,indent=2,ensure_ascii=False)+'\n')
+          (out/'role-image-api.json').write_text(json.dumps(still['api'],indent=2,ensure_ascii=False)+'\n')
+          (out/'portrait-image-api.json').write_text(json.dumps(portrait['api'],indent=2,ensure_ascii=False)+'\n')
+          (out/'portrait-search-api.json').write_text(json.dumps(search,indent=2,ensure_ascii=False)+'\n')
+          PY
+          jq -e --arg parent "$CANONICAL_PARENT" --arg task "$TASK_ID" --arg fp "$TASK_FINGERPRINT" '.canonical_parent == $parent and .task_id == $task and .source_fingerprint == $fp and .performance_mode == "voice-only" and .maker_attribution == "unresolved" and .byte_collision == false and .source_collision == false and .cross_facet_substitution == false and .media_review.verdict == "pass" and (.facets | length) == 2 and (.facets | all(.status == "verified")) and .canonical_mutation == false and .lease_taken == false' "$ROOT/output/media-preparation.json" >/dev/null
+          still_path="$(jq -r .still_path "$ROOT/output/media-preparation.json")"
+          portrait_path="$(jq -r .portrait_path "$ROOT/output/media-preparation.json")"
+          test "$(sha256sum "$ROOT/output/$still_path" | cut -d' ' -f1)" = "$(jq -r .still.sha256 "$ROOT/output/media-preparation.json")"
+          test "$(sha256sum "$ROOT/output/$portrait_path" | cut -d' ' -f1)" = "$(jq -r .portrait.sha256 "$ROOT/output/media-preparation.json")"
+
+      - name: Upload exact rolling media preparation
+        if: steps.plan.outputs.should_run == 'true'
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-rolling-media-${{ github.run_id }}
+          path: /tmp/star-trek-rolling-media-v1/output/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Advance state to media-ready
+        if: steps.plan.outputs.should_run == 'true'
+        env:
+          CANONICAL_PARENT: ${{ steps.bind.outputs.parent }}
+          TASK_ID: ${{ steps.bind.outputs.task_id }}
+          TASK_FINGERPRINT: ${{ steps.bind.outputs.fingerprint }}
+          PROBE_ID: ${{ steps.bind.outputs.probe_id }}
+          PROBE_SHA: ${{ steps.bind.outputs.probe_sha }}
+          MEDIA_ID: ${{ steps.artifact.outputs.artifact-id }}
+          MEDIA_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          character="$(jq -r .character "$ROOT/output/media-preparation.json")"
+          performer="$(jq -r .performer "$ROOT/output/media-preparation.json")"
+          wall="$(jq -r .wall_id "$ROOT/output/media-preparation.json")"
+          facets_sha="$(jq -r .facets_sha256 "$ROOT/output/media-preparation.json")"
+          git fetch --filter=blob:none --no-tags origin "$CONTROL_BRANCH"
+          git checkout -B "$CONTROL_BRANCH" FETCH_HEAD
+          test "$(jq -r .stage "$STATE_PATH")" = probe-ready
+          test "$(jq -r .expected_predecessor "$STATE_PATH")" = "$CANONICAL_PARENT"
+          test "$(jq -r .current.task_id "$STATE_PATH")" = "$TASK_ID"
+          tmp="$(mktemp)"
+          jq --argjson run "$GITHUB_RUN_ID" --argjson artifact "$MEDIA_ID" --arg digest "${MEDIA_DIGEST#sha256:}" --arg facets "$facets_sha" --arg wall "$wall" --arg character "$character" --arg performer "$performer" '.stage="media-ready" | .current.wall_id=$wall | .current.character=$character | .current.performer=$performer | .media={workflow_run:$run,artifact_id:$artifact,artifact_sha256:$digest,facets_sha256:$facets,canonical_mutation:false,lease_taken:false}' "$STATE_PATH" > "$tmp"
+          mv "$tmp" "$STATE_PATH"
+          git config user.name undercast-star-trek-rolling-media
+          git config user.email rolling-media@users.noreply.github.com
+          git add "$STATE_PATH"
+          git commit -m "Star Trek rolling continuation: media ${character}"
+          git push origin "HEAD:refs/heads/${CONTROL_BRANCH}"
