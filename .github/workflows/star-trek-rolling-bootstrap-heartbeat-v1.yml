@@ -1,0 +1,58 @@
+name: star-trek-rolling-bootstrap-heartbeat-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-rolling-continuation-v1
+
+concurrency:
+  group: star-trek-rolling-bootstrap-heartbeat-v1
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CONTROL_BRANCH: agent/star-trek-rolling-continuation-v1
+      RESULT_BRANCH: agent/star-trek-post-kzinti-cycle-result-v1
+      STATE_PATH: transport/star-trek-rolling-continuation-v1/state.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Wake the bootstrap after a quiet interval
+        run: |
+          set -euo pipefail
+          test -f "$STATE_PATH"
+          iteration="$(jq -r .iteration "$STATE_PATH")"
+          stage="$(jq -r .stage "$STATE_PATH")"
+          status="$(jq -r .status "$STATE_PATH")"
+          test "$iteration" = 0 || exit 0
+          test "$status" = bootstrap || test "$status" = running || exit 0
+          test "$stage" = awaiting-predecessor || test "$stage" = bootstrap || exit 0
+          sleep 120
+          if git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}" | grep -q .; then exit 0; fi
+          git fetch --filter=blob:none --no-tags origin "$CONTROL_BRANCH"
+          git checkout -B "$CONTROL_BRANCH" FETCH_HEAD
+          test "$(jq -r .iteration "$STATE_PATH")" = 0 || exit 0
+          attempts="$(jq -r '.recovery.bootstrap_heartbeats // 0' "$STATE_PATH")"
+          if test "$attempts" -ge 120; then
+            tmp="$(mktemp)"
+            jq --argjson attempts "$attempts" --argjson run "$GITHUB_RUN_ID" '.status="boundary" | .stage="boundary" | .boundary={kind:"bootstrap-timeout",reason:"post-Kzinti bootstrap did not reach a verified result within the sealed retry ceiling",attempts:$attempts,workflow_run:$run,canonical_mutation:false,lease_taken:false}' "$STATE_PATH" > "$tmp"
+            mv "$tmp" "$STATE_PATH"
+          else
+            tmp="$(mktemp)"
+            jq --argjson attempts "$((attempts + 1))" --argjson run "$GITHUB_RUN_ID" '.recovery.bootstrap_heartbeats=$attempts | .recovery.last_bootstrap_heartbeat_run=$run' "$STATE_PATH" > "$tmp"
+            mv "$tmp" "$STATE_PATH"
+          fi
+          git config user.name undercast-star-trek-bootstrap-heartbeat
+          git config user.email bootstrap-heartbeat@users.noreply.github.com
+          git add "$STATE_PATH"
+          git commit -m 'Star Trek rolling continuation: bootstrap heartbeat'
+          git push origin "HEAD:refs/heads/${CONTROL_BRANCH}"
