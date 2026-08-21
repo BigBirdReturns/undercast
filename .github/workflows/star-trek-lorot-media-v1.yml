@@ -1,0 +1,203 @@
+name: star-trek-lorot-media-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-lorot-cycle-v1
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-lorot-media-v1
+  cancel-in-progress: true
+
+jobs:
+  media:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_MAIN: 640754cdeb5a7679790682ab6c28070c28ca9fae
+      TASK_ID: ap_9b7123237c640f1ce0a16ffe
+      FINGERPRINT: df893de8f597caf34517ccfc5b7da21953f2b05b21cf8d11dd4c387e9216bf8c
+      WALL_ID: UC-1392
+      PROBE_ARTIFACT: '9451813968'
+      PROBE_ARTIFACT_SHA: 9ff62d960e44beb644bfb5657bdb878939001b878294431ac4ea6bbb2a3e23f8
+      PROBE_RECEIPT_SHA: 8d781a52e3ca2216df22b9ccb2ab271d5bd3440b6e48c2878c94bce2580947cd
+      RESULT_BRANCH: agent/star-trek-lorot-media-result-v1
+      ROOT: /tmp/star-trek-lorot-media-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Bind exact source probe and prepare media
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/probe" "$ROOT/output"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$EXPECTED_MAIN"
+          printf '%s\n' "$live" | jq . > "$ROOT/live-main.json"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_MAIN"
+          git checkout --detach "$EXPECTED_MAIN"
+          npm ci --ignore-scripts
+          node scripts/star-trek-kzinti-flyer-cycle.mjs | tee "$ROOT/predecessor-checker.log"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          jq -e --arg task "$TASK_ID" --arg fp "$FINGERPRINT" '.phase=="ready-for-one-cycle" and .candidate.task_id==$task and .candidate.source_fingerprint==$fp and .candidate.character=="Lorot" and .candidate.performer=="Jeri Ryan"' "$ROOT/thesis-next.json" >/dev/null
+
+          meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${PROBE_ARTIFACT}")"
+          test "$(jq -r .expired <<<"$meta")" = false
+          test "$(jq -r .name <<<"$meta")" = star-trek-lorot-source-probe-v1
+          test "$(jq -r .digest <<<"$meta")" = "sha256:${PROBE_ARTIFACT_SHA}"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${PROBE_ARTIFACT}/zip" > "$ROOT/probe.zip"
+          echo "$PROBE_ARTIFACT_SHA  $ROOT/probe.zip" | sha256sum -c -
+          unzip -q "$ROOT/probe.zip" -d "$ROOT/probe"
+          test "$(jq -r .receipt_sha256 "$ROOT/probe/source-probe.json")" = "$PROBE_RECEIPT_SHA"
+          jq -e --arg parent "$EXPECTED_MAIN" --arg task "$TASK_ID" --arg fp "$FINGERPRINT" '.status=="success" and .canonical_parent==$parent and .task_id==$task and .source_fingerprint==$fp and .character=="Lorot" and .performer=="Jeri Ryan" and .adjudicated_kind=="physical" and .maker_attribution=="unresolved" and .lease_taken==false' "$ROOT/probe/source-probe.json" >/dev/null
+          cp "$ROOT/probe/source-probe.json" "$ROOT/output/"
+          cp "$ROOT/probe/frozen-source.wikitext" "$ROOT/output/"
+          cp "$ROOT/probe/frozen-source-api.json" "$ROOT/output/"
+          cp "$ROOT/probe/task.json" "$ROOT/output/task-original.json"
+
+          python3 -m pip install --disable-pip-version-check --no-input Pillow==11.3.0
+          python3 - <<'PY'
+          from __future__ import annotations
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+          from io import BytesIO
+          from datetime import datetime, timezone
+          from PIL import Image
+          import hashlib, html, json, os, re
+
+          repo=Path('.')
+          root=Path(os.environ['ROOT'])
+          out=root/'output'
+          probe=json.loads((out/'source-probe.json').read_text())
+          task=json.loads((out/'task-original.json').read_text())
+          parent=os.environ['EXPECTED_MAIN']; task_id=os.environ['TASK_ID']; fp=os.environ['FINGERPRINT']; wall=os.environ['WALL_ID']
+          if probe['canonical_parent']!=parent or probe['task_id']!=task_id or probe['source_fingerprint']!=fp: raise SystemExit('probe binding drifted')
+          ua='UNDERCAST-Lorot-Media/1.0 (source and attribution audit)'
+          def get_bytes(url, referer=None):
+              headers={'User-Agent':ua,'Accept':'*/*'}
+              if referer: headers['Referer']=referer
+              with urlopen(Request(url,headers=headers),timeout=120) as r:return r.read()
+          def api(base, params):return json.loads(get_bytes(base+'?'+urlencode(params)))
+          def clean(value):return html.unescape(re.sub(r'<[^>]+>','',value or '')).strip()
+          def image(data):
+              with Image.open(BytesIO(data)) as im: im.load(); return im.convert('RGB'), im.size, im.format or 'unknown'
+          def normalize(data, side):
+              im,size,fmt=image(data)
+              im.thumbnail((1600,1600) if side=='still' else (1200,1500),Image.Resampling.LANCZOS)
+              b=BytesIO()
+              if side=='still': im.save(b,format='WEBP',quality=94,method=6)
+              else: im.save(b,format='JPEG',quality=94,optimize=True,progressive=False)
+              return b.getvalue(),size,fmt
+          def sha(data):return hashlib.sha256(data).hexdigest()
+          existing={}
+          for p in (repo/'images').glob('*'):
+              if p.is_file():existing.setdefault(sha(p.read_bytes()),[]).append(str(p))
+          canonical='\n'.join((repo/p).read_text(errors='replace') for p in ('data/specimens.json','data/SOURCES.json','data/MEDIA-AUDIT.json','CREDITS.md'))
+
+          memory='https://memory-alpha.fandom.com/api.php'
+          still_title='File:Seven Lorot.jpg'
+          sdata=api(memory,{'action':'query','prop':'imageinfo','titles':still_title,'iiprop':'url|size|sha1|mime|timestamp|extmetadata','iiurlwidth':'1600','format':'json','formatversion':'2'})
+          spage=sdata['query']['pages'][0]; sinfo=(spage.get('imageinfo') or [])[0]
+          raw=None; selected=None
+          for url in (sinfo.get('thumburl'),sinfo.get('url')):
+              if not url:continue
+              try: raw=get_bytes(url,'https://memory-alpha.fandom.com/'); image(raw); selected=url; break
+              except Exception:pass
+          if raw is None:raise SystemExit('exact Lorot still download failed')
+          sbytes,ssize,sfmt=normalize(raw,'still'); ssha=sha(sbytes)
+          if min(ssize)<250 or ssha in existing:raise SystemExit('Lorot still is unusable or collides with canonical bytes')
+          still_origin=sinfo.get('descriptionurl') or 'https://memory-alpha.fandom.com/wiki/File:Seven_Lorot.jpg'
+
+          commons='https://commons.wikimedia.org/w/api.php'
+          portrait_title='File:Jeri Ryan 2014.jpg'
+          pdata=api(commons,{'action':'query','prop':'imageinfo','titles':portrait_title,'iiprop':'url|size|sha1|mime|timestamp|extmetadata','iiurlwidth':'1200','format':'json','formatversion':'2'})
+          ppage=pdata['query']['pages'][0]; pinfo=(ppage.get('imageinfo') or [])[0]; ext=pinfo.get('extmetadata') or {}
+          desc=clean((ext.get('ImageDescription') or ext.get('ObjectName') or {}).get('value'))
+          ident=(ppage.get('title','')+' '+desc).lower(); license_name=clean((ext.get('LicenseShortName') or {}).get('value')); portrait_origin=pinfo.get('descriptionurl') or 'https://commons.wikimedia.org/wiki/File:Jeri_Ryan_2014.jpg'
+          author=clean((ext.get('Artist') or {}).get('value'))
+          if 'jeri' not in ident or 'ryan' not in ident:raise SystemExit('portrait identity metadata drifted')
+          if not any(x in license_name.lower() for x in ('public domain','cc by','cc0')):raise SystemExit('portrait licence is not accepted')
+          if portrait_origin in canonical or ppage.get('title','') in canonical or ppage.get('title','').replace(' ','_') in canonical:raise SystemExit('portrait source already exists in canonical corpus')
+          praw=None; pselected=None
+          for url in (pinfo.get('thumburl'),pinfo.get('url')):
+              if not url:continue
+              try:praw=get_bytes(url,'https://commons.wikimedia.org/'); image(praw); pselected=url; break
+              except Exception:pass
+          if praw is None:raise SystemExit('Jeri Ryan portrait download failed')
+          pbytes,psize,pfmt=normalize(praw,'portrait'); psha=sha(pbytes)
+          if min(psize)<250 or psha in existing or psha==ssha:raise SystemExit('portrait is unusable or collides with canonical bytes')
+          if portrait_origin==still_origin:raise SystemExit('source collision')
+
+          episode_title='Infinite Regress (episode)'
+          edata=api(memory,{'action':'query','prop':'revisions','titles':episode_title,'rvprop':'ids|timestamp|content','rvslots':'main','format':'json','formatversion':'2'})
+          epage=edata['query']['pages'][0]; erev=(epage.get('revisions') or [])[0]; etext=erev['slots']['main']['content']; elower=etext.lower()
+          if 'infinite regress' not in elower or 'jeri ryan' not in elower:raise SystemExit('episode evidence drifted')
+          if '1998' not in etext:raise SystemExit('episode year not supported')
+          episode_source='https://memory-alpha.fandom.com/wiki/Infinite_Regress_(episode)'
+          episode_receipt={'source':episode_source,'pageid':epage['pageid'],'revision':erev['revid'],'timestamp':erev['timestamp'],'content_sha256':sha(etext.encode())}
+
+          still_name='uc-1392-still.webp'; portrait_name='uc-1392-portrait.jpg'
+          (out/still_name).write_bytes(sbytes); (out/portrait_name).write_bytes(pbytes)
+          generated=datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z'); date=generated[:10]
+          still={'title':spage['title'],'origin':still_origin,'asset_url':sinfo.get('url'),'download_url':selected,'source_page':still_origin,'sha256':ssha,'bytes':len(sbytes),'source_size':ssize,'source_format':sfmt,'mime':sinfo.get('mime'),'timestamp':sinfo.get('timestamp')}
+          portrait={'title':ppage['title'],'origin':portrait_origin,'asset_url':pinfo.get('url'),'download_url':pselected,'sha256':psha,'bytes':len(pbytes),'source_size':psize,'source_format':pfmt,'mime':pinfo.get('mime'),'timestamp':pinfo.get('timestamp'),'description':desc,'author':author,'license':license_name,'year':2014}
+          task['source']=task['sources'][0]; task['production']='Star Trek: Voyager (Infinite Regress)'; task['years']='1998'; task['episode_source']=episode_source; task['episode_receipt']=episode_receipt
+          facets=[
+            {'id':'ma_'+sha(f'{wall}:portrait:{psha}'.encode())[:24],'scope':'star-trek','wall_id':wall,'side':'portrait','actor':'Jeri Ryan','character':'Lorot','expected_subject':'Jeri Ryan','source_fetched_at':date,'asset':{'src':f'images/{portrait_name}','sha256':psha,'bytes':len(pbytes),'origin':portrait_origin,'kind':'free'},'risk_codes':[],'votes':[{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'identity','value':'expected','note':'The licensed Commons file identifies Jeri Ryan and supports performer identity only; it is not Lorot, Seven of Nine, production, makeup, or maker evidence.','evidence':[f'source-origin:{portrait_origin}',f'source-author:{author}',f'source-license:{license_name}',f'asset-sha256:{psha}'],'enforced':True,'at':generated,'asset_sha256':psha},{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'presentation','value':'neutral-human','note':'The portrait presents Jeri Ryan as a human performer and is source-distinct and byte-distinct from the exact Lorot still and every canonical asset.','evidence':[f'source-origin:{portrait_origin}',f'asset-sha256:{psha}'],'enforced':True,'at':generated,'asset_sha256':psha}],'claims':{'identity':{'state':'enforced','value':'expected','support':2,'reviewers':1,'human_reviewers':1,'competing':[]},'presentation':{'state':'enforced','value':'neutral-human','support':2,'reviewers':1,'human_reviewers':1,'competing':[]}},'status':'verified'},
+            {'id':'ma_'+sha(f'{wall}:still:{ssha}'.encode())[:24],'scope':'star-trek','wall_id':wall,'side':'still','actor':'Jeri Ryan','character':'Lorot','expected_subject':'Lorot as manifested through Seven of Nine','source_fetched_at':date,'asset':{'src':f'images/{still_name}','sha256':ssha,'bytes':len(sbytes),'origin':still_origin,'kind':'still'},'risk_codes':[],'votes':[{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'identity','value':'expected','note':'The exact Memory Alpha file is titled Seven Lorot and depicts Seven of Nine acting as Lorot in Infinite Regress; the frozen role source identifies Jeri Ryan as the performer.','evidence':['source-page:https://memory-alpha.fandom.com/wiki/Lorot','source-revision:2743351',f'source-file:{still_origin}',f'asset-sha256:{ssha}'],'enforced':True,'at':generated,'asset_sha256':ssha},{'reviewer':'chatgpt-source-identity-second-desk','role':'second-desk','namespace':'presentation','value':'character-depiction','note':'The exact frame depicts Lorot’s manifested personality through Seven of Nine. It is not treated as a depiction of Lorot’s original Vulcan or Borg body, as a neutral performer portrait, or as maker evidence.','evidence':[f'source-file:{still_origin}',f'asset-sha256:{ssha}'],'enforced':True,'at':generated,'asset_sha256':ssha}],'claims':{'identity':{'state':'enforced','value':'expected','support':2,'reviewers':1,'human_reviewers':1,'competing':[]},'presentation':{'state':'enforced','value':'character-depiction','support':2,'reviewers':1,'human_reviewers':1,'competing':[]}},'status':'verified'}
+          ]
+          stable=lambda v:[stable(x) for x in v] if isinstance(v,list) else {k:stable(v[k]) for k in sorted(v)} if isinstance(v,dict) else v
+          facets_sha=sha((json.dumps(stable(facets),indent=2,ensure_ascii=False)+'\n').encode())
+          media={'version':1,'transaction':'STAR-TREK-LOROT-MEDIA-PREPARATION-V1','generated_at':generated,'canonical_parent':parent,'task_id':task_id,'source_fingerprint':fp,'wall_id':wall,'character':'Lorot','performer':'Jeri Ryan','production':task['production'],'years':task['years'],'source':'https://memory-alpha.fandom.com/wiki/Lorot','source_receipts':task.get('source_receipts'),'episode_source':episode_source,'episode_receipt':episode_receipt,'queued_mode_hint':task.get('performance_modes'),'adjudicated_kind':'physical','performance_mode':'physical-prosthetic','performance_scope':'Jeri Ryan’s physical live-action performance as Lorot through Seven of Nine in Infinite Regress (1998)','seven_of_nine_body_not_conflated_with_original_lorot_body':True,'voice_performance_attributed':False,'maker_attribution':'unresolved','makeup_maker_attribution':'unresolved','costume_maker_attribution':'unresolved','character_design_maker_attribution':'unresolved','editing_attribution':'unresolved','sound_processing_attribution':'unresolved','production_shop_attribution':'unresolved','still':still,'portrait':portrait,'still_path':still_name,'portrait_path':portrait_name,'facets':facets,'facets_sha256':facets_sha,'byte_collision':False,'source_collision':False,'cross_facet_substitution':False,'media_review':{'reviewer':'chatgpt-source-identity-second-desk','verdict':'pass','scope':'exact Lorot manifestation still and source-distinct Jeri Ryan portrait only'},'canonical_mutation':False,'lease_taken':False}
+          (out/'media-preparation.json').write_text(json.dumps(stable(media),indent=2,ensure_ascii=False)+'\n')
+          (out/'task.json').write_text(json.dumps(task,indent=2,ensure_ascii=False)+'\n')
+          (out/'episode-source.wikitext').write_text(etext)
+          (out/'episode-source-api.json').write_text(json.dumps(edata,indent=2,ensure_ascii=False)+'\n')
+          (out/'still-image-api.json').write_text(json.dumps(sdata,indent=2,ensure_ascii=False)+'\n')
+          (out/'portrait-image-api.json').write_text(json.dumps(pdata,indent=2,ensure_ascii=False)+'\n')
+          PY
+          jq -e --arg parent "$EXPECTED_MAIN" --arg task "$TASK_ID" --arg fp "$FINGERPRINT" --arg wall "$WALL_ID" '.canonical_parent==$parent and .task_id==$task and .source_fingerprint==$fp and .wall_id==$wall and .performance_mode=="physical-prosthetic" and .maker_attribution=="unresolved" and .seven_of_nine_body_not_conflated_with_original_lorot_body==true and .media_review.verdict=="pass" and (.facets|length)==2 and (.facets|all(.status=="verified")) and .byte_collision==false and .source_collision==false and .cross_facet_substitution==false and .canonical_mutation==false and .lease_taken==false' "$ROOT/output/media-preparation.json" >/dev/null
+          test "$(sha256sum "$ROOT/output/uc-1392-still.webp" | cut -d' ' -f1)" = "$(jq -r .still.sha256 "$ROOT/output/media-preparation.json")"
+          test "$(sha256sum "$ROOT/output/uc-1392-portrait.jpg" | cut -d' ' -f1)" = "$(jq -r .portrait.sha256 "$ROOT/output/media-preparation.json")"
+      - name: Upload exact Lorot media artifact
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-lorot-media-v1
+          path: /tmp/star-trek-lorot-media-v1/output/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish Lorot media locator
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$EXPECTED_MAIN"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach "$EXPECTED_MAIN"
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/star-trek-lorot-media-v1
+          mkdir -p transport/star-trek-lorot-media-v1
+          cp "$ROOT/output/media-preparation.json" transport/star-trek-lorot-media-v1/
+          cp "$ROOT/output/source-probe.json" transport/star-trek-lorot-media-v1/
+          jq -n --argjson version 1 --arg transaction STAR-TREK-LOROT-MEDIA-LOCATOR-V1 --arg status success --argjson workflow_run "$GITHUB_RUN_ID" --arg workflow_head "$GITHUB_SHA" --arg canonical_parent "$EXPECTED_MAIN" --arg task_id "$TASK_ID" --arg source_fingerprint "$FINGERPRINT" --arg wall_id "$WALL_ID" --argjson artifact_id "$ARTIFACT_ID" --arg artifact_sha256 "${ARTIFACT_DIGEST#sha256:}" --arg facets_sha256 "$(jq -r .facets_sha256 "$ROOT/output/media-preparation.json")" '{version:$version,transaction:$transaction,status:$status,workflow_run:$workflow_run,workflow_head:$workflow_head,canonical_parent:$canonical_parent,task_id:$task_id,source_fingerprint:$source_fingerprint,wall_id:$wall_id,artifact:{id:$artifact_id,name:"star-trek-lorot-media-v1",sha256:$artifact_sha256},facets_sha256:$facets_sha256,canonical_mutation:false,lease_taken:false}' > transport/star-trek-lorot-media-v1/locator.json
+          git config user.name undercast-lorot-media
+          git config user.email lorot-media@users.noreply.github.com
+          git add -- transport/star-trek-lorot-media-v1
+          git commit -m 'Star Trek: publish exact Lorot media preparation'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
