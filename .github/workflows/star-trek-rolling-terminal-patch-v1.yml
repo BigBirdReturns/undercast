@@ -1,0 +1,45 @@
+name: star-trek-rolling-terminal-patch-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-rolling-continuation-v1
+
+concurrency:
+  group: star-trek-rolling-terminal-patch-v1
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Strengthen terminal in-flight and cleanup receipts
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('.github/workflows/star-trek-rolling-terminal-v1.yml')
+          text=path.read_text()
+          old='          node scripts/autopilot.mjs status --scope star-trek --json > "$ROOT/autopilot-status.json"\n          jq -e \'.in_flight == 0 or .counts.in_flight == 0 or .summary.in_flight == 0\' "$ROOT/autopilot-status.json" >/dev/null\n'
+          new='          node scripts/autopilot.mjs status --scope star-trek --json > "$ROOT/autopilot-status.json"\n          jq -e \'[.jobs[] | select(.scope == "star-trek" and (.status == "leased" or .status == "drafted" or .status == "merged"))] | length == 0\' data/AUTOPILOT.json >/dev/null\n'
+          if old not in text: raise SystemExit('terminal in-flight predicate pattern drifted')
+          text=text.replace(old,new,1)
+          old_cleanup='          git ls-remote --heads origin \'refs/heads/agent/star-trek-rolling*\' \'refs/heads/agent/star-trek-next-bounded-cycle-claim\' \'refs/heads/agent/star-trek-lwaxana*\' \'refs/heads/agent/star-trek-kzinti-flyer*\' \'refs/heads/agent/star-trek-post-kzinti*\' | grep -v "refs/heads/${RESULT_BRANCH}$" > "$ROOT/temporary-refs-after.txt" || true\n          test ! -s "$ROOT/temporary-refs-after.txt"\n'
+          new_cleanup='          git ls-remote --heads origin \'refs/heads/agent/star-trek-rolling*\' \'refs/heads/agent/star-trek-next-bounded-cycle-claim\' \'refs/heads/agent/star-trek-lwaxana*\' \'refs/heads/agent/star-trek-kzinti-flyer*\' \'refs/heads/agent/star-trek-post-kzinti*\' | grep -v "refs/heads/${RESULT_BRANCH}$" > "$ROOT/temporary-refs-after.txt" || true\n          test ! -s "$ROOT/temporary-refs-after.txt"\n          live_commit="$(jq -r .live.commit "$ROOT/terminal.json")"\n          deleted_count="$(wc -l < "$ROOT/temporary-refs-before.txt" | tr -d \' \')"\n          jq -n --argjson version 1 --arg transaction STAR-TREK-ROLLING-CLEANUP-V1 --arg status success --arg live_commit "$live_commit" --argjson workflow_run "$GITHUB_RUN_ID" --argjson terminal_artifact "$ARTIFACT_ID" --arg terminal_sha256 "${ARTIFACT_DIGEST#sha256:}" --argjson deleted_count "$deleted_count" \'{version:$version,transaction:$transaction,status:$status,live_commit:$live_commit,workflow_run:$workflow_run,terminal_artifact:{id:$terminal_artifact,sha256:$terminal_sha256},deleted_ref_count:$deleted_count,remaining_ref_count:0,second_enumeration_empty:true}\' > "$ROOT/cleanup.json"\n          git fetch --filter=blob:none --no-tags origin "$RESULT_BRANCH"\n          git checkout -B "$RESULT_BRANCH" FETCH_HEAD\n          cp "$ROOT/cleanup.json" transport/star-trek-rolling-terminal-v1/cleanup.json\n          git config user.name undercast-star-trek-rolling-cleanup\n          git config user.email rolling-cleanup@users.noreply.github.com\n          git add transport/star-trek-rolling-terminal-v1/cleanup.json\n          git commit -m \'Star Trek: publish rolling continuation cleanup receipt\'\n          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"\n'
+          if old_cleanup not in text: raise SystemExit('terminal cleanup block pattern drifted')
+          path.write_text(text.replace(old_cleanup,new_cleanup,1))
+          PY
+          git diff --check
+          git config user.name undercast-star-trek-terminal-patcher
+          git config user.email terminal-patcher@users.noreply.github.com
+          git add -- .github/workflows/star-trek-rolling-terminal-v1.yml
+          git rm -- .github/workflows/star-trek-rolling-terminal-patch-v1.yml
+          git commit -m 'Star Trek rolling continuation: strengthen terminal seal'
+          git push origin HEAD:agent/star-trek-rolling-continuation-v1
