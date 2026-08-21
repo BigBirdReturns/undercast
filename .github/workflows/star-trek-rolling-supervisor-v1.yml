@@ -1,0 +1,85 @@
+name: star-trek-rolling-supervisor-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-rolling-continuation-v1
+
+concurrency:
+  group: star-trek-rolling-supervisor-v1
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  supervise:
+    name: unitstar-trek-rolling-supervisor-v1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CONTROL_BRANCH: agent/star-trek-rolling-continuation-v1
+      STATE_PATH: transport/star-trek-rolling-continuation-v1/state.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Reconcile duplicates and recover one bounded failure
+        run: |
+          set -euo pipefail
+          test -f "$STATE_PATH"
+          cp "$STATE_PATH" /tmp/rolling-supervisor-state.json
+          status="$(jq -r .status /tmp/rolling-supervisor-state.json)"
+          stage="$(jq -r .stage /tmp/rolling-supervisor-state.json)"
+          runs="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" -f branch="$CONTROL_BRANCH" -f per_page=100)"
+          for name in star-trek-rolling-probe-v1 star-trek-rolling-media-v1 star-trek-rolling-cycle-v1; do
+            mapfile -t active < <(jq -r --arg name "$name" '[.workflow_runs[] | select(.name == $name and .status != "completed")] | sort_by(.created_at) | reverse | .[].id' <<<"$runs")
+            keep=true
+            for id in "${active[@]}"; do
+              if $keep; then keep=false; continue; fi
+              gh run cancel "$id" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
+            done
+          done
+
+          changed=false
+          if test "$status" = blocked && test "$stage" = blocked && test "$(jq -r '.boundary.kind // empty' /tmp/rolling-supervisor-state.json)" = product-stage-failure; then
+            retries="$(jq -r '.recovery.product_stage_retries // 0' /tmp/rolling-supervisor-state.json)"
+            if test "$retries" -lt 1; then
+              tmp="$(mktemp)"
+              jq --argjson retries "$((retries + 1))" --argjson supervisor_run "$GITHUB_RUN_ID" '.status="running" | .stage="media-ready" | .boundary=null | .recovery.product_stage_retries=$retries | .recovery.last_supervisor_run=$supervisor_run' "$STATE_PATH" > "$tmp"
+              mv "$tmp" "$STATE_PATH"
+              changed=true
+            fi
+          fi
+
+          if test "$changed" = false; then
+            expected=''
+            case "$stage" in
+              awaiting-predecessor|bootstrap) expected=star-trek-rolling-probe-v1 ;;
+              probe-ready) expected=star-trek-rolling-media-v1 ;;
+              media-ready) expected=star-trek-rolling-cycle-v1 ;;
+            esac
+            if test -n "$expected"; then
+              row="$(jq -c --arg name "$expected" '[.workflow_runs[] | select(.name == $name)] | sort_by(.created_at) | last // empty' <<<"$runs")"
+              active=false
+              if test -n "$row" && test "$(jq -r .status <<<"$row")" != completed; then active=true; fi
+              if test "$active" = false; then
+                heartbeat="$(jq -r '.recovery.heartbeat // 0' "$STATE_PATH")"
+                tmp="$(mktemp)"
+                jq --argjson heartbeat "$((heartbeat + 1))" --argjson supervisor_run "$GITHUB_RUN_ID" '.recovery.heartbeat=$heartbeat | .recovery.last_supervisor_run=$supervisor_run' "$STATE_PATH" > "$tmp"
+                mv "$tmp" "$STATE_PATH"
+                changed=true
+              fi
+            fi
+          fi
+
+          if test "$changed" = true; then
+            git config user.name undercast-star-trek-rolling-supervisor
+            git config user.email rolling-supervisor@users.noreply.github.com
+            git add "$STATE_PATH"
+            git commit -m 'Star Trek rolling continuation: supervised retry heartbeat'
+            git push origin "HEAD:refs/heads/${CONTROL_BRANCH}"
+          fi
