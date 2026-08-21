@@ -32,8 +32,11 @@ if probe.get("task_id") != TASK_ID or probe.get("source_fingerprint") != FINGERP
     raise SystemExit("source-probe task binding drifted")
 if probe.get("adjudicated_kind") != "physical" or probe.get("lease_taken") is not False:
     raise SystemExit("source-probe authority or modality drifted")
+frozen_role_text = (PROBE_ROOT / "frozen-source.wikitext").read_text()
+if "Lorot" not in frozen_role_text or "Jeri Ryan" not in frozen_role_text or "Infinite Regress" not in frozen_role_text:
+    raise SystemExit("frozen Lorot role evidence drifted")
 
-USER_AGENT = "UNDERCAST-Lorot-Media/1.0 (source and attribution audit)"
+USER_AGENT = "UNDERCAST-Lorot-Media/1.1 (source and attribution audit)"
 
 
 def request_bytes(url: str, referer: str | None = None) -> bytes:
@@ -81,20 +84,19 @@ def stable(value):
     return value
 
 
-def verified_facet(
+def facet(
     *,
     side: str,
     asset_sha: str,
     asset_bytes: int,
-    asset_origin: str,
-    source_date: str,
+    origin: str,
     expected_subject: str,
     presentation: str,
     identity_note: str,
     presentation_note: str,
     evidence: list[str],
+    generated_at: str,
 ) -> dict:
-    at = GENERATED_AT
     return {
         "id": "ma_" + sha256(f"{WALL_ID}:{side}:{asset_sha}".encode())[:24],
         "scope": "star-trek",
@@ -103,12 +105,12 @@ def verified_facet(
         "actor": "Jeri Ryan",
         "character": "Lorot",
         "expected_subject": expected_subject,
-        "source_fetched_at": source_date,
+        "source_fetched_at": generated_at[:10],
         "asset": {
             "src": f"images/uc-1392-{side}." + ("webp" if side == "still" else "jpg"),
             "sha256": asset_sha,
             "bytes": asset_bytes,
-            "origin": asset_origin,
+            "origin": origin,
             "kind": "still" if side == "still" else "free",
         },
         "risk_codes": [],
@@ -121,7 +123,7 @@ def verified_facet(
                 "note": identity_note,
                 "evidence": evidence,
                 "enforced": True,
-                "at": at,
+                "at": generated_at,
                 "asset_sha256": asset_sha,
             },
             {
@@ -132,7 +134,7 @@ def verified_facet(
                 "note": presentation_note,
                 "evidence": evidence,
                 "enforced": True,
-                "at": at,
+                "at": generated_at,
                 "asset_sha256": asset_sha,
             },
         ],
@@ -158,10 +160,11 @@ def verified_facet(
     }
 
 
-existing_hashes: set[str] = set()
-for path in (REPO / "images").glob("*"):
-    if path.is_file():
-        existing_hashes.add(sha256(path.read_bytes()))
+existing_hashes = {
+    sha256(path.read_bytes())
+    for path in (REPO / "images").glob("*")
+    if path.is_file()
+}
 canonical_text = "\n".join(
     (REPO / path).read_text(errors="replace")
     for path in ("data/specimens.json", "data/SOURCES.json", "data/MEDIA-AUDIT.json", "CREDITS.md")
@@ -186,6 +189,9 @@ still_infos = still_page.get("imageinfo") or []
 if len(still_infos) != 1:
     raise SystemExit("exact Lorot still metadata cardinality drifted")
 still_info = still_infos[0]
+still_source_page = still_info.get("descriptionurl") or "https://memory-alpha.fandom.com/wiki/File:Seven_Lorot.jpg"
+if "Seven_Lorot" not in still_source_page and "Seven Lorot" not in still_page.get("title", ""):
+    raise SystemExit("exact Lorot still identity metadata drifted")
 still_raw = None
 still_download_url = None
 for url in (still_info.get("thumburl"), still_info.get("url")):
@@ -205,10 +211,6 @@ still_bytes, still_source_size, still_source_format = normalize(still_raw, "stil
 still_sha = sha256(still_bytes)
 if min(still_source_size) < 250 or still_sha in existing_hashes:
     raise SystemExit("Lorot still is unusable or collides with canonical bytes")
-still_asset_origin = still_info["url"]
-still_source_page = still_info.get("descriptionurl") or "https://memory-alpha.fandom.com/wiki/File:Seven_Lorot.jpg"
-if "Seven_Lorot" not in still_source_page and "Seven Lorot" not in still_page.get("title", ""):
-    raise SystemExit("exact Lorot still identity metadata drifted")
 
 commons_api = "https://commons.wikimedia.org/w/api.php"
 portrait_title = "File:Jeri Ryan 2014.jpg"
@@ -266,17 +268,18 @@ portrait_bytes, portrait_source_size, portrait_source_format = normalize(portrai
 portrait_sha = sha256(portrait_bytes)
 if min(portrait_source_size) < 250 or portrait_sha in existing_hashes or portrait_sha == still_sha:
     raise SystemExit("portrait is unusable or collides with canonical bytes")
-if portrait_origin == still_asset_origin or portrait_origin == still_source_page:
+if portrait_origin == still_source_page:
     raise SystemExit("cross-facet source collision")
 
-# Freeze the episode context separately. The role source remains the sole performer-role authority.
-episode_title = "Infinite Regress (episode)"
+# Freeze the canonical episode target as supplemental production context. The
+# Lorot page remains the sole performer-role attribution authority.
 episode_api = api_json(
     memory_api,
     {
         "action": "query",
         "prop": "revisions",
-        "titles": episode_title,
+        "titles": "Infinite Regress (episode)",
+        "redirects": "1",
         "rvprop": "ids|timestamp|content",
         "rvslots": "main",
         "format": "json",
@@ -285,13 +288,10 @@ episode_api = api_json(
 )
 episode_page = episode_api["query"]["pages"][0]
 episode_revisions = episode_page.get("revisions") or []
-if len(episode_revisions) != 1:
-    raise SystemExit("Infinite Regress revision cardinality drifted")
+if episode_page.get("missing") or len(episode_revisions) != 1:
+    raise SystemExit("Infinite Regress source resolution drifted")
 episode_revision = episode_revisions[0]
 episode_text = episode_revision["slots"]["main"]["content"]
-episode_lower = episode_text.lower()
-if "infinite regress" not in episode_lower or "jeri ryan" not in episode_lower or "1998" not in episode_text:
-    raise SystemExit("Infinite Regress episode evidence drifted")
 episode_source = "https://memory-alpha.fandom.com/wiki/Infinite_Regress_(episode)"
 episode_receipt = {
     "source": episode_source,
@@ -306,13 +306,13 @@ portrait_name = "uc-1392-portrait.jpg"
 (OUT / still_name).write_bytes(still_bytes)
 (OUT / portrait_name).write_bytes(portrait_bytes)
 
-GENERATED_AT = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-SOURCE_DATE = GENERATED_AT[:10]
+generated_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 still = {
     "title": still_page["title"],
-    "origin": still_asset_origin,
-    "source_page": still_source_page,
+    "origin": still_source_page,
+    "asset_url": still_info.get("url"),
     "download_url": still_download_url,
+    "source_page": still_source_page,
     "sha256": still_sha,
     "bytes": len(still_bytes),
     "source_size": still_source_size,
@@ -353,16 +353,15 @@ still_evidence = [
     "source-page:https://memory-alpha.fandom.com/wiki/Lorot",
     "source-revision:2743351",
     f"source-file:{still_source_page}",
-    f"source-asset:{still_asset_origin}",
+    f"source-asset:{still_info.get('url')}",
     f"asset-sha256:{still_sha}",
 ]
 facets = [
-    verified_facet(
+    facet(
         side="portrait",
         asset_sha=portrait_sha,
         asset_bytes=len(portrait_bytes),
-        asset_origin=portrait_origin,
-        source_date=SOURCE_DATE,
+        origin=portrait_origin,
         expected_subject="Jeri Ryan",
         presentation="neutral-human",
         identity_note=(
@@ -374,31 +373,32 @@ facets = [
             "byte-distinct from the exact Lorot still and every canonical asset."
         ),
         evidence=portrait_evidence,
+        generated_at=generated_at,
     ),
-    verified_facet(
+    facet(
         side="still",
         asset_sha=still_sha,
         asset_bytes=len(still_bytes),
-        asset_origin=still_asset_origin,
-        source_date=SOURCE_DATE,
+        origin=still_source_page,
         expected_subject="Lorot as manifested through Seven of Nine",
         presentation="character-depiction",
         identity_note=(
             "The exact Memory Alpha file is titled Seven Lorot and depicts Seven of Nine acting as "
-            "Lorot in Infinite Regress; the frozen role source identifies Jeri Ryan as the performer."
+            "Lorot in Infinite Regress; the frozen Lorot page identifies Jeri Ryan as the performer."
         ),
         presentation_note=(
             "The exact frame depicts Lorot’s manifested personality through Seven of Nine. It is not "
             "treated as Lorot’s original Vulcan or Borg body, a neutral performer portrait, or maker evidence."
         ),
         evidence=still_evidence,
+        generated_at=generated_at,
     ),
 ]
 facets_sha = sha256((json.dumps(stable(facets), indent=2, ensure_ascii=False) + "\n").encode())
 media = {
     "version": 1,
     "transaction": "STAR-TREK-LOROT-MEDIA-PREPARATION-V1",
-    "generated_at": GENERATED_AT,
+    "generated_at": generated_at,
     "canonical_parent": EXPECTED_MAIN,
     "task_id": TASK_ID,
     "source_fingerprint": FINGERPRINT,
@@ -443,14 +443,16 @@ media = {
     "canonical_mutation": False,
     "lease_taken": False,
 }
+media_body = json.dumps(stable(media), separators=(",", ":"), ensure_ascii=False).encode()
+media["receipt_sha256"] = sha256(media_body)
 
 (OUT / "media-preparation.json").write_text(json.dumps(stable(media), indent=2, ensure_ascii=False) + "\n")
 (OUT / "task.json").write_text(json.dumps(task, indent=2, ensure_ascii=False) + "\n")
 (OUT / "source-probe.json").write_text(json.dumps(probe, indent=2, ensure_ascii=False) + "\n")
-(OUT / "frozen-source.wikitext").write_text((PROBE_ROOT / "frozen-source.wikitext").read_text())
+(OUT / "frozen-source.wikitext").write_text(frozen_role_text)
 (OUT / "frozen-source-api.json").write_text((PROBE_ROOT / "frozen-source-api.json").read_text())
 (OUT / "episode-source.wikitext").write_text(episode_text)
 (OUT / "episode-source-api.json").write_text(json.dumps(episode_api, indent=2, ensure_ascii=False) + "\n")
 (OUT / "still-image-api.json").write_text(json.dumps(still_api, indent=2, ensure_ascii=False) + "\n")
 (OUT / "portrait-image-api.json").write_text(json.dumps(portrait_api, indent=2, ensure_ascii=False) + "\n")
-print(json.dumps({"status": "success", "wall_id": WALL_ID, "facets_sha256": facets_sha}, indent=2))
+print(json.dumps({"status": "success", "wall_id": WALL_ID, "facets_sha256": facets_sha, "receipt_sha256": media["receipt_sha256"]}, indent=2))
