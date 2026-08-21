@@ -1,0 +1,385 @@
+name: star-trek-rolling-cycle-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-rolling-continuation-v1
+
+concurrency:
+  group: star-trek-rolling-cycle-v1
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  cycle:
+    name: unitstar-trek-rolling-cycle-v1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 420
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CONTROL_BRANCH: agent/star-trek-rolling-continuation-v1
+      STATE_PATH: transport/star-trek-rolling-continuation-v1/state.json
+      ROOT: /tmp/star-trek-rolling-cycle-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Decide whether the product stage owns this state
+        id: plan
+        run: |
+          set -euo pipefail
+          test -f "$STATE_PATH"
+          cp "$STATE_PATH" /tmp/rolling-state-before-cycle.json
+          status="$(jq -r .status /tmp/rolling-state-before-cycle.json)"
+          stage="$(jq -r .stage /tmp/rolling-state-before-cycle.json)"
+          should=false
+          if test "$status" = running && test "$stage" = media-ready; then should=true; fi
+          echo "should_run=$should" >> "$GITHUB_OUTPUT"
+
+      - name: Bind media artifact, predecessor product, and predecessor controller
+        if: steps.plan.outputs.should_run == 'true'
+        id: bind
+        run: |
+          set -euo pipefail
+          cp .github/recovery/rolling-cycle-controller-rebind-v1.py /tmp/rolling-cycle-controller-rebind-v1.py
+          python3 -m py_compile /tmp/rolling-cycle-controller-rebind-v1.py
+          rm -rf "$ROOT" /tmp/rolling-media /tmp/rolling-source-controller /tmp/rolling-controller-exec /tmp/rolling-programs /tmp/rolling-preflight
+          rm -f /tmp/rolling-media.zip /tmp/rolling-controller.zip
+          mkdir -p "$ROOT" /tmp/rolling-media /tmp/rolling-source-controller /tmp/rolling-preflight
+          carrier_head="$(git rev-parse HEAD)"
+          parent="$(jq -r .expected_predecessor /tmp/rolling-state-before-cycle.json)"
+          task_id="$(jq -r .current.task_id /tmp/rolling-state-before-cycle.json)"
+          fingerprint="$(jq -r .current.source_fingerprint /tmp/rolling-state-before-cycle.json)"
+          media_id="$(jq -r .media.artifact_id /tmp/rolling-state-before-cycle.json)"
+          media_sha="$(jq -r .media.artifact_sha256 /tmp/rolling-state-before-cycle.json)"
+          probe_id="$(jq -r .probe.artifact_id /tmp/rolling-state-before-cycle.json)"
+          probe_sha="$(jq -r .probe.artifact_sha256 /tmp/rolling-state-before-cycle.json)"
+          iteration="$(jq -r .iteration /tmp/rolling-state-before-cycle.json)"
+          test -n "$parent" && test -n "$task_id" && test -n "$fingerprint"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$parent"
+          printf '%s\n' "$live" | jq . > "$ROOT/predecessor.json"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$parent"
+          git checkout --detach "$parent"
+          npm ci --ignore-scripts
+          mapfile -t predecessor_checkers < <(git diff-tree --no-commit-id --name-only -r HEAD | grep -E '^scripts/star-trek-.*-cycle\.mjs$' | LC_ALL=C sort -u)
+          test "${#predecessor_checkers[@]}" = 1
+          predecessor_checker="${predecessor_checkers[0]}"
+          node "$predecessor_checker" | tee "$ROOT/predecessor-checker.log"
+          predecessor_slug="$(basename "$predecessor_checker")"
+          predecessor_slug="${predecessor_slug#star-trek-}"
+          predecessor_slug="${predecessor_slug%-cycle.mjs}"
+          test -n "$predecessor_slug"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-before.json"
+          jq -e --arg task "$task_id" --arg fp "$fingerprint" '.phase == "ready-for-one-cycle" and .candidate.task_id == $task and .candidate.source_fingerprint == $fp' "$ROOT/thesis-before.json" >/dev/null
+
+          media_meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${media_id}")"
+          test "$(jq -r .expired <<<"$media_meta")" = false
+          test "$(jq -r .digest <<<"$media_meta")" = "sha256:${media_sha}"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${media_id}/zip" > /tmp/rolling-media.zip
+          echo "$media_sha  /tmp/rolling-media.zip" | sha256sum -c -
+          unzip -q /tmp/rolling-media.zip -d /tmp/rolling-media
+          media_file="$(find /tmp/rolling-media -type f -name media-preparation.json -print -quit)"
+          probe_file="$(find /tmp/rolling-media -type f -name source-probe.json -print -quit)"
+          task_file="$(find /tmp/rolling-media -type f -name task.json -print -quit)"
+          test -n "$media_file" && test -n "$probe_file" && test -n "$task_file"
+          cp "$media_file" "$ROOT/media-preparation.json"
+          cp "$probe_file" "$ROOT/source-probe.json"
+          cp "$task_file" "$ROOT/task.json"
+          jq -e --arg parent "$parent" --arg task "$task_id" --arg fp "$fingerprint" '.canonical_parent == $parent and .task_id == $task and .source_fingerprint == $fp and .performance_mode == "voice-only" and .maker_attribution == "unresolved" and .byte_collision == false and .source_collision == false and .cross_facet_substitution == false and .media_review.verdict == "pass" and (.facets | length) == 2' "$ROOT/media-preparation.json" >/dev/null
+
+          artifact_name="star-trek-${predecessor_slug}-controller-execution-v1"
+          controller_meta=''
+          for attempt in $(seq 1 900); do
+            all="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/artifacts" -f per_page=100)"
+            controller_meta="$(jq -c --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | sort_by(.created_at) | last // empty' <<<"$all")"
+            test -n "$controller_meta" && break
+            sleep 5
+          done
+          test -n "$controller_meta"
+          controller_id="$(jq -r .id <<<"$controller_meta")"
+          controller_sha="$(jq -r .digest <<<"$controller_meta" | sed 's/^sha256://')"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${controller_id}/zip" > /tmp/rolling-controller.zip
+          echo "$controller_sha  /tmp/rolling-controller.zip" | sha256sum -c -
+          unzip -q /tmp/rolling-controller.zip -d /tmp/rolling-source-controller
+          source_manifest="$(find /tmp/rolling-source-controller -type f -name controller-source-manifest.json -print | LC_ALL=C sort | head -1)"
+          test -n "$source_manifest"
+          source_unit="$(jq -r .unit_slug "$source_manifest")"
+          test -n "$source_unit" && test "$source_unit" != null
+          source_programs="$(dirname "$(find /tmp/rolling-source-controller -type f -name "${source_unit}-controller.sh" -print -quit)")"
+          test -n "$source_programs"
+
+          python3 /tmp/rolling-cycle-controller-rebind-v1.py "$source_programs" "$source_manifest" /tmp/rolling-controller-exec "$ROOT" "$PWD"
+          manifest=/tmp/rolling-controller-exec/controller-source-manifest.json
+          jq -e --arg parent "$parent" --arg task "$task_id" --arg fp "$fingerprint" '.status == "applied" and .canonical_parent == $parent and .task_id == $task and .source_fingerprint == $fp and .prior.task_id | length > 0' "$manifest" >/dev/null
+          slug="$(jq -r .slug "$manifest")"
+          unit="$(jq -r .unit_slug "$manifest")"
+          character="$(jq -r .character "$manifest")"
+          performer="$(jq -r .performer "$manifest")"
+          wall="$(jq -r .wall_id "$manifest")"
+          test -n "$slug" && test -n "$unit" && test -n "$character" && test -n "$performer" && test -n "$wall"
+          cp -a /tmp/rolling-controller-exec/programs /tmp/rolling-programs
+          chmod +x /tmp/rolling-programs/*
+          bash -n "/tmp/rolling-programs/${unit}-controller.sh"
+          node --check "/tmp/rolling-programs/${unit}-stage.mjs"
+          node --check "/tmp/rolling-programs/${unit}-review.mjs"
+          node --check "/tmp/rolling-programs/${unit}-prior-phase.mjs"
+          node --check "/tmp/rolling-programs/${unit}-finalize.mjs"
+          cp "$ROOT/media-preparation.json" /tmp/rolling-preflight/
+          cp "$ROOT/source-probe.json" /tmp/rolling-preflight/
+          cp "$ROOT/task.json" /tmp/rolling-preflight/
+          cp "$ROOT/thesis-before.json" /tmp/rolling-preflight/
+          cp "$manifest" /tmp/rolling-preflight/
+          cp /tmp/rolling-state-before-cycle.json /tmp/rolling-preflight/state-before.json
+          printf '%s\n' "$carrier_head" > /tmp/rolling-preflight/carrier-head.txt
+
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+          echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+          echo "iteration=$iteration" >> "$GITHUB_OUTPUT"
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
+          echo "unit=$unit" >> "$GITHUB_OUTPUT"
+          echo "character=$character" >> "$GITHUB_OUTPUT"
+          echo "performer=$performer" >> "$GITHUB_OUTPUT"
+          echo "wall=$wall" >> "$GITHUB_OUTPUT"
+          echo "media_id=$media_id" >> "$GITHUB_OUTPUT"
+          echo "media_sha=$media_sha" >> "$GITHUB_OUTPUT"
+          echo "probe_id=$probe_id" >> "$GITHUB_OUTPUT"
+          echo "probe_sha=$probe_sha" >> "$GITHUB_OUTPUT"
+          echo "source_controller_id=$controller_id" >> "$GITHUB_OUTPUT"
+          echo "source_controller_sha=$controller_sha" >> "$GITHUB_OUTPUT"
+          echo "predecessor_slug=$predecessor_slug" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact rolling controller and preflight
+        if: steps.plan.outputs.should_run == 'true'
+        id: controller_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-${{ steps.bind.outputs.slug }}-controller-execution-v1
+          path: |
+            /tmp/rolling-controller-exec/
+            /tmp/rolling-preflight/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stage exact rolling candidate
+        if: steps.plan.outputs.should_run == 'true'
+        id: stage
+        env:
+          UNIT: ${{ steps.bind.outputs.unit }}
+          CANDIDATE_BRANCH: agent/star-trek-${{ steps.bind.outputs.slug }}-candidate-v1
+        run: bash "/tmp/rolling-programs/${UNIT}-controller.sh" stage
+
+      - name: Upload exact rolling candidate
+        if: steps.plan.outputs.should_run == 'true'
+        id: candidate_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.bind.outputs.unit }}-candidate-product
+          path: /tmp/${{ steps.bind.outputs.unit }}-candidate-artifact/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Review exact rolling candidate independently
+        if: steps.plan.outputs.should_run == 'true'
+        env:
+          UNIT: ${{ steps.bind.outputs.unit }}
+        run: bash "/tmp/rolling-programs/${UNIT}-controller.sh" review
+
+      - name: Upload exact rolling independent review
+        if: steps.plan.outputs.should_run == 'true'
+        id: review_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.bind.outputs.unit }}-independent-review
+          path: /tmp/${{ steps.bind.outputs.unit }}-review-artifact/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish exact reviewed rolling product
+        if: steps.plan.outputs.should_run == 'true'
+        id: publish
+        env:
+          UNIT: ${{ steps.bind.outputs.unit }}
+        run: bash "/tmp/rolling-programs/${UNIT}-controller.sh" publish
+
+      - name: Upload exact rolling final product receipt
+        if: steps.plan.outputs.should_run == 'true'
+        id: final_receipt_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-${{ steps.bind.outputs.slug }}-final-product-receipt-v1
+          path: /tmp/${{ steps.bind.outputs.unit }}-final-product-receipt/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Seal exact rolling product and Pages custody
+        if: steps.plan.outputs.should_run == 'true'
+        id: seal
+        env:
+          CANONICAL_PARENT: ${{ steps.bind.outputs.parent }}
+          TASK_ID: ${{ steps.bind.outputs.task_id }}
+          TASK_FINGERPRINT: ${{ steps.bind.outputs.fingerprint }}
+          ITERATION: ${{ steps.bind.outputs.iteration }}
+          SLUG: ${{ steps.bind.outputs.slug }}
+          UNIT: ${{ steps.bind.outputs.unit }}
+          CHARACTER: ${{ steps.bind.outputs.character }}
+          PERFORMER: ${{ steps.bind.outputs.performer }}
+          WALL: ${{ steps.bind.outputs.wall }}
+          PRODUCT_COMMIT: ${{ steps.publish.outputs.product_commit }}
+          PRODUCT_TREE: ${{ steps.publish.outputs.product_tree }}
+          PAGES_RUN: ${{ steps.publish.outputs.pages_run }}
+          CANDIDATE_COMMIT: ${{ steps.stage.outputs.commit }}
+          CANDIDATE_TREE: ${{ steps.stage.outputs.tree }}
+          CONTROLLER_ID: ${{ steps.controller_artifact.outputs.artifact-id }}
+          CONTROLLER_DIGEST: ${{ steps.controller_artifact.outputs.artifact-digest }}
+          CANDIDATE_ID: ${{ steps.candidate_artifact.outputs.artifact-id }}
+          CANDIDATE_DIGEST: ${{ steps.candidate_artifact.outputs.artifact-digest }}
+          REVIEW_ID: ${{ steps.review_artifact.outputs.artifact-id }}
+          REVIEW_DIGEST: ${{ steps.review_artifact.outputs.artifact-digest }}
+          FINAL_ID: ${{ steps.final_receipt_artifact.outputs.artifact-id }}
+          FINAL_DIGEST: ${{ steps.final_receipt_artifact.outputs.artifact-digest }}
+          MEDIA_ID: ${{ steps.bind.outputs.media_id }}
+          MEDIA_SHA: ${{ steps.bind.outputs.media_sha }}
+          PROBE_ID: ${{ steps.bind.outputs.probe_id }}
+          PROBE_SHA: ${{ steps.bind.outputs.probe_sha }}
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCT_COMMIT" && test -n "$PRODUCT_TREE" && test -n "$PAGES_RUN"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$PRODUCT_COMMIT"
+          test "$(jq -r .commit.tree.sha <<<"$live")" = "$PRODUCT_TREE"
+          test "$(jq -r '.parents | length' <<<"$live")" = 1
+          test "$(jq -r .parents[0].sha <<<"$live")" = "$CANONICAL_PARENT"
+          test "$(jq -r .commit.message <<<"$live")" = "Star Trek: publish ${CHARACTER} cycle"
+          test "$CANDIDATE_COMMIT" != "$PRODUCT_COMMIT"
+          test "$CANDIDATE_TREE" != "$PRODUCT_TREE"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$PRODUCT_COMMIT"
+          git checkout --detach "$PRODUCT_COMMIT"
+          checker="$(find scripts -maxdepth 1 -type f -name "star-trek-${SLUG}*.mjs" -print | LC_ALL=C sort | tail -1)"
+          predecessor="$(find scripts -maxdepth 1 -type f -name "star-trek-${{ steps.bind.outputs.predecessor_slug }}*.mjs" -print | LC_ALL=C sort | tail -1)"
+          test -n "$checker" && test -n "$predecessor"
+          node "$checker"
+          node "$predecessor"
+          node scripts/thesis-rails.mjs validate --json > "$ROOT/thesis-status.json"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          node scripts/media-audit.mjs gate --scope star-trek
+          node scripts/waterline.mjs validate
+          node scripts/corpus-ops.mjs validate
+          pages="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${PAGES_RUN}")"
+          test "$(jq -r .status <<<"$pages")" = completed
+          test "$(jq -r .conclusion <<<"$pages")" = success
+          test "$(jq -r .head_sha <<<"$pages")" = "$PRODUCT_COMMIT"
+          printf '%s\n' "$pages" | jq . > "$ROOT/pages-run.json"
+          mkdir -p "$ROOT/sealed"
+          receipt="$(find data/review/adapter-sdk -maxdepth 1 -type f -name "star-trek-${SLUG}*.json" -print | LC_ALL=C sort | tail -1)"
+          test -n "$receipt"
+          cp "$receipt" "$ROOT/sealed/"
+          cp "$checker" "$ROOT/sealed/"
+          cp "$ROOT/media-preparation.json" "$ROOT/sealed/"
+          cp "$ROOT/source-probe.json" "$ROOT/sealed/"
+          cp "$ROOT/thesis-status.json" "$ROOT/sealed/"
+          cp "$ROOT/thesis-next.json" "$ROOT/sealed/"
+          cp "$ROOT/pages-run.json" "$ROOT/sealed/"
+          cp /tmp/rolling-controller-exec/controller-source-manifest.json "$ROOT/sealed/"
+          jq -n --argjson version 1 --arg transaction STAR-TREK-ROLLING-CYCLE-EXECUTION-V1 --arg status success --argjson workflow_run "$GITHUB_RUN_ID" --arg workflow_head "$GITHUB_SHA" --argjson iteration "$ITERATION" --arg canonical_parent "$CANONICAL_PARENT" --arg task_id "$TASK_ID" --arg source_fingerprint "$TASK_FINGERPRINT" --arg character "$CHARACTER" --arg performer "$PERFORMER" --arg wall_id "$WALL" --arg product_commit "$PRODUCT_COMMIT" --arg product_tree "$PRODUCT_TREE" --arg candidate_commit "$CANDIDATE_COMMIT" --arg candidate_tree "$CANDIDATE_TREE" --argjson pages_run "$PAGES_RUN" --argjson probe_id "$PROBE_ID" --arg probe_sha "$PROBE_SHA" --argjson media_id "$MEDIA_ID" --arg media_sha "$MEDIA_SHA" --argjson controller_id "$CONTROLLER_ID" --arg controller_sha "${CONTROLLER_DIGEST#sha256:}" --argjson candidate_id "$CANDIDATE_ID" --arg candidate_sha "${CANDIDATE_DIGEST#sha256:}" --argjson review_id "$REVIEW_ID" --arg review_sha "${REVIEW_DIGEST#sha256:}" --argjson final_id "$FINAL_ID" --arg final_sha "${FINAL_DIGEST#sha256:}" '{version:$version,transaction:$transaction,status:$status,workflow_run:$workflow_run,workflow_head:$workflow_head,iteration:$iteration,canonical_parent:$canonical_parent,task:{id:$task_id,source_fingerprint:$source_fingerprint,character:$character,performer:$performer,wall_id:$wall_id},product:{commit:$product_commit,tree:$product_tree,parent:$canonical_parent,pages_run:$pages_run},candidate:{commit:$candidate_commit,tree:$candidate_tree,distinct_from_product:true},artifacts:{probe:{id:$probe_id,sha256:$probe_sha},media:{id:$media_id,sha256:$media_sha},controller:{id:$controller_id,sha256:$controller_sha},candidate:{id:$candidate_id,sha256:$candidate_sha},independent_review:{id:$review_id,sha256:$review_sha},final_product_receipt:{id:$final_id,sha256:$final_sha}}}' > "$ROOT/sealed/execution.json"
+          (cd "$ROOT/sealed" && find . -maxdepth 1 -type f ! -name manifest.sha256 -print0 | sort -z | xargs -0 sha256sum > manifest.sha256 && sha256sum -c manifest.sha256)
+          echo "product_commit=$PRODUCT_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "product_tree=$PRODUCT_TREE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sealed rolling execution
+        if: steps.plan.outputs.should_run == 'true'
+        id: execution_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-${{ steps.bind.outputs.slug }}-cycle-execution-v1
+          path: /tmp/star-trek-rolling-cycle-v1/sealed/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Advance state to the next exact predecessor
+        if: steps.plan.outputs.should_run == 'true'
+        env:
+          CANONICAL_PARENT: ${{ steps.bind.outputs.parent }}
+          TASK_ID: ${{ steps.bind.outputs.task_id }}
+          TASK_FINGERPRINT: ${{ steps.bind.outputs.fingerprint }}
+          ITERATION: ${{ steps.bind.outputs.iteration }}
+          CHARACTER: ${{ steps.bind.outputs.character }}
+          PERFORMER: ${{ steps.bind.outputs.performer }}
+          WALL: ${{ steps.bind.outputs.wall }}
+          PRODUCT_COMMIT: ${{ steps.seal.outputs.product_commit }}
+          PRODUCT_TREE: ${{ steps.seal.outputs.product_tree }}
+          EXECUTION_ID: ${{ steps.execution_artifact.outputs.artifact-id }}
+          EXECUTION_DIGEST: ${{ steps.execution_artifact.outputs.artifact-digest }}
+          PAGES_RUN: ${{ steps.publish.outputs.pages_run }}
+          SLUG: ${{ steps.bind.outputs.slug }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$PRODUCT_COMMIT"
+          meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${EXECUTION_ID}")"
+          test "$(jq -r .expired <<<"$meta")" = false
+          test "$(jq -r .digest <<<"$meta")" = "$EXECUTION_DIGEST"
+          git fetch --filter=blob:none --no-tags origin "$CONTROL_BRANCH"
+          git checkout -B "$CONTROL_BRANCH" FETCH_HEAD
+          test "$(jq -r .stage "$STATE_PATH")" = media-ready
+          test "$(jq -r .expected_predecessor "$STATE_PATH")" = "$CANONICAL_PARENT"
+          test "$(jq -r .current.task_id "$STATE_PATH")" = "$TASK_ID"
+          next_iteration="$((ITERATION + 1))"
+          max="$(jq -r .max_iterations "$STATE_PATH")"
+          tmp="$(mktemp)"
+          jq --argjson iteration "$ITERATION" --arg task "$TASK_ID" --arg fp "$TASK_FINGERPRINT" --arg character "$CHARACTER" --arg performer "$PERFORMER" --arg wall "$WALL" --arg parent "$CANONICAL_PARENT" --arg commit "$PRODUCT_COMMIT" --arg tree "$PRODUCT_TREE" --argjson pages "$PAGES_RUN" --argjson execution "$EXECUTION_ID" --arg execution_sha "${EXECUTION_DIGEST#sha256:}" '.completed += [{iteration:$iteration,task_id:$task,source_fingerprint:$fp,character:$character,performer:$performer,wall_id:$wall,product:{commit:$commit,tree:$tree,parent:$parent,pages_run:$pages},execution_artifact:{id:$execution,sha256:$execution_sha}}]' "$STATE_PATH" > "$tmp"
+          mv "$tmp" "$STATE_PATH"
+          if test "$next_iteration" -ge "$max"; then
+            tmp="$(mktemp)"
+            jq --argjson next "$next_iteration" --arg predecessor "$PRODUCT_COMMIT" '.iteration=$next | .status="boundary" | .stage="boundary" | .expected_predecessor=$predecessor | .current=null | .probe=null | .media=null | .boundary={kind:"iteration-limit",reason:"rolling continuation reached its sealed maximum iteration count",canonical_mutation:false,lease_taken:false}' "$STATE_PATH" > "$tmp"
+            mv "$tmp" "$STATE_PATH"
+          else
+            tmp="$(mktemp)"
+            jq --argjson next "$next_iteration" --arg predecessor "$PRODUCT_COMMIT" '.iteration=$next | .status="running" | .stage="bootstrap" | .expected_predecessor=$predecessor | .current=null | .probe=null | .media=null | .boundary=null' "$STATE_PATH" > "$tmp"
+            mv "$tmp" "$STATE_PATH"
+          fi
+          git config user.name undercast-star-trek-rolling-cycle
+          git config user.email rolling-cycle@users.noreply.github.com
+          git add "$STATE_PATH"
+          git commit -m "Star Trek rolling continuation: complete ${CHARACTER}"
+          git push origin "HEAD:refs/heads/${CONTROL_BRANCH}"
+          git ls-remote --heads origin "refs/heads/agent/star-trek-${SLUG}*" | cut -f2 | sed 's#refs/heads/##' | LC_ALL=C sort -u > "$ROOT/refs-before-cleanup.txt"
+          while IFS= read -r branch; do test -z "$branch" || git push origin --delete "$branch" >/dev/null 2>&1 || true; done < "$ROOT/refs-before-cleanup.txt"
+
+      - name: Preserve a failed product stage as a blocked state
+        if: failure() && steps.plan.outputs.should_run == 'true'
+        env:
+          CANONICAL_PARENT: ${{ steps.bind.outputs.parent }}
+          TASK_ID: ${{ steps.bind.outputs.task_id }}
+          TASK_FINGERPRINT: ${{ steps.bind.outputs.fingerprint }}
+          CHARACTER: ${{ steps.bind.outputs.character }}
+          SLUG: ${{ steps.bind.outputs.slug }}
+        run: |
+          set +e
+          gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > /tmp/rolling-cycle-failed.log 2>&1 || true
+          git fetch --filter=blob:none --no-tags origin "$CONTROL_BRANCH" || exit 0
+          git checkout -B "$CONTROL_BRANCH" FETCH_HEAD || exit 0
+          if test "$(jq -r .stage "$STATE_PATH" 2>/dev/null)" = media-ready; then
+            tmp="$(mktemp)"
+            jq --argjson run "$GITHUB_RUN_ID" --arg parent "$CANONICAL_PARENT" --arg task "$TASK_ID" --arg fp "$TASK_FINGERPRINT" --arg character "$CHARACTER" '.status="blocked" | .stage="blocked" | .boundary={kind:"product-stage-failure",workflow_run:$run,canonical_parent:$parent,task_id:$task,source_fingerprint:$fp,character:$character,canonical_mutation:false,lease_taken:false}' "$STATE_PATH" > "$tmp" && mv "$tmp" "$STATE_PATH"
+            git config user.name undercast-star-trek-rolling-cycle
+            git config user.email rolling-cycle@users.noreply.github.com
+            git add "$STATE_PATH"
+            git commit -m "Star Trek rolling continuation: block failed ${CHARACTER}" || true
+            git push origin "HEAD:refs/heads/${CONTROL_BRANCH}" || true
+          fi
+          test -z "$SLUG" || git push origin --delete "agent/star-trek-${SLUG}-candidate-v1" >/dev/null 2>&1 || true
+          exit 0
