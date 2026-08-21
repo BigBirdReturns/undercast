@@ -1,0 +1,64 @@
+name: star-trek-rolling-patch-cleanup-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-rolling-continuation-v1
+
+concurrency:
+  group: star-trek-rolling-patch-cleanup-v2
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Assert patched sources and retire every patch carrier
+        run: |
+          set -euo pipefail
+          branch=agent/star-trek-rolling-continuation-v1
+          ready=false
+          for attempt in $(seq 1 120); do
+            git fetch --filter=blob:none --no-tags origin "$branch"
+            git checkout -B "$branch" FETCH_HEAD
+            if python3 - <<'PY'
+          from pathlib import Path
+          rolling=Path('.github/recovery/rolling-cycle-controller-rebind-v1.py').read_text()
+          bootstrap=Path('.github/workflows/star-trek-rolling-bootstrap-lwaxana-v1.yml').read_text()
+          post=Path('.github/recovery/post-kzinti-cycle-controller-rebind-v1.py').read_text()
+          kz=Path('.github/recovery/kzinti-flyer-cycle-controller-rebind-v1.py').read_text()
+          checks=[
+            '"star-trek-rolling-media-v1", text)' in rolling,
+            'data/review/adapter-sdk/star-trek-[a-z0-9-]+-cycle\\.json",\n        old_receipt_rel' not in rolling,
+            "log','--first-parent','HEAD'" in bootstrap,
+            'fs.rmSync(temp,{recursive:true,force:true})' in bootstrap,
+            '"star-trek-post-kzinti-media-v1", text)' in post,
+            'data/review/adapter-sdk/star-trek-[a-z0-9-]+-cycle\\.json", prior_receipt_rel' not in kz,
+          ]
+          raise SystemExit(0 if all(checks) else 1)
+          PY
+            then ready=true; break; fi
+            sleep 5
+          done
+          test "$ready" = true
+          for path in \
+            .github/workflows/star-trek-rolling-template-patch-v1.yml \
+            .github/workflows/star-trek-rolling-inherited-template-patch-v1.yml \
+            .github/workflows/star-trek-lwaxana-projection-patch-v1.yml \
+            .github/workflows/star-trek-rolling-patch-cleanup-v1.yml \
+            .github/workflows/star-trek-rolling-patch-cleanup-v2.yml; do
+            test ! -f "$path" || git rm -- "$path"
+          done
+          git diff --cached --check
+          git config user.name undercast-star-trek-patch-cleanup
+          git config user.email patch-cleanup@users.noreply.github.com
+          git commit -m 'Star Trek rolling continuation: retire completed patch machinery'
+          git push origin "HEAD:refs/heads/${branch}"
