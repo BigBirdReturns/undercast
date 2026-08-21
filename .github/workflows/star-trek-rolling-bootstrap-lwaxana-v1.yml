@@ -1,0 +1,299 @@
+name: star-trek-rolling-bootstrap-lwaxana-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-rolling-continuation-v1
+
+concurrency:
+  group: star-trek-rolling-bootstrap-lwaxana-v1
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  reject:
+    name: unitlwaxana-rejection-bootstrap-v1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KUKULKAN: 47296e8a7947384b04275962b8f6a125e5306680
+      TASK_ID: ap_a65494e8328ca262d82a49c0
+      TASK_FINGERPRINT: f5b48cb2179b2192e0c02eedfb417a891278757693c31fd9dea19cb5351e132f
+      ROOT: /tmp/lwaxana-rejection-bootstrap-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Establish exclusive Kukulkan-parent authority
+        id: authority
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          sha="$(jq -r .sha <<<"$live")"
+          if test "$sha" != "$KUKULKAN"; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "$live" | jq . > "$ROOT/existing-main.json"
+            exit 0
+          fi
+          test "$(jq -r .commit.tree.sha <<<"$live")" = 8594a496bbbeeabc73c883c2c2052949574f5316
+          test "$(jq -r '.parents | length' <<<"$live")" = 1
+          test "$(jq -r .commit.message <<<"$live")" = 'Star Trek: publish Kukulkan cycle'
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Replay the exact evidence-backed rejection and aborted cycle
+        if: steps.authority.outputs.should_run == 'true'
+        id: build
+        run: |
+          set -euo pipefail
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$KUKULKAN"
+          git checkout --detach "$KUKULKAN"
+          npm ci
+          node scripts/star-trek-kukulkan-cycle.mjs
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-before.json"
+          jq -e --arg task "$TASK_ID" --arg fp "$TASK_FINGERPRINT" '.phase == "ready-for-one-cycle" and .candidate.task_id == $task and .candidate.source_fingerprint == $fp and .candidate.character == "Lwaxana Troi" and .candidate.performer == "Majel Barrett"' "$ROOT/thesis-before.json" >/dev/null
+          jq --arg id "$TASK_ID" '.jobs[] | select(.id == $id)' data/AUTOPILOT.json > "$ROOT/task-before.json"
+          jq -e '.status == "queued" and (.wall_ids | length) == 0' "$ROOT/task-before.json" >/dev/null
+          before_specimens="$(sha256sum data/specimens.json | cut -d' ' -f1)"
+          before_sources="$(sha256sum data/SOURCES.json | cut -d' ' -f1)"
+          before_media="$(sha256sum data/MEDIA-AUDIT.json | cut -d' ' -f1)"
+
+          claim_at='2026-08-20T06:30:00.000Z'
+          submit_at='2026-08-20T06:30:01.000Z'
+          reviewed_at='2026-08-20T06:30:02.000Z'
+          node scripts/autopilot.mjs claim \
+            --agent chatgpt-star-trek-lwaxana-eligibility-bootstrap \
+            --scope star-trek \
+            --capability-profile text-vision \
+            --task-id "$TASK_ID" \
+            --selection-basis "star-trek-lwaxana-eligibility-bootstrap:${TASK_FINGERPRINT}" \
+            --limit 1 \
+            --lease-minutes 1440 \
+            --now "$claim_at" \
+            --out "$ROOT/batch.json" \
+            --prompt "$ROOT/prompt.md" > "$ROOT/claim.log"
+          lease_id="$(jq -r .lease_id "$ROOT/batch.json")"
+          test -n "$lease_id"
+          jq -n --arg lease "$lease_id" --arg task "$TASK_ID" --arg agent chatgpt-star-trek-lwaxana-eligibility-bootstrap --arg source 'https://memory-alpha.fandom.com/wiki/Lwaxana_Troi' --arg policy "https://github.com/${GITHUB_REPOSITORY}/blob/${KUKULKAN}/GROW.md" '{version:1,lease_id:$lease,agent:$agent,results:[{task_id:$task,decision:"reject",reason:"The frozen role source proves Majel Barrett’s live-action performance and a wig-and-costume presentation, but it does not establish that Lwaxana Troi hides the performer under a designed face, mask, heavy prosthetic, creature suit, motion-capture skin, or unseen voice role as required for wall entry.",evidence:[{label:"Frozen Lwaxana Troi source proves performer identity and wardrobe presentation without a designed-face claim",source:$source},{label:"Repository entry rule requires disappearance under a designed face or an unseen voice-only role",source:$policy}]}]}' > "$ROOT/results.json"
+          node scripts/autopilot.mjs submit --batch "$ROOT/batch.json" --input "$ROOT/results.json" --now "$submit_at" | tee "$ROOT/submit.log"
+          jq --arg id "$TASK_ID" '.jobs[] | select(.id == $id)' data/AUTOPILOT.json > "$ROOT/task-after.json"
+          jq -e '.status == "rejected" and .outcome.kind == "rejection" and (.wall_ids | length) == 0' "$ROOT/task-after.json" >/dev/null
+
+          jq -n --arg scope star-trek --arg lease "$lease_id" --arg reviewed_at "$reviewed_at" --arg run "$GITHUB_RUN_ID" --arg commit "$KUKULKAN" --arg task "$TASK_ID" '{scope_id:$scope,lease_id:$lease,outcome:"aborted",reviewed_by:"chatgpt-second-desk",reviewed_role:"second-desk",reviewed_at:$reviewed_at,note:"The exact rail-selected task was closed as an evidence-backed eligibility rejection because the frozen source does not satisfy the repository’s designed-face entry rule; no card or media binding was created.",evidence:[{type:"incident",value:("eligibility-selection-boundary:"+$task)},{type:"workflow-run",value:$run},{type:"commit",value:$commit},{type:"restart-proof",value:"Exact task, source fingerprint, rejection reason, and deterministic successor are preserved in the canonical rejection receipt."}]}' > "$ROOT/cycle-input.json"
+          node scripts/waterline.mjs record-cycle --input "$ROOT/cycle-input.json" | tee "$ROOT/record-cycle.log"
+          cycle_id="$(grep -Eo 'cycle_[0-9a-f]{24}' "$ROOT/record-cycle.log" | tail -1)"
+          test -n "$cycle_id"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-after.json"
+          jq -e '.phase == "ready-for-one-cycle" and .candidate.task_id == "ap_8f2b1b123aa02bbbb27d00b4" and .candidate.character == "Kzinti Flyer" and .candidate.performer == "James Doohan"' "$ROOT/thesis-after.json" >/dev/null
+          test "$(sha256sum data/specimens.json | cut -d' ' -f1)" = "$before_specimens"
+          test "$(sha256sum data/SOURCES.json | cut -d' ' -f1)" = "$before_sources"
+          test "$(sha256sum data/MEDIA-AUDIT.json | cut -d' ' -f1)" = "$before_media"
+
+          cat > scripts/star-trek-product-check-projection.mjs <<'JS'
+          #!/usr/bin/env node
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import path from 'node:path';
+          import crypto from 'node:crypto';
+          import {spawnSync} from 'node:child_process';
+          const checker=process.argv[2];
+          if(!checker||!checker.startsWith('scripts/star-trek-')||!checker.endsWith('-cycle.mjs')) throw Error('usage: star-trek-product-check-projection.mjs <historical-checker>');
+          const run=(args,opts={})=>spawnSync('git',args,{cwd:process.cwd(),encoding:'utf8',maxBuffer:256*1024*1024,...opts});
+          const shallow=run(['rev-parse','--is-shallow-repository']);
+          if(shallow.status===0&&shallow.stdout.trim()==='true'){
+            const deepen=run(['fetch','--quiet','--unshallow','origin']);
+            if(deepen.status!==0) throw Error('historical checker projection requires complete first-parent history: '+deepen.stderr);
+          }
+          const targetHash=crypto.createHash('sha256').update(fs.readFileSync(checker)).digest('hex');
+          const log=run(['log','--all','--format=%H','--',checker]);
+          if(log.status!==0) throw Error(log.stderr);
+          let product='';
+          for(const commit of log.stdout.trim().split(/\r?\n/).filter(Boolean)){
+            const show=run(['show',`${commit}:${checker}`]);
+            if(show.status!==0) continue;
+            const hash=crypto.createHash('sha256').update(show.stdout).digest('hex');
+            if(hash!==targetHash) continue;
+            const message=run(['show','-s','--format=%s',commit]);
+            if(message.status===0&&/^Star Trek: publish /.test(message.stdout.trim())){product=commit;break;}
+          }
+          if(!product) throw Error(`no canonical product commit found for ${checker}`);
+          const temp=fs.mkdtempSync(path.join(os.tmpdir(),'undercast-product-check-'));
+          const add=run(['worktree','add','--detach',temp,product]);
+          if(add.status!==0) throw Error(add.stderr);
+          try{
+            const result=spawnSync(process.execPath,[checker],{cwd:temp,encoding:'utf8',maxBuffer:256*1024*1024,env:{...process.env,UNDERCAST_HISTORICAL_PRODUCT:product}});
+            process.stdout.write(result.stdout||''); process.stderr.write(result.stderr||'');
+            if(result.status!==0) process.exit(result.status??1);
+          } finally {
+            run(['worktree','remove','--force',temp]);
+          }
+          JS
+          chmod +x scripts/star-trek-product-check-projection.mjs
+
+          python3 - "$lease_id" "$cycle_id" <<'PY'
+          from pathlib import Path
+          import hashlib,json,sys
+          root=Path('/tmp/lwaxana-rejection-bootstrap-v1')
+          receipt={
+            'version':1,
+            'transaction':'STAR-TREK-LWAXANA-ELIGIBILITY-REJECTION-V1',
+            'canonical_parent':'47296e8a7947384b04275962b8f6a125e5306680',
+            'task':{
+              'id':'ap_a65494e8328ca262d82a49c0','performer':'Majel Barrett','role':'Lwaxana Troi',
+              'source':'https://memory-alpha.fandom.com/wiki/Lwaxana_Troi',
+              'source_fingerprint':'f5b48cb2179b2192e0c02eedfb417a891278757693c31fd9dea19cb5351e132f',
+              'queued_mode_hint':['physical-prosthetic'],'disposition':'rejected',
+              'reason':'The frozen role source proves a live-action performance and wig-and-costume presentation but does not establish disappearance under a designed face, heavy prosthetics, mask, suit, motion-capture skin, or unseen voice-only role.'
+            },
+            'lease_id':sys.argv[1],
+            'reviewed_cycle':{'id':sys.argv[2],'outcome':'aborted'},
+            'boundary':{'public_card_added':False,'wall_id_assigned':False,'media_facets_added':0,'performer_credit_denied':False,'designed_face_eligibility_proved':False,'maker_attribution':'unresolved','canonical_mutation_limited_to_queue_and_waterline':True},
+            'compatibility_projection':{'script':'scripts/star-trek-product-check-projection.mjs','historical_checker_bytes_mutated':False},
+            'next':json.loads((root/'thesis-after.json').read_text())
+          }
+          def stable(v):
+            if isinstance(v,dict):return {k:stable(v[k]) for k in sorted(v)}
+            if isinstance(v,list):return [stable(x) for x in v]
+            return v
+          body=json.dumps(stable(receipt),indent=2,ensure_ascii=False)+'\n'
+          receipt['receipt_sha256']=hashlib.sha256(body.encode()).hexdigest()
+          Path('data/review/adapter-sdk/star-trek-lwaxana-rejection-cycle.json').write_text(json.dumps(stable(receipt),indent=2,ensure_ascii=False)+'\n')
+          PY
+
+          cat > scripts/star-trek-lwaxana-rejection-cycle.mjs <<'JS'
+          #!/usr/bin/env node
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          import {spawnSync} from 'node:child_process';
+          const TASK='ap_a65494e8328ca262d82a49c0';
+          const FP='f5b48cb2179b2192e0c02eedfb417a891278757693c31fd9dea19cb5351e132f';
+          const PARENT='47296e8a7947384b04275962b8f6a125e5306680';
+          const RECEIPT='data/review/adapter-sdk/star-trek-lwaxana-rejection-cycle.json';
+          const read=p=>JSON.parse(fs.readFileSync(p,'utf8'));
+          const stable=v=>Array.isArray(v)?v.map(stable):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,stable(v[k])])):v;
+          const pretty=v=>JSON.stringify(stable(v),null,2)+'\n';
+          const sha=v=>crypto.createHash('sha256').update(v).digest('hex');
+          const ok=(v,m)=>{if(!v)throw Error(m)};
+          const receipt=read(RECEIPT), body=structuredClone(receipt); delete body.receipt_sha256;
+          ok(receipt.canonical_parent===PARENT&&receipt.task.id===TASK&&receipt.task.source_fingerprint===FP,'Lwaxana rejection receipt binding drifted');
+          ok(receipt.receipt_sha256===sha(pretty(body)),'Lwaxana rejection receipt identity drifted');
+          const state=read('data/AUTOPILOT.json'), task=state.jobs.find(row=>row.id===TASK);
+          ok(task?.status==='rejected'&&task.performer==='Majel Barrett'&&task.character==='Lwaxana Troi'&&task.source_fingerprint===FP,'Lwaxana rejection task drifted');
+          ok(task.outcome?.kind==='rejection'&&/designed face|designed-face/.test(task.outcome.reason),'Lwaxana rejection reason drifted');
+          ok((task.wall_ids||[]).length===0,'Lwaxana rejection gained a wall binding');
+          ok(read('data/specimens.json').filter(row=>row.character==='Lwaxana Troi'&&row.actor==='Majel Barrett').length===0,'Lwaxana rejection gained a public card');
+          ok(read('data/MEDIA-AUDIT.json').items.filter(row=>row.character==='Lwaxana Troi'&&row.actor==='Majel Barrett').length===0,'Lwaxana rejection gained media facets');
+          const water=read('data/WATERLINE-STATE.json');
+          const cycle=water.cycles.find(row=>row.id===receipt.reviewed_cycle.id);
+          ok(cycle?.outcome==='aborted'&&cycle.lease_id===receipt.lease_id&&cycle.task_statuses?.[TASK]==='rejected','Lwaxana aborted cycle drifted');
+          const projected=spawnSync(process.execPath,['scripts/star-trek-product-check-projection.mjs','scripts/star-trek-kukulkan-cycle.mjs'],{encoding:'utf8',maxBuffer:256*1024*1024});
+          ok(projected.status===0,'Kukulkan historical product projection failed: '+(projected.stdout||'')+(projected.stderr||''));
+          const next=spawnSync(process.execPath,['scripts/thesis-rails.mjs','next','--json'],{encoding:'utf8',maxBuffer:256*1024*1024});
+          ok(next.status===0,'thesis successor resolution failed');
+          const candidate=JSON.parse(next.stdout).candidate;
+          ok(candidate?.task_id==='ap_8f2b1b123aa02bbbb27d00b4'&&candidate.character==='Kzinti Flyer','Lwaxana rejection successor drifted');
+          console.log('star-trek-lwaxana-rejection-cycle: PASS — exact performer evidence preserved, designed-face eligibility not proved, no card or media object created, task rejected, aborted waterline cycle receipted, and Kukulkan product custody projected without mutating its checker');
+          JS
+          chmod +x scripts/star-trek-lwaxana-rejection-cycle.mjs
+
+          node - <<'NODE'
+          const fs=require('fs');
+          const path='package.json'; const doc=JSON.parse(fs.readFileSync(path,'utf8'));
+          for(const [name,command] of Object.entries(doc.scripts)){
+            if(!name.startsWith('star-trek:')||!name.endsWith('cycle:check')) continue;
+            const match=/^node (scripts\/star-trek-[a-z0-9-]+-cycle\.mjs)$/.exec(command);
+            if(!match) continue;
+            doc.scripts[name]=`node scripts/star-trek-product-check-projection.mjs ${match[1]}`;
+          }
+          doc.scripts['star-trek:lwaxana-rejection-cycle:check']='node scripts/star-trek-lwaxana-rejection-cycle.mjs';
+          fs.writeFileSync(path,JSON.stringify(doc,null,2)+'\n');
+          NODE
+
+          node scripts/star-trek-lwaxana-rejection-cycle.mjs | tee "$ROOT/rejection-checker-precommit.log"
+          node scripts/thesis-rails.mjs validate --json > "$ROOT/thesis-status-precommit.json"
+          node scripts/media-audit.mjs gate --scope star-trek > "$ROOT/media-precommit.log"
+          node scripts/waterline.mjs validate > "$ROOT/waterline-precommit.log"
+          node scripts/corpus-ops.mjs validate > "$ROOT/corpus-precommit.log"
+          node scripts/validate.mjs > "$ROOT/archive-precommit.log"
+
+          { git diff --name-only; git ls-files --others --exclude-standard; } | LC_ALL=C sort -u > "$ROOT/changed-paths.txt"
+          test -s "$ROOT/changed-paths.txt"
+          if grep -Eq '^(images/|records/|data/specimens\.json$|data/SOURCES\.json$|data/MEDIA-AUDIT\.json$|data/media-manifest\.json$|sitemap\.xml$)' "$ROOT/changed-paths.txt"; then
+            echo 'rejection attempted a forbidden public-wall or media mutation'; cat "$ROOT/changed-paths.txt"; exit 1
+          fi
+          while IFS= read -r path; do test -z "$path" || git add -- "$path"; done < "$ROOT/changed-paths.txt"
+          git diff --cached --check
+          git config user.name undercast-star-trek-lwaxana-rejection
+          git config user.email lwaxana-rejection@users.noreply.github.com
+          GIT_AUTHOR_DATE='2026-08-20T06:30:03Z' GIT_COMMITTER_DATE='2026-08-20T06:30:03Z' git commit -m 'Star Trek: reject ineligible Lwaxana Troi wall task'
+          product_commit="$(git rev-parse HEAD)"
+          product_tree="$(git rev-parse HEAD^{tree})"
+          test "$(git show -s --format=%P HEAD)" = "$KUKULKAN"
+          test -z "$(git status --porcelain)"
+
+          npm run autopilot:fixtures | tee "$ROOT/autopilot-fixtures.log"
+          node scripts/star-trek-lwaxana-rejection-cycle.mjs | tee "$ROOT/rejection-checker.log"
+          node scripts/thesis-rails.mjs validate --json > "$ROOT/thesis-status.json"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          node scripts/media-audit.mjs gate --scope star-trek | tee "$ROOT/media-gate.log"
+          node scripts/waterline.mjs validate | tee "$ROOT/waterline.log"
+          node scripts/corpus-ops.mjs validate | tee "$ROOT/corpus.log"
+          node scripts/validate.mjs | tee "$ROOT/archive.log"
+          test -z "$(git status --porcelain)"
+          echo "product_commit=$product_commit" >> "$GITHUB_OUTPUT"
+          echo "product_tree=$product_tree" >> "$GITHUB_OUTPUT"
+
+      - name: Publish exact rejection and deploy Pages
+        if: steps.authority.outputs.should_run == 'true'
+        id: publish
+        env:
+          PRODUCT_COMMIT: ${{ steps.build.outputs.product_commit }}
+          PRODUCT_TREE: ${{ steps.build.outputs.product_tree }}
+        run: |
+          set -euo pipefail
+          current="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if test "$current" != "$KUKULKAN"; then
+            test "$current" = "$PRODUCT_COMMIT"
+          else
+            git push origin "$PRODUCT_COMMIT:refs/heads/main"
+          fi
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$PRODUCT_COMMIT"
+          test "$(jq -r .commit.tree.sha <<<"$live")" = "$PRODUCT_TREE"
+          test "$(jq -r '.parents | length' <<<"$live")" = 1
+          test "$(jq -r .parents[0].sha <<<"$live")" = "$KUKULKAN"
+          printf '%s\n' "$live" | jq . > "$ROOT/live-product.json"
+          gh workflow run pages.yml --ref main
+          pages=''
+          for attempt in $(seq 1 720); do
+            runs="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/workflows/pages.yml/runs" -f branch=main -f per_page=50)"
+            pages="$(jq -c --arg sha "$PRODUCT_COMMIT" '[.workflow_runs[] | select(.head_sha == $sha and .status == "completed" and .conclusion == "success")] | sort_by(.created_at) | last // empty' <<<"$runs")"
+            test -n "$pages" && break
+            sleep 5
+          done
+          test -n "$pages"
+          printf '%s\n' "$pages" | jq . > "$ROOT/pages-run.json"
+          echo "pages_run=$(jq -r .id "$ROOT/pages-run.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact bootstrap rejection receipt
+        if: steps.authority.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-lwaxana-rejection-bootstrap-v1
+          path: /tmp/lwaxana-rejection-bootstrap-v1/
+          if-no-files-found: error
+          retention-days: 30
