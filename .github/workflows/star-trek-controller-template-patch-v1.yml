@@ -1,0 +1,70 @@
+name: star-trek-controller-template-patch-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-next-bounded-cycle-claim
+
+concurrency:
+  group: star-trek-controller-template-patch-v1
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Patch exact Kzinti and post-Kzinti controller templates
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          kz=Path('.github/recovery/kzinti-flyer-cycle-controller-rebind-v1.py')
+          post=Path('.github/recovery/post-kzinti-cycle-controller-rebind-v1.py')
+          workflow=Path('.github/workflows/star-trek-post-kzinti-cycle-v1.yml')
+          for path in (kz,post,workflow):
+              if not path.is_file(): raise SystemExit(f'missing patch target: {path}')
+
+          text=kz.read_text()
+          old='    text = re.sub(r"data/review/adapter-sdk/star-trek-[a-z0-9-]+-cycle\\.json", prior_receipt_rel, text)\n'
+          if old not in text: raise SystemExit('Kzinti broad receipt replacement pattern drifted')
+          text=text.replace(old,'',1)
+          kz.write_text(text)
+
+          text=post.read_text()
+          old_receipt='    text = re.sub(r"data/review/adapter-sdk/star-trek-[a-z0-9-]+-cycle\\.json", prior_receipt_rel, text)\n'
+          old_checker='    text = re.sub(r"scripts/star-trek-kzinti-flyer[^\\\"\']*\\.mjs", prior_checker_rel, text)\n'
+          if old_receipt not in text: raise SystemExit('post-Kzinti broad receipt replacement pattern drifted')
+          if old_checker not in text: raise SystemExit('post-Kzinti broad checker replacement pattern drifted')
+          text=text.replace(old_receipt,'',1).replace(old_checker,'',1)
+          anchor='    text = text.replace("__PRIOR_TARGET_UP__", slug.upper().replace("-", "_"))\n'
+          if anchor not in text: raise SystemExit('post-Kzinti slug restoration anchor drifted')
+          insertion=anchor+'    text = re.sub(r"star-trek-[a-z0-9-]+-media-v1", "star-trek-post-kzinti-media-v1", text)\n'
+          text=text.replace(anchor,insertion,1)
+          post.write_text(text)
+
+          text=workflow.read_text()
+          old='.status == "applied" and .canonical_parent == $parent and .task_id == $task and .source_fingerprint == $fp and .prior.checker_path | length > 0'
+          new='.status == "applied" and .canonical_parent == $parent and .task_id == $task and .source_fingerprint == $fp and (.prior.checker_path | length > 0)'
+          if old not in text: raise SystemExit('post-Kzinti jq predicate pattern drifted')
+          workflow.write_text(text.replace(old,new,1))
+          PY
+          python3 -m py_compile .github/recovery/kzinti-flyer-cycle-controller-rebind-v1.py
+          python3 -m py_compile .github/recovery/post-kzinti-cycle-controller-rebind-v1.py
+          git diff --check
+          git config user.name undercast-star-trek-template-patcher
+          git config user.email template-patcher@users.noreply.github.com
+          git add -- \
+            .github/recovery/kzinti-flyer-cycle-controller-rebind-v1.py \
+            .github/recovery/post-kzinti-cycle-controller-rebind-v1.py \
+            .github/workflows/star-trek-post-kzinti-cycle-v1.yml
+          git diff --cached --quiet && exit 0
+          git commit -m 'Star Trek: patch bounded controller template bindings'
+          git push origin HEAD:agent/star-trek-next-bounded-cycle-claim
