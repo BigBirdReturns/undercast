@@ -1,0 +1,110 @@
+name: star-trek-lorot-media-pr-v1
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-lorot-media-pr-v1
+  cancel-in-progress: true
+
+jobs:
+  media:
+    if: github.head_ref == 'agent/star-trek-lorot-cycle-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_MAIN: 640754cdeb5a7679790682ab6c28070c28ca9fae
+      TASK_ID: ap_9b7123237c640f1ce0a16ffe
+      FINGERPRINT: df893de8f597caf34517ccfc5b7da21953f2b05b21cf8d11dd4c387e9216bf8c
+      WALL_ID: UC-1392
+      PROBE_ARTIFACT: '9451813968'
+      PROBE_ARTIFACT_SHA: 9ff62d960e44beb644bfb5657bdb878939001b878294431ac4ea6bbb2a3e23f8
+      PROBE_RECEIPT_SHA: 8d781a52e3ca2216df22b9ccb2ab271d5bd3440b6e48c2878c94bce2580947cd
+      RESULT_BRANCH: agent/star-trek-lorot-media-result-v1
+      ROOT: /tmp/star-trek-lorot-media-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Bind live predecessor and exact source artifact
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cp .github/recovery/star-trek-lorot-media-v1.py /tmp/star-trek-lorot-media-v1.py
+          python3 -m py_compile /tmp/star-trek-lorot-media-v1.py
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/probe" "$ROOT/output"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$EXPECTED_MAIN"
+          test "$(jq -r '.parents|length' <<<"$live")" = 1
+          test "$(jq -r .parents[0].sha <<<"$live")" = 59ac6a46ff0cae175a5ab2ebe0cdeb03f2620bc8
+          printf '%s\n' "$live" | jq . > "$ROOT/live-main.json"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_MAIN"
+          git checkout --detach "$EXPECTED_MAIN"
+          npm ci --ignore-scripts
+          node scripts/star-trek-kzinti-flyer-cycle.mjs | tee "$ROOT/predecessor-checker.log"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          jq -e --arg task "$TASK_ID" --arg fp "$FINGERPRINT" '.phase=="ready-for-one-cycle" and .scope_id=="star-trek" and .candidate.task_id==$task and .candidate.source_fingerprint==$fp and .candidate.character=="Lorot" and .candidate.performer=="Jeri Ryan"' "$ROOT/thesis-next.json" >/dev/null
+          meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${PROBE_ARTIFACT}")"
+          test "$(jq -r .expired <<<"$meta")" = false
+          test "$(jq -r .name <<<"$meta")" = star-trek-lorot-source-probe-v1
+          test "$(jq -r .digest <<<"$meta")" = "sha256:${PROBE_ARTIFACT_SHA}"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${PROBE_ARTIFACT}/zip" > "$ROOT/probe.zip"
+          echo "$PROBE_ARTIFACT_SHA  $ROOT/probe.zip" | sha256sum -c -
+          unzip -q "$ROOT/probe.zip" -d "$ROOT/probe"
+          test "$(jq -r .receipt_sha256 "$ROOT/probe/source-probe.json")" = "$PROBE_RECEIPT_SHA"
+          jq -e --arg parent "$EXPECTED_MAIN" --arg task "$TASK_ID" --arg fp "$FINGERPRINT" '.status=="success" and .canonical_parent==$parent and .task_id==$task and .source_fingerprint==$fp and .character=="Lorot" and .performer=="Jeri Ryan" and .adjudicated_kind=="physical" and .maker_attribution=="unresolved" and .canonical_mutation==false and .lease_taken==false' "$ROOT/probe/source-probe.json" >/dev/null
+      - name: Prepare exact role and performer media
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --disable-pip-version-check --no-input Pillow==11.3.0
+          python3 /tmp/star-trek-lorot-media-v1.py | tee "$ROOT/media-preparer.log"
+          jq -e --arg parent "$EXPECTED_MAIN" --arg task "$TASK_ID" --arg fp "$FINGERPRINT" --arg wall "$WALL_ID" '.canonical_parent==$parent and .task_id==$task and .source_fingerprint==$fp and .wall_id==$wall and .performance_mode=="physical-prosthetic" and .maker_attribution=="unresolved" and .seven_of_nine_body_not_conflated_with_original_lorot_body==true and .voice_performance_attributed==false and .media_review.verdict=="pass" and (.facets|length)==2 and (.facets|all(.status=="verified")) and .byte_collision==false and .source_collision==false and .cross_facet_substitution==false and .canonical_mutation==false and .lease_taken==false' "$ROOT/output/media-preparation.json" >/dev/null
+          test "$(sha256sum "$ROOT/output/uc-1392-still.webp" | cut -d' ' -f1)" = "$(jq -r .still.sha256 "$ROOT/output/media-preparation.json")"
+          test "$(sha256sum "$ROOT/output/uc-1392-portrait.jpg" | cut -d' ' -f1)" = "$(jq -r .portrait.sha256 "$ROOT/output/media-preparation.json")"
+      - name: Upload exact Lorot media artifact
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-lorot-media-v1
+          path: /tmp/star-trek-lorot-media-v1/output/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish Lorot media locator
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$EXPECTED_MAIN"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach "$EXPECTED_MAIN"
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/star-trek-lorot-media-v1
+          mkdir -p transport/star-trek-lorot-media-v1
+          cp "$ROOT/output/media-preparation.json" transport/star-trek-lorot-media-v1/
+          cp "$ROOT/output/source-probe.json" transport/star-trek-lorot-media-v1/
+          jq -n --argjson version 1 --arg transaction STAR-TREK-LOROT-MEDIA-LOCATOR-V1 --arg status success --argjson workflow_run "$GITHUB_RUN_ID" --arg workflow_head "$GITHUB_SHA" --arg canonical_parent "$EXPECTED_MAIN" --arg task_id "$TASK_ID" --arg source_fingerprint "$FINGERPRINT" --arg wall_id "$WALL_ID" --argjson artifact_id "$ARTIFACT_ID" --arg artifact_sha256 "${ARTIFACT_DIGEST#sha256:}" --arg facets_sha256 "$(jq -r .facets_sha256 "$ROOT/output/media-preparation.json")" '{version:$version,transaction:$transaction,status:$status,workflow_run:$workflow_run,workflow_head:$workflow_head,canonical_parent:$canonical_parent,task_id:$task_id,source_fingerprint:$source_fingerprint,wall_id:$wall_id,artifact:{id:$artifact_id,name:"star-trek-lorot-media-v1",sha256:$artifact_sha256},facets_sha256:$facets_sha256,canonical_mutation:false,lease_taken:false}' > transport/star-trek-lorot-media-v1/locator.json
+          git config user.name undercast-lorot-media
+          git config user.email lorot-media@users.noreply.github.com
+          git add -- transport/star-trek-lorot-media-v1
+          git commit -m 'Star Trek: publish exact Lorot media preparation'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
