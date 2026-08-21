@@ -1,0 +1,63 @@
+name: star-trek-bounded-patch-cleanup-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-next-bounded-cycle-claim
+
+concurrency:
+  group: star-trek-bounded-patch-cleanup-v2
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Assert bounded patches and retire every patch carrier
+        run: |
+          set -euo pipefail
+          branch=agent/star-trek-next-bounded-cycle-claim
+          ready=false
+          for attempt in $(seq 1 120); do
+            git fetch --filter=blob:none --no-tags origin "$branch"
+            git checkout -B "$branch" FETCH_HEAD
+            if python3 - <<'PY'
+          from pathlib import Path
+          kz=Path('.github/recovery/kzinti-flyer-cycle-controller-rebind-v1.py').read_text()
+          post=Path('.github/recovery/post-kzinti-cycle-controller-rebind-v1.py').read_text()
+          workflow=Path('.github/workflows/star-trek-post-kzinti-cycle-v1.yml').read_text()
+          direct=[]
+          for path in Path('.github/workflows').glob('star-trek-*.yml'):
+              if 'node scripts/star-trek-kukulkan-cycle.mjs' in path.read_text(): direct.append(str(path))
+          checks=[
+            'data/review/adapter-sdk/star-trek-[a-z0-9-]+-cycle\\.json", prior_receipt_rel' not in kz,
+            '"star-trek-post-kzinti-media-v1", text)' in post,
+            '(.prior.checker_path | length > 0)' in workflow,
+            not direct,
+          ]
+          raise SystemExit(0 if all(checks) else 1)
+          PY
+            then ready=true; break; fi
+            sleep 5
+          done
+          test "$ready" = true
+          for path in \
+            .github/workflows/star-trek-controller-template-patch-v1.yml \
+            .github/workflows/star-trek-historical-check-route-patch-v1.yml \
+            .github/workflows/star-trek-bounded-patch-cleanup-v1.yml \
+            .github/workflows/star-trek-bounded-patch-cleanup-v2.yml; do
+            test ! -f "$path" || git rm -- "$path"
+          done
+          git diff --cached --check
+          git config user.name undercast-star-trek-bounded-patch-cleanup
+          git config user.email bounded-patch-cleanup@users.noreply.github.com
+          git commit -m 'Star Trek: retire completed bounded patch machinery'
+          git push origin "HEAD:refs/heads/${branch}"
