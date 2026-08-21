@@ -50,7 +50,7 @@ def slugify(value: str) -> str:
 
 
 def replace_number(text: str, old: int, token: str) -> str:
-    return re.sub(rf"(?<!\d){old}(?!\d)", token, text)
+    return re.sub(rf"(?<![0-9A-Za-z]){old}(?![0-9A-Za-z])", token, text)
 
 
 def replace_const(text: str, name: str, value) -> tuple[str, int]:

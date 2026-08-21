@@ -49,7 +49,7 @@ def pretty(value) -> str:
 
 
 def replace_number(text: str, old: str, token: str) -> str:
-    return re.sub(rf"(?<!\d){re.escape(old)}(?!\d)", token, text)
+    return re.sub(rf"(?<![0-9A-Za-z]){re.escape(old)}(?![0-9A-Za-z])", token, text)
 
 
 def replace_const(text: str, name: str, value) -> tuple[str, int]:
