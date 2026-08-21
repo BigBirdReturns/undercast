@@ -1,0 +1,66 @@
+name: star-trek-rolling-template-patch-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-rolling-continuation-v1
+
+concurrency:
+  group: star-trek-rolling-template-patch-v1
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Patch exact rolling controller and workflow predicates
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          script=Path('.github/recovery/rolling-cycle-controller-rebind-v1.py')
+          workflow=Path('.github/workflows/star-trek-rolling-cycle-v1.yml')
+          if not script.is_file() or not workflow.is_file(): raise SystemExit('rolling patch target missing')
+
+          text=script.read_text()
+          old_receipt='    text = re.sub(\n        r"data/review/adapter-sdk/star-trek-[a-z0-9-]+-cycle\\.json",\n        old_receipt_rel,\n        text,\n    )\n'
+          old_checker='    text = re.sub(\n        r"scripts/star-trek-[a-z0-9-]+-cycle\\.mjs",\n        old_checker_rel,\n        text,\n    )\n'
+          if old_receipt not in text: raise SystemExit('rolling broad receipt replacement pattern drifted')
+          if old_checker not in text: raise SystemExit('rolling broad checker replacement pattern drifted')
+          text=text.replace(old_receipt,'',1).replace(old_checker,'',1)
+
+          anchor='    text = text.replace("__rolling_prior_unit__", old_unit)\n'
+          if anchor not in text: raise SystemExit('rolling media replacement anchor drifted')
+          insertion=anchor+'    text = re.sub(r"star-trek-[a-z0-9-]+-media-v1", "star-trek-rolling-media-v1", text)\n'
+          text=text.replace(anchor,insertion,1)
+
+          old_forbidden='    old_unit,\n    f"star-trek-{old_slug}-media-v1",\n'
+          new_forbidden='    f"star-trek-{old_slug}-media-v1",\n'
+          if old_forbidden not in text: raise SystemExit('rolling forbidden-unit pattern drifted')
+          text=text.replace(old_forbidden,new_forbidden,1)
+          script.write_text(text)
+
+          text=workflow.read_text()
+          old='.status == "applied" and .canonical_parent == $parent and .task_id == $task and .source_fingerprint == $fp and .prior.task_id | length > 0'
+          new='.status == "applied" and .canonical_parent == $parent and .task_id == $task and .source_fingerprint == $fp and (.prior.task_id | length > 0)'
+          if old not in text: raise SystemExit('rolling jq predicate pattern drifted')
+          workflow.write_text(text.replace(old,new,1))
+          PY
+          python3 -m py_compile .github/recovery/rolling-cycle-controller-rebind-v1.py
+          git diff --check
+          git config user.name undercast-star-trek-rolling-template-patcher
+          git config user.email rolling-template-patcher@users.noreply.github.com
+          git add -- \
+            .github/recovery/rolling-cycle-controller-rebind-v1.py \
+            .github/workflows/star-trek-rolling-cycle-v1.yml
+          git diff --cached --quiet && exit 0
+          git commit -m 'Star Trek rolling continuation: patch controller bindings'
+          git push origin HEAD:agent/star-trek-rolling-continuation-v1
