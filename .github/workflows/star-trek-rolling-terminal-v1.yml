@@ -1,0 +1,181 @@
+name: star-trek-rolling-terminal-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-rolling-continuation-v1
+
+concurrency:
+  group: star-trek-rolling-terminal-v1
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  terminal:
+    name: unitstar-trek-rolling-terminal-v1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CONTROL_BRANCH: agent/star-trek-rolling-continuation-v1
+      RESULT_BRANCH: agent/star-trek-rolling-terminal-result-v1
+      STATE_PATH: transport/star-trek-rolling-continuation-v1/state.json
+      ROOT: /tmp/star-trek-rolling-terminal-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Decide whether the state is terminal and stable
+        id: plan
+        run: |
+          set -euo pipefail
+          test -f "$STATE_PATH"
+          cp "$STATE_PATH" /tmp/rolling-terminal-state.json
+          status="$(jq -r .status /tmp/rolling-terminal-state.json)"
+          stage="$(jq -r .stage /tmp/rolling-terminal-state.json)"
+          should=false
+          if test "$status" = boundary && test "$stage" = boundary; then should=true; fi
+          if test "$status" = blocked && test "$stage" = blocked; then
+            retries="$(jq -r '.recovery.product_stage_retries // 0' /tmp/rolling-terminal-state.json)"
+            test "$retries" -ge 1 && should=true
+          fi
+          echo "should_run=$should" >> "$GITHUB_OUTPUT"
+
+      - name: Quiesce bounded continuation carriers
+        if: steps.plan.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$ROOT"
+          carrier_head="$(git rev-parse HEAD)"
+          printf '%s\n' "$carrier_head" > "$ROOT/carrier-head.txt"
+          all="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" -f per_page=100)"
+          printf '%s\n' "$all" | jq . > "$ROOT/runs-before-quiescence.json"
+          jq -r --argjson self "$GITHUB_RUN_ID" '.workflow_runs[] | select(.id != $self and .status != "completed" and ((.head_branch // "") | test("^agent/star-trek-(rolling-continuation-v1|next-bounded-cycle-claim|lwaxana|kzinti-flyer|post-kzinti)"))) | .id' <<<"$all" | while read -r id; do
+            test -z "$id" || gh run cancel "$id" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
+          done
+          for attempt in $(seq 1 120); do
+            current="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" -f per_page=100)"
+            active="$(jq --argjson self "$GITHUB_RUN_ID" '[.workflow_runs[] | select(.id != $self and .status != "completed" and ((.head_branch // "") | test("^agent/star-trek-(rolling-continuation-v1|next-bounded-cycle-claim|lwaxana|kzinti-flyer|post-kzinti)")))] | length' <<<"$current")"
+            test "$active" = 0 && break
+            sleep 5
+          done
+          test "$active" = 0
+
+      - name: Independently verify live product, chain, ledgers, and Pages
+        if: steps.plan.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+          cp /tmp/rolling-terminal-state.json "$ROOT/state.json"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          live_sha="$(jq -r .sha <<<"$live")"
+          live_tree="$(jq -r .commit.tree.sha <<<"$live")"
+          expected="$(jq -r .expected_predecessor "$ROOT/state.json")"
+          test "$live_sha" = "$expected"
+          printf '%s\n' "$live" | jq . > "$ROOT/live-main.json"
+
+          previous=''
+          count="$(jq '.completed | length' "$ROOT/state.json")"
+          for index in $(seq 0 $((count - 1))); do
+            row="$(jq -c --argjson index "$index" '.completed[$index]' "$ROOT/state.json")"
+            commit="$(jq -r .product.commit <<<"$row")"
+            parent="$(jq -r .product.parent <<<"$row")"
+            tree="$(jq -r .product.tree <<<"$row")"
+            pages_run="$(jq -r .product.pages_run <<<"$row")"
+            remote="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/${commit}")"
+            test "$(jq -r .commit.tree.sha <<<"$remote")" = "$tree"
+            test "$(jq -r '.parents | length' <<<"$remote")" = 1
+            test "$(jq -r .parents[0].sha <<<"$remote")" = "$parent"
+            if test -n "$previous"; then test "$parent" = "$previous"; fi
+            pages="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${pages_run}")"
+            test "$(jq -r .status <<<"$pages")" = completed
+            test "$(jq -r .conclusion <<<"$pages")" = success
+            test "$(jq -r .head_sha <<<"$pages")" = "$commit"
+            previous="$commit"
+          done
+          if test "$count" -gt 0; then test "$previous" = "$live_sha"; fi
+
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$live_sha"
+          git checkout --detach "$live_sha"
+          npm ci --ignore-scripts
+          mapfile -t checkers < <(git diff-tree --no-commit-id --name-only -r HEAD | grep -E '^scripts/star-trek-.*-cycle\.mjs$' | LC_ALL=C sort -u)
+          test "${#checkers[@]}" = 1
+          node "${checkers[0]}" | tee "$ROOT/live-checker.log"
+          node scripts/thesis-rails.mjs validate --json > "$ROOT/thesis-status.json"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          node scripts/autopilot.mjs status --scope star-trek --json > "$ROOT/autopilot-status.json"
+          jq -e '.in_flight == 0 or .counts.in_flight == 0 or .summary.in_flight == 0' "$ROOT/autopilot-status.json" >/dev/null
+          node scripts/media-audit.mjs gate --scope star-trek | tee "$ROOT/media-gate.log"
+          node scripts/waterline.mjs validate | tee "$ROOT/waterline.log"
+          node scripts/corpus-ops.mjs validate | tee "$ROOT/corpus.log"
+          node scripts/validate.mjs | tee "$ROOT/archive.log"
+
+          pages_all="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/workflows/pages.yml/runs" -f branch=main -f per_page=100)"
+          page="$(jq -c --arg sha "$live_sha" '[.workflow_runs[] | select(.head_sha == $sha and .status == "completed" and .conclusion == "success")] | sort_by(.created_at) | last // empty' <<<"$pages_all")"
+          test -n "$page"
+          printf '%s\n' "$page" | jq . > "$ROOT/pages-run.json"
+          git ls-remote --heads origin 'refs/heads/agent/star-trek-rolling*' 'refs/heads/agent/star-trek-next-bounded-cycle-claim' 'refs/heads/agent/star-trek-lwaxana*' 'refs/heads/agent/star-trek-kzinti-flyer*' 'refs/heads/agent/star-trek-post-kzinti*' > "$ROOT/temporary-refs-before.txt"
+
+          disposition="$(jq -r .status "$ROOT/state.json")"
+          jq -n --argjson version 1 --arg transaction STAR-TREK-ROLLING-TERMINAL-V1 --arg disposition "$disposition" --argjson workflow_run "$GITHUB_RUN_ID" --arg workflow_head "$(cat "$ROOT/carrier-head.txt")" --arg live_commit "$live_sha" --arg live_tree "$live_tree" --argjson completed "$count" --slurpfile state "$ROOT/state.json" --slurpfile next "$ROOT/thesis-next.json" --slurpfile pages "$ROOT/pages-run.json" '{version:$version,transaction:$transaction,disposition:$disposition,workflow_run:$workflow_run,workflow_head:$workflow_head,live:{commit:$live_commit,tree:$live_tree},completed_iterations:$completed,state:$state[0],next:$next[0],pages:$pages[0],checks:{first_parent_chain:"pass",product_checker:"pass",thesis:"pass",autopilot_in_flight_zero:"pass",media:"pass",waterline:"pass",corpus:"pass",archive:"pass",pages:"success"}}' > "$ROOT/terminal.json"
+          (cd "$ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -print0 | sort -z | xargs -0 sha256sum > manifest.sha256 && sha256sum -c manifest.sha256)
+
+      - name: Publish independent terminal receipt
+        if: steps.plan.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+          live="$(jq -r .live.commit "$ROOT/terminal.json")"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$live"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach FETCH_HEAD
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/star-trek-rolling-terminal-v1
+          mkdir -p transport/star-trek-rolling-terminal-v1
+          cp "$ROOT/terminal.json" transport/star-trek-rolling-terminal-v1/
+          cp "$ROOT/state.json" transport/star-trek-rolling-terminal-v1/
+          cp "$ROOT/thesis-next.json" transport/star-trek-rolling-terminal-v1/
+          cp "$ROOT/temporary-refs-before.txt" transport/star-trek-rolling-terminal-v1/
+          cp "$ROOT/manifest.sha256" transport/star-trek-rolling-terminal-v1/
+          git config user.name undercast-star-trek-rolling-terminal
+          git config user.email rolling-terminal@users.noreply.github.com
+          git add transport/star-trek-rolling-terminal-v1
+          git commit -m 'Star Trek: publish rolling continuation terminal receipt'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+      - name: Upload complete terminal package
+        if: steps.plan.outputs.should_run == 'true'
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-rolling-terminal-v1
+          path: /tmp/star-trek-rolling-terminal-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retire every temporary continuation ref
+        if: steps.plan.outputs.should_run == 'true'
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
+          test "$(jq -r .expired <<<"$meta")" = false
+          test "$(jq -r .digest <<<"$meta")" = "$ARTIFACT_DIGEST"
+          refs="$(git ls-remote --heads origin 'refs/heads/agent/star-trek-rolling*' 'refs/heads/agent/star-trek-next-bounded-cycle-claim' 'refs/heads/agent/star-trek-lwaxana*' 'refs/heads/agent/star-trek-kzinti-flyer*' 'refs/heads/agent/star-trek-post-kzinti*' | cut -f2 | sed 's#refs/heads/##' | LC_ALL=C sort -u)"
+          while IFS= read -r branch; do
+            test -z "$branch" && continue
+            test "$branch" = "$RESULT_BRANCH" && continue
+            git push origin --delete "$branch" >/dev/null 2>&1 || true
+          done <<<"$refs"
+          git ls-remote --heads origin 'refs/heads/agent/star-trek-rolling*' 'refs/heads/agent/star-trek-next-bounded-cycle-claim' 'refs/heads/agent/star-trek-lwaxana*' 'refs/heads/agent/star-trek-kzinti-flyer*' 'refs/heads/agent/star-trek-post-kzinti*' | grep -v "refs/heads/${RESULT_BRANCH}$" > "$ROOT/temporary-refs-after.txt" || true
+          test ! -s "$ROOT/temporary-refs-after.txt"
