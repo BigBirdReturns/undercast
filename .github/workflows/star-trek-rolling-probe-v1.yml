@@ -1,0 +1,260 @@
+name: star-trek-rolling-probe-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-rolling-continuation-v1
+
+concurrency:
+  group: star-trek-rolling-probe-v1
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  probe:
+    name: unitstar-trek-rolling-probe-v1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CONTROL_BRANCH: agent/star-trek-rolling-continuation-v1
+      BOOTSTRAP_RESULT: agent/star-trek-post-kzinti-cycle-result-v1
+      STATE_PATH: transport/star-trek-rolling-continuation-v1/state.json
+      ROOT: /tmp/star-trek-rolling-probe-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Decide whether the probe stage owns this state
+        id: plan
+        run: |
+          set -euo pipefail
+          test -f "$STATE_PATH"
+          cp "$STATE_PATH" /tmp/rolling-state-before.json
+          status="$(jq -r .status /tmp/rolling-state-before.json)"
+          stage="$(jq -r .stage /tmp/rolling-state-before.json)"
+          iteration="$(jq -r .iteration /tmp/rolling-state-before.json)"
+          max="$(jq -r .max_iterations /tmp/rolling-state-before.json)"
+          should=false
+          if test "$status" = bootstrap && { test "$stage" = awaiting-predecessor || test "$stage" = bootstrap; }; then should=true; fi
+          if test "$status" = running && test "$stage" = bootstrap; then should=true; fi
+          if test "$iteration" -ge "$max"; then should=false; fi
+          echo "should_run=$should" >> "$GITHUB_OUTPUT"
+          echo "iteration=$iteration" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve exact predecessor and repository-generated task
+        if: steps.plan.outputs.should_run == 'true'
+        id: bind
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          carrier_head="$(git rev-parse HEAD)"
+          iteration='${{ steps.plan.outputs.iteration }}'
+          predecessor="$(jq -r '.expected_predecessor // empty' /tmp/rolling-state-before.json)"
+          if test "$iteration" = 0 && test -z "$predecessor"; then
+            for attempt in $(seq 1 2160); do
+              encoded="$(gh api "/repos/${GITHUB_REPOSITORY}/contents/transport/post-kzinti-cycle-v1/execution.json?ref=${BOOTSTRAP_RESULT}" --jq .content 2>/dev/null || true)"
+              if test -n "$encoded"; then
+                printf '%s' "$encoded" | tr -d '\n' | base64 -d > "$ROOT/bootstrap-execution.json"
+                predecessor="$(jq -r '.product.commit // empty' "$ROOT/bootstrap-execution.json")"
+                test -n "$predecessor" && break
+              fi
+              sleep 5
+            done
+          fi
+          test -n "$predecessor"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$predecessor"
+          printf '%s\n' "$live" | jq . > "$ROOT/predecessor.json"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$predecessor"
+          git checkout --detach "$predecessor"
+          npm ci --ignore-scripts
+          mapfile -t checkers < <(git diff-tree --no-commit-id --name-only -r HEAD | grep -E '^scripts/star-trek-.*-cycle\.mjs$' | LC_ALL=C sort -u)
+          test "${#checkers[@]}" = 1
+          checker="${checkers[0]}"
+          node "$checker" | tee "$ROOT/predecessor-checker.log"
+          node scripts/thesis-rails.mjs validate --json > "$ROOT/thesis-status.json"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          phase="$(jq -r '.phase // empty' "$ROOT/thesis-next.json")"
+          task_id="$(jq -r '.candidate.task_id // empty' "$ROOT/thesis-next.json")"
+          fingerprint="$(jq -r '.candidate.source_fingerprint // empty' "$ROOT/thesis-next.json")"
+          if test "$phase" != ready-for-one-cycle || test -z "$task_id"; then
+            echo "boundary=true" >> "$GITHUB_OUTPUT"
+            echo "boundary_reason=thesis phase ${phase:-unset} has no authorized task" >> "$GITHUB_OUTPUT"
+            echo "predecessor=$predecessor" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          jq --arg id "$task_id" '.jobs[] | select(.id == $id)' data/AUTOPILOT.json > "$ROOT/task.json"
+          jq -e --arg fp "$fingerprint" '.status == "queued" and .source_fingerprint == $fp' "$ROOT/task.json" >/dev/null
+          printf '%s\n' "$checker" > "$ROOT/predecessor-checker-path.txt"
+          printf '%s\n' "$carrier_head" > "$ROOT/carrier-head.txt"
+          echo "boundary=false" >> "$GITHUB_OUTPUT"
+          echo "predecessor=$predecessor" >> "$GITHUB_OUTPUT"
+          echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      - name: Record a thesis boundary without taking a lease
+        if: steps.plan.outputs.should_run == 'true' && steps.bind.outputs.boundary == 'true'
+        env:
+          PREDECESSOR: ${{ steps.bind.outputs.predecessor }}
+          REASON: ${{ steps.bind.outputs.boundary_reason }}
+        run: |
+          set -euo pipefail
+          git fetch --filter=blob:none --no-tags origin "$CONTROL_BRANCH"
+          git checkout -B "$CONTROL_BRANCH" FETCH_HEAD
+          current="$(jq -r .expected_predecessor "$STATE_PATH")"
+          test "$current" = null || test "$current" = "$PREDECESSOR"
+          tmp="$(mktemp)"
+          jq --arg reason "$REASON" --arg predecessor "$PREDECESSOR" --argjson run "$GITHUB_RUN_ID" '.status="boundary" | .stage="boundary" | .expected_predecessor=$predecessor | .boundary={kind:"thesis",reason:$reason,workflow_run:$run,canonical_mutation:false,lease_taken:false}' "$STATE_PATH" > "$tmp"
+          mv "$tmp" "$STATE_PATH"
+          git config user.name undercast-star-trek-rolling-probe
+          git config user.email rolling-probe@users.noreply.github.com
+          git add "$STATE_PATH"
+          git commit -m 'Star Trek rolling continuation: record thesis boundary'
+          git push origin "HEAD:refs/heads/${CONTROL_BRANCH}"
+
+      - name: Freeze exact successor source revision
+        if: steps.plan.outputs.should_run == 'true' && steps.bind.outputs.boundary == 'false'
+        id: freeze
+        env:
+          PREDECESSOR: ${{ steps.bind.outputs.predecessor }}
+          TASK_ID: ${{ steps.bind.outputs.task_id }}
+          TASK_FINGERPRINT: ${{ steps.bind.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+          from datetime import datetime, timezone
+          import hashlib, json, os
+          root=Path('/tmp/star-trek-rolling-probe-v1')
+          task=json.loads((root/'task.json').read_text())
+          source=task['source']; title=source.rsplit('/',1)[-1].replace('_',' ')
+          url='https://memory-alpha.fandom.com/api.php?'+urlencode({
+              'action':'query','prop':'revisions|pageimages','titles':title,
+              'rvprop':'ids|timestamp|content','rvslots':'main',
+              'piprop':'original|name','format':'json','formatversion':'2'
+          })
+          request=Request(url,headers={'User-Agent':'UNDERCAST-Rolling-Probe/1.0','Accept':'application/json'})
+          with urlopen(request,timeout=90) as response:data=json.load(response)
+          pages=data['query']['pages']
+          if len(pages)!=1 or pages[0].get('missing'):raise SystemExit(f'source missing: {pages}')
+          page=pages[0];revisions=page.get('revisions') or []
+          if len(revisions)!=1:raise SystemExit('source revision cardinality drifted')
+          revision=revisions[0];text=revision['slots']['main']['content'];lower=text.lower()
+          performer=task['performer'];character=task['character'];modes=task.get('performance_modes') or []
+          if performer.lower() not in lower:raise SystemExit('performer attribution absent from frozen source')
+          voice_wording=any(value in lower for value in ('voice','voiced by','voice actor','voice actors'))
+          physical_wording=any(value in lower for value in ('portrayed by','played by','suit performer','physical performer'))
+          queued_voice='voice-animation' in modes
+          queued_physical='physical-prosthetic' in modes or 'physical-and-voice' in modes
+          if queued_voice and voice_wording:
+              kind='voice';adjudicated='voice / voice-only'
+          elif queued_physical and physical_wording:
+              kind='face';adjudicated='physical / live-action'
+          else:
+              kind='unresolved';adjudicated='unresolved'
+          receipt={
+              'version':1,
+              'transaction':'STAR-TREK-ROLLING-SOURCE-PROBE-V1',
+              'status':'success',
+              'generated_at':datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00','Z'),
+              'canonical_parent':os.environ['PREDECESSOR'],
+              'task_id':os.environ['TASK_ID'],
+              'source_fingerprint':os.environ['TASK_FINGERPRINT'],
+              'character':character,'performer':performer,
+              'production':task.get('production'),'years':task.get('years'),
+              'source':source,'pageid':page['pageid'],'revision':revision['revid'],
+              'revision_timestamp':revision['timestamp'],
+              'content_sha256':hashlib.sha256(text.encode()).hexdigest(),
+              'page_image':page.get('original'),
+              'queued_mode_hint':modes,
+              'source_voice_wording':voice_wording,
+              'source_physical_wording':physical_wording,
+              'adjudicated_kind':kind,
+              'adjudicated_performance_mode':adjudicated,
+              'maker_attribution':'unresolved',
+              'animation_maker_attribution':'unresolved',
+              'character_design_maker_attribution':'unresolved',
+              'makeup_maker_attribution':'unresolved',
+              'costume_maker_attribution':'unresolved',
+              'voice_direction_attribution':'unresolved',
+              'editing_attribution':'unresolved',
+              'sound_processing_attribution':'unresolved',
+              'production_shop_attribution':'unresolved',
+              'vocal_transformation_measured':False,
+              'canonical_mutation':False,
+              'lease_taken':False,
+          }
+          def stable(value):
+              if isinstance(value,dict):return {key:stable(value[key]) for key in sorted(value)}
+              if isinstance(value,list):return [stable(item) for item in value]
+              return value
+          body=json.dumps(stable(receipt),indent=2,ensure_ascii=False)+'\n'
+          receipt['receipt_sha256']=hashlib.sha256(body.encode()).hexdigest()
+          (root/'source-probe.json').write_text(json.dumps(stable(receipt),indent=2,ensure_ascii=False)+'\n')
+          (root/'frozen-source.wikitext').write_text(text)
+          (root/'frozen-source-api.json').write_text(json.dumps(data,indent=2,ensure_ascii=False)+'\n')
+          PY
+          jq -e --arg parent "$PREDECESSOR" --arg task "$TASK_ID" --arg fp "$TASK_FINGERPRINT" '.status == "success" and .canonical_parent == $parent and .task_id == $task and .source_fingerprint == $fp and .maker_attribution == "unresolved" and .canonical_mutation == false and .lease_taken == false' "$ROOT/source-probe.json" >/dev/null
+          mode="$(jq -r .adjudicated_performance_mode "$ROOT/source-probe.json")"
+          if test "$mode" = 'voice / voice-only'; then
+            echo "mode_supported=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode_supported=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact rolling source probe
+        if: steps.plan.outputs.should_run == 'true' && steps.bind.outputs.boundary == 'false'
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-rolling-source-probe-${{ github.run_id }}
+          path: /tmp/star-trek-rolling-probe-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Advance state to probe-ready or modality boundary
+        if: steps.plan.outputs.should_run == 'true' && steps.bind.outputs.boundary == 'false'
+        env:
+          PREDECESSOR: ${{ steps.bind.outputs.predecessor }}
+          TASK_ID: ${{ steps.bind.outputs.task_id }}
+          TASK_FINGERPRINT: ${{ steps.bind.outputs.fingerprint }}
+          MODE: ${{ steps.freeze.outputs.mode }}
+          MODE_SUPPORTED: ${{ steps.freeze.outputs.mode_supported }}
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          character="$(jq -r .character "$ROOT/source-probe.json")"
+          performer="$(jq -r .performer "$ROOT/source-probe.json")"
+          receipt_sha="$(jq -r .receipt_sha256 "$ROOT/source-probe.json")"
+          git fetch --filter=blob:none --no-tags origin "$CONTROL_BRANCH"
+          git checkout -B "$CONTROL_BRANCH" FETCH_HEAD
+          current_stage="$(jq -r .stage "$STATE_PATH")"
+          test "$current_stage" = awaiting-predecessor || test "$current_stage" = bootstrap
+          tmp="$(mktemp)"
+          if test "$MODE_SUPPORTED" = true; then
+            jq --arg predecessor "$PREDECESSOR" --arg task "$TASK_ID" --arg fp "$TASK_FINGERPRINT" --arg character "$character" --arg performer "$performer" --arg mode "$MODE" --argjson run "$GITHUB_RUN_ID" --argjson artifact "$ARTIFACT_ID" --arg digest "${ARTIFACT_DIGEST#sha256:}" --arg receipt "$receipt_sha" '.status="running" | .stage="probe-ready" | .expected_predecessor=$predecessor | .current={task_id:$task,source_fingerprint:$fp,character:$character,performer:$performer,adjudicated_performance_mode:$mode} | .probe={workflow_run:$run,artifact_id:$artifact,artifact_sha256:$digest,receipt_sha256:$receipt} | .boundary=null' "$STATE_PATH" > "$tmp"
+          else
+            jq --arg predecessor "$PREDECESSOR" --arg task "$TASK_ID" --arg fp "$TASK_FINGERPRINT" --arg character "$character" --arg performer "$performer" --arg mode "$MODE" --argjson run "$GITHUB_RUN_ID" --argjson artifact "$ARTIFACT_ID" --arg digest "${ARTIFACT_DIGEST#sha256:}" --arg receipt "$receipt_sha" '.status="boundary" | .stage="boundary" | .expected_predecessor=$predecessor | .current={task_id:$task,source_fingerprint:$fp,character:$character,performer:$performer,adjudicated_performance_mode:$mode} | .probe={workflow_run:$run,artifact_id:$artifact,artifact_sha256:$digest,receipt_sha256:$receipt} | .boundary={kind:"modality",reason:("rolling v1 authorizes source-proven voice-only work; adjudicated mode is "+$mode),canonical_mutation:false,lease_taken:false}' "$STATE_PATH" > "$tmp"
+          fi
+          mv "$tmp" "$STATE_PATH"
+          git config user.name undercast-star-trek-rolling-probe
+          git config user.email rolling-probe@users.noreply.github.com
+          git add "$STATE_PATH"
+          git commit -m "Star Trek rolling continuation: probe ${character}"
+          git push origin "HEAD:refs/heads/${CONTROL_BRANCH}"
