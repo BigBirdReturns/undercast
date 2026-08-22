@@ -1,0 +1,59 @@
+name: observe-star-trek-cycle-v3-snapshot
+
+on:
+  push:
+    branches:
+      - agent/observe-star-trek-cycle-v3-snapshot
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: agent/star-trek-maryl-cycle-v3
+      TARGET_HEAD: 535b802c03fa38dd6062c331d625b60f19a588e7
+      TARGET_WORKFLOW: star-trek-maryl-cycle-v3
+      RESULT_BRANCH: agent/observe-star-trek-cycle-v3-snapshot-result
+      ROOT: /tmp/observe-star-trek-cycle-v3-snapshot
+    steps:
+      - uses: actions/checkout@v4
+      - name: Capture current run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?branch=${TARGET_BRANCH}&per_page=100")"
+          run="$(jq -c --arg sha "$TARGET_HEAD" --arg name "$TARGET_WORKFLOW" '.workflow_runs | map(select(.head_sha==$sha and .name==$name)) | sort_by(.created_at) | last // empty' <<<"$runs")"
+          if test -z "$run"; then
+            jq -n --arg status missing --arg target_head "$TARGET_HEAD" '{status:$status,target_head:$target_head}' > "$ROOT/status.json"
+          else
+            run_id="$(jq -r .id <<<"$run")"
+            printf '%s\n' "$run" | jq . > "$ROOT/run.json"
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "$ROOT/jobs.json"
+            jq -n \
+              --arg status found \
+              --argjson run_id "$run_id" \
+              --arg run_status "$(jq -r .status <<<"$run")" \
+              --arg conclusion "$(jq -r '.conclusion // ""' <<<"$run")" \
+              --arg target_head "$TARGET_HEAD" \
+              '{status:$status,run_id:$run_id,run_status:$run_status,conclusion:$conclusion,target_head:$target_head}' \
+              > "$ROOT/status.json"
+          fi
+      - name: Publish snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-observer
+          git config user.email undercast-observer@users.noreply.github.com
+          git checkout --orphan observation
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/observe-star-trek-cycle-v3-snapshot
+          cp "$ROOT"/*.json transport/observe-star-trek-cycle-v3-snapshot/
+          git add transport/observe-star-trek-cycle-v3-snapshot
+          git commit -m 'Snapshot Star Trek cycle v3'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
