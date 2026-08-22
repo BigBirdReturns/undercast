@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-rm -rf "$ROOT" "$MEDIA_ROOT" "$STAGE_ROOT" /tmp/maryl-media.zip /tmp/star-trek-maryl-cycle-v1.mjs
+rm -rf "$ROOT" "$MEDIA_ROOT" "$STAGE_ROOT" /tmp/maryl-media.zip /tmp/star-trek-maryl-cycle-v1.mjs /tmp/star-trek-maryl-cycle-v1.mjs.sha256
 mkdir -p "$ROOT" "$MEDIA_ROOT" "$STAGE_ROOT"
-cat .github/recovery/star-trek-maryl-cycle-v1/part-*.mjs > /tmp/star-trek-maryl-cycle-v1.mjs
-echo "678fa03df59acb68eb2d765246b83beabc3a8eab26294a455a19f5d3979e8912  /tmp/star-trek-maryl-cycle-v1.mjs" | sha256sum -c -
-node --check /tmp/star-trek-maryl-cycle-v1.mjs
+bash .github/recovery/star-trek-maryl-cycle-v1/prepare.sh
 
 live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
 test "$(jq -r .sha <<<"$live")" = "$EXPECTED_MAIN"
@@ -79,6 +77,7 @@ jq -n \
   '{version:1,transaction:"STAR-TREK-MARYL-CANDIDATE-METADATA-V1",canonical_parent:$canonical_parent,candidate_commit:$candidate_commit,candidate_tree:$candidate_tree,candidate_path_count:$candidate_path_count,candidate_path_ledger_sha256:$candidate_path_ledger_sha256,workflow_run:($workflow_run|tonumber)}' \
   > "$STAGE_ROOT/candidate-metadata.json"
 cp "$ROOT/live-main.json" "$ROOT/source-media-artifact.json" "$ROOT/stage.stdout.log" "$STAGE_ROOT/"
+cp /tmp/star-trek-maryl-cycle-v1.mjs.sha256 "$STAGE_ROOT/helper.sha256"
 (cd "$STAGE_ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256)
 
 git push origin "HEAD:refs/heads/${CANDIDATE_BRANCH}"
