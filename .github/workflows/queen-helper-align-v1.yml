@@ -1,0 +1,74 @@
+name: queen-helper-align-v1
+
+on:
+  push:
+    branches:
+      - agent/queen-helper-align-v1
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      RESULT_BRANCH: agent/queen-helper-align-result-v1
+      ROOT: transport/queen-helper-align-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Align predecessor and current payload text
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf /tmp/queen-helper-align-v1
+          mkdir -p /tmp/queen-helper-align-v1
+          git fetch --filter=blob:none --no-tags origin \
+            agent/star-trek-queen-hearts-cycle-v1 \
+            agent/star-trek-queen-of-hearts-cycle-v1
+          git show origin/agent/star-trek-queen-hearts-cycle-v1:.github/recovery/star-trek-queen-hearts-cycle-v1/cycle.mjs.gz.b64 > /tmp/old.b64
+          for part in 00 01 02 03 04 05; do
+            git show "origin/agent/star-trek-queen-of-hearts-cycle-v1:.github/recovery/star-trek-queen-of-hearts-cycle-v1/helper.mjs.gz.b64.part-${part}"
+          done > /tmp/new.b64
+          python3 - <<'PY'
+          from difflib import SequenceMatcher
+          from pathlib import Path
+          import hashlib, json
+
+          old = ''.join(Path('/tmp/old.b64').read_text().split())
+          new = ''.join(Path('/tmp/new.b64').read_text().split())
+          sm = SequenceMatcher(None, old, new, autojunk=False)
+          opcodes = [
+              {'tag': tag, 'old_start': i1, 'old_end': i2, 'new_start': j1, 'new_end': j2,
+               'old_len': i2-i1, 'new_len': j2-j1}
+              for tag, i1, i2, j1, j2 in sm.get_opcodes()
+          ]
+          blocks = [
+              {'old_start': b.a, 'new_start': b.b, 'length': b.size}
+              for b in sm.get_matching_blocks() if b.size
+          ]
+          report = {
+              'version': 1,
+              'transaction': 'QUEEN-HELPER-ALIGN-V1',
+              'old': {'length': len(old), 'mod4': len(old)%4, 'sha256': hashlib.sha256(old.encode()).hexdigest()},
+              'new': {'length': len(new), 'mod4': len(new)%4, 'sha256': hashlib.sha256(new.encode()).hexdigest()},
+              'length_delta_old_minus_new': len(old)-len(new),
+              'ratio': sm.ratio(),
+              'opcodes': opcodes,
+              'largest_matching_blocks': sorted(blocks, key=lambda x: x['length'], reverse=True)[:20],
+          }
+          Path('/tmp/queen-helper-align-v1/alignment.json').write_text(json.dumps(report, indent=2) + '\n')
+          Path('/tmp/queen-helper-align-v1/old.b64').write_text(old + '\n')
+          Path('/tmp/queen-helper-align-v1/new.b64').write_text(new + '\n')
+          PY
+          git config user.name undercast-queen-helper-align
+          git config user.email queen-helper-align@users.noreply.github.com
+          git switch --orphan alignment-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p "$ROOT"
+          cp -a /tmp/queen-helper-align-v1/. "$ROOT/"
+          git add "$ROOT"
+          git commit -m 'Align Queen of Hearts helper payloads'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
