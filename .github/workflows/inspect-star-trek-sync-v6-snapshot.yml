@@ -1,0 +1,52 @@
+name: inspect-star-trek-sync-v6-snapshot
+
+on:
+  push:
+    branches:
+      - agent/inspect-star-trek-sync-v6-snapshot
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: agent/inspect-star-trek-sync-v6
+      TARGET_HEAD: 1517e064cdd3e67f837719ab9c2d493c8c2e9523
+      TARGET_WORKFLOW: inspect-star-trek-sync-v6
+      RESULT_BRANCH: agent/inspect-star-trek-sync-v6-snapshot-result
+      ROOT: /tmp/inspect-star-trek-sync-v6-snapshot
+    steps:
+      - uses: actions/checkout@v4
+      - name: Capture inspection run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?branch=${TARGET_BRANCH}&per_page=100")"
+          run="$(jq -c --arg sha "$TARGET_HEAD" --arg name "$TARGET_WORKFLOW" '.workflow_runs | map(select(.head_sha==$sha and .name==$name)) | sort_by(.created_at) | last // empty' <<<"$runs")"
+          if test -z "$run"; then
+            jq -n --arg status missing --arg target_head "$TARGET_HEAD" '{status:$status,target_head:$target_head}' > "$ROOT/status.json"
+          else
+            run_id="$(jq -r .id <<<"$run")"
+            printf '%s\n' "$run" | jq . > "$ROOT/run.json"
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "$ROOT/jobs.json"
+            jq -n --arg status found --argjson run_id "$run_id" --arg run_status "$(jq -r .status <<<"$run")" --arg conclusion "$(jq -r '.conclusion // ""' <<<"$run")" --arg target_head "$TARGET_HEAD" '{status:$status,run_id:$run_id,run_status:$run_status,conclusion:$conclusion,target_head:$target_head}' > "$ROOT/status.json"
+          fi
+      - name: Publish snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-inspector
+          git config user.email undercast-inspector@users.noreply.github.com
+          git checkout --orphan inspection
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/inspect-star-trek-sync-v6-snapshot
+          cp "$ROOT"/*.json transport/inspect-star-trek-sync-v6-snapshot/
+          git add transport/inspect-star-trek-sync-v6-snapshot
+          git commit -m 'Snapshot sync-first inspection run'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
