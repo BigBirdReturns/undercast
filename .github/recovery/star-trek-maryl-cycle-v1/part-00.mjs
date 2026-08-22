@@ -6,7 +6,8 @@ import { spawnSync } from 'node:child_process';
 
 const cmd = process.argv[2];
 const env = process.env;
-const EXPECTED_MAIN = env.EXPECTED_MAIN || 'b22d01251746a824a404308e6c9e3466aef2091a';
+const EXPECTED_MAIN = env.EXPECTED_MAIN || '4900668f614a060f31ceeefb5009f7ee93cb17c1';
+const MEDIA_CANONICAL_PARENT = env.MEDIA_CANONICAL_PARENT || 'b22d01251746a824a404308e6c9e3466aef2091a';
 const TASK_ID = 'ap_a7bae45c6030e1212e1ad6b0';
 const SOURCE_FINGERPRINT = 'dd367d1cef3b2089e6757a4321195ea40a6096e6785db9a00fe1a13a846c9e48';
 const SOURCE = 'https://memory-alpha.fandom.com/wiki/Maryl';
@@ -98,4 +99,3 @@ function cardRow() {
   const matches = cards.filter((row) => normalize(row.actor) === normalize(PERFORMER) && normalize(row.character) === normalize(CHARACTER));
   ensure(matches.length === 1, `expected one Maryl/Jeri Ryan card, found ${matches.length}`);
   return { cards, card: matches[0] };
-}
