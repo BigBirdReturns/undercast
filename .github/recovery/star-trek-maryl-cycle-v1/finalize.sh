@@ -15,7 +15,7 @@ test "$(git rev-parse HEAD^)" = "$EXPECTED_MAIN"
 npm ci --ignore-scripts
 
 STAGE_ROOT="$STAGE_ROOT" REVIEW_ROOT="$REVIEW_ROOT" FINAL_ROOT="$FINAL_ROOT" \
-  EXPECTED_MAIN="$EXPECTED_MAIN" CANDIDATE_BRANCH="$CANDIDATE_BRANCH" \
+  EXPECTED_MAIN="$EXPECTED_MAIN" MEDIA_CANONICAL_PARENT="$MEDIA_CANONICAL_PARENT" CANDIDATE_BRANCH="$CANDIDATE_BRANCH" \
   CANDIDATE_COMMIT="$CANDIDATE_COMMIT" CANDIDATE_TREE="$CANDIDATE_TREE" \
   CANDIDATE_PATH_COUNT="$CANDIDATE_PATH_COUNT" CANDIDATE_PATH_LEDGER_SHA256="$CANDIDATE_PATH_LEDGER_SHA256" \
   STAGE_ARTIFACT_ID="$STAGE_ARTIFACT_ID" STAGE_ARTIFACT_DIGEST="$STAGE_ARTIFACT_DIGEST" \
@@ -89,16 +89,18 @@ jq -n \
   '{version:1,transaction:"STAR-TREK-MARYL-TERMINAL-EXECUTION-V1",status:"published",product_commit:$product_commit,product_tree:$product_tree,product_path_count:$product_path_count,product_path_ledger_sha256:$product_path_ledger_sha256,pages_run:$pages_run,receipt_sha256:$receipt_sha256,checker_sha256:$checker_sha256}' \
   > "$FINAL_ROOT/terminal.json"
 
-for branch in \
-  "$CANDIDATE_BRANCH" \
-  "$CARRIER_BRANCH" \
-  agent/star-trek-maryl-media-prep-v1 \
-  agent/star-trek-maryl-source-media-result-v1 \
-  agent/star-trek-maryl-source-media-status-v1 \
-  agent/star-trek-maryl-source-media-status-v2; do
-  if test -n "$(git ls-remote --heads origin "refs/heads/${branch}")"; then
-    git push origin --delete "$branch"
-  fi
+mapfile -t maryl_branches < <(
+  git ls-remote --heads origin 'refs/heads/*maryl*' \
+    | awk '{sub(/^refs\/heads\//,"",$2); print $2}' \
+    | LC_ALL=C sort -u
+)
+for branch in "${maryl_branches[@]}"; do
+  test -n "$branch" || continue
+  git push origin --delete "$branch"
+done
+for _ in $(seq 1 30); do
+  test -z "$(git ls-remote --heads origin 'refs/heads/*maryl*')" && break
+  sleep 2
 done
 test -z "$(git ls-remote --heads origin 'refs/heads/*maryl*')"
 jq -n --argjson version 1 --arg transaction STAR-TREK-MARYL-CLEANUP-V1 --arg status complete --arg product "$product_commit" '{version:$version,transaction:$transaction,status:$status,product_commit:$product,maryl_refs_remaining:0}' > "$FINAL_ROOT/cleanup.json"
