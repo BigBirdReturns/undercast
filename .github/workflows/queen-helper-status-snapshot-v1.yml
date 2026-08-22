@@ -1,0 +1,51 @@
+name: queen-helper-status-snapshot-v1
+
+on:
+  push:
+    branches:
+      - agent/queen-helper-status-snapshot-v1
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: agent/queen-helper-verify-v1
+      TARGET_WORKFLOW: queen-helper-verify-v1
+      RESULT_BRANCH: agent/queen-helper-status-snapshot-result-v1
+      ROOT: transport/queen-helper-status-snapshot-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Capture helper verification state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf /tmp/queen-helper-status-snapshot-v1
+          mkdir -p /tmp/queen-helper-status-snapshot-v1
+          runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?branch=${TARGET_BRANCH}&per_page=30")"
+          run="$(jq -c --arg name "$TARGET_WORKFLOW" '[.workflow_runs[] | select(.name==$name)] | sort_by(.created_at) | last // empty' <<<"$runs")"
+          if test -n "$run"; then
+            id="$(jq -r .id <<<"$run")"
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${id}" | jq . > /tmp/queen-helper-status-snapshot-v1/run.json
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs?per_page=100" | jq . > /tmp/queen-helper-status-snapshot-v1/jobs.json
+            jq -n --argjson run_id "$id" --arg status "$(jq -r .status /tmp/queen-helper-status-snapshot-v1/run.json)" --arg conclusion "$(jq -r '.conclusion // ""' /tmp/queen-helper-status-snapshot-v1/run.json)" '{found:true,run_id:$run_id,status:$status,conclusion:$conclusion}' > /tmp/queen-helper-status-snapshot-v1/status.json
+          else
+            printf '%s\n' '{"found":false}' > /tmp/queen-helper-status-snapshot-v1/status.json
+            printf '%s\n' '{"jobs":[]}' > /tmp/queen-helper-status-snapshot-v1/jobs.json
+          fi
+          git config user.name undercast-queen-helper-status
+          git config user.email queen-helper-status@users.noreply.github.com
+          git switch --orphan status-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p "$ROOT"
+          cp -a /tmp/queen-helper-status-snapshot-v1/. "$ROOT/"
+          git add "$ROOT"
+          git commit -m 'Capture Queen helper verification status'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
