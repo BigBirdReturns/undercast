@@ -1,0 +1,93 @@
+name: extract-white-rabbit-controller-v1
+
+on:
+  push:
+    branches:
+      - agent/extract-white-rabbit-controller-v1
+
+permissions:
+  contents: write
+
+env:
+  SOURCE_COMMIT: b48e91029e56e18c7fe434de671b45949be32abc
+  RESULT_BRANCH: agent/extract-white-rabbit-controller-result-v1
+  ROOT: /tmp/extract-white-rabbit-controller-v1
+
+jobs:
+  extract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Extract successful White Rabbit controller and payload
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          git fetch --no-tags origin "$SOURCE_COMMIT"
+          git cat-file -e "${SOURCE_COMMIT}^{commit}"
+
+          : > "$ROOT/controller.b64"
+          for file in scripts/.white-rabbit-controller-v2-00 scripts/.white-rabbit-controller-v2-01; do
+            git show "${SOURCE_COMMIT}:${file}" >> "$ROOT/controller.b64"
+          done
+          test "$(sha256sum "$ROOT/controller.b64" | cut -d' ' -f1)" = 2cac26c70eb14019b3ff65078d7f42c3c6dd8cc572cef629820fe076fca3f51d
+          base64 -d "$ROOT/controller.b64" | xz -dc > "$ROOT/white-rabbit-controller.sh"
+          test "$(sha256sum "$ROOT/white-rabbit-controller.sh" | cut -d' ' -f1)" = 0a58285a31c54123d6a29dbd9c7ee0d1faa1d82116f14f5cd295350b545fe1d1
+          bash -n "$ROOT/white-rabbit-controller.sh"
+
+          : > "$ROOT/payload.b64"
+          for file in \
+            scripts/.white-rabbit-payload-v2-00 \
+            scripts/.white-rabbit-payload-v2-01 \
+            scripts/.white-rabbit-payload-v3-02-00 \
+            scripts/.white-rabbit-payload-v3-02-01 \
+            scripts/.white-rabbit-payload-v3-02-02 \
+            scripts/.white-rabbit-payload-v3-02-03 \
+            scripts/.white-rabbit-payload-v3-02-04 \
+            scripts/.white-rabbit-payload-v3-02-05 \
+            scripts/.white-rabbit-payload-v3-02-06 \
+            scripts/.white-rabbit-payload-v3-02-07 \
+            scripts/.white-rabbit-payload-v3-02-08 \
+            scripts/.white-rabbit-payload-v3-02-09 \
+            scripts/.white-rabbit-payload-v2-03 \
+            scripts/.white-rabbit-payload-v2-04 \
+            scripts/.white-rabbit-payload-v2-05 \
+            scripts/.white-rabbit-payload-v2-06; do
+            git show "${SOURCE_COMMIT}:${file}" >> "$ROOT/payload.b64"
+          done
+          test "$(sha256sum "$ROOT/payload.b64" | cut -d' ' -f1)" = 3308e41f305e249fdc01a2a0771d6ad9bc82c7b6a76f3d17c45eea62fd1889fd
+          base64 -d "$ROOT/payload.b64" > "$ROOT/payload.bin"
+          file "$ROOT/payload.bin" > "$ROOT/payload-file.txt"
+
+          grep -nE '^(stage|review|publish|prepare|main|function|[a-zA-Z_][a-zA-Z0-9_]*\(\))' "$ROOT/white-rabbit-controller.sh" > "$ROOT/controller-index.txt" || true
+          grep -nE 'EXPECTED_MAIN|TASK_ID|SOURCE_FINGERPRINT|White Rabbit|Once Upon a Planet|MEDIA_PREP' "$ROOT/white-rabbit-controller.sh" > "$ROOT/controller-bindings.txt" || true
+
+          jq -n \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg controller_sha256 "$(sha256sum "$ROOT/white-rabbit-controller.sh" | cut -d' ' -f1)" \
+            --arg payload_b64_sha256 "$(sha256sum "$ROOT/payload.b64" | cut -d' ' -f1)" \
+            --arg payload_sha256 "$(sha256sum "$ROOT/payload.bin" | cut -d' ' -f1)" \
+            --argjson controller_bytes "$(stat -c %s "$ROOT/white-rabbit-controller.sh")" \
+            --argjson controller_lines "$(wc -l < "$ROOT/white-rabbit-controller.sh" | tr -d ' ')" \
+            --argjson payload_bytes "$(stat -c %s "$ROOT/payload.bin")" \
+            '{version:1,transaction:"EXTRACT-WHITE-RABBIT-CONTROLLER-V1",source_commit:$source_commit,controller:{sha256:$controller_sha256,bytes:$controller_bytes,lines:$controller_lines,bash_syntax:"pass"},payload:{base64_sha256:$payload_b64_sha256,sha256:$payload_sha256,bytes:$payload_bytes}}' \
+            > "$ROOT/result.json"
+          (cd "$ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+
+      - name: Publish extraction
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-white-rabbit-controller-extract
+          git config user.email white-rabbit-controller-extract@users.noreply.github.com
+          git switch --orphan extraction-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/extract-white-rabbit-controller-v1
+          cp -a "$ROOT"/. transport/extract-white-rabbit-controller-v1/
+          git add transport/extract-white-rabbit-controller-v1
+          git commit -m 'Extract successful White Rabbit controller'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
