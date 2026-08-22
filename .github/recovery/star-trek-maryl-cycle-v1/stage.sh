@@ -8,9 +8,20 @@ live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
 test "$(jq -r .sha <<<"$live")" = "$EXPECTED_MAIN"
 test "$(jq -r .commit.tree.sha <<<"$live")" = "$EXPECTED_TREE"
 test "$(jq -r '.parents | length' <<<"$live")" = 1
-test "$(jq -r .commit.message <<<"$live")" = 'Star Trek: publish Lorot cycle'
+test "$(jq -r .parents[0].sha <<<"$live")" = "$MEDIA_CANONICAL_PARENT"
+test "$(jq -r .commit.message <<<"$live")" = 'Media search: record rolling candidate attempt (2026-08-22)'
 printf '%s\n' "$live" | jq . > "$ROOT/live-main.json"
 test -z "$(git ls-remote origin "refs/heads/${CANDIDATE_BRANCH}" || true)"
+
+git fetch --filter=blob:none --no-tags origin main
+test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+test "$(git rev-parse "${EXPECTED_MAIN}^")" = "$MEDIA_CANONICAL_PARENT"
+git diff --name-only "$MEDIA_CANONICAL_PARENT" "$EXPECTED_MAIN" | LC_ALL=C sort -u > "$ROOT/rebase-paths.txt"
+cat > "$ROOT/expected-rebase-paths.txt" <<'PATHS'
+data/MEDIA-SEARCH-LATEST.json
+data/journal/media-search.jsonl
+PATHS
+cmp "$ROOT/expected-rebase-paths.txt" "$ROOT/rebase-paths.txt"
 
 meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${MEDIA_ARTIFACT}")"
 test "$(jq -r .expired <<<"$meta")" = false
@@ -26,13 +37,11 @@ for file in locator.json visual-review.json source-revision.json source.wikitext
   test -n "$(find "$MEDIA_ROOT" -type f -name "$file" -print -quit)"
 done
 
-git fetch --filter=blob:none --no-tags origin main
-test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
 git checkout --detach "$EXPECTED_MAIN"
 git checkout -B "$CANDIDATE_BRANCH"
 npm ci --ignore-scripts
 
-MEDIA_ROOT="$MEDIA_ROOT" STAGE_ROOT="$STAGE_ROOT" EXPECTED_MAIN="$EXPECTED_MAIN" \
+MEDIA_ROOT="$MEDIA_ROOT" STAGE_ROOT="$STAGE_ROOT" EXPECTED_MAIN="$EXPECTED_MAIN" MEDIA_CANONICAL_PARENT="$MEDIA_CANONICAL_PARENT" \
   node /tmp/star-trek-maryl-cycle-v1.mjs stage | tee "$ROOT/stage.stdout.log"
 rm -rf .luna
 
@@ -69,14 +78,15 @@ candidate_path_ledger_sha256="$(sha256sum "$STAGE_ROOT/candidate-paths.txt" | cu
 test -z "$(grep -E '^(\.github/|transport/)' "$STAGE_ROOT/candidate-paths.txt" || true)"
 jq -n \
   --arg canonical_parent "$EXPECTED_MAIN" \
+  --arg media_canonical_parent "$MEDIA_CANONICAL_PARENT" \
   --arg candidate_commit "$candidate_commit" \
   --arg candidate_tree "$candidate_tree" \
   --argjson candidate_path_count "$candidate_path_count" \
   --arg candidate_path_ledger_sha256 "$candidate_path_ledger_sha256" \
   --arg workflow_run "$GITHUB_RUN_ID" \
-  '{version:1,transaction:"STAR-TREK-MARYL-CANDIDATE-METADATA-V1",canonical_parent:$canonical_parent,candidate_commit:$candidate_commit,candidate_tree:$candidate_tree,candidate_path_count:$candidate_path_count,candidate_path_ledger_sha256:$candidate_path_ledger_sha256,workflow_run:($workflow_run|tonumber)}' \
+  '{version:1,transaction:"STAR-TREK-MARYL-CANDIDATE-METADATA-V1",canonical_parent:$canonical_parent,media_canonical_parent:$media_canonical_parent,candidate_commit:$candidate_commit,candidate_tree:$candidate_tree,candidate_path_count:$candidate_path_count,candidate_path_ledger_sha256:$candidate_path_ledger_sha256,workflow_run:($workflow_run|tonumber)}' \
   > "$STAGE_ROOT/candidate-metadata.json"
-cp "$ROOT/live-main.json" "$ROOT/source-media-artifact.json" "$ROOT/stage.stdout.log" "$STAGE_ROOT/"
+cp "$ROOT/live-main.json" "$ROOT/source-media-artifact.json" "$ROOT/stage.stdout.log" "$ROOT/rebase-paths.txt" "$ROOT/expected-rebase-paths.txt" "$STAGE_ROOT/"
 cp /tmp/star-trek-maryl-cycle-v1.mjs.sha256 "$STAGE_ROOT/helper.sha256"
 (cd "$STAGE_ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256)
 
