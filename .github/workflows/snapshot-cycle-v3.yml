@@ -1,0 +1,53 @@
+name: snapshot-cycle-v3
+
+on:
+  push:
+    branches:
+      - agent/snapshot-cycle-v3
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: agent/star-trek-maryl-cycle-v3
+      TARGET_WORKFLOW: star-trek-maryl-cycle-v3
+      RESULT_BRANCH: agent/snapshot-cycle-v3-result
+      ROOT: transport/snapshot-cycle-v3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Capture latest target run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          run=''
+          for _ in $(seq 1 24); do
+            runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?branch=${TARGET_BRANCH}&per_page=50")"
+            run="$(jq -c --arg name "$TARGET_WORKFLOW" '[.workflow_runs[] | select(.name==$name)] | sort_by(.created_at) | last // empty' <<<"$runs")"
+            test -n "$run" && break
+            sleep 5
+          done
+          test -n "$run"
+          run_id="$(jq -r .id <<<"$run")"
+          jobs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100")"
+          rm -rf /tmp/snapshot-cycle-v3
+          mkdir -p /tmp/snapshot-cycle-v3
+          printf '%s\n' "$run" | jq . > /tmp/snapshot-cycle-v3/run.json
+          printf '%s\n' "$jobs" | jq . > /tmp/snapshot-cycle-v3/jobs.json
+          jq -n --argjson run_id "$run_id" --arg status "$(jq -r .status <<<"$run")" --arg conclusion "$(jq -r '.conclusion // ""' <<<"$run")" --arg head_sha "$(jq -r .head_sha <<<"$run")" '{version:1,run_id:$run_id,status:$status,conclusion:$conclusion,head_sha:$head_sha}' > /tmp/snapshot-cycle-v3/status.json
+          git config user.name undercast-cycle-snapshot
+          git config user.email cycle-snapshot@users.noreply.github.com
+          git switch --orphan snapshot-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p "$ROOT"
+          cp -a /tmp/snapshot-cycle-v3/. "$ROOT/"
+          git add "$ROOT"
+          git commit -m "Snapshot cycle v3 run ${run_id}"
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
