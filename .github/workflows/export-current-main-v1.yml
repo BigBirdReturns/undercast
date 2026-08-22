@@ -6,11 +6,12 @@ on:
       - agent/export-current-main-v1
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   EXPECTED_MAIN: 6e9aa87be07411fdb42bc4e55b6e480135826d35
   EXPECTED_TREE: 521d688da380123c76a129b618439a4889f2232f
+  RESULT_BRANCH: agent/export-current-main-result-v1
 
 jobs:
   export:
@@ -33,9 +34,32 @@ jobs:
           git archive --format=tar.gz --prefix=undercast-current-main-v1/ "$EXPECTED_MAIN" > /tmp/undercast-current-main-v1/undercast-current-main-v1.tar.gz
           sha256sum /tmp/undercast-current-main-v1/undercast-current-main-v1.tar.gz > /tmp/undercast-current-main-v1/undercast-current-main-v1.tar.gz.sha256
           git show -s --format='%H%n%T%n%P%n%s' "$EXPECTED_MAIN" > /tmp/undercast-current-main-v1/commit.txt
-      - uses: actions/upload-artifact@v4
+      - id: artifact
+        uses: actions/upload-artifact@v4
         with:
           name: undercast-current-main-v1
           path: /tmp/undercast-current-main-v1/
           if-no-files-found: error
           retention-days: 7
+      - name: Publish export locator
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/export-current-main-result-v1
+          jq -n \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --argjson artifact_id "${{ steps.artifact.outputs.artifact-id }}" \
+            --arg artifact_digest "${{ steps.artifact.outputs.artifact-digest }}" \
+            --arg canonical "$EXPECTED_MAIN" \
+            --arg tree "$EXPECTED_TREE" \
+            '{version:1,transaction:"EXPORT-CURRENT-MAIN-V1",status:"complete",run_id:$run_id,artifact:{id:$artifact_id,digest:$artifact_digest},canonical:{commit:$canonical,tree:$tree}}' \
+            > /tmp/export-current-main-result-v1/status.json
+          git config user.name undercast-current-main-export
+          git config user.email current-main-export@users.noreply.github.com
+          git switch --orphan export-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/export-current-main-v1
+          cp /tmp/export-current-main-result-v1/status.json transport/export-current-main-v1/status.json
+          git add transport/export-current-main-v1/status.json
+          git commit -m 'Publish exact current-main export locator'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
