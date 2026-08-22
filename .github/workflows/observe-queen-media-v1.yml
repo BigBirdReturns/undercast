@@ -1,0 +1,57 @@
+name: observe-queen-media-v1
+
+on:
+  push:
+    branches:
+      - agent/observe-queen-media-v1
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  observe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: agent/star-trek-queen-hearts-media-v1
+      TARGET_HEAD: 530bd427e90c9d49fd4b36c8e3087d3f61a410f9
+      TARGET_WORKFLOW: star-trek-queen-hearts-media-v1
+      RESULT_BRANCH: agent/observe-queen-media-v1-result
+      ROOT: /tmp/observe-queen-media-v1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Observe target run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          run=''
+          for _ in $(seq 1 90); do
+            runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?branch=${TARGET_BRANCH}&per_page=100")"
+            run="$(jq -c --arg sha "$TARGET_HEAD" --arg name "$TARGET_WORKFLOW" '.workflow_runs | map(select(.head_sha==$sha and .name==$name)) | sort_by(.created_at) | last // empty' <<<"$runs")"
+            if test -n "$run" && test "$(jq -r .status <<<"$run")" = completed; then break; fi
+            sleep 10
+          done
+          test -n "$run"
+          test "$(jq -r .status <<<"$run")" = completed
+          run_id="$(jq -r .id <<<"$run")"
+          printf '%s\n' "$run" | jq . > "$ROOT/run.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "$ROOT/jobs.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$ROOT/artifacts.json"
+          jq -n --arg status found --argjson run_id "$run_id" --arg conclusion "$(jq -r .conclusion <<<"$run")" --arg run_status "$(jq -r .status <<<"$run")" --arg target_head "$TARGET_HEAD" '{status:$status,run_id:$run_id,run_status:$run_status,conclusion:$conclusion,target_head:$target_head}' > "$ROOT/status.json"
+      - name: Publish observation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-observer
+          git config user.email undercast-observer@users.noreply.github.com
+          git checkout --orphan observation
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/observe-queen-media-v1
+          cp "$ROOT"/*.json transport/observe-queen-media-v1/
+          git add transport/observe-queen-media-v1
+          git commit -m 'Observe Queen of Hearts media preparation'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
