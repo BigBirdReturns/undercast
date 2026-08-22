@@ -1,0 +1,190 @@
+name: supervise-star-trek-cycle-v1
+
+on:
+  push:
+    branches:
+      - agent/supervise-star-trek-cycle-v1
+
+permissions:
+  actions: read
+  contents: write
+  pages: read
+
+jobs:
+  supervise:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_HEAD: 465c55f1c2163470074c35a96a5e729f07164ecb
+      TARGET_PATH: .github/workflows/star-trek-maryl-cycle-v1.yml
+      EXPECTED_PARENT: b22d01251746a824a404308e6c9e3466aef2091a
+      SUCCESS_BRANCH: agent/star-trek-cycle-terminal-result-v1
+      DIAGNOSTIC_BRANCH: agent/star-trek-cycle-terminal-diagnostic-v1
+      ROOT: /tmp/supervise-star-trek-cycle-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Wait for exact cycle attempt and collect evidence
+        id: target
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/logs"
+          run=''
+          for _ in $(seq 1 480); do
+            runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${TARGET_HEAD}&per_page=100")"
+            run="$(jq -c --arg path "$TARGET_PATH" '[.workflow_runs[] | select(.path==$path)] | sort_by(.created_at) | last // empty' <<<"$runs")"
+            if test -n "$run"; then
+              printf '%s\n' "$run" | jq . > "$ROOT/target-run.json"
+              if test "$(jq -r .status <<<"$run")" = completed; then
+                break
+              fi
+            fi
+            sleep 15
+          done
+          if test -z "$run"; then
+            jq -n --arg status missing --arg target_head "$TARGET_HEAD" --arg target_path "$TARGET_PATH" '{status:$status,target_head:$target_head,target_path:$target_path}' > "$ROOT/target-status.json"
+            echo 'conclusion=missing' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          run_id="$(jq -r .id <<<"$run")"
+          conclusion="$(jq -r '.conclusion // "unknown"' <<<"$run")"
+          jobs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100")"
+          printf '%s\n' "$jobs" | jq . > "$ROOT/target-jobs.json"
+          while IFS= read -r job_id; do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/jobs/${job_id}/logs" > "$ROOT/logs/job-${job_id}.log" || true
+          done < <(jq -r '.jobs[].id' <<<"$jobs")
+          jq -n --arg status completed --arg conclusion "$conclusion" --argjson run_id "$run_id" --arg target_head "$TARGET_HEAD" '{status:$status,conclusion:$conclusion,run_id:$run_id,target_head:$target_head}' > "$ROOT/target-status.json"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+
+      - name: Inspect canonical outcome
+        id: canonical
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          printf '%s\n' "$live" | jq . > "$ROOT/live-main.json"
+          sha="$(jq -r .sha <<<"$live")"
+          message="$(jq -r .commit.message <<<"$live")"
+          parent="$(jq -r '.parents[0].sha // ""' <<<"$live")"
+          if test "$message" = 'Star Trek: publish Maryl cycle' && test "$parent" = "$EXPECTED_PARENT"; then
+            echo 'state=maryl-canonical' >> "$GITHUB_OUTPUT"
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          elif test "$sha" = "$EXPECTED_PARENT"; then
+            echo 'state=predecessor-intact' >> "$GITHUB_OUTPUT"
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          else
+            echo 'state=unexpected-main' >> "$GITHUB_OUTPUT"
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify terminal Maryl product
+        if: steps.canonical.outputs.state == 'maryl-canonical'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          main_sha="${{ steps.canonical.outputs.sha }}"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach "$main_sha"
+          npm ci --ignore-scripts
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
+          test "$(git show -s --format=%s HEAD)" = 'Star Trek: publish Maryl cycle'
+          test -f data/review/adapter-sdk/star-trek-maryl-cycle.json
+          test -f scripts/star-trek-maryl-cycle.mjs
+          node scripts/star-trek-maryl-cycle.mjs | tee "$ROOT/maryl-checker.log"
+          node scripts/validate.mjs | tee "$ROOT/archive-gate.log"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/next.json"
+          jq -e '.candidate.task_id != "ap_a7bae45c6030e1212e1ad6b0" and .phase=="ready-for-one-cycle"' "$ROOT/next.json" >/dev/null
+          jq -e '
+            .transaction=="STAR-TREK-CYCLE-MARYL"
+            and .task.id=="ap_a7bae45c6030e1212e1ad6b0"
+            and .task.performer=="Jeri Ryan"
+            and .task.role=="Maryl"
+            and .task.source_fingerprint=="dd367d1cef3b2089e6757a4321195ea40a6096e6785db9a00fe1a13a846c9e48"
+            and .canonical.wall_id=="UC-1393"
+            and .queue.after.total==2228
+            and .queue.after.queued==1801
+            and .queue.after.resolved==425
+            and .queue.after.rejected==2
+            and .queue.after.in_flight==0
+            and .boundary.erica_mer_conflated==false
+            and .boundary.cross_performer_substitution==false
+            and .boundary.maker_attributed==false
+          ' data/review/adapter-sdk/star-trek-maryl-cycle.json >/dev/null
+          jq -e '
+            [.jobs[] | select(.id=="ap_a7bae45c6030e1212e1ad6b0")][0]
+            | .status=="resolved"
+            and .performer=="Jeri Ryan"
+            and .character=="Maryl"
+            and .wall_ids==["UC-1393"]
+          ' data/AUTOPILOT.json >/dev/null
+          jq -e '[.items[] | select(.wall_id=="UC-1393")] | length==2 and all(.[]; .status=="verified")' data/MEDIA-AUDIT.json >/dev/null
+          jq -e '.cycles[-1].task_ids==["ap_a7bae45c6030e1212e1ad6b0"] and .cycles[-1].outcome=="completed"' data/WATERLINE-STATE.json >/dev/null
+          pages=''
+          for _ in $(seq 1 160); do
+            pages_runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/pages.yml/runs?head_sha=${main_sha}&per_page=20")"
+            pages="$(jq -c '[.workflow_runs[]] | sort_by(.created_at) | last // empty' <<<"$pages_runs")"
+            if test -n "$pages" && test "$(jq -r .status <<<"$pages")" = completed; then
+              break
+            fi
+            sleep 15
+          done
+          test -n "$pages"
+          printf '%s\n' "$pages" | jq . > "$ROOT/pages-run.json"
+          test "$(jq -r .conclusion <<<"$pages")" = success
+          # Terminal cleanup is allowed only after the permanent checker and Pages pass.
+          while IFS=$'\t' read -r ref sha; do
+            branch="${ref#refs/heads/}"
+            case "$branch" in
+              *maryl*|*Maryl*) git push origin --delete "$branch" || true ;;
+            esac
+          done < <(git ls-remote --heads origin | awk '{print $2"\t"$1}')
+          test -z "$(git ls-remote --heads origin | grep -i maryl || true)"
+          jq -n --arg status success --arg canonical "$main_sha" --arg parent "$EXPECTED_PARENT" --argjson target_run "${{ steps.target.outputs.run_id || 'null' }}" --arg target_conclusion "${{ steps.target.outputs.conclusion }}" --arg pages_run "$(jq -r .id <<<"$pages")" '{version:1,transaction:"STAR-TREK-MARYL-CYCLE-TERMINAL-V1",status:$status,canonical:{commit:$canonical,parent:$parent,message:"Star Trek: publish Maryl cycle"},target:{run:$target_run,conclusion:$target_conclusion},pages:{run:($pages_run|tonumber),conclusion:"success"},task:{id:"ap_a7bae45c6030e1212e1ad6b0",wall_id:"UC-1393",performer:"Jeri Ryan",character:"Maryl"},queue:{total:2228,queued:1801,resolved:425,rejected:2,in_flight:0},temporary_maryl_refs:0}' > "$ROOT/terminal.json"
+
+      - name: Publish terminal success receipt
+        if: steps.canonical.outputs.state == 'maryl-canonical'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          main_sha="${{ steps.canonical.outputs.sha }}"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach "$main_sha"
+          git checkout -B "$SUCCESS_BRANCH"
+          rm -rf transport/star-trek-cycle-terminal-v1
+          mkdir -p transport/star-trek-cycle-terminal-v1
+          cp -a "$ROOT/." transport/star-trek-cycle-terminal-v1/
+          git config user.name undercast-star-trek-cycle-terminal
+          git config user.email star-trek-cycle-terminal@users.noreply.github.com
+          git add -- transport/star-trek-cycle-terminal-v1
+          git commit -m 'Star Trek: publish terminal Maryl cycle receipt'
+          git push --force origin "HEAD:refs/heads/${SUCCESS_BRANCH}"
+
+      - name: Publish failure diagnostics
+        if: steps.canonical.outputs.state != 'maryl-canonical'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          jq -n --arg status failure --arg canonical_state "${{ steps.canonical.outputs.state }}" --arg canonical_sha "${{ steps.canonical.outputs.sha }}" --arg target_conclusion "${{ steps.target.outputs.conclusion }}" --arg target_run "${{ steps.target.outputs.run_id }}" '{version:1,transaction:"STAR-TREK-CYCLE-TERMINAL-DIAGNOSTIC-V1",status:$status,canonical_state:$canonical_state,canonical_sha:$canonical_sha,target:{run:($target_run|tonumber? // null),conclusion:$target_conclusion}}' > "$ROOT/diagnostic.json"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach origin/main
+          git checkout -B "$DIAGNOSTIC_BRANCH"
+          rm -rf transport/star-trek-cycle-terminal-diagnostic-v1
+          mkdir -p transport/star-trek-cycle-terminal-diagnostic-v1
+          cp -a "$ROOT/." transport/star-trek-cycle-terminal-diagnostic-v1/
+          git config user.name undercast-star-trek-cycle-diagnostic
+          git config user.email star-trek-cycle-diagnostic@users.noreply.github.com
+          git add -- transport/star-trek-cycle-terminal-diagnostic-v1
+          git commit -m 'Star Trek: publish terminal cycle diagnostics'
+          git push --force origin "HEAD:refs/heads/${DIAGNOSTIC_BRANCH}"
+          exit 1
