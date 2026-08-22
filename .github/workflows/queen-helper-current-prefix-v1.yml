@@ -1,0 +1,70 @@
+name: queen-helper-current-prefix-v1
+
+on:
+  push:
+    branches:
+      - agent/queen-helper-current-prefix-v1
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      RESULT_BRANCH: agent/queen-helper-current-prefix-result-v1
+      ROOT: transport/queen-helper-current-prefix-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decode current truncated payload as far as possible
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf /tmp/queen-helper-current-prefix-v1
+          mkdir -p /tmp/queen-helper-current-prefix-v1
+          git fetch --filter=blob:none --no-tags origin agent/star-trek-queen-of-hearts-cycle-v1
+          for part in 00 01 02 03 04 05; do
+            git show "origin/agent/star-trek-queen-of-hearts-cycle-v1:.github/recovery/star-trek-queen-of-hearts-cycle-v1/helper.mjs.gz.b64.part-${part}"
+          done | tr -d '\r\n\t ' > /tmp/current.b64
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64
+          text = Path('/tmp/current.b64').read_text()
+          padded = text + '=' * ((4 - len(text) % 4) % 4)
+          try:
+              raw = base64.b64decode(padded, validate=False)
+          except Exception as exc:
+              Path('/tmp/queen-helper-current-prefix-v1/base64.error.txt').write_text(repr(exc) + '\n')
+              raw = base64.b64decode(padded[:len(padded)//4*4], validate=False)
+          Path('/tmp/current.gz').write_bytes(raw)
+          PY
+          set +e
+          gzip -dc /tmp/current.gz > /tmp/current.mjs 2> /tmp/queen-helper-current-prefix-v1/gzip.stderr.log
+          gzip_code=$?
+          node --check /tmp/current.mjs > /tmp/queen-helper-current-prefix-v1/node.stdout.log 2> /tmp/queen-helper-current-prefix-v1/node.stderr.log
+          node_code=$?
+          set -e
+          cp /tmp/current.mjs /tmp/queen-helper-current-prefix-v1/current-prefix.mjs
+          head -n 260 /tmp/current.mjs > /tmp/queen-helper-current-prefix-v1/head-260.mjs
+          tail -n 100 /tmp/current.mjs > /tmp/queen-helper-current-prefix-v1/tail-100.mjs
+          jq -n \
+            --argjson base64_chars "$(stat -c %s /tmp/current.b64)" \
+            --argjson compressed_bytes "$(stat -c %s /tmp/current.gz)" \
+            --argjson emitted_bytes "$(stat -c %s /tmp/current.mjs)" \
+            --argjson emitted_lines "$(wc -l < /tmp/current.mjs | tr -d ' ')" \
+            --argjson gzip_exit "$gzip_code" \
+            --argjson node_exit "$node_code" \
+            '{version:1,transaction:"QUEEN-HELPER-CURRENT-PREFIX-V1",base64_chars:$base64_chars,compressed_bytes:$compressed_bytes,emitted_bytes:$emitted_bytes,emitted_lines:$emitted_lines,gzip_exit:$gzip_exit,node_exit:$node_exit}' \
+            > /tmp/queen-helper-current-prefix-v1/result.json
+          git config user.name undercast-queen-prefix
+          git config user.email queen-prefix@users.noreply.github.com
+          git switch --orphan prefix-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p "$ROOT"
+          cp -a /tmp/queen-helper-current-prefix-v1/. "$ROOT/"
+          git add "$ROOT"
+          git commit -m 'Extract Queen of Hearts current helper prefix'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
