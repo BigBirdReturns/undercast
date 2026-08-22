@@ -1,0 +1,65 @@
+name: snapshot-cycle-v4
+
+on:
+  push:
+    branches:
+      - agent/snapshot-cycle-v4
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  observe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: agent/star-trek-maryl-cycle-v4
+      TARGET_WORKFLOW: star-trek-maryl-cycle-v4
+      RESULT_BRANCH: agent/snapshot-cycle-v4-result
+      ROOT: transport/snapshot-cycle-v4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Observe exact target run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          run=''
+          run_id=''
+          for _ in $(seq 1 180); do
+            runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?branch=${TARGET_BRANCH}&per_page=50")"
+            run="$(jq -c --arg name "$TARGET_WORKFLOW" '[.workflow_runs[] | select(.name==$name)] | sort_by(.created_at) | last // empty' <<<"$runs")"
+            run_id="$(jq -r '.id // empty' <<<"${run:-{}}")"
+            test -n "$run_id" && break
+            sleep 5
+          done
+          test -n "$run_id"
+          for _ in $(seq 1 900); do
+            run="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            test "$(jq -r .status <<<"$run")" = completed && break
+            sleep 5
+          done
+          test "$(jq -r .status <<<"$run")" = completed
+          jobs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100")"
+          artifacts="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100")"
+          rm -rf /tmp/snapshot-cycle-v4
+          mkdir -p /tmp/snapshot-cycle-v4
+          printf '%s\n' "$run" | jq . > /tmp/snapshot-cycle-v4/run.json
+          printf '%s\n' "$jobs" | jq . > /tmp/snapshot-cycle-v4/jobs.json
+          printf '%s\n' "$artifacts" | jq . > /tmp/snapshot-cycle-v4/artifacts.json
+          jq -n --argjson run_id "$run_id" --arg status "$(jq -r .status <<<"$run")" --arg conclusion "$(jq -r '.conclusion // ""' <<<"$run")" --arg head_sha "$(jq -r .head_sha <<<"$run")" --arg branch "$TARGET_BRANCH" '{version:1,transaction:"SNAPSHOT-MARYL-CYCLE-V4",run_id:$run_id,status:$status,conclusion:$conclusion,head_sha:$head_sha,target_branch:$branch}' > /tmp/snapshot-cycle-v4/status.json
+          if test "$(jq -r '.conclusion // ""' <<<"$run")" != success; then
+            gh run view "$run_id" --log-failed > /tmp/snapshot-cycle-v4/failed.log 2>&1 || true
+          fi
+          git config user.name undercast-cycle-snapshot
+          git config user.email cycle-snapshot@users.noreply.github.com
+          git switch --orphan snapshot-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p "$ROOT"
+          cp -a /tmp/snapshot-cycle-v4/. "$ROOT/"
+          git add "$ROOT"
+          git commit -m "Snapshot Maryl cycle v4 run ${run_id}"
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
