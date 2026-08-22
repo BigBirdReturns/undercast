@@ -5,6 +5,7 @@
   fs.writeFileSync(checkerPath, checkerText);
   fs.chmodSync(checkerPath, 0o755);
   const checkerSha = shaFile(checkerPath);
+  const sourceMediaVisualReview = readJson(path.join(stageRoot, 'source-media-visual-review.json'));
 
   const receiptBody = {
     version: 1,
@@ -56,7 +57,7 @@
     source_media: {
       workflow_run: Number(env.MEDIA_RUN),
       artifact: { id: Number(env.MEDIA_ARTIFACT), sha256: String(env.MEDIA_DIGEST || '').replace(/^sha256:/, '') },
-      visual_review_sha256: sha(Buffer.from(stablePretty(readJson(path.join(stageRoot, 'source-media-visual-review.json')))),
+      visual_review_sha256: sha(Buffer.from(stablePretty(sourceMediaVisualReview))),
       canonical_parent: MEDIA_CANONICAL_PARENT,
     },
     canonical: {
