@@ -1,0 +1,98 @@
+name: inspect-star-trek-sync-v6
+
+on:
+  push:
+    branches:
+      - agent/inspect-star-trek-sync-v6
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_MAIN: 4900668f614a060f31ceeefb5009f7ee93cb17c1
+      EXPECTED_TREE: b20e299aa8fd48510bc88b14018d957efa76c8bd
+      MARYL_TASK: ap_a7bae45c6030e1212e1ad6b0
+      QUEEN_TASK: ap_a2fc2c7b0d3dec8a244ef048
+      RESULT_BRANCH: agent/inspect-star-trek-sync-v6-result
+      ROOT: /tmp/inspect-star-trek-sync-v6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Reconcile locally and inspect candidate transition
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$EXPECTED_MAIN"
+          test "$(jq -r .commit.tree.sha <<<"$live")" = "$EXPECTED_TREE"
+          printf '%s\n' "$live" | jq . > "$ROOT/main.json"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach "$EXPECTED_MAIN"
+          npm ci --ignore-scripts
+          cp data/AUTOPILOT.json "$ROOT/autopilot-before.json"
+          cp data/journal/autopilot.jsonl "$ROOT/autopilot-journal-before.jsonl"
+          node - "$MARYL_TASK" "$QUEEN_TASK" "$ROOT/before-tasks.json" <<'NODE'
+          const fs = require('fs');
+          const [maryl, queen, out] = process.argv.slice(2);
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const by = id => state.jobs.find(x => x.id === id) || null;
+          fs.writeFileSync(out, JSON.stringify({maryl:by(maryl),queen:by(queen)}, null, 2)+'\n');
+          NODE
+          npm run autopilot -- sync --scope star-trek --json > "$ROOT/sync.stdout"
+          cp data/AUTOPILOT.json "$ROOT/autopilot-after.json"
+          cp data/journal/autopilot.jsonl "$ROOT/autopilot-journal-after.jsonl"
+          node - "$MARYL_TASK" "$QUEEN_TASK" "$ROOT/after-tasks.json" <<'NODE'
+          const fs = require('fs');
+          const [maryl, queen, out] = process.argv.slice(2);
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const by = id => state.jobs.find(x => x.id === id) || null;
+          fs.writeFileSync(out, JSON.stringify({maryl:by(maryl),queen:by(queen)}, null, 2)+'\n');
+          NODE
+          npm run autopilot -- candidates --scope star-trek --capability-profile text-vision --limit 20 --json > "$ROOT/candidates-after.stdout"
+          python3 - "$ROOT/candidates-after.stdout" "$ROOT/candidates-after.json" <<'PY'
+          import json, pathlib, sys
+          text = pathlib.Path(sys.argv[1]).read_text()
+          start = text.find('{')
+          if start < 0: raise SystemExit('missing candidates JSON')
+          pathlib.Path(sys.argv[2]).write_text(json.dumps(json.loads(text[start:]), indent=2)+'\n')
+          PY
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next-after.json"
+          git diff --name-status "$EXPECTED_MAIN" > "$ROOT/reconcile-diff.txt"
+          jq -n \
+            --arg main "$EXPECTED_MAIN" \
+            --arg before_maryl_status "$(jq -r '.maryl.status // "missing"' "$ROOT/before-tasks.json")" \
+            --arg after_maryl_status "$(jq -r '.maryl.status // "missing"' "$ROOT/after-tasks.json")" \
+            --arg before_maryl_role "$(jq -r '.maryl.role_on_wall|tostring' "$ROOT/before-tasks.json")" \
+            --arg after_maryl_role "$(jq -r '.maryl.role_on_wall|tostring' "$ROOT/after-tasks.json")" \
+            --arg first_task "$(jq -r '.compatible[0].task_id // ""' "$ROOT/candidates-after.json")" \
+            --arg first_performer "$(jq -r '.compatible[0].performer // ""' "$ROOT/candidates-after.json")" \
+            --arg first_character "$(jq -r '.compatible[0].character // ""' "$ROOT/candidates-after.json")" \
+            --arg thesis_task "$(jq -r '.candidate.task_id // ""' "$ROOT/thesis-next-after.json")" \
+            '{version:1,status:"complete",canonical_main:$main,maryl:{before_status:$before_maryl_status,after_status:$after_maryl_status,before_role_on_wall:$before_maryl_role,after_role_on_wall:$after_maryl_role},post_sync_candidate:{task_id:$first_task,performer:$first_performer,character:$first_character},post_sync_thesis_task:$thesis_task,candidates_match:($first_task==$thesis_task)}' \
+            > "$ROOT/summary.json"
+          (cd "$ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256)
+      - name: Publish reconciliation inspection
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-inspector
+          git config user.email undercast-inspector@users.noreply.github.com
+          git checkout --orphan inspection
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/inspect-star-trek-sync-v6
+          cp "$ROOT"/* transport/inspect-star-trek-sync-v6/
+          git add transport/inspect-star-trek-sync-v6
+          git commit -m 'Inspect sync-first Star Trek reconciliation'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
