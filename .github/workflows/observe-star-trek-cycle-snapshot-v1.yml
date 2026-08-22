@@ -1,0 +1,57 @@
+name: observe-star-trek-cycle-snapshot-v1
+
+on:
+  push:
+    branches:
+      - agent/observe-star-trek-cycle-v1
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_HEAD: 465c55f1c2163470074c35a96a5e729f07164ecb
+      TARGET_PATH: .github/workflows/star-trek-maryl-cycle-v1.yml
+      RESULT_BRANCH: agent/observe-star-trek-cycle-snapshot-v1
+      ROOT: /tmp/observe-star-trek-cycle-snapshot-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Capture target run snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${TARGET_HEAD}&per_page=100")"
+          printf '%s\n' "$runs" | jq . > "$ROOT/runs.json"
+          run="$(jq -c --arg path "$TARGET_PATH" '[.workflow_runs[] | select(.path==$path)] | sort_by(.created_at) | last // empty' <<<"$runs")"
+          if test -n "$run"; then
+            printf '%s\n' "$run" | jq . > "$ROOT/run.json"
+            run_id="$(jq -r .id <<<"$run")"
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" | jq . > "$ROOT/jobs.json"
+            jq -n --arg status found --argjson run_id "$run_id" --arg run_status "$(jq -r .status <<<"$run")" --arg conclusion "$(jq -r '.conclusion // ""' <<<"$run")" '{status:$status,run_id:$run_id,run_status:$run_status,conclusion:$conclusion}' > "$ROOT/status.json"
+          else
+            jq -n --arg status missing --arg head "$TARGET_HEAD" '{status:$status,target_head:$head}' > "$ROOT/status.json"
+          fi
+      - name: Publish snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach origin/main
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/observe-star-trek-cycle-snapshot-v1
+          mkdir -p transport/observe-star-trek-cycle-snapshot-v1
+          cp -a "$ROOT/." transport/observe-star-trek-cycle-snapshot-v1/
+          git config user.name undercast-star-trek-cycle-snapshot
+          git config user.email star-trek-cycle-snapshot@users.noreply.github.com
+          git add -- transport/observe-star-trek-cycle-snapshot-v1
+          git commit -m 'Capture exact Star Trek cycle snapshot'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
