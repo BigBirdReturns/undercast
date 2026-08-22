@@ -15,7 +15,7 @@ function queueCounts() {
 function verifyPinnedSource(mediaRoot) {
   const visual = readJson(findOne(mediaRoot, 'visual-review.json'));
   ensure(visual.verdict === 'pass', 'Maryl visual review is not pass');
-  ensure(visual.canonical_parent === EXPECTED_MAIN, 'Maryl media canonical parent drifted');
+  ensure(visual.canonical_parent === MEDIA_CANONICAL_PARENT, 'Maryl media canonical parent drifted');
   ensure(visual.task_id === TASK_ID && visual.source_fingerprint === SOURCE_FINGERPRINT, 'Maryl visual review identity drifted');
   ensure(visual.target?.performer === PERFORMER && visual.target?.character === CHARACTER, 'Maryl visual review target drifted');
   ensure(visual.selected_still?.download_sha256 === STILL_SHA256, 'selected Maryl still hash drifted');
