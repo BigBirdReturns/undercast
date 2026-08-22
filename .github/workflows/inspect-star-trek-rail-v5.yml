@@ -1,0 +1,98 @@
+name: inspect-star-trek-rail-v5
+
+on:
+  push:
+    branches:
+      - agent/inspect-star-trek-rail-v5
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_MAIN: 4900668f614a060f31ceeefb5009f7ee93cb17c1
+      EXPECTED_TREE: b20e299aa8fd48510bc88b14018d957efa76c8bd
+      RESULT_BRANCH: agent/inspect-star-trek-rail-v5-result
+      ROOT: /tmp/inspect-star-trek-rail-v5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Inspect canonical rail without taking a lease
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$EXPECTED_MAIN"
+          test "$(jq -r .commit.tree.sha <<<"$live")" = "$EXPECTED_TREE"
+          printf '%s\n' "$live" | jq . > "$ROOT/main.json"
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach "$EXPECTED_MAIN"
+          npm ci --ignore-scripts
+          node scripts/thesis-rails.mjs validate > "$ROOT/thesis-validate.txt"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          npm run autopilot -- candidates --scope star-trek --capability-profile text-vision --limit 20 --json > "$ROOT/candidates.stdout"
+          python3 - "$ROOT/candidates.stdout" "$ROOT/candidates.json" <<'PY'
+          import json, pathlib, sys
+          src = pathlib.Path(sys.argv[1]).read_text()
+          start = src.find('{')
+          if start < 0:
+              raise SystemExit('candidate command returned no JSON object')
+          data = json.loads(src[start:])
+          pathlib.Path(sys.argv[2]).write_text(json.dumps(data, indent=2) + '\n')
+          PY
+          npm run waterline -- status --scope star-trek --json > "$ROOT/waterline.stdout"
+          python3 - "$ROOT/waterline.stdout" "$ROOT/waterline.json" <<'PY'
+          import json, pathlib, sys
+          src = pathlib.Path(sys.argv[1]).read_text()
+          start = src.find('{')
+          if start < 0:
+              raise SystemExit('waterline command returned no JSON object')
+          data = json.loads(src[start:])
+          pathlib.Path(sys.argv[2]).write_text(json.dumps(data, indent=2) + '\n')
+          PY
+          npm run autopilot -- status --scope star-trek --json > "$ROOT/autopilot-status.stdout"
+          python3 - "$ROOT/autopilot-status.stdout" "$ROOT/autopilot-status.json" <<'PY'
+          import json, pathlib, sys
+          src = pathlib.Path(sys.argv[1]).read_text()
+          start = src.find('{')
+          if start < 0:
+              raise SystemExit('autopilot status returned no JSON object')
+          data = json.loads(src[start:])
+          pathlib.Path(sys.argv[2]).write_text(json.dumps(data, indent=2) + '\n')
+          PY
+          jq -n \
+            --arg phase "$(jq -r .phase "$ROOT/thesis-next.json")" \
+            --arg task "$(jq -r '.candidate.task_id // ""' "$ROOT/thesis-next.json")" \
+            --arg performer "$(jq -r '.candidate.performer // ""' "$ROOT/thesis-next.json")" \
+            --arg character "$(jq -r '.candidate.character // ""' "$ROOT/thesis-next.json")" \
+            --arg autopilot_task "$(jq -r '.compatible[0].task_id // ""' "$ROOT/candidates.json")" \
+            --arg autopilot_performer "$(jq -r '.compatible[0].performer // ""' "$ROOT/candidates.json")" \
+            --arg autopilot_character "$(jq -r '.compatible[0].character // ""' "$ROOT/candidates.json")" \
+            --arg main "$EXPECTED_MAIN" \
+            '{version:1,status:"complete",canonical_main:$main,phase:$phase,thesis_candidate:{task_id:$task,performer:$performer,character:$character},autopilot_candidate:{task_id:$autopilot_task,performer:$autopilot_performer,character:$autopilot_character},candidates_match:($task==$autopilot_task)}' \
+            > "$ROOT/summary.json"
+          (cd "$ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256)
+      - name: Publish read-only inspection
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-inspector
+          git config user.email undercast-inspector@users.noreply.github.com
+          git checkout --orphan inspection
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/inspect-star-trek-rail-v5
+          cp "$ROOT"/* transport/inspect-star-trek-rail-v5/
+          git add transport/inspect-star-trek-rail-v5
+          git commit -m 'Inspect current Star Trek thesis rail'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
