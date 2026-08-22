@@ -1,0 +1,53 @@
+name: queen-helper-verify-v1
+
+on:
+  push:
+    branches:
+      - agent/queen-helper-verify-v1
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      RESULT_BRANCH: agent/queen-helper-verify-result-v1
+      ROOT: transport/queen-helper-verify-v1
+      EXPECTED_SHA: 2bd41195123bfe860f01b1201cbf52a349e6f40231f97047c481e7fddcc36f65
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decode and fingerprint predecessor helper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf /tmp/queen-helper-verify-v1
+          mkdir -p /tmp/queen-helper-verify-v1
+          git fetch --filter=blob:none --no-tags origin agent/star-trek-queen-hearts-cycle-v1
+          git show origin/agent/star-trek-queen-hearts-cycle-v1:.github/recovery/star-trek-queen-hearts-cycle-v1/cycle.mjs.gz.b64 > /tmp/queen-old.b64
+          base64 -d /tmp/queen-old.b64 | gzip -d > /tmp/queen-old.mjs
+          sha="$(sha256sum /tmp/queen-old.mjs | cut -d' ' -f1)"
+          node --check /tmp/queen-old.mjs
+          grep -F 'ap_a2fc2c7b0d3dec8a244ef048' /tmp/queen-old.mjs > /tmp/queen-helper-verify-v1/task-lines.txt || true
+          grep -F 'STAR-TREK-QUEEN-OF-HEARTS' /tmp/queen-old.mjs > /tmp/queen-helper-verify-v1/transaction-lines.txt || true
+          jq -n \
+            --arg sha "$sha" \
+            --arg expected "$EXPECTED_SHA" \
+            --argjson bytes "$(stat -c %s /tmp/queen-old.mjs)" \
+            --argjson task_lines "$(wc -l < /tmp/queen-helper-verify-v1/task-lines.txt | tr -d ' ')" \
+            --argjson transaction_lines "$(wc -l < /tmp/queen-helper-verify-v1/transaction-lines.txt | tr -d ' ')" \
+            '{version:1,transaction:"QUEEN-HELPER-VERIFY-V1",sha256:$sha,expected_sha256:$expected,byte_identical:($sha==$expected),bytes:$bytes,task_lines:$task_lines,transaction_lines:$transaction_lines,node_check:"pass"}' \
+            > /tmp/queen-helper-verify-v1/result.json
+          cp /tmp/queen-old.mjs /tmp/queen-helper-verify-v1/predecessor-helper.mjs
+          git config user.name undercast-queen-helper-verify
+          git config user.email queen-helper-verify@users.noreply.github.com
+          git switch --orphan helper-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p "$ROOT"
+          cp -a /tmp/queen-helper-verify-v1/. "$ROOT/"
+          git add "$ROOT"
+          git commit -m 'Verify Queen of Hearts predecessor helper'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
