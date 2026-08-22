@@ -1,0 +1,63 @@
+name: observe-cycle-v3-current
+
+on:
+  push:
+    branches:
+      - agent/observe-cycle-v3-current
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  observe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: agent/star-trek-maryl-cycle-v3
+      TARGET_WORKFLOW: star-trek-maryl-cycle-v3
+      RESULT_BRANCH: agent/observe-cycle-v3-current-result
+      ROOT: transport/observe-cycle-v3-current
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Observe exact cycle run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          run=''
+          run_id=''
+          for _ in $(seq 1 180); do
+            runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?branch=${TARGET_BRANCH}&per_page=50")"
+            run="$(jq -c --arg name "$TARGET_WORKFLOW" '[.workflow_runs[] | select(.name==$name)] | sort_by(.created_at) | last // empty' <<<"$runs")"
+            run_id="$(jq -r '.id // empty' <<<"${run:-{}}")"
+            test -n "$run_id" && break
+            sleep 5
+          done
+          test -n "$run_id"
+          for _ in $(seq 1 540); do
+            run="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            test "$(jq -r .status <<<"$run")" = completed && break
+            sleep 5
+          done
+          test "$(jq -r .status <<<"$run")" = completed
+          jobs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100")"
+          rm -rf /tmp/observe-cycle-v3-current
+          mkdir -p /tmp/observe-cycle-v3-current
+          printf '%s\n' "$run" | jq . > /tmp/observe-cycle-v3-current/run.json
+          printf '%s\n' "$jobs" | jq . > /tmp/observe-cycle-v3-current/jobs.json
+          jq -n --argjson run_id "$run_id" --arg status "$(jq -r .status <<<"$run")" --arg conclusion "$(jq -r '.conclusion // ""' <<<"$run")" --arg head_sha "$(jq -r .head_sha <<<"$run")" --arg branch "$TARGET_BRANCH" '{version:1,transaction:"OBSERVE-CYCLE-V3-CURRENT",run_id:$run_id,status:$status,conclusion:$conclusion,head_sha:$head_sha,target_branch:$branch}' > /tmp/observe-cycle-v3-current/status.json
+          if test "$(jq -r '.conclusion // ""' <<<"$run")" != success; then
+            gh run view "$run_id" --log-failed > /tmp/observe-cycle-v3-current/failed.log 2>&1 || true
+          fi
+          git config user.name undercast-cycle-observer
+          git config user.email cycle-observer@users.noreply.github.com
+          git switch --orphan observe-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p "$ROOT"
+          cp -a /tmp/observe-cycle-v3-current/. "$ROOT/"
+          git add "$ROOT"
+          git commit -m "Observe cycle v3 run ${run_id}"
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
