@@ -1,0 +1,78 @@
+name: recover-star-trek-cycle-terminal-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-cycle-terminal-diagnostic-v1
+
+permissions:
+  actions: write
+  contents: write
+  pages: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_PARENT: b22d01251746a824a404308e6c9e3466aef2091a
+      RESULT_BRANCH: agent/star-trek-cycle-recovery-result-v1
+      ROOT: /tmp/star-trek-cycle-recovery-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Re-run the exact failed cycle once in full
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          diagnostic=transport/star-trek-cycle-terminal-diagnostic-v1/diagnostic.json
+          test -f "$diagnostic"
+          run_id="$(jq -r .target.run "$diagnostic")"
+          test "$run_id" != null
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          if test "$(jq -r .sha <<<"$live")" = "$EXPECTED_PARENT"; then
+            current="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            attempt="$(jq -r .run_attempt <<<"$current")"
+            if test "$attempt" -lt 3; then
+              gh api --method POST "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/rerun"
+              for _ in $(seq 1 480); do
+                after="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+                if test "$(jq -r .run_attempt <<<"$after")" -gt "$attempt" && test "$(jq -r .status <<<"$after")" = completed; then
+                  printf '%s\n' "$after" | jq . > "$ROOT/run.json"
+                  break
+                fi
+                sleep 15
+              done
+            else
+              printf '%s\n' "$current" | jq . > "$ROOT/run.json"
+            fi
+          else
+            printf '%s\n' "$live" | jq . > "$ROOT/main-before.json"
+          fi
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          printf '%s\n' "$live" | jq . > "$ROOT/main.json"
+          sha="$(jq -r .sha <<<"$live")"
+          state=failed
+          if test "$(jq -r .commit.message <<<"$live")" = 'Star Trek: publish Maryl cycle' && test "$(jq -r .parents[0].sha <<<"$live")" = "$EXPECTED_PARENT"; then
+            state=canonical
+          fi
+          jq -n --arg state "$state" --arg canonical "$sha" --argjson run_id "$run_id" '{version:1,transaction:"STAR-TREK-CYCLE-RECOVERY-V1",state:$state,canonical:$canonical,run_id:$run_id}' > "$ROOT/status.json"
+      - name: Publish recovery result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach origin/main
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/star-trek-cycle-recovery-v1
+          mkdir -p transport/star-trek-cycle-recovery-v1
+          cp -a "$ROOT/." transport/star-trek-cycle-recovery-v1/
+          git config user.name undercast-star-trek-cycle-recovery
+          git config user.email star-trek-cycle-recovery@users.noreply.github.com
+          git add -- transport/star-trek-cycle-recovery-v1
+          git commit -m 'Star Trek: publish exact cycle recovery result'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
