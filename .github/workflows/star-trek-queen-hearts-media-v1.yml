@@ -1,0 +1,202 @@
+name: star-trek-queen-hearts-media-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-queen-hearts-media-v1
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_MAIN: 4900668f614a060f31ceeefb5009f7ee93cb17c1
+      EXPECTED_TREE: b20e299aa8fd48510bc88b14018d957efa76c8bd
+      TASK_ID: ap_a2fc2c7b0d3dec8a244ef048
+      SOURCE_FINGERPRINT: d961ab1ce5d5406871727bbdce05423f4716a92a8cd505f2c4bc44400d3fbd47
+      SOURCE_REVISION: '3400902'
+      SOURCE_CONTENT_SHA256: e2cba9542d7a3c8daae212fcf8337e1e06f9a2631ebd0e7c0586e1410391bafc
+      RESULT_BRANCH: agent/star-trek-queen-hearts-media-result-v1
+      ROOT: /tmp/star-trek-queen-hearts-media-v1
+    outputs:
+      still_sha256: ${{ steps.prepare.outputs.still_sha256 }}
+      portrait_sha256: ${{ steps.prepare.outputs.portrait_sha256 }}
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      artifact_digest: ${{ steps.artifact.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare revision-bound sources and source-distinct media
+        id: prepare
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$EXPECTED_MAIN"
+          test "$(jq -r .commit.tree.sha <<<"$live")" = "$EXPECTED_TREE"
+          printf '%s\n' "$live" | jq . > "$ROOT/main.json"
+
+          curl -fsSL --retry 5 --retry-all-errors --get \
+            -H 'User-Agent: undercast-queen-hearts-media-v1/1.0' \
+            'https://memory-alpha.fandom.com/api.php' \
+            --data-urlencode 'action=query' \
+            --data-urlencode 'format=json' \
+            --data-urlencode 'formatversion=2' \
+            --data-urlencode "revids=${SOURCE_REVISION}" \
+            --data-urlencode 'prop=revisions' \
+            --data-urlencode 'rvprop=ids|timestamp|content' \
+            --data-urlencode 'rvslots=main' \
+            > "$ROOT/source-revision.json"
+          python3 - "$ROOT/source-revision.json" "$ROOT/source.wikitext" "$SOURCE_REVISION" "$SOURCE_CONTENT_SHA256" <<'PY'
+          import hashlib, json, pathlib, sys
+          doc = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          page = doc['query']['pages'][0]
+          rev = page['revisions'][0]
+          if str(rev['revid']) != sys.argv[3]:
+              raise SystemExit('Queen source revision drifted')
+          content = rev['slots']['main']['content']
+          digest = hashlib.sha256(content.encode()).hexdigest()
+          if digest != sys.argv[4]:
+              raise SystemExit(f'Queen source content drifted: {digest}')
+          for literal in ['Queen of Hearts.jpg', 'Majel Barrett', 'voice', 'Once Upon a Planet']:
+              if literal.lower() not in content.lower():
+                  raise SystemExit(f'Queen source lost literal: {literal}')
+          pathlib.Path(sys.argv[2]).write_text(content)
+          PY
+
+          curl -fsSL --retry 5 --retry-all-errors --get \
+            -H 'User-Agent: undercast-queen-hearts-media-v1/1.0' \
+            'https://memory-alpha.fandom.com/api.php' \
+            --data-urlencode 'action=query' \
+            --data-urlencode 'format=json' \
+            --data-urlencode 'formatversion=2' \
+            --data-urlencode 'titles=File:Queen of Hearts.jpg' \
+            --data-urlencode 'prop=imageinfo' \
+            --data-urlencode 'iiprop=url|sha1|size|mime|extmetadata' \
+            --data-urlencode 'iiurlwidth=1200' \
+            > "$ROOT/still-imageinfo.json"
+          still_url="$(jq -r '.query.pages[0].imageinfo[0] | .thumburl // .url' "$ROOT/still-imageinfo.json")"
+          still_origin="$(jq -r '.query.pages[0].imageinfo[0].descriptionurl' "$ROOT/still-imageinfo.json")"
+          test "$still_origin" = 'https://memory-alpha.fandom.com/wiki/File:Queen_of_Hearts.jpg'
+          curl -fsSL --retry 5 --retry-all-errors -H 'User-Agent: undercast-queen-hearts-media-v1/1.0' "$still_url" -o "$ROOT/queen-of-hearts-still.jpg"
+          test -s "$ROOT/queen-of-hearts-still.jpg"
+
+          curl -fsSL --retry 5 --retry-all-errors --get \
+            -H 'User-Agent: undercast-queen-hearts-media-v1/1.0' \
+            'https://commons.wikimedia.org/w/api.php' \
+            --data-urlencode 'action=query' \
+            --data-urlencode 'format=json' \
+            --data-urlencode 'formatversion=2' \
+            --data-urlencode 'titles=File:Majel Roddenberry Star Trek Convention Las Vegas 20080814 (cropped).jpg' \
+            --data-urlencode 'prop=imageinfo' \
+            --data-urlencode 'iiprop=url|sha1|size|mime|extmetadata' \
+            --data-urlencode 'iiurlwidth=1200' \
+            > "$ROOT/portrait-imageinfo.json"
+          portrait_url="$(jq -r '.query.pages[0].imageinfo[0] | .thumburl // .url' "$ROOT/portrait-imageinfo.json")"
+          portrait_origin="$(jq -r '.query.pages[0].imageinfo[0].descriptionurl' "$ROOT/portrait-imageinfo.json")"
+          test "$portrait_origin" = 'https://commons.wikimedia.org/wiki/File:Majel_Roddenberry_Star_Trek_Convention_Las_Vegas_20080814_(cropped).jpg'
+          license="$(jq -r '.query.pages[0].imageinfo[0].extmetadata.LicenseShortName.value' "$ROOT/portrait-imageinfo.json")"
+          author="$(jq -r '.query.pages[0].imageinfo[0].extmetadata.Artist.value' "$ROOT/portrait-imageinfo.json" | sed -E 's/<[^>]+>//g')"
+          test "$license" = 'CC BY 2.0'
+          grep -Fqi 'Beth Madison' <<<"$author"
+          curl -fsSL --retry 5 --retry-all-errors -H 'User-Agent: undercast-queen-hearts-media-v1/1.0' "$portrait_url" -o "$ROOT/majel-barrett-portrait.jpg"
+          test -s "$ROOT/majel-barrett-portrait.jpg"
+
+          curl -fsSL --retry 5 --retry-all-errors --get \
+            -H 'User-Agent: undercast-queen-hearts-media-v1/1.0' \
+            'https://memory-alpha.fandom.com/api.php' \
+            --data-urlencode 'action=query' \
+            --data-urlencode 'format=json' \
+            --data-urlencode 'formatversion=2' \
+            --data-urlencode 'titles=Once Upon a Planet (episode)' \
+            --data-urlencode 'prop=revisions' \
+            --data-urlencode 'rvprop=ids|timestamp|content' \
+            --data-urlencode 'rvslots=main' \
+            --data-urlencode 'rvlimit=1' \
+            > "$ROOT/episode-revision.json"
+          python3 - "$ROOT/episode-revision.json" "$ROOT/episode-receipt.json" <<'PY'
+          import hashlib, json, pathlib, sys
+          doc = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          page = doc['query']['pages'][0]
+          rev = page['revisions'][0]
+          content = rev['slots']['main']['content']
+          if '3 November 1973' not in content and '1973' not in content:
+              raise SystemExit('episode source does not support 1973')
+          receipt = {
+              'source': 'https://memory-alpha.fandom.com/wiki/Once_Upon_a_Planet_(episode)',
+              'pageid': page['pageid'],
+              'revision': rev['revid'],
+              'timestamp': rev['timestamp'],
+              'content_sha256': hashlib.sha256(content.encode()).hexdigest(),
+          }
+          pathlib.Path(sys.argv[2]).write_text(json.dumps(receipt, indent=2)+'\n')
+          PY
+
+          still_sha="$(sha256sum "$ROOT/queen-of-hearts-still.jpg" | cut -d' ' -f1)"
+          portrait_sha="$(sha256sum "$ROOT/majel-barrett-portrait.jpg" | cut -d' ' -f1)"
+          test "$still_sha" != "$portrait_sha"
+          if grep -RFl "$still_sha" images data/media-manifest.json >/dev/null 2>&1; then
+            echo 'Queen still collides with a canonical asset receipt' >&2
+            exit 1
+          fi
+          if grep -RFl "$portrait_sha" images data/media-manifest.json >/dev/null 2>&1; then
+            echo 'Majel Barrett portrait collides with a canonical asset receipt' >&2
+            exit 1
+          fi
+          jq -n \
+            --arg task_id "$TASK_ID" \
+            --arg fingerprint "$SOURCE_FINGERPRINT" \
+            --arg source_revision "$SOURCE_REVISION" \
+            --arg source_content_sha256 "$SOURCE_CONTENT_SHA256" \
+            --arg still_origin "$still_origin" \
+            --arg still_sha256 "$still_sha" \
+            --arg portrait_origin "$portrait_origin" \
+            --arg portrait_sha256 "$portrait_sha" \
+            --arg portrait_author "$author" \
+            --arg portrait_license "$license" \
+            '{version:1,transaction:"STAR-TREK-QUEEN-HEARTS-MEDIA-V1",canonical_parent:"4900668f614a060f31ceeefb5009f7ee93cb17c1",task:{id:$task_id,performer:"Majel Barrett",character:"Queen of Hearts",source_fingerprint:$fingerprint,queued_mode_hint:["physical-and-voice"],adjudicated_kind:"voice",performance_mode:"voice-only",physical_performance_attributed:false},source:{url:"https://memory-alpha.fandom.com/wiki/Queen_of_Hearts",revision:($source_revision|tonumber),content_sha256:$source_content_sha256},still:{path:"queen-of-hearts-still.jpg",origin:$still_origin,sha256:$still_sha256,disposition:"verified",subject:"Queen of Hearts",note:"The revision-bound lead image depicts the animated Queen of Hearts with two knaves and is character evidence only."},portrait:{path:"majel-barrett-portrait.jpg",origin:$portrait_origin,sha256:$portrait_sha256,author:$portrait_author,license:$portrait_license,disposition:"verified",subject:"Majel Barrett",note:"The cropped licensed convention photograph depicts Majel Barrett as a neutral human performer and is source-distinct from the character still."},boundary:{voice_credit_is_performance_not_processing_credit:true,physical_performance_attributed:false,animation_maker_attributed:false,character_design_maker_attributed:false,voice_direction_attributed:false,sound_processing_attributed:false,cross_facet_substitution:false}}' \
+            > "$ROOT/media-preparation.json"
+          (cd "$ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+          echo "still_sha256=$still_sha" >> "$GITHUB_OUTPUT"
+          echo "portrait_sha256=$portrait_sha" >> "$GITHUB_OUTPUT"
+      - name: Upload exact Queen of Hearts media
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-queen-hearts-media-v1
+          path: /tmp/star-trek-queen-hearts-media-v1/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish source-media locator
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+          STILL_SHA256: ${{ steps.prepare.outputs.still_sha256 }}
+          PORTRAIT_SHA256: ${{ steps.prepare.outputs.portrait_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          jq -n \
+            --argjson workflow_run "$GITHUB_RUN_ID" \
+            --arg workflow_head "$GITHUB_SHA" \
+            --argjson artifact_id "$ARTIFACT_ID" \
+            --arg artifact_sha256 "${ARTIFACT_DIGEST#sha256:}" \
+            --arg still_sha256 "$STILL_SHA256" \
+            --arg portrait_sha256 "$PORTRAIT_SHA256" \
+            '{version:1,transaction:"STAR-TREK-QUEEN-HEARTS-MEDIA-LOCATOR-V1",status:"success",workflow_run:$workflow_run,workflow_head:$workflow_head,canonical_parent:"4900668f614a060f31ceeefb5009f7ee93cb17c1",task_id:"ap_a2fc2c7b0d3dec8a244ef048",source_fingerprint:"d961ab1ce5d5406871727bbdce05423f4716a92a8cd505f2c4bc44400d3fbd47",artifact:{id:$artifact_id,name:"star-trek-queen-hearts-media-v1",sha256:$artifact_sha256},still_sha256:$still_sha256,portrait_sha256:$portrait_sha256,canonical_mutation:false,lease_taken:false}' > "$ROOT/locator.json"
+          git config user.name undercast-queen-hearts-media
+          git config user.email undercast-queen-hearts-media@users.noreply.github.com
+          git checkout --orphan locator
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/star-trek-queen-hearts-media-v1
+          cp "$ROOT/locator.json" "$ROOT/media-preparation.json" "$ROOT/manifest.sha256" transport/star-trek-queen-hearts-media-v1/
+          git add transport/star-trek-queen-hearts-media-v1
+          git commit -m 'Publish Queen of Hearts media locator'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
