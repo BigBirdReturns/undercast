@@ -1,3 +1,8 @@
+  let checkerText = fs.readFileSync(checkerPath, 'utf8');
+  const checkerTypo = '{total:trek.length,ueued,resolved,';
+  ensure(checkerText.includes(checkerTypo), 'Maryl checker typo repair target missing');
+  checkerText = checkerText.replace(checkerTypo, '{total:trek.length,queued,resolved,');
+  fs.writeFileSync(checkerPath, checkerText);
   fs.chmodSync(checkerPath, 0o755);
   const checkerSha = shaFile(checkerPath);
 
@@ -51,7 +56,8 @@
     source_media: {
       workflow_run: Number(env.MEDIA_RUN),
       artifact: { id: Number(env.MEDIA_ARTIFACT), sha256: String(env.MEDIA_DIGEST || '').replace(/^sha256:/, '') },
-      visual_review_sha256: sha(Buffer.from(stablePretty(readJson(path.join(stageRoot, 'source-media-visual-review.json'))))),
+      visual_review_sha256: sha(Buffer.from(stablePretty(readJson(path.join(stageRoot, 'source-media-visual-review.json')))),
+      canonical_parent: MEDIA_CANONICAL_PARENT,
     },
     canonical: {
       wall_id: stageDoc.wall_id,
