@@ -1,0 +1,195 @@
+name: star-trek-maryl-cycle-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-maryl-cycle-v1
+
+permissions:
+  actions: write
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: star-trek-maryl-cycle-v1
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    name: stage-maryl-candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_MAIN: b22d01251746a824a404308e6c9e3466aef2091a
+      EXPECTED_TREE: 88a581bfd531f6997574205001aade0548dca94a
+      TASK_ID: ap_a7bae45c6030e1212e1ad6b0
+      SOURCE_FINGERPRINT: dd367d1cef3b2089e6757a4321195ea40a6096e6785db9a00fe1a13a846c9e48
+      CARRIER_BRANCH: agent/star-trek-maryl-cycle-v1
+      CANDIDATE_BRANCH: agent/star-trek-maryl-candidate-v1
+      MEDIA_RUN: '32542150579'
+      MEDIA_HEAD: 4a9e4b7cb7f10c608b06c25dac6902e64d2195a4
+      MEDIA_ARTIFACT: '9467364244'
+      MEDIA_DIGEST: sha256:c5962794d33952a9d78e20b3202b39e5ed7a988c76b315b8b4b5b6142ff731f4
+      ROOT: /tmp/star-trek-maryl-cycle-v1
+      MEDIA_ROOT: /tmp/star-trek-maryl-media-v1
+      STAGE_ROOT: /tmp/star-trek-maryl-stage-v1
+    outputs:
+      candidate_commit: ${{ steps.stage.outputs.candidate_commit }}
+      candidate_tree: ${{ steps.stage.outputs.candidate_tree }}
+      candidate_path_count: ${{ steps.stage.outputs.candidate_path_count }}
+      candidate_path_ledger_sha256: ${{ steps.stage.outputs.candidate_path_ledger_sha256 }}
+      wall_id: ${{ steps.stage.outputs.wall_id }}
+      lease_id: ${{ steps.stage.outputs.lease_id }}
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      artifact_digest: ${{ steps.artifact.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Stage exact Maryl candidate
+        id: stage
+        shell: bash
+        run: bash .github/recovery/star-trek-maryl-cycle-v1/stage.sh
+      - name: Upload staged Maryl candidate receipt
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-maryl-stage-v1
+          path: /tmp/star-trek-maryl-stage-v1/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload stage failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-maryl-stage-failure-${{ github.run_id }}
+          path: /tmp/star-trek-maryl-cycle-v1/
+          if-no-files-found: warn
+          retention-days: 30
+
+  review:
+    name: independently-review-maryl-candidate
+    needs: stage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_MAIN: b22d01251746a824a404308e6c9e3466aef2091a
+      CANDIDATE_BRANCH: agent/star-trek-maryl-candidate-v1
+      CANDIDATE_COMMIT: ${{ needs.stage.outputs.candidate_commit }}
+      CANDIDATE_TREE: ${{ needs.stage.outputs.candidate_tree }}
+      CANDIDATE_PATH_COUNT: ${{ needs.stage.outputs.candidate_path_count }}
+      CANDIDATE_PATH_LEDGER_SHA256: ${{ needs.stage.outputs.candidate_path_ledger_sha256 }}
+      STAGE_ROOT: /tmp/star-trek-maryl-stage-v1
+      REVIEW_ROOT: /tmp/star-trek-maryl-review-v1
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      artifact_digest: ${{ steps.artifact.outputs.artifact-digest }}
+      review_sha256: ${{ steps.review.outputs.review_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Preserve Maryl reviewer
+        run: bash .github/recovery/star-trek-maryl-cycle-v1/prepare.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: star-trek-maryl-stage-v1
+          path: /tmp/star-trek-maryl-stage-v1
+      - name: Independently review exact Maryl candidate
+        id: review
+        shell: bash
+        run: bash .github/recovery/star-trek-maryl-cycle-v1/review.sh
+      - name: Upload independent Maryl review
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-maryl-independent-review-v1
+          path: /tmp/star-trek-maryl-review-v1/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload review failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-maryl-review-failure-${{ github.run_id }}
+          path: /tmp/star-trek-maryl-review-v1/
+          if-no-files-found: warn
+          retention-days: 30
+
+  finalize:
+    name: finalize-and-publish-maryl-cycle
+    needs: [stage, review]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_MAIN: b22d01251746a824a404308e6c9e3466aef2091a
+      EXPECTED_TREE: 88a581bfd531f6997574205001aade0548dca94a
+      CARRIER_BRANCH: agent/star-trek-maryl-cycle-v1
+      CANDIDATE_BRANCH: agent/star-trek-maryl-candidate-v1
+      CANDIDATE_COMMIT: ${{ needs.stage.outputs.candidate_commit }}
+      CANDIDATE_TREE: ${{ needs.stage.outputs.candidate_tree }}
+      CANDIDATE_PATH_COUNT: ${{ needs.stage.outputs.candidate_path_count }}
+      CANDIDATE_PATH_LEDGER_SHA256: ${{ needs.stage.outputs.candidate_path_ledger_sha256 }}
+      STAGE_ARTIFACT_ID: ${{ needs.stage.outputs.artifact_id }}
+      STAGE_ARTIFACT_DIGEST: ${{ needs.stage.outputs.artifact_digest }}
+      REVIEW_ARTIFACT_ID: ${{ needs.review.outputs.artifact_id }}
+      REVIEW_ARTIFACT_DIGEST: ${{ needs.review.outputs.artifact_digest }}
+      MEDIA_RUN: '32542150579'
+      MEDIA_ARTIFACT: '9467364244'
+      MEDIA_DIGEST: sha256:c5962794d33952a9d78e20b3202b39e5ed7a988c76b315b8b4b5b6142ff731f4
+      STAGE_ROOT: /tmp/star-trek-maryl-stage-v1
+      REVIEW_ROOT: /tmp/star-trek-maryl-review-v1
+      FINAL_ROOT: /tmp/star-trek-maryl-final-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Preserve Maryl finalizer
+        run: bash .github/recovery/star-trek-maryl-cycle-v1/prepare.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: star-trek-maryl-stage-v1
+          path: /tmp/star-trek-maryl-stage-v1
+      - uses: actions/download-artifact@v4
+        with:
+          name: star-trek-maryl-independent-review-v1
+          path: /tmp/star-trek-maryl-review-v1
+      - name: Finalize, publish, deploy, and retire Maryl
+        id: finalize
+        shell: bash
+        run: bash .github/recovery/star-trek-maryl-cycle-v1/finalize.sh
+      - name: Upload terminal Maryl execution
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-maryl-terminal-v1
+          path: /tmp/star-trek-maryl-final-v1/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload finalization failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-maryl-finalization-failure-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-maryl-stage-v1/
+            /tmp/star-trek-maryl-review-v1/
+            /tmp/star-trek-maryl-final-v1/
+          if-no-files-found: warn
+          retention-days: 30
