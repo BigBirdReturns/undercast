@@ -311,6 +311,7 @@ derivative work: Jorgebarrios, CC BY-SA 3.0 — [source](https://commons.wikimed
 - **James Doohan** (UC-1390) — AllyUnion, CC BY-SA 3.0 — [source](https://commons.wikimedia.org/wiki/File:James_Doohan_-_Walk_of_Fame_-_July_21_2005.jpg)
 - **James Doohan** (UC-1391) — Neelix at English Wikipedia, Public domain — [source](https://commons.wikimedia.org/wiki/File:Doohan.JPG)
 - **Jeri Ryan** (UC-1392) — sean.koo, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Jeri_Ryan_2014.jpg)
+- **Jeri Ryan** (UC-1393) — Brian Wilkins, CC BY 2.0 — [source](https://commons.wikimedia.org/wiki/File:Jeri_Ryan_by_Brian_Wilkins_(2010).jpg)
 - **Vaughn Armstrong** (UC-140) — AFroese, CC BY 3.0 — [source](https://commons.wikimedia.org/wiki/File:Vaughn_Armstrong.JPG)
 - **Suzie Plakson** (UC-141) — Eva Rinaldi, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Suzie_Plakson_in_2012.jpg)
 - **Carel Struycken** (UC-142) — Miguel Discart, CC BY-SA 2.0 — [source](https://commons.wikimedia.org/wiki/File:Carel_Struycken_March_2016.jpg)
@@ -795,8 +796,8 @@ derivative work: Jonathas Davi (talk), CC BY-SA 3.0 — [source](https://commons
 
 ## Ledger summary
 
-- Free-licensed portraits (attributed above): **765**
-- Character stills (studio-copyright, shown under fan-use; see ledger): **1019**
+- Free-licensed portraits (attributed above): **766**
+- Character stills (studio-copyright, shown under fan-use; see ledger): **1020**
 
 Copyright holders: this is a fan project. See the takedown note in the README —
 email and any specific asset comes down.
