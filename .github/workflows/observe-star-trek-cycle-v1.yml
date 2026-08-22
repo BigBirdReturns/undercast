@@ -1,0 +1,78 @@
+name: observe-star-trek-cycle-v1
+
+on:
+  push:
+    branches:
+      - agent/observe-star-trek-cycle-v1
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  observe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_HEAD: 465c55f1c2163470074c35a96a5e729f07164ecb
+      TARGET_PATH: .github/workflows/star-trek-maryl-cycle-v1.yml
+      ROOT: /tmp/observe-star-trek-cycle-v1
+      RESULT_BRANCH: agent/observe-star-trek-cycle-result-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Observe exact target run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/logs"
+          run=''
+          for _ in $(seq 1 360); do
+            runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${TARGET_HEAD}&per_page=100")"
+            run="$(jq -c --arg path "$TARGET_PATH" '[.workflow_runs[] | select(.path==$path)] | sort_by(.created_at) | last // empty' <<<"$runs")"
+            if test -n "$run"; then
+              printf '%s\n' "$run" | jq . > "$ROOT/run.json"
+              status="$(jq -r .status <<<"$run")"
+              if test "$status" = completed; then
+                break
+              fi
+            fi
+            sleep 10
+          done
+          if test -z "$run"; then
+            jq -n --arg status missing --arg head "$TARGET_HEAD" --arg path "$TARGET_PATH" '{status:$status,target_head:$head,target_path:$path}' > "$ROOT/status.json"
+            exit 0
+          fi
+          run_id="$(jq -r .id <<<"$run")"
+          jobs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100")"
+          printf '%s\n' "$jobs" | jq . > "$ROOT/jobs.json"
+          while IFS= read -r job_id; do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/jobs/${job_id}/logs" > "$ROOT/logs/job-${job_id}.log" || true
+          done < <(jq -r '.jobs[].id' <<<"$jobs")
+          jq -n \
+            --arg status "$(jq -r .status <<<"$run")" \
+            --arg conclusion "$(jq -r '.conclusion // ""' <<<"$run")" \
+            --argjson run_id "$run_id" \
+            --arg head "$TARGET_HEAD" \
+            --arg path "$TARGET_PATH" \
+            '{status:$status,conclusion:$conclusion,run_id:$run_id,target_head:$head,target_path:$path}' > "$ROOT/status.json"
+
+      - name: Publish observation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach origin/main
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/observe-star-trek-cycle-v1
+          mkdir -p transport/observe-star-trek-cycle-v1
+          cp -a "$ROOT/." transport/observe-star-trek-cycle-v1/
+          git config user.name undercast-star-trek-cycle-observer
+          git config user.email star-trek-cycle-observer@users.noreply.github.com
+          git add -- transport/observe-star-trek-cycle-v1
+          git commit -m 'Observe exact Star Trek cycle run'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
