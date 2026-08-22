@@ -26,7 +26,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           rm -rf "$ROOT"
-          mkdir -p "$ROOT"
+          mkdir -p "$ROOT/programs"
           git fetch --no-tags origin "$SOURCE_COMMIT"
           git cat-file -e "${SOURCE_COMMIT}^{commit}"
 
@@ -62,6 +62,12 @@ jobs:
           test "$(sha256sum "$ROOT/payload.b64" | cut -d' ' -f1)" = 3308e41f305e249fdc01a2a0771d6ad9bc82c7b6a76f3d17c45eea62fd1889fd
           base64 -d "$ROOT/payload.b64" > "$ROOT/payload.bin"
           file "$ROOT/payload.bin" > "$ROOT/payload-file.txt"
+          xz -dc "$ROOT/payload.bin" | tar -xf - -C "$ROOT/programs" --strip-components=1
+          find "$ROOT/programs" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$ROOT/program-list.txt"
+          for file in "$ROOT"/programs/*.mjs; do
+            node --check "$file"
+          done
+          (cd "$ROOT/programs" && find . -maxdepth 1 -type f -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > ../program-manifest.sha256)
 
           grep -nE '^(stage|review|publish|prepare|main|function|[a-zA-Z_][a-zA-Z0-9_]*\(\))' "$ROOT/white-rabbit-controller.sh" > "$ROOT/controller-index.txt" || true
           grep -nE 'EXPECTED_MAIN|TASK_ID|SOURCE_FINGERPRINT|White Rabbit|Once Upon a Planet|MEDIA_PREP' "$ROOT/white-rabbit-controller.sh" > "$ROOT/controller-bindings.txt" || true
@@ -71,10 +77,12 @@ jobs:
             --arg controller_sha256 "$(sha256sum "$ROOT/white-rabbit-controller.sh" | cut -d' ' -f1)" \
             --arg payload_b64_sha256 "$(sha256sum "$ROOT/payload.b64" | cut -d' ' -f1)" \
             --arg payload_sha256 "$(sha256sum "$ROOT/payload.bin" | cut -d' ' -f1)" \
+            --arg program_manifest_sha256 "$(sha256sum "$ROOT/program-manifest.sha256" | cut -d' ' -f1)" \
             --argjson controller_bytes "$(stat -c %s "$ROOT/white-rabbit-controller.sh")" \
             --argjson controller_lines "$(wc -l < "$ROOT/white-rabbit-controller.sh" | tr -d ' ')" \
             --argjson payload_bytes "$(stat -c %s "$ROOT/payload.bin")" \
-            '{version:1,transaction:"EXTRACT-WHITE-RABBIT-CONTROLLER-V1",source_commit:$source_commit,controller:{sha256:$controller_sha256,bytes:$controller_bytes,lines:$controller_lines,bash_syntax:"pass"},payload:{base64_sha256:$payload_b64_sha256,sha256:$payload_sha256,bytes:$payload_bytes}}' \
+            --argjson program_count "$(find "$ROOT/programs" -maxdepth 1 -type f | wc -l | tr -d ' ')" \
+            '{version:2,transaction:"EXTRACT-WHITE-RABBIT-CONTROLLER-V1",source_commit:$source_commit,controller:{sha256:$controller_sha256,bytes:$controller_bytes,lines:$controller_lines,bash_syntax:"pass"},payload:{base64_sha256:$payload_b64_sha256,sha256:$payload_sha256,bytes:$payload_bytes},programs:{count:$program_count,manifest_sha256:$program_manifest_sha256,node_syntax:"pass"}}' \
             > "$ROOT/result.json"
           (cd "$ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
 
@@ -89,5 +97,5 @@ jobs:
           mkdir -p transport/extract-white-rabbit-controller-v1
           cp -a "$ROOT"/. transport/extract-white-rabbit-controller-v1/
           git add transport/extract-white-rabbit-controller-v1
-          git commit -m 'Extract successful White Rabbit controller'
+          git commit -m 'Extract successful White Rabbit controller and programs'
           git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
