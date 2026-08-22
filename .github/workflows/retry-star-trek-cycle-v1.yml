@@ -1,0 +1,75 @@
+name: retry-star-trek-cycle-v1
+
+on:
+  push:
+    branches:
+      - agent/supervise-star-trek-cycle-v1
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  retry-once:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_HEAD: 465c55f1c2163470074c35a96a5e729f07164ecb
+      TARGET_PATH: .github/workflows/star-trek-maryl-cycle-v1.yml
+      RESULT_BRANCH: agent/star-trek-cycle-retry-result-v1
+      ROOT: /tmp/retry-star-trek-cycle-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Retry one exact failed attempt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          run=''
+          for _ in $(seq 1 480); do
+            runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${TARGET_HEAD}&per_page=100")"
+            run="$(jq -c --arg path "$TARGET_PATH" '[.workflow_runs[] | select(.path==$path)] | sort_by(.created_at) | last // empty' <<<"$runs")"
+            if test -n "$run" && test "$(jq -r .status <<<"$run")" = completed; then break; fi
+            sleep 15
+          done
+          test -n "$run"
+          run_id="$(jq -r .id <<<"$run")"
+          printf '%s\n' "$run" | jq . > "$ROOT/before.json"
+          conclusion="$(jq -r .conclusion <<<"$run")"
+          attempt="$(jq -r .run_attempt <<<"$run")"
+          if test "$conclusion" = failure && test "$attempt" = 1; then
+            gh api --method POST "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/rerun-failed-jobs"
+            for _ in $(seq 1 480); do
+              after="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+              if test "$(jq -r .run_attempt <<<"$after")" -ge 2 && test "$(jq -r .status <<<"$after")" = completed; then
+                printf '%s\n' "$after" | jq . > "$ROOT/after.json"
+                break
+              fi
+              sleep 15
+            done
+          else
+            cp "$ROOT/before.json" "$ROOT/after.json"
+          fi
+          after="$(cat "$ROOT/after.json")"
+          jobs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/attempts/$(jq -r .run_attempt <<<"$after")/jobs?per_page=100")"
+          printf '%s\n' "$jobs" | jq . > "$ROOT/jobs.json"
+          jq -n --argjson run_id "$run_id" --argjson attempt "$(jq -r .run_attempt <<<"$after")" --arg conclusion "$(jq -r '.conclusion // ""' <<<"$after")" '{version:1,transaction:"STAR-TREK-CYCLE-RETRY-V1",run_id:$run_id,attempt:$attempt,conclusion:$conclusion}' > "$ROOT/status.json"
+      - name: Publish retry result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach origin/main
+          git checkout -B "$RESULT_BRANCH"
+          rm -rf transport/star-trek-cycle-retry-v1
+          mkdir -p transport/star-trek-cycle-retry-v1
+          cp -a "$ROOT/." transport/star-trek-cycle-retry-v1/
+          git config user.name undercast-star-trek-cycle-retry
+          git config user.email star-trek-cycle-retry@users.noreply.github.com
+          git add -- transport/star-trek-cycle-retry-v1
+          git commit -m 'Star Trek: publish exact cycle retry result'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
