@@ -1,0 +1,117 @@
+name: inspect-star-trek-current-v1
+
+on:
+  push:
+    branches:
+      - agent/inspect-star-trek-current-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: inspect-star-trek-current-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 6e9aa87be07411fdb42bc4e55b6e480135826d35
+  EXPECTED_TREE: 521d688da380123c76a129b618439a4889f2232f
+  RESULT_BRANCH: agent/inspect-star-trek-current-result-v1
+  ROOT: /tmp/inspect-star-trek-current-v1
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Inspect exact current Star Trek rail
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$EXPECTED_MAIN"
+          test "$(jq -r .commit.tree.sha <<<"$live")" = "$EXPECTED_TREE"
+          printf '%s\n' "$live" | jq . > "$ROOT/main.json"
+
+          git fetch --filter=blob:none --no-tags origin main
+          git checkout --detach "$EXPECTED_MAIN"
+          npm ci --ignore-scripts
+
+          node scripts/thesis-rails.mjs validate > "$ROOT/thesis-validate.txt"
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          npm run autopilot -- status --scope star-trek --json > "$ROOT/autopilot-status.stdout"
+          npm run autopilot -- candidates --scope star-trek --capability-profile text-vision --limit 20 --json > "$ROOT/candidates.stdout"
+
+          python3 - "$ROOT/autopilot-status.stdout" "$ROOT/autopilot-status.json" <<'PY'
+          import json, pathlib, sys
+          text = pathlib.Path(sys.argv[1]).read_text()
+          start = text.find('{')
+          if start < 0:
+              raise SystemExit('missing autopilot status JSON')
+          pathlib.Path(sys.argv[2]).write_text(json.dumps(json.loads(text[start:]), indent=2) + '\n')
+          PY
+          python3 - "$ROOT/candidates.stdout" "$ROOT/candidates.json" <<'PY'
+          import json, pathlib, sys
+          text = pathlib.Path(sys.argv[1]).read_text()
+          start = text.find('{')
+          if start < 0:
+              raise SystemExit('missing candidates JSON')
+          pathlib.Path(sys.argv[2]).write_text(json.dumps(json.loads(text[start:]), indent=2) + '\n')
+          PY
+
+          node - "$ROOT/task-slice.json" <<'NODE'
+          const fs = require('fs');
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const ids = [
+            'ap_a7bae45c6030e1212e1ad6b0',
+            'ap_a2fc2c7b0d3dec8a244ef048'
+          ];
+          const jobs = ids.map(id => state.jobs.find(job => job.id === id) || {id, status:'missing'});
+          fs.writeFileSync(process.argv[2], JSON.stringify({version:1,jobs}, null, 2) + '\n');
+          NODE
+
+          git ls-remote --heads origin 'refs/heads/*queen*' > "$ROOT/queen-refs.txt"
+          git ls-remote --heads origin 'refs/heads/*star-trek*' > "$ROOT/star-trek-refs.txt"
+
+          jq -n \
+            --arg canonical "$EXPECTED_MAIN" \
+            --arg tree "$EXPECTED_TREE" \
+            --arg phase "$(jq -r '.phase // ""' "$ROOT/thesis-next.json")" \
+            --arg task "$(jq -r '.candidate.task_id // ""' "$ROOT/thesis-next.json")" \
+            --arg performer "$(jq -r '.candidate.performer // ""' "$ROOT/thesis-next.json")" \
+            --arg character "$(jq -r '.candidate.character // ""' "$ROOT/thesis-next.json")" \
+            --arg fingerprint "$(jq -r '.candidate.source_fingerprint // ""' "$ROOT/thesis-next.json")" \
+            --argjson priority "$(jq -r '.candidate.priority // 0' "$ROOT/thesis-next.json")" \
+            --arg first_candidate "$(jq -r '.compatible[0].task_id // ""' "$ROOT/candidates.json")" \
+            --arg maryl_status "$(jq -r '.jobs[] | select(.id=="ap_a7bae45c6030e1212e1ad6b0") | .status' "$ROOT/task-slice.json")" \
+            --arg queen_status "$(jq -r '.jobs[] | select(.id=="ap_a2fc2c7b0d3dec8a244ef048") | .status' "$ROOT/task-slice.json")" \
+            --argjson queen_ref_count "$(wc -l < "$ROOT/queen-refs.txt" | tr -d ' ')" \
+            '{version:1,transaction:"INSPECT-STAR-TREK-CURRENT-V1",status:"complete",canonical:{commit:$canonical,tree:$tree},rail:{phase:$phase,candidate:{task_id:$task,performer:$performer,character:$character,priority:$priority,source_fingerprint:$fingerprint},first_compatible_task:$first_candidate,candidates_match:($task==$first_candidate)},tasks:{maryl:$maryl_status,queen_of_hearts:$queen_status},queen_ref_count:$queen_ref_count}' \
+            > "$ROOT/summary.json"
+
+          (cd "$ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+
+      - name: Publish read-only inspection
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-current-rail-inspector
+          git config user.email current-rail-inspector@users.noreply.github.com
+          git switch --orphan inspection-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/inspect-star-trek-current-v1
+          cp -a "$ROOT"/. transport/inspect-star-trek-current-v1/
+          git add transport/inspect-star-trek-current-v1
+          git commit -m 'Inspect exact current Star Trek rail'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
