@@ -1,0 +1,209 @@
+name: star-trek-anastasia-finalizer-recovery-v3
+
+on:
+  push:
+    branches:
+      - agent/star-trek-anastasia-finalizer-recovery-v3
+
+permissions:
+  actions: write
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: star-trek-anastasia-finalizer-recovery-v3
+  cancel-in-progress: false
+
+env:
+  CURRENT_MAIN: 933415b505d1c6e40c7e4bd44bf132c61a5ea32d
+  CURRENT_TREE: 651edbcfb9efd3b6d9189f8903afa1a8d88677d4
+  CANDIDATE_COMMIT: 73f572459b49b9cf30915aca5ec6511478dc2807
+  CANDIDATE_TREE: fe3f75da989b9006447df5424fbf8acb29f71d1f
+  CANDIDATE_PATH_COUNT: "44"
+  CANDIDATE_PATH_LEDGER_SHA256: 6374da8128b6d0047fa9e197760eb2976fe915cc6968b320b83bce0dd31e1b31
+  REBASED_CANDIDATE_BRANCH: agent/star-trek-anastasia-candidate-rebased-v1
+  CONTROLLER_SOURCE_BRANCH: agent/anastasia-rebind-inspection-result-v1
+  CONTROLLER_SOURCE_PATH: transport/anastasia-rebind-inspection-v1/anastasia-controller.mjs
+  CONTROLLER_SHA256: 2eaaa9de01ab5b529df6cf17183c72ad099fef1837177d5d5411365c1cf5f76d
+  MEDIA_CANONICAL_PARENT: 97956ce415d565d968cc5f66067142183ec28a1f
+  MEDIA_RUN: "32609675555"
+  MEDIA_HEAD: fd0c91d94128182423857d0be506f7a49bf934cd
+  MEDIA_ARTIFACT: "9485147987"
+  MEDIA_DIGEST: c7e507c8e791204c96fa5c54cdf27cb15a113487785868df6d78cf09444f0bfb
+  REBOUND_SOURCE_RUN: "32627038856"
+  REBOUND_STAGE_ARTIFACT_ID: "9489977666"
+  REBOUND_STAGE_ARTIFACT_DIGEST: 8a9f87ee042760270f11217cad26d7da3471f0fe6fd2ec38b837ad890d1ed2e3
+  REBOUND_REVIEW_ARTIFACT_ID: "9489987688"
+  REBOUND_REVIEW_ARTIFACT_DIGEST: 27c935a8524b199d560c4d04265fb097a58de25bd5ea987f7a3976de80b4cf11
+  REBOUND_REVIEW_SHA256: b8892e3f147087dd0353c246d66b8b70f7eeff38de53416af4b6f6c7aa642618
+  CONTROLLER: /tmp/star-trek-anastasia-controller-v1.mjs
+  RECOVERY_CONTROLLER: /tmp/star-trek-anastasia-finalizer-recovery-v3.sh
+  RECOVERY_CONTROLLER_SHA256: fc4c898fd9396156fe1317eed2c5d8c40eec089d6667769c476566a6267f3f21
+  RECOVERY_CONTROLLER_B64_SHA256: e2ce82983c0b141e997ba96d7b210b29a9678db26b5d40cdebe6a8253a538a32
+  STAGE_ROOT: /tmp/star-trek-anastasia-rebound-stage-v2
+  REVIEW_ROOT: /tmp/star-trek-anastasia-rebound-review-v2
+  FINAL_ROOT: /tmp/star-trek-anastasia-recovery-final-v3
+  DIAGNOSTIC_ROOT: /tmp/star-trek-anastasia-recovery-diagnostics-v3
+  RESULT_BRANCH: agent/star-trek-anastasia-recovery-result-v3
+
+jobs:
+  finalize:
+    name: finalize-publish-and-deploy-anastasia-recovery-v3
+    if: ${{ github.event.head_commit.message == 'Trigger Anastasia finalizer recovery v3' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      product_commit: ${{ steps.publish.outputs.product_commit }}
+      product_tree: ${{ steps.publish.outputs.product_tree }}
+      pages_run: ${{ steps.publish.outputs.pages_run }}
+      receipt_sha256: ${{ steps.publish.outputs.receipt_sha256 }}
+      checker_sha256: ${{ steps.publish.outputs.checker_sha256 }}
+      reviewed_cycle: ${{ steps.publish.outputs.reviewed_cycle }}
+      next_task: ${{ steps.publish.outputs.next_task }}
+      artifact_id: ${{ steps.terminal_artifact.outputs.artifact-id }}
+      artifact_digest: ${{ steps.terminal_artifact.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Download rebound stage receipt
+        uses: actions/download-artifact@v4
+        with:
+          name: star-trek-anastasia-rebound-stage-v2
+          path: /tmp/star-trek-anastasia-rebound-stage-v2
+          repository: ${{ github.repository }}
+          run-id: ${{ env.REBOUND_SOURCE_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Download independent rebound review
+        uses: actions/download-artifact@v4
+        with:
+          name: star-trek-anastasia-rebound-independent-review-v2
+          path: /tmp/star-trek-anastasia-rebound-review-v2
+          repository: ${{ github.repository }}
+          run-id: ${{ env.REBOUND_SOURCE_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify rebound artifact custody
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          stage_meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${REBOUND_STAGE_ARTIFACT_ID}")"
+          review_meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${REBOUND_REVIEW_ARTIFACT_ID}")"
+          test "$(jq -r .expired <<<"$stage_meta")" = false
+          test "$(jq -r .name <<<"$stage_meta")" = star-trek-anastasia-rebound-stage-v2
+          test "$(jq -r .digest <<<"$stage_meta")" = "sha256:${REBOUND_STAGE_ARTIFACT_DIGEST}"
+          test "$(jq -r .workflow_run.id <<<"$stage_meta")" = "$REBOUND_SOURCE_RUN"
+          test "$(jq -r .expired <<<"$review_meta")" = false
+          test "$(jq -r .name <<<"$review_meta")" = star-trek-anastasia-rebound-independent-review-v2
+          test "$(jq -r .digest <<<"$review_meta")" = "sha256:${REBOUND_REVIEW_ARTIFACT_DIGEST}"
+          test "$(jq -r .workflow_run.id <<<"$review_meta")" = "$REBOUND_SOURCE_RUN"
+          (cd "$STAGE_ROOT" && sha256sum -c manifest.sha256)
+          (cd "$REVIEW_ROOT" && sha256sum -c manifest.sha256)
+          test "$(jq -r .candidate.commit "$REVIEW_ROOT/independent-review.json")" = "$CANDIDATE_COMMIT"
+          test "$(jq -r .candidate.tree "$REVIEW_ROOT/independent-review.json")" = "$CANDIDATE_TREE"
+          test "$(jq -r .review_sha256 "$REVIEW_ROOT/independent-review.json")" = "$REBOUND_REVIEW_SHA256"
+          test "$(jq -r .lease_id "$REVIEW_ROOT/independent-review.json")" = lease_7d5e1311748aad6fae189b59
+
+      - name: Reconstruct sealed recovery v3 controller
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat .github/recovery/star-trek-anastasia-finalizer-recovery-v3/controller.sh.gz.b64.part-* > /tmp/anastasia-recovery-v3-controller.b64
+          echo "${RECOVERY_CONTROLLER_B64_SHA256}  /tmp/anastasia-recovery-v3-controller.b64" | sha256sum -c -
+          base64 -d /tmp/anastasia-recovery-v3-controller.b64 | gzip -d > "$RECOVERY_CONTROLLER"
+          echo "${RECOVERY_CONTROLLER_SHA256}  ${RECOVERY_CONTROLLER}" | sha256sum -c -
+          bash -n "$RECOVERY_CONTROLLER"
+          chmod +x "$RECOVERY_CONTROLLER"
+
+      - name: Finalize, refresh deterministic projections, publish, and deploy
+        id: publish
+        shell: bash
+        run: $RECOVERY_CONTROLLER finalize
+
+      - name: Upload terminal recovery v3 evidence
+        id: terminal_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-anastasia-recovery-terminal-v3
+          path: /tmp/star-trek-anastasia-recovery-final-v3/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Capture recovery v3 failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$DIAGNOSTIC_ROOT"
+          git status --short > "$DIAGNOSTIC_ROOT/git-status-short.txt" || true
+          git diff --name-status > "$DIAGNOSTIC_ROOT/git-diff-name-status.txt" || true
+          git diff --stat > "$DIAGNOSTIC_ROOT/git-diff-stat.txt" || true
+          git diff --binary > "$DIAGNOSTIC_ROOT/git-diff-binary.patch" || true
+          git diff --name-only -- data/ds9 > "$DIAGNOSTIC_ROOT/ds9-dirty-paths.txt" || true
+          git diff --stat -- data/ds9 > "$DIAGNOSTIC_ROOT/ds9-diff-stat.txt" || true
+          git diff --binary -- data/ds9 > "$DIAGNOSTIC_ROOT/ds9-diff.patch" || true
+          cp "$RECOVERY_CONTROLLER" "$DIAGNOSTIC_ROOT/recovery-controller.sh" || true
+          sha256sum "$RECOVERY_CONTROLLER" > "$DIAGNOSTIC_ROOT/recovery-controller.sha256" || true
+          gh api "/repos/${GITHUB_REPOSITORY}/commits/main" > "$DIAGNOSTIC_ROOT/live-main.json" || true
+
+      - name: Preserve recovery v3 failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-anastasia-recovery-v3-failure-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-anastasia-rebound-stage-v2/
+            /tmp/star-trek-anastasia-rebound-review-v2/
+            /tmp/star-trek-anastasia-recovery-final-v3/
+            /tmp/star-trek-anastasia-recovery-diagnostics-v3/
+            /tmp/star-trek-anastasia-controller-v1.mjs
+          if-no-files-found: warn
+          retention-days: 30
+
+  publish_result:
+    name: publish-anastasia-recovery-v3-terminal-locator
+    needs: finalize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PRODUCT_COMMIT: ${{ needs.finalize.outputs.product_commit }}
+      PRODUCT_TREE: ${{ needs.finalize.outputs.product_tree }}
+      PAGES_RUN: ${{ needs.finalize.outputs.pages_run }}
+      TERMINAL_ARTIFACT_ID: ${{ needs.finalize.outputs.artifact_id }}
+      TERMINAL_ARTIFACT_DIGEST: ${{ needs.finalize.outputs.artifact_digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download terminal recovery v3 evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: star-trek-anastasia-recovery-terminal-v3
+          path: /tmp/star-trek-anastasia-recovery-final-v3
+
+      - name: Reconstruct sealed recovery v3 controller
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat .github/recovery/star-trek-anastasia-finalizer-recovery-v3/controller.sh.gz.b64.part-* > /tmp/anastasia-recovery-v3-controller.b64
+          echo "${RECOVERY_CONTROLLER_B64_SHA256}  /tmp/anastasia-recovery-v3-controller.b64" | sha256sum -c -
+          base64 -d /tmp/anastasia-recovery-v3-controller.b64 | gzip -d > "$RECOVERY_CONTROLLER"
+          echo "${RECOVERY_CONTROLLER_SHA256}  ${RECOVERY_CONTROLLER}" | sha256sum -c -
+          bash -n "$RECOVERY_CONTROLLER"
+          chmod +x "$RECOVERY_CONTROLLER"
+
+      - name: Publish terminal locator branch
+        shell: bash
+        run: $RECOVERY_CONTROLLER publish_result
