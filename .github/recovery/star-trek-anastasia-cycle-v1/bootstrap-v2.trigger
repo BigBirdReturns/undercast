@@ -1,5 +1,5 @@
-transaction=INSTALL-STAR-TREK-ANASTASIA-CYCLE-V2
+transaction=STAGE-STAR-TREK-ANASTASIA-WORKFLOW-BLOBS-V3
 canonical=97956ce415d565d968cc5f66067142183ec28a1f
-workflow_sha256=e4706736a23209f4da0f2d3f9c634544854e93ed2fff181c085e82ab2fa26fc5
+sealed_workflow_sha256=e4706736a23209f4da0f2d3f9c634544854e93ed2fff181c085e82ab2fa26fc5
 controller_sha256=2eaaa9de01ab5b529df6cf17183c72ad099fef1837177d5d5411365c1cf5f76d
-trigger=2026-08-22-pr-closed-v6
+trigger=2026-08-22-workflow-blob-pr-v7
