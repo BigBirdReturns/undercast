@@ -1,0 +1,123 @@
+name: inspect-anastasia-install-v1
+
+on:
+  push:
+    branches:
+      - agent/inspect-anastasia-install-v1
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: inspect-anastasia-install-v1
+  cancel-in-progress: false
+
+env:
+  CYCLE_BRANCH: agent/star-trek-anastasia-cycle-v1
+  INSTALLER_WORKFLOW: install-star-trek-anastasia-cycle-v3.yml
+  CYCLE_WORKFLOW_PATH: .github/workflows/star-trek-anastasia-cycle-v1.yml
+  TRIGGER_COMMIT: c937a6e55f6ed9da2ddd186b4b9054a39e60de51
+  RESULT_BRANCH: agent/inspect-anastasia-install-result-v1
+  ROOT: /tmp/inspect-anastasia-install-v1
+
+jobs:
+  inspect:
+    if: ${{ github.event.head_commit.message == 'Trigger Anastasia installer inspection v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Inspect installer and cycle state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/commits/main" | jq . > "$ROOT/main.json"
+          cycle_head="$(git ls-remote origin "refs/heads/${CYCLE_BRANCH}" | cut -f1)"
+          test -n "$cycle_head"
+          printf '%s\n' "$cycle_head" > "$ROOT/cycle-head.txt"
+
+          git fetch --filter=blob:none --no-tags origin "$CYCLE_BRANCH"
+          git checkout --detach "$cycle_head"
+          test "$(git rev-parse HEAD)" = "$cycle_head"
+          git show -s --format='%H%n%T%n%P%n%s' HEAD > "$ROOT/cycle-head-commit.txt"
+
+          workflow_present=false
+          install_receipt_present=false
+          if test -f "$CYCLE_WORKFLOW_PATH"; then
+            workflow_present=true
+            cp "$CYCLE_WORKFLOW_PATH" "$ROOT/star-trek-anastasia-cycle-v1.yml"
+            sha256sum "$CYCLE_WORKFLOW_PATH" > "$ROOT/cycle-workflow.sha256"
+          fi
+          if test -f transport/star-trek-anastasia-cycle-v1/install-v3.json; then
+            install_receipt_present=true
+            cp transport/star-trek-anastasia-cycle-v1/install-v3.json "$ROOT/install-v3.json"
+          fi
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?branch=${CYCLE_BRANCH}&per_page=100" | jq . > "$ROOT/branch-runs.json"
+          jq --arg sha "$TRIGGER_COMMIT" '[.workflow_runs[] | select(.head_sha==$sha)]' "$ROOT/branch-runs.json" > "$ROOT/trigger-runs.json"
+          installer_run="$(jq -r --arg sha "$TRIGGER_COMMIT" --arg path ".github/workflows/${INSTALLER_WORKFLOW}" '[.workflow_runs[] | select(.head_sha==$sha and .path==$path)] | sort_by(.created_at) | last | .id // empty' "$ROOT/branch-runs.json")"
+          cycle_run="$(jq -r --arg path "$CYCLE_WORKFLOW_PATH" '[.workflow_runs[] | select(.path==$path)] | sort_by(.created_at) | last | .id // empty' "$ROOT/branch-runs.json")"
+
+          installer_status=missing
+          installer_conclusion=''
+          if [[ "$installer_run" =~ ^[0-9]+$ ]]; then
+            for _ in $(seq 1 120); do
+              gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${installer_run}" | jq . > "$ROOT/installer-run.json"
+              installer_status="$(jq -r .status "$ROOT/installer-run.json")"
+              installer_conclusion="$(jq -r '.conclusion // ""' "$ROOT/installer-run.json")"
+              test "$installer_status" = completed && break
+              sleep 5
+            done
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${installer_run}/jobs?per_page=100" | jq . > "$ROOT/installer-jobs.json"
+            gh run view "$installer_run" --log-failed > "$ROOT/installer-failed.log" 2>&1 || true
+          fi
+
+          cycle_status=missing
+          cycle_conclusion=''
+          if [[ "$cycle_run" =~ ^[0-9]+$ ]]; then
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${cycle_run}" | jq . > "$ROOT/cycle-run.json"
+            cycle_status="$(jq -r .status "$ROOT/cycle-run.json")"
+            cycle_conclusion="$(jq -r '.conclusion // ""' "$ROOT/cycle-run.json")"
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${cycle_run}/jobs?per_page=100" | jq . > "$ROOT/cycle-jobs.json"
+            if test "$cycle_status" = completed && test "$cycle_conclusion" != success; then
+              gh run view "$cycle_run" --log-failed > "$ROOT/cycle-failed.log" 2>&1 || true
+            fi
+          fi
+
+          jq -n \
+            --arg status complete \
+            --arg cycle_head "$cycle_head" \
+            --argjson workflow_present "$workflow_present" \
+            --argjson install_receipt_present "$install_receipt_present" \
+            --arg installer_run "${installer_run:-}" \
+            --arg installer_status "$installer_status" \
+            --arg installer_conclusion "$installer_conclusion" \
+            --arg cycle_run "${cycle_run:-}" \
+            --arg cycle_status "$cycle_status" \
+            --arg cycle_conclusion "$cycle_conclusion" \
+            '{version:1,transaction:"INSPECT-ANASTASIA-INSTALL-V1",status:$status,cycle_head:$cycle_head,workflow_present:$workflow_present,install_receipt_present:$install_receipt_present,installer:{run_id:(if $installer_run=="" then null else ($installer_run|tonumber) end),status:$installer_status,conclusion:(if $installer_conclusion=="" then null else $installer_conclusion end)},cycle:{run_id:(if $cycle_run=="" then null else ($cycle_run|tonumber) end),status:$cycle_status,conclusion:(if $cycle_conclusion=="" then null else $cycle_conclusion end)},canonical_mutation:false,lease_taken:false}' \
+            > "$ROOT/summary.json"
+          (cd "$ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+
+      - name: Publish inspection
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-anastasia-inspector
+          git config user.email anastasia-inspector@users.noreply.github.com
+          git switch --orphan inspection-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/inspect-anastasia-install-v1
+          cp -a "$ROOT"/. transport/inspect-anastasia-install-v1/
+          git add transport/inspect-anastasia-install-v1
+          git commit -m 'Publish Anastasia installer inspection'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
