@@ -1,0 +1,6 @@
+transaction=INSTALL-STAR-TREK-ANASTASIA-CYCLE-V3
+source_product=97956ce415d565d968cc5f66067142183ec28a1f
+canonical=933415b505d1c6e40c7e4bd44bf132c61a5ea32d
+canonical_tree=651edbcfb9efd3b6d9189f8903afa1a8d88677d4
+lease_taken=false
+canonical_mutation=false
