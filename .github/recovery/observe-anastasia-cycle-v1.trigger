@@ -1,0 +1,5 @@
+transaction=OBSERVE-ANASTASIA-CYCLE-V1
+carrier_branch=agent/star-trek-anastasia-cycle-v1
+expected_parent=933415b505d1c6e40c7e4bd44bf132c61a5ea32d
+canonical_mutation=false
+lease_taken=false
