@@ -1,0 +1,85 @@
+name: star-trek-anastasia-ds9-observer-20260823-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-anastasia-ds9-observer-20260823-v1
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-anastasia-ds9-observer-20260823-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 933415b505d1c6e40c7e4bd44bf132c61a5ea32d
+  EXPECTED_TREE: 651edbcfb9efd3b6d9189f8903afa1a8d88677d4
+  TARGET_BRANCH: agent/star-trek-anastasia-ds9-diagnostic-20260823-v1
+  TARGET_WORKFLOW: star-trek-anastasia-ds9-diagnostic-20260823-v1
+  OBSERVER_RESULT_BRANCH: agent/star-trek-anastasia-ds9-observer-result-20260823-v1
+  RESULT_ROOT: /tmp/star-trek-anastasia-ds9-observer-result-v1
+
+jobs:
+  observe:
+    name: publish-anastasia-ds9-diagnostic-run-index
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read diagnostic workflow runs and publish observer branch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          live_before="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live_before")" = "$EXPECTED_MAIN"
+          test "$(jq -r .commit.tree.sha <<<"$live_before")" = "$EXPECTED_TREE"
+          rm -rf "$RESULT_ROOT"
+          mkdir -p "$RESULT_ROOT"
+          gh api -X GET "/repos/${GITHUB_REPOSITORY}/actions/runs" \
+            -f branch="$TARGET_BRANCH" \
+            -F per_page=100 \
+            > /tmp/diagnostic-runs-all.json
+          jq --arg workflow "$TARGET_WORKFLOW" \
+            '{version:1,observed_at:(now|todateiso8601),workflow:$workflow,total_count:(.workflow_runs|map(select(.name==$workflow))|length),workflow_runs:(.workflow_runs|map(select(.name==$workflow)|{id,name,event,status,conclusion,workflow_id,run_number,run_attempt,head_branch,head_sha,created_at,updated_at,run_started_at,jobs_url,artifacts_url,html_url}))}' \
+            /tmp/diagnostic-runs-all.json > "$RESULT_ROOT/runs.json"
+          printf '%s\n' "$live_before" | jq . > "$RESULT_ROOT/main-before.json"
+          jq -n \
+            --arg transaction STAR-TREK-ANASTASIA-DS9-DIAGNOSTIC-OBSERVER-V1 \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$GITHUB_SHA" \
+            --arg target_branch "$TARGET_BRANCH" \
+            --arg target_workflow "$TARGET_WORKFLOW" \
+            --arg canonical_parent "$EXPECTED_MAIN" \
+            --arg canonical_tree "$EXPECTED_TREE" \
+            '{version:1,transaction:$transaction,status:"observed",run_id:($run_id|tonumber),head_sha:$head_sha,target_branch:$target_branch,target_workflow:$target_workflow,canonical_parent:$canonical_parent,canonical_tree:$canonical_tree,canonical_write:false,additional_lease_issued:false}' \
+            > "$RESULT_ROOT/result.json"
+          (
+            cd "$RESULT_ROOT"
+            find . -type f ! -name manifest.sha256 -print0 | sort -z | xargs -0 sha256sum > manifest.sha256
+          )
+          git config user.name undercast-anastasia-observer
+          git config user.email undercast-anastasia-observer@users.noreply.github.com
+          worktree=/tmp/star-trek-anastasia-ds9-observer-worktree
+          rm -rf "$worktree"
+          git worktree add --detach "$worktree" "$GITHUB_SHA"
+          (
+            cd "$worktree"
+            git checkout --orphan anastasia-ds9-observer-result
+            git rm -rf .
+            cp -a "$RESULT_ROOT"/. .
+            git add -A
+            git commit -m "Observe Anastasia DS9 diagnostic workflow runs"
+            git push --force origin "HEAD:refs/heads/${OBSERVER_RESULT_BRANCH}"
+          )
+          git worktree remove --force "$worktree"
+          live_after="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live_after")" = "$EXPECTED_MAIN"
+          test "$(jq -r .commit.tree.sha <<<"$live_after")" = "$EXPECTED_TREE"
+          test -n "$(git ls-remote --heads origin "refs/heads/${OBSERVER_RESULT_BRANCH}")"
