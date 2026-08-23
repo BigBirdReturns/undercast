@@ -1,0 +1,325 @@
+name: star-trek-alice-qualification-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-alice-qualification-v1
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-alice-qualification-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 91254f17fa1ebb6e8502c6201e9bc8651ef4d4ac
+  EXPECTED_TREE: c72d4a3369d4056d38b84c97bf884e4efa0ffa3c
+  EXPECTED_TASK: ap_c7ff8298a99fe94fc55bbdbc
+  EXPECTED_PERFORMER: Nichelle Nichols
+  EXPECTED_CHARACTER: Alice (character)
+  EXPECTED_FINGERPRINT: 9caf9645daf70d67203bd0056980531a7190659c5209e15b3899cf6bac016297
+  RESULT_BRANCH: agent/star-trek-alice-qualification-result-v1
+  RESULT_ROOT: /tmp/star-trek-alice-qualification-v1
+
+jobs:
+  qualify:
+    name: qualify-exact-alice-successor-without-leasing
+    if: ${{ github.event.head_commit.message == 'Qualify Star Trek Alice successor v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Extract exact task, rail, source, and media custody
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$RESULT_ROOT"
+          mkdir -p "$RESULT_ROOT/logs"
+
+          capture() {
+            local name="$1"
+            shift
+            set +e
+            "$@" >"$RESULT_ROOT/logs/${name}.log" 2>&1
+            local rc=$?
+            set -e
+            printf '%s\n' "$rc" >"$RESULT_ROOT/logs/${name}.exit-code"
+            return 0
+          }
+
+          git fetch --no-tags origin main
+          live_start="$(git rev-parse refs/remotes/origin/main)"
+          tree_start="$(git show -s --format=%T refs/remotes/origin/main)"
+          printf '%s\n' "$live_start" >"$RESULT_ROOT/main-start.sha"
+          printf '%s\n' "$tree_start" >"$RESULT_ROOT/main-start.tree"
+          printf '%s\n' "$(git show -s --format=%P refs/remotes/origin/main)" >"$RESULT_ROOT/main-start.parents"
+          printf '%s\n' "$(git show -s --format=%s refs/remotes/origin/main)" >"$RESULT_ROOT/main-start.message"
+
+          before_autopilot="$(sha256sum data/AUTOPILOT.json | awk '{print $1}')"
+          printf '%s\n' "$before_autopilot" >"$RESULT_ROOT/autopilot-before.sha256"
+
+          capture npm-ci npm ci --ignore-scripts
+          capture thesis-validate node scripts/thesis-rails.mjs validate
+          capture thesis-next node scripts/thesis-rails.mjs next --json
+          cp "$RESULT_ROOT/logs/thesis-next.log" "$RESULT_ROOT/thesis-next.json" || true
+          capture autopilot-validate node scripts/autopilot.mjs validate
+          capture media-gate node scripts/media-audit.mjs gate --scope star-trek
+          capture media-status node scripts/media-audit.mjs status --scope star-trek
+          capture waterline-validate node scripts/waterline.mjs validate
+          capture waterline-status node scripts/waterline.mjs status --scope star-trek
+
+          git ls-remote --heads origin >"$RESULT_ROOT/remote-heads.txt"
+          grep -i 'alice' "$RESULT_ROOT/remote-heads.txt" >"$RESULT_ROOT/alice-heads.txt" || true
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const crypto = require('node:crypto');
+
+          const root = process.env.RESULT_ROOT;
+          const expected = {
+            main: process.env.EXPECTED_MAIN,
+            tree: process.env.EXPECTED_TREE,
+            task_id: process.env.EXPECTED_TASK,
+            performer: process.env.EXPECTED_PERFORMER,
+            character: process.env.EXPECTED_CHARACTER,
+            source_fingerprint: process.env.EXPECTED_FINGERPRINT,
+          };
+          const read = (p) => fs.readFileSync(p, 'utf8');
+          const maybeJson = (p) => {
+            try { return JSON.parse(read(p)); } catch { return null; }
+          };
+          const exitCode = (name) => Number(read(path.join(root, 'logs', `${name}.exit-code`)).trim());
+          const errors = [];
+          const notes = [];
+
+          const mainStart = read(path.join(root, 'main-start.sha')).trim();
+          const treeStart = read(path.join(root, 'main-start.tree')).trim();
+          const parents = read(path.join(root, 'main-start.parents')).trim().split(/\s+/).filter(Boolean);
+          if (mainStart !== expected.main) errors.push(`main-start:${mainStart}`);
+          if (treeStart !== expected.tree) errors.push(`tree-start:${treeStart}`);
+          if (parents.length !== 1) errors.push(`main-parent-count:${parents.length}`);
+
+          const rail = maybeJson(path.join(root, 'thesis-next.json'));
+          const railCandidate = rail?.candidate || null;
+          if (exitCode('thesis-validate') !== 0) errors.push('thesis-validate-failed');
+          if (exitCode('thesis-next') !== 0 || !rail) errors.push('thesis-next-failed');
+          if (rail?.phase !== 'ready-for-one-cycle') errors.push(`rail-phase:${rail?.phase ?? 'missing'}`);
+          if (rail?.scope_id !== 'star-trek') errors.push(`rail-scope:${rail?.scope_id ?? 'missing'}`);
+          for (const key of ['task_id', 'performer', 'character', 'source_fingerprint']) {
+            if (railCandidate?.[key] !== expected[key]) errors.push(`rail-${key}:${railCandidate?.[key] ?? 'missing'}`);
+          }
+          if (Number(railCandidate?.priority) !== 1330) errors.push(`rail-priority:${railCandidate?.priority ?? 'missing'}`);
+
+          const autopilot = maybeJson('data/AUTOPILOT.json');
+          if (!autopilot) errors.push('autopilot-json-unreadable');
+          const taskMatches = [];
+          const visit = (value, trail = '$') => {
+            if (!value || typeof value !== 'object') return;
+            if (!Array.isArray(value)) {
+              const directValues = Object.values(value);
+              if (value.id === expected.task_id || value.task_id === expected.task_id || directValues.includes(expected.task_id)) {
+                taskMatches.push({ path: trail, value });
+              }
+            }
+            if (Array.isArray(value)) value.forEach((v, i) => visit(v, `${trail}[${i}]`));
+            else Object.entries(value).forEach(([k, v]) => visit(v, `${trail}.${k}`));
+          };
+          if (autopilot) visit(autopilot);
+          const score = (m) => {
+            const v = m.value || {};
+            return (v.id === expected.task_id ? 10 : 0)
+              + (v.performer === expected.performer ? 4 : 0)
+              + (v.character === expected.character ? 4 : 0)
+              + (v.source_fingerprint === expected.source_fingerprint ? 4 : 0)
+              + (v.status ? 1 : 0);
+          };
+          taskMatches.sort((a, b) => score(b) - score(a));
+          const task = taskMatches[0]?.value || null;
+          if (!task) errors.push('task-record-missing');
+          if (task?.id !== expected.task_id && task?.task_id !== expected.task_id) errors.push('task-id-mismatch');
+          if (task?.performer !== expected.performer) errors.push(`task-performer:${task?.performer ?? 'missing'}`);
+          if (task?.character !== expected.character) errors.push(`task-character:${task?.character ?? 'missing'}`);
+          if (task?.source_fingerprint !== expected.source_fingerprint) errors.push(`task-fingerprint:${task?.source_fingerprint ?? 'missing'}`);
+          if (task?.status !== 'queued') errors.push(`task-status:${task?.status ?? 'missing'}`);
+          if (Number(task?.attempts ?? 0) !== 0) errors.push(`task-attempts:${task?.attempts}`);
+
+          for (const gate of ['npm-ci', 'autopilot-validate', 'media-gate', 'waterline-validate']) {
+            if (exitCode(gate) !== 0) errors.push(`${gate}-failed`);
+          }
+
+          const jsonFiles = [];
+          const walk = (dir) => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const p = path.join(dir, entry.name);
+              if (entry.isDirectory()) walk(p);
+              else if (entry.isFile() && p.endsWith('.json')) jsonFiles.push(p);
+            }
+          };
+          walk('data');
+          const references = [];
+          const collectObjects = (value, file, trail = '$') => {
+            if (!value || typeof value !== 'object' || references.length >= 500) return;
+            if (!Array.isArray(value)) {
+              const values = Object.values(value);
+              if (values.includes(expected.performer) || values.includes(expected.character) || values.includes(expected.task_id)) {
+                references.push({ file, path: trail, value });
+              }
+            }
+            if (Array.isArray(value)) value.forEach((v, i) => collectObjects(v, file, `${trail}[${i}]`));
+            else Object.entries(value).forEach(([k, v]) => collectObjects(v, file, `${trail}.${k}`));
+          };
+          for (const file of jsonFiles) {
+            let text;
+            try { text = read(file); } catch { continue; }
+            if (!text.includes(expected.performer) && !text.includes(expected.character) && !text.includes(expected.task_id)) continue;
+            try { collectObjects(JSON.parse(text), file); } catch { notes.push(`unparsed-reference-file:${file}`); }
+          }
+
+          const imageStrings = new Set();
+          const collectImages = (value) => {
+            if (typeof value === 'string' && /^(?:\.\/)?images\//.test(value)) imageStrings.add(value.replace(/^\.\//, ''));
+            else if (Array.isArray(value)) value.forEach(collectImages);
+            else if (value && typeof value === 'object') Object.values(value).forEach(collectImages);
+          };
+          for (const match of references) collectImages(match.value);
+          if (task) collectImages(task);
+          const assets = [...imageStrings].sort().map((p) => {
+            if (!fs.existsSync(p) || !fs.statSync(p).isFile()) return { path: p, exists: false };
+            const bytes = fs.readFileSync(p);
+            return { path: p, exists: true, size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
+          });
+
+          const aliceHeads = read(path.join(root, 'alice-heads.txt')).split(/\r?\n/).filter(Boolean);
+          const disallowedHeads = aliceHeads.filter((line) => !line.includes('agent/star-trek-alice-qualification-v1') && !line.includes('agent/star-trek-alice-qualification-result-v1'));
+          if (disallowedHeads.length) errors.push(`existing-alice-heads:${disallowedHeads.length}`);
+
+          const taskSources = [...new Set([
+            ...(Array.isArray(task?.sources) ? task.sources : []),
+            ...(typeof task?.source === 'string' ? [task.source] : []),
+          ])];
+          const sourceReceipts = task?.source_receipts ?? task?.source_receipt ?? null;
+          if (!taskSources.length) notes.push('task-source-list-not-found-at-selected-record');
+          if (!sourceReceipts) notes.push('task-source-receipt-not-found-at-selected-record');
+
+          const result = {
+            version: 1,
+            transaction: 'STAR-TREK-ALICE-QUALIFICATION-V1',
+            generated_at: new Date().toISOString(),
+            status: errors.length ? 'blocked-read-only' : 'qualified-read-only',
+            lease_taken: false,
+            canonical_mutation: false,
+            expected,
+            canonical_start: {
+              commit: mainStart,
+              tree: treeStart,
+              parents,
+              message: read(path.join(root, 'main-start.message')).trim(),
+            },
+            gates: {
+              npm_ci: exitCode('npm-ci'),
+              thesis_validate: exitCode('thesis-validate'),
+              thesis_next: exitCode('thesis-next'),
+              autopilot_validate: exitCode('autopilot-validate'),
+              media_gate: exitCode('media-gate'),
+              waterline_validate: exitCode('waterline-validate'),
+            },
+            rail,
+            task,
+            task_match_count: taskMatches.length,
+            task_match_paths: taskMatches.slice(0, 20).map((m) => m.path),
+            task_sources: taskSources,
+            source_receipts: sourceReceipts,
+            matching_repository_objects: references,
+            matching_repository_object_count: references.length,
+            existing_image_assets: assets,
+            remote_alice_heads: aliceHeads,
+            disallowed_remote_alice_heads: disallowedHeads,
+            errors,
+            notes,
+          };
+          fs.writeFileSync(path.join(root, 'qualification.json'), JSON.stringify(result, null, 2) + '\n');
+          NODE
+
+          after_autopilot="$(sha256sum data/AUTOPILOT.json | awk '{print $1}')"
+          printf '%s\n' "$after_autopilot" >"$RESULT_ROOT/autopilot-after.sha256"
+          test "$before_autopilot" = "$after_autopilot"
+
+          git fetch --no-tags origin main
+          live_end="$(git rev-parse refs/remotes/origin/main)"
+          tree_end="$(git show -s --format=%T refs/remotes/origin/main)"
+          printf '%s\n' "$live_end" >"$RESULT_ROOT/main-end.sha"
+          printf '%s\n' "$tree_end" >"$RESULT_ROOT/main-end.tree"
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = process.env.RESULT_ROOT;
+          const qPath = path.join(root, 'qualification.json');
+          const q = JSON.parse(fs.readFileSync(qPath, 'utf8'));
+          q.autopilot_sha256 = {
+            before: fs.readFileSync(path.join(root, 'autopilot-before.sha256'), 'utf8').trim(),
+            after: fs.readFileSync(path.join(root, 'autopilot-after.sha256'), 'utf8').trim(),
+          };
+          q.canonical_end = {
+            commit: fs.readFileSync(path.join(root, 'main-end.sha'), 'utf8').trim(),
+            tree: fs.readFileSync(path.join(root, 'main-end.tree'), 'utf8').trim(),
+          };
+          if (q.canonical_end.commit !== q.expected.main || q.canonical_end.tree !== q.expected.tree) {
+            q.errors.push(`main-moved:${q.canonical_end.commit}:${q.canonical_end.tree}`);
+            q.status = 'stale-main';
+          }
+          if (q.autopilot_sha256.before !== q.autopilot_sha256.after) {
+            q.errors.push('autopilot-mutated');
+            q.status = 'invalid-mutation';
+          }
+          fs.writeFileSync(qPath, JSON.stringify(q, null, 2) + '\n');
+          const summary = [
+            '# Star Trek Alice read-only qualification',
+            '',
+            `Status: \`${q.status}\``,
+            '',
+            `Canonical main: \`${q.canonical_end.commit}\``,
+            `Task: \`${q.expected.task_id}\``,
+            `Performer: ${q.expected.performer}`,
+            `Character: ${q.expected.character}`,
+            `Fingerprint: \`${q.expected.source_fingerprint}\``,
+            `Rail phase: \`${q.rail?.phase ?? 'missing'}\``,
+            `Task status: \`${q.task?.status ?? 'missing'}\``,
+            `Attempts: \`${q.task?.attempts ?? 'missing'}\``,
+            `Repository matches: \`${q.matching_repository_object_count}\``,
+            `Existing image assets: \`${q.existing_image_assets.length}\``,
+            `Lease taken: \`${q.lease_taken}\``,
+            '',
+            'Errors:',
+            ...(q.errors.length ? q.errors.map((e) => `- ${e}`) : ['- none']),
+            '',
+            'Notes:',
+            ...(q.notes.length ? q.notes.map((e) => `- ${e}`) : ['- none']),
+          ].join('\n') + '\n';
+          fs.writeFileSync(path.join(root, 'qualification.md'), summary);
+          NODE
+
+          rm -rf node_modules
+          git config user.name undercast-alice-qualification
+          git config user.email undercast-alice-qualification@users.noreply.github.com
+          git checkout --orphan alice-qualification-result
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-alice-qualification-v1
+          cp -a "$RESULT_ROOT"/. transport/star-trek-alice-qualification-v1/
+          git add transport/star-trek-alice-qualification-v1
+          git commit -m 'Record read-only Star Trek Alice qualification v1'
+          git push origin HEAD:"refs/heads/${RESULT_BRANCH}"
