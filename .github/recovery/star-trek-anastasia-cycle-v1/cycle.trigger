@@ -1,6 +1,6 @@
 transaction=STAR-TREK-ANASTASIA-KOMANANOV-CYCLE-V1
 canonical=933415b505d1c6e40c7e4bd44bf132c61a5ea32d
-canonical_tree=8617e20c97edb9b736d8d44ee92ff5bc30501daa
+canonical_tree=651edbcfb9efd3b6d9189f8903afa1a8d88677d4
 task_id=ap_82712ddec2c606e4c7d1a152
 performer=Nana Visitor
 character=Anastasia Komananov
