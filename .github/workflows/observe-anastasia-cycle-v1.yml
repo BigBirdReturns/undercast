@@ -1,0 +1,132 @@
+name: observe-anastasia-cycle-v1
+
+on:
+  push:
+    branches:
+      - agent/observe-anastasia-cycle-v1
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: observe-anastasia-cycle-v1
+  cancel-in-progress: false
+
+env:
+  CARRIER_BRANCH: agent/star-trek-anastasia-cycle-v1
+  WORKFLOW_FILE: star-trek-anastasia-cycle-v1.yml
+  EXPECTED_PARENT: 933415b505d1c6e40c7e4bd44bf132c61a5ea32d
+  RESULT_BRANCH: agent/observe-anastasia-cycle-result-v1
+  ROOT: /tmp/observe-anastasia-cycle-v1
+
+jobs:
+  observe:
+    if: ${{ github.event.head_commit.message == 'Trigger Anastasia cycle observer v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Observe exact carrier and terminal repository state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          carrier_head="$(git ls-remote origin "refs/heads/${CARRIER_BRANCH}" | cut -f1)"
+          test -n "$carrier_head"
+          printf '%s\n' "$carrier_head" > "$ROOT/carrier-head.txt"
+
+          run_id=''
+          for _ in $(seq 1 180); do
+            runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?branch=${CARRIER_BRANCH}&event=push&per_page=30" 2>/dev/null || printf '{\"workflow_runs\":[]}')"
+            run_id="$(jq -r --arg sha "$carrier_head" '[.workflow_runs[] | select(.head_sha==$sha)] | sort_by(.created_at) | last | .id // empty' <<<"$runs")"
+            if [[ "$run_id" =~ ^[0-9]+$ ]]; then
+              printf '%s\n' "$runs" | jq . > "$ROOT/runs.json"
+              break
+            fi
+            sleep 5
+          done
+          test "$run_id" != ''
+          printf '%s\n' "$run_id" > "$ROOT/run-id.txt"
+
+          final=''
+          for _ in $(seq 1 900); do
+            current="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            printf '%s\n' "$current" | jq . > "$ROOT/run.json"
+            status="$(jq -r .status <<<"$current")"
+            if test "$status" = completed; then
+              final="$(jq -r '.conclusion // ""' <<<"$current")"
+              break
+            fi
+            sleep 5
+          done
+          test "$final" != ''
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" | jq . > "$ROOT/jobs.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" | jq . > "$ROOT/artifacts.json"
+
+          git fetch --filter=blob:none --no-tags origin main
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          main_tree="$(git rev-parse "${main_sha}^{tree}")"
+          main_parent="$(git rev-parse "${main_sha}^")"
+          main_message="$(git show -s --format=%s "$main_sha")"
+          jq -n \
+            --arg commit "$main_sha" \
+            --arg tree "$main_tree" \
+            --arg parent "$main_parent" \
+            --arg message "$main_message" \
+            '{commit:$commit,tree:$tree,parent:$parent,message:$message}' > "$ROOT/main.json"
+
+          git checkout --detach "$main_sha"
+          find data/review/adapter-sdk -maxdepth 1 -type f -iname '*anastasia*' -printf '%P\n' | LC_ALL=C sort > "$ROOT/anastasia-receipts.txt"
+          find scripts -maxdepth 1 -type f -iname '*anastasia*' -printf '%P\n' | LC_ALL=C sort > "$ROOT/anastasia-checkers.txt"
+          if test "$final" = success; then
+            test "$main_parent" = "$EXPECTED_PARENT"
+            receipt_file="$(find data/review/adapter-sdk -maxdepth 1 -type f -iname '*anastasia*cycle*.json' -print | LC_ALL=C sort | tail -1)"
+            checker_file="$(find scripts -maxdepth 1 -type f -iname '*anastasia*cycle*.mjs' -print | LC_ALL=C sort | tail -1)"
+            test -n "$receipt_file"
+            test -n "$checker_file"
+            cp "$receipt_file" "$ROOT/canonical-receipt.json"
+            cp "$checker_file" "$ROOT/canonical-checker.mjs"
+            node "$checker_file" > "$ROOT/checker.log" 2>&1
+            node scripts/validate.mjs > "$ROOT/validate.log" 2>&1
+            node scripts/thesis-rails.mjs validate > "$ROOT/thesis-validate.log" 2>&1
+            node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+            node scripts/waterline.mjs status --scope star-trek --json > "$ROOT/waterline.json"
+          fi
+
+          jq -n \
+            --arg status "$final" \
+            --argjson run_id "$run_id" \
+            --arg carrier_head "$carrier_head" \
+            --arg main_commit "$main_sha" \
+            --arg main_tree "$main_tree" \
+            --arg main_parent "$main_parent" \
+            --arg main_message "$main_message" \
+            --argjson receipt_present "$(test -f "$ROOT/canonical-receipt.json" && echo true || echo false)" \
+            --argjson checker_pass "$(test -s "$ROOT/checker.log" && echo true || echo false)" \
+            --argjson validate_pass "$(test -s "$ROOT/validate.log" && echo true || echo false)" \
+            --argjson thesis_pass "$(test -s "$ROOT/thesis-validate.log" && echo true || echo false)" \
+            '{version:1,transaction:"OBSERVE-ANASTASIA-CYCLE-V1",status:$status,run_id:$run_id,carrier_head:$carrier_head,canonical:{commit:$main_commit,tree:$main_tree,parent:$main_parent,message:$main_message},receipt_present:$receipt_present,checker_pass:$checker_pass,validate_pass:$validate_pass,thesis_pass:$thesis_pass,canonical_mutation_by_observer:false,lease_taken_by_observer:false}' \
+            > "$ROOT/status.json"
+          (cd "$ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256)
+
+      - name: Publish observer result
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-anastasia-cycle-observer
+          git config user.email anastasia-cycle-observer@users.noreply.github.com
+          git switch --orphan observer-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/observe-anastasia-cycle-v1
+          cp -a "$ROOT"/. transport/observe-anastasia-cycle-v1/
+          git add transport/observe-anastasia-cycle-v1
+          git commit -m 'Publish Anastasia cycle observation'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
