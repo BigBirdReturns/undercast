@@ -1,0 +1,8 @@
+transaction=STAR-TREK-ANASTASIA-FINALIZER-RECOVERY-V3
+canonical_parent=933415b505d1c6e40c7e4bd44bf132c61a5ea32d
+canonical_tree=651edbcfb9efd3b6d9189f8903afa1a8d88677d4
+candidate=73f572459b49b9cf30915aca5ec6511478dc2807
+candidate_tree=fe3f75da989b9006447df5424fbf8acb29f71d1f
+lease=lease_7d5e1311748aad6fae189b59
+ds9_projection_paths=data/ds9/coverage.json,data/ds9/summary.json
+additional_lease_issued=false
