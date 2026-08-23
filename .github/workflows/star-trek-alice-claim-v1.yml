@@ -1,0 +1,231 @@
+name: star-trek-alice-claim-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-alice-claim-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-alice-claim-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 91254f17fa1ebb6e8502c6201e9bc8651ef4d4ac
+  EXPECTED_TREE: e395cd3e679aadf60243f5b7bfe0ee7b2b079874
+  EXPECTED_TASK: ap_c7ff8298a99fe94fc55bbdbc
+  EXPECTED_FINGERPRINT: 9caf9645daf70d67203bd0056980531a7190659c5209e15b3899cf6bac016297
+  EXPECTED_PERFORMER: Nichelle Nichols
+  EXPECTED_CHARACTER: Alice (character)
+  CANDIDATE_BRANCH: agent/star-trek-alice-candidate-v1
+  RESULT_BRANCH: agent/star-trek-alice-claim-result-v1
+  RESULT_ROOT: /tmp/star-trek-alice-claim-v1
+
+jobs:
+  claim:
+    name: claim-exact-alice-task-once
+    if: ${{ github.event.head_commit.message == 'Claim Star Trek Alice task v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Take one exact Autopilot lease and publish candidate custody
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$RESULT_ROOT"
+          mkdir -p "$RESULT_ROOT"
+
+          git fetch --no-tags origin main
+          live="$(git rev-parse refs/remotes/origin/main)"
+          tree="$(git show -s --format=%T refs/remotes/origin/main)"
+          test "$live" = "$EXPECTED_MAIN"
+          test "$tree" = "$EXPECTED_TREE"
+          test "$(git show -s --format=%P refs/remotes/origin/main | wc -w | tr -d ' ')" = 1
+          test -z "$(git ls-remote --heads origin "refs/heads/${CANDIDATE_BRANCH}")"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          git switch -C "$CANDIDATE_BRANCH" "$EXPECTED_MAIN"
+          npm ci --ignore-scripts
+          node scripts/thesis-rails.mjs validate
+          node scripts/thesis-rails.mjs next --json > "$RESULT_ROOT/rail-before.json"
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const rail = JSON.parse(fs.readFileSync(process.env.RESULT_ROOT + '/rail-before.json', 'utf8'));
+          const c = rail.candidate || {};
+          const expected = {
+            task_id: process.env.EXPECTED_TASK,
+            source_fingerprint: process.env.EXPECTED_FINGERPRINT,
+            performer: process.env.EXPECTED_PERFORMER,
+            character: process.env.EXPECTED_CHARACTER,
+          };
+          if (rail.phase !== 'ready-for-one-cycle') throw new Error(`unexpected rail phase ${rail.phase}`);
+          if (rail.scope_id !== 'star-trek') throw new Error(`unexpected scope ${rail.scope_id}`);
+          for (const [key, value] of Object.entries(expected)) {
+            if (c[key] !== value) throw new Error(`candidate ${key} mismatch: ${c[key]}`);
+          }
+          if (Number(c.priority) !== 1330) throw new Error(`candidate priority mismatch: ${c.priority}`);
+          NODE
+
+          cp data/AUTOPILOT.json "$RESULT_ROOT/autopilot-before.json"
+          before_sha="$(sha256sum data/AUTOPILOT.json | awk '{print $1}')"
+          printf '%s\n' "$before_sha" > "$RESULT_ROOT/autopilot-before.sha256"
+
+          npm run autopilot -- next --agent luna --scope star-trek --capability-profile text-vision --limit 1 --out .luna/batch.json --prompt .luna/AUTOPILOT-PROMPT.md
+
+          test -f .luna/batch.json
+          test -f .luna/AUTOPILOT-PROMPT.md
+          cp .luna/batch.json "$RESULT_ROOT/batch.json"
+          cp .luna/AUTOPILOT-PROMPT.md "$RESULT_ROOT/AUTOPILOT-PROMPT.md"
+          cp data/AUTOPILOT.json "$RESULT_ROOT/autopilot-after.json"
+          after_sha="$(sha256sum data/AUTOPILOT.json | awk '{print $1}')"
+          printf '%s\n' "$after_sha" > "$RESULT_ROOT/autopilot-after.sha256"
+          test "$before_sha" != "$after_sha"
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = process.env.RESULT_ROOT;
+          const expectedTask = process.env.EXPECTED_TASK;
+          const expectedPerformer = process.env.EXPECTED_PERFORMER;
+          const expectedCharacter = process.env.EXPECTED_CHARACTER;
+          const expectedFingerprint = process.env.EXPECTED_FINGERPRINT;
+          const before = JSON.parse(fs.readFileSync(path.join(root, 'autopilot-before.json'), 'utf8'));
+          const after = JSON.parse(fs.readFileSync(path.join(root, 'autopilot-after.json'), 'utf8'));
+          const batch = JSON.parse(fs.readFileSync(path.join(root, 'batch.json'), 'utf8'));
+          if (!Array.isArray(batch.tasks) || batch.tasks.length !== 1 || batch.tasks[0].id !== expectedTask) {
+            throw new Error('batch does not contain exactly the Alice task');
+          }
+          const beforeJobs = new Map((before.jobs || []).map((job) => [job.id, job]));
+          const afterJobs = new Map((after.jobs || []).map((job) => [job.id, job]));
+          const changed = [];
+          for (const [id, post] of afterJobs) {
+            const pre = beforeJobs.get(id);
+            if (JSON.stringify(pre) !== JSON.stringify(post)) changed.push({ id, before: pre, after: post });
+          }
+          if (changed.length !== 1 || changed[0].id !== expectedTask) {
+            throw new Error(`unexpected changed task set: ${changed.map((row) => row.id).join(',')}`);
+          }
+          const pre = changed[0].before;
+          const post = changed[0].after;
+          if (pre.status !== 'queued' || Number(pre.attempts) !== 0) throw new Error('pre-claim Alice state was not queued/zero-attempt');
+          if (post.status === 'queued') throw new Error('claim did not move Alice out of queued state');
+          if (post.performer !== expectedPerformer || post.character !== expectedCharacter || post.source_fingerprint !== expectedFingerprint) {
+            throw new Error('claimed Alice identity drifted');
+          }
+          const leaseFields = {};
+          const collect = (value, trail = '$') => {
+            if (!value || typeof value !== 'object') return;
+            if (Array.isArray(value)) value.forEach((item, i) => collect(item, `${trail}[${i}]`));
+            else for (const [key, item] of Object.entries(value)) {
+              const next = `${trail}.${key}`;
+              if (/lease/i.test(key) && (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean')) leaseFields[next] = item;
+              collect(item, next);
+            }
+          };
+          collect(post);
+          collect(batch);
+          const receipt = {
+            version: 1,
+            transaction: 'STAR-TREK-ALICE-CLAIM-V1',
+            generated_at: new Date().toISOString(),
+            canonical_parent: process.env.EXPECTED_MAIN,
+            canonical_tree: process.env.EXPECTED_TREE,
+            task_id: expectedTask,
+            performer: expectedPerformer,
+            character: expectedCharacter,
+            source_fingerprint: expectedFingerprint,
+            before: pre,
+            after: post,
+            batch_task: batch.tasks[0],
+            lease_fields: leaseFields,
+            changed_task_ids: changed.map((row) => row.id),
+            additional_lease_issued: false,
+            canonical_mutation: false,
+          };
+          fs.writeFileSync(path.join(root, 'claim.json'), JSON.stringify(receipt, null, 2) + '\n');
+          NODE
+
+          git status --porcelain --untracked-files=all > "$RESULT_ROOT/git-status.txt"
+          awk '{print substr($0,4)}' "$RESULT_ROOT/git-status.txt" | while IFS= read -r changed; do
+            case "$changed" in
+              data/AUTOPILOT.json|data/journal/autopilot.jsonl|data/AUTOPILOT.lock|.luna/*) ;;
+              '') ;;
+              *) echo "unexpected claim path: $changed" >&2; exit 1 ;;
+            esac
+          done
+
+          rm -rf node_modules
+          git add data/AUTOPILOT.json data/journal/autopilot.jsonl
+          git diff --cached --quiet && { echo 'claim produced no tracked state change' >&2; exit 1; }
+          git diff --cached --name-only > "$RESULT_ROOT/staged-paths.txt"
+          test "$(grep -c '^data/AUTOPILOT.json$' "$RESULT_ROOT/staged-paths.txt")" = 1
+          test "$(grep -c '^data/journal/autopilot.jsonl$' "$RESULT_ROOT/staged-paths.txt")" = 1
+
+          git config user.name undercast-alice-claim
+          git config user.email undercast-alice-claim@users.noreply.github.com
+          git commit -m 'Star Trek: claim Nichelle Nichols as Alice'
+          candidate_commit="$(git rev-parse HEAD)"
+          candidate_tree="$(git show -s --format=%T HEAD)"
+          printf '%s\n' "$candidate_commit" > "$RESULT_ROOT/candidate-commit.sha"
+          printf '%s\n' "$candidate_tree" > "$RESULT_ROOT/candidate-tree.sha"
+          git push origin HEAD:"refs/heads/${CANDIDATE_BRANCH}"
+
+          git fetch --no-tags origin main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T refs/remotes/origin/main)" = "$EXPECTED_TREE"
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = process.env.RESULT_ROOT;
+          const claimPath = path.join(root, 'claim.json');
+          const claim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+          claim.candidate = {
+            branch: process.env.CANDIDATE_BRANCH,
+            commit: fs.readFileSync(path.join(root, 'candidate-commit.sha'), 'utf8').trim(),
+            tree: fs.readFileSync(path.join(root, 'candidate-tree.sha'), 'utf8').trim(),
+          };
+          claim.canonical_end = {
+            commit: process.env.EXPECTED_MAIN,
+            tree: process.env.EXPECTED_TREE,
+          };
+          claim.status = 'claimed-on-candidate-branch';
+          fs.writeFileSync(claimPath, JSON.stringify(claim, null, 2) + '\n');
+          const md = [
+            '# Star Trek Alice claim receipt',
+            '',
+            `Status: \`${claim.status}\``,
+            `Task: \`${claim.task_id}\``,
+            `Performer: ${claim.performer}`,
+            `Character: ${claim.character}`,
+            `Candidate branch: \`${claim.candidate.branch}\``,
+            `Candidate commit: \`${claim.candidate.commit}\``,
+            `Post-claim task status: \`${claim.after.status}\``,
+            `Additional lease issued: \`${claim.additional_lease_issued}\``,
+            `Canonical mutation: \`${claim.canonical_mutation}\``,
+          ].join('\n') + '\n';
+          fs.writeFileSync(path.join(root, 'claim.md'), md);
+          NODE
+
+          git checkout --orphan alice-claim-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-alice-claim-v1
+          cp -a "$RESULT_ROOT"/. transport/star-trek-alice-claim-v1/
+          git add transport/star-trek-alice-claim-v1
+          git commit -m 'Record Star Trek Alice claim v1'
+          git push origin HEAD:"refs/heads/${RESULT_BRANCH}"
