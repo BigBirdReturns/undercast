@@ -1,0 +1,101 @@
+name: inspect-anastasia-runs-all-v1
+
+on:
+  push:
+    branches:
+      - agent/inspect-anastasia-runs-all-v1
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: inspect-anastasia-runs-all-v1
+  cancel-in-progress: false
+
+env:
+  CYCLE_WORKFLOW: star-trek-anastasia-cycle-v1.yml
+  RESULT_BRANCH: agent/inspect-anastasia-runs-all-result-v1
+  ROOT: /tmp/inspect-anastasia-runs-all-v1
+
+jobs:
+  inspect:
+    if: ${{ github.event.head_commit.message == 'Trigger Anastasia all-runs inspection v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Inspect every Anastasia workflow run and artifact
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/runs"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/${CYCLE_WORKFLOW}/runs?per_page=100" | jq . > "$ROOT/workflow-runs.json"
+          for run_id in $(jq -r '.workflow_runs[].id' "$ROOT/workflow-runs.json"); do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" | jq . > "$ROOT/runs/${run_id}-jobs.json" || true
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" | jq . > "$ROOT/runs/${run_id}-artifacts.json" || true
+          done
+          node - "$ROOT" <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const root = process.argv[2];
+          const runs = JSON.parse(fs.readFileSync(path.join(root, 'workflow-runs.json'), 'utf8')).workflow_runs || [];
+          const summary = runs.map((run) => {
+            const jobsFile = path.join(root, 'runs', `${run.id}-jobs.json`);
+            const artifactsFile = path.join(root, 'runs', `${run.id}-artifacts.json`);
+            const jobs = fs.existsSync(jobsFile) ? JSON.parse(fs.readFileSync(jobsFile, 'utf8')).jobs || [] : [];
+            const artifacts = fs.existsSync(artifactsFile) ? JSON.parse(fs.readFileSync(artifactsFile, 'utf8')).artifacts || [] : [];
+            return {
+              id: run.id,
+              run_number: run.run_number,
+              head_branch: run.head_branch,
+              head_sha: run.head_sha,
+              event: run.event,
+              status: run.status,
+              conclusion: run.conclusion,
+              created_at: run.created_at,
+              updated_at: run.updated_at,
+              display_title: run.display_title,
+              jobs: jobs.map((job) => ({id: job.id, name: job.name, status: job.status, conclusion: job.conclusion})),
+              artifacts: artifacts.map((item) => ({id: item.id, name: item.name, digest: item.digest, expired: item.expired, created_at: item.created_at})),
+            };
+          });
+          fs.writeFileSync(path.join(root, 'runs-summary.json'), JSON.stringify(summary, null, 2) + '\n');
+          const stage = [];
+          for (const run of summary) {
+            for (const artifact of run.artifacts) {
+              if (/star-trek-anastasia-(stage|independent-review|terminal|final|review)/i.test(artifact.name || '')) stage.push({run_id: run.id, head_branch: run.head_branch, head_sha: run.head_sha, run_conclusion: run.conclusion, ...artifact});
+            }
+          }
+          fs.writeFileSync(path.join(root, 'candidate-artifacts.json'), JSON.stringify(stage, null, 2) + '\n');
+          const complete = summary.filter((run) => run.jobs.some((job) => job.name === 'stage-anastasia-komananov-candidate' && job.conclusion === 'success'));
+          fs.writeFileSync(path.join(root, 'candidate-producing-runs.json'), JSON.stringify(complete, null, 2) + '\n');
+          NODE
+          jq -n \
+            --arg status complete \
+            --argjson run_count "$(jq '. | length' "$ROOT/runs-summary.json")" \
+            --argjson candidate_producing_run_count "$(jq '. | length' "$ROOT/candidate-producing-runs.json")" \
+            --argjson candidate_artifact_count "$(jq '. | length' "$ROOT/candidate-artifacts.json")" \
+            '{version:1,transaction:"INSPECT-ANASTASIA-RUNS-ALL-V1",status:$status,run_count:$run_count,candidate_producing_run_count:$candidate_producing_run_count,candidate_artifact_count:$candidate_artifact_count,canonical_mutation:false,lease_taken:false}' \
+            > "$ROOT/summary.json"
+          (cd "$ROOT" && find . -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+
+      - name: Publish all-runs inspection
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-anastasia-run-inspector
+          git config user.email anastasia-run-inspector@users.noreply.github.com
+          git switch --orphan inspection-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/inspect-anastasia-runs-all-v1
+          cp -a "$ROOT"/. transport/inspect-anastasia-runs-all-v1/
+          git add transport/inspect-anastasia-runs-all-v1
+          git commit -m 'Publish Anastasia all-runs inspection'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
