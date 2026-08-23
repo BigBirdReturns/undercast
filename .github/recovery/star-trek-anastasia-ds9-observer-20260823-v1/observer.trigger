@@ -1,0 +1,6 @@
+transaction=STAR-TREK-ANASTASIA-DS9-DIAGNOSTIC-OBSERVER-V1
+canonical_parent=933415b505d1c6e40c7e4bd44bf132c61a5ea32d
+canonical_tree=651edbcfb9efd3b6d9189f8903afa1a8d88677d4
+target_branch=agent/star-trek-anastasia-ds9-diagnostic-20260823-v1
+canonical_write=false
+additional_lease_issued=false
