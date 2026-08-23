@@ -1,0 +1,201 @@
+name: star-trek-alice-stage-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-alice-stage-v1
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: star-trek-alice-stage-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 91254f17fa1ebb6e8502c6201e9bc8651ef4d4ac
+  EXPECTED_MAIN_TREE: e395cd3e679aadf60243f5b7bfe0ee7b2b079874
+  CANDIDATE_BRANCH: agent/star-trek-alice-candidate-v1
+  CANDIDATE_COMMIT: 31499f3d871c7a4d8a749af5a90e361a50153a50
+  CANDIDATE_TREE: 9612f0169cc670847f468459d489aa408e79ec62
+  MEDIA_RESULT_BRANCH: agent/star-trek-alice-media-result-v1
+  CLAIM_RESULT_BRANCH: agent/star-trek-alice-claim-result-v1
+  RESULT_BRANCH: agent/star-trek-alice-stage-result-v1
+  TASK_ID: ap_c7ff8298a99fe94fc55bbdbc
+  LEASE_ID: lease_e1da8637695057922f1840d4
+  SOURCE_FINGERPRINT: 9caf9645daf70d67203bd0056980531a7190659c5209e15b3899cf6bac016297
+  MEDIA_ROOT: /tmp/star-trek-alice-media-input-v1
+  CLAIM_ROOT: /tmp/star-trek-alice-claim-input-v1
+  STAGE_ROOT: /tmp/star-trek-alice-stage-output-v1
+  STAGE_PROGRAM: /tmp/star-trek-alice-stage-v1.mjs
+
+jobs:
+  stage:
+    name: stage-and-review-exact-alice-candidate
+    if: ${{ github.event.head_commit.message == 'Stage Star Trek Alice candidate v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      candidate_commit: ${{ steps.commit.outputs.candidate_commit }}
+      candidate_tree: ${{ steps.commit.outputs.candidate_tree }}
+      path_count: ${{ steps.commit.outputs.path_count }}
+      path_ledger_sha256: ${{ steps.commit.outputs.path_ledger_sha256 }}
+      stage_receipt_sha256: ${{ steps.commit.outputs.stage_receipt_sha256 }}
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      artifact_digest: ${{ steps.artifact.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Bind exact claim and media inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$MEDIA_ROOT" "$CLAIM_ROOT" "$STAGE_ROOT"
+          mkdir -p "$MEDIA_ROOT" "$CLAIM_ROOT" "$STAGE_ROOT/logs"
+
+          cp .github/recovery/star-trek-alice-stage-v1/stage.mjs "$STAGE_PROGRAM"
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('/tmp/star-trek-alice-stage-v1.mjs')
+          text=path.read_text()
+          old="claim.lease_fields?.['$.batch.lease_id']"
+          new="claim.lease_fields?.['$.lease_id']"
+          if text.count(old) != 1:
+              raise SystemExit(f'lease verifier cardinality drifted: {text.count(old)}')
+          path.write_text(text.replace(old,new))
+          PY
+          node --check "$STAGE_PROGRAM"
+          sha256sum "$STAGE_PROGRAM" > "$STAGE_ROOT/stage-program.sha256"
+
+          git fetch --no-tags origin main "$CANDIDATE_BRANCH" "$MEDIA_RESULT_BRANCH" "$CLAIM_RESULT_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T refs/remotes/origin/main)" = "$EXPECTED_MAIN_TREE"
+          test "$(git show -s --format=%P refs/remotes/origin/main | wc -w | tr -d ' ')" = 1
+          test "$(git rev-parse "refs/remotes/origin/${CANDIDATE_BRANCH}")" = "$CANDIDATE_COMMIT"
+          test "$(git show -s --format=%T "refs/remotes/origin/${CANDIDATE_BRANCH}")" = "$CANDIDATE_TREE"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          media_ref="refs/remotes/origin/${MEDIA_RESULT_BRANCH}"
+          claim_ref="refs/remotes/origin/${CLAIM_RESULT_BRANCH}"
+          media_prefix=transport/star-trek-alice-media-v1
+          claim_prefix=transport/star-trek-alice-claim-v1
+          for name in media-scout.json alice-2269-still.webp nichelle-nichols-portrait.jpg source-revision.json episode-receipt.json media-boundary.md; do
+            git show "${media_ref}:${media_prefix}/${name}" > "$MEDIA_ROOT/$name"
+          done
+          for name in claim.json batch.json; do
+            git show "${claim_ref}:${claim_prefix}/${name}" > "$CLAIM_ROOT/$name"
+          done
+          sha256sum "$MEDIA_ROOT"/* "$CLAIM_ROOT"/* > "$STAGE_ROOT/input-files.sha256"
+
+      - name: Execute one existing-lease candidate stage
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git switch -C "$CANDIDATE_BRANCH" "refs/remotes/origin/${CANDIDATE_BRANCH}"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT"
+          test "$(git show -s --format=%T HEAD)" = "$CANDIDATE_TREE"
+          npm ci --ignore-scripts
+          node "$STAGE_PROGRAM" 2>&1 | tee "$STAGE_ROOT/logs/stage.log"
+          rm -rf node_modules .luna
+          test -f "$STAGE_ROOT/stage.json"
+          test "$(jq -r .receipt_sha256 "$STAGE_ROOT/stage.json")" != null
+          git status --short --untracked-files=all > "$STAGE_ROOT/precommit-status.txt"
+
+      - name: Commit and publish exact staged candidate
+        id: commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$CANDIDATE_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T refs/remotes/origin/main)" = "$EXPECTED_MAIN_TREE"
+          test "$(git rev-parse "refs/remotes/origin/${CANDIDATE_BRANCH}")" = "$CANDIDATE_COMMIT"
+
+          git add -A
+          git diff --cached --quiet && { echo 'Alice staging produced no candidate delta' >&2; exit 1; }
+          git diff --cached --check
+          if git diff --cached --name-only | grep -q '^\.github/'; then
+            echo 'Alice product stage attempted to include workflow transport' >&2
+            exit 1
+          fi
+          git diff --cached --name-only | LC_ALL=C sort > "$STAGE_ROOT/stage-delta-paths.txt"
+          stage_delta_count="$(wc -l < "$STAGE_ROOT/stage-delta-paths.txt" | tr -d ' ')"
+          test "$stage_delta_count" -gt 20
+
+          git config user.name undercast-alice-stage
+          git config user.email undercast-alice-stage@users.noreply.github.com
+          git commit -m 'Star Trek: stage Nichelle Nichols as Alice'
+          candidate_commit="$(git rev-parse HEAD)"
+          candidate_tree="$(git show -s --format=%T HEAD)"
+          test "$(git show -s --format=%P HEAD)" = "$CANDIDATE_COMMIT"
+
+          git diff --name-only "$EXPECTED_MAIN" "$candidate_commit" | LC_ALL=C sort > "$STAGE_ROOT/candidate-paths.txt"
+          path_count="$(wc -l < "$STAGE_ROOT/candidate-paths.txt" | tr -d ' ')"
+          path_ledger_sha256="$(sha256sum "$STAGE_ROOT/candidate-paths.txt" | awk '{print $1}')"
+          stage_receipt_sha256="$(jq -r .receipt_sha256 "$STAGE_ROOT/stage.json")"
+
+          jq -n \
+            --arg branch "$CANDIDATE_BRANCH" \
+            --arg parent "$EXPECTED_MAIN" \
+            --arg claim_commit "$CANDIDATE_COMMIT" \
+            --arg commit "$candidate_commit" \
+            --arg tree "$candidate_tree" \
+            --argjson path_count "$path_count" \
+            --arg path_ledger_sha256 "$path_ledger_sha256" \
+            --argjson stage_delta_count "$stage_delta_count" \
+            --arg stage_receipt_sha256 "$stage_receipt_sha256" \
+            '{version:1,branch:$branch,canonical_parent:$parent,claim_commit:$claim_commit,commit:$commit,tree:$tree,path_count:$path_count,path_ledger_sha256:$path_ledger_sha256,stage_delta_count:$stage_delta_count,stage_receipt_sha256:$stage_receipt_sha256,canonical_mutation:false,additional_lease_issued:false}' \
+            > "$STAGE_ROOT/candidate-metadata.json"
+
+          git push origin "HEAD:refs/heads/${CANDIDATE_BRANCH}"
+          test "$(git ls-remote --heads origin "refs/heads/${CANDIDATE_BRANCH}" | awk '{print $1}')" = "$candidate_commit"
+          git fetch --no-tags origin main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T refs/remotes/origin/main)" = "$EXPECTED_MAIN_TREE"
+
+          echo "candidate_commit=$candidate_commit" >> "$GITHUB_OUTPUT"
+          echo "candidate_tree=$candidate_tree" >> "$GITHUB_OUTPUT"
+          echo "path_count=$path_count" >> "$GITHUB_OUTPUT"
+          echo "path_ledger_sha256=$path_ledger_sha256" >> "$GITHUB_OUTPUT"
+          echo "stage_receipt_sha256=$stage_receipt_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact staged Alice candidate evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-alice-stage-v1
+          path: /tmp/star-trek-alice-stage-output-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish staged candidate locator
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq --argjson artifact_id "$ARTIFACT_ID" --arg artifact_sha256 "${ARTIFACT_DIGEST#sha256:}" '.artifact={id:$artifact_id,sha256:$artifact_sha256}' "$STAGE_ROOT/candidate-metadata.json" > "$STAGE_ROOT/candidate-metadata.tmp"
+          mv "$STAGE_ROOT/candidate-metadata.tmp" "$STAGE_ROOT/candidate-metadata.json"
+          find "$STAGE_ROOT" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$STAGE_ROOT/manifest.sha256"
+
+          git config user.name undercast-alice-stage
+          git config user.email undercast-alice-stage@users.noreply.github.com
+          git checkout --orphan alice-stage-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-alice-stage-v1
+          cp -a "$STAGE_ROOT"/. transport/star-trek-alice-stage-v1/
+          git add transport/star-trek-alice-stage-v1
+          git commit -m 'Record staged Star Trek Alice candidate v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
