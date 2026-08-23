@@ -1,0 +1,124 @@
+name: install-star-trek-anastasia-cycle-v3
+
+on:
+  push:
+    branches:
+      - agent/star-trek-anastasia-cycle-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: install-star-trek-anastasia-cycle-v3
+  cancel-in-progress: false
+
+env:
+  QUEEN_MAIN: 97956ce415d565d968cc5f66067142183ec28a1f
+  QUEEN_TREE: ff8adadb6dd36ab84a21336bdd30ce3cb17b5335
+  EXPECTED_MAIN: 933415b505d1c6e40c7e4bd44bf132c61a5ea32d
+  EXPECTED_TREE: 651edbcfb9efd3b6d9189f8903afa1a8d88677d4
+
+jobs:
+  install:
+    if: ${{ github.event.head_commit.message == 'Trigger Anastasia rebind installer v3' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify maintenance delta and install rebound sealed workflow
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root=.github/recovery/star-trek-anastasia-cycle-v1
+          work=/tmp/anastasia-rebind-installer-v3
+          rm -rf "$work"
+          mkdir -p "$work"
+
+          git fetch --filter=blob:none --no-tags origin main
+          live_main="$(git rev-parse refs/remotes/origin/main)"
+          live_tree="$(git rev-parse "${live_main}^{tree}")"
+          live_parent="$(git rev-parse "${live_main}^")"
+          test "$live_main" = "$EXPECTED_MAIN"
+          test "$live_tree" = "$EXPECTED_TREE"
+          test "$live_parent" = "$QUEEN_MAIN"
+          test "$(git rev-parse "${QUEEN_MAIN}^{tree}")" = "$QUEEN_TREE"
+          git diff --name-only "$QUEEN_MAIN" "$EXPECTED_MAIN" | LC_ALL=C sort -u > "$work/live-delta-paths.txt"
+          cat > "$work/allowed-live-delta-paths.txt" <<'PATHS'
+          data/MEDIA-SEARCH-LATEST.json
+          data/journal/media-search.jsonl
+          PATHS
+          cmp "$work/allowed-live-delta-paths.txt" "$work/live-delta-paths.txt"
+
+          cat "$root"/controller.mjs.gz.b64.part-* > "$work/controller.b64"
+          echo '523d20c4f656de45c5cff182694718f780f48c1153cb9fd2e3f4f3dc4359e2a8  '"$work/controller.b64" | sha256sum -c -
+          base64 -d "$work/controller.b64" | gzip -d > "$work/anastasia-controller.mjs"
+          echo '2eaaa9de01ab5b529df6cf17183c72ad099fef1837177d5d5411365c1cf5f76d  '"$work/anastasia-controller.mjs" | sha256sum -c -
+          node --check "$work/anastasia-controller.mjs"
+
+          cat "$root"/workflow.yml.gz.b64.part-* > "$work/workflow.b64"
+          echo '9a1a1957a34dc6ee255c1c159e0dd115cda28cecf390cbf6f5cd08c3c813bd7e  '"$work/workflow.b64" | sha256sum -c -
+          base64 -d "$work/workflow.b64" | gzip -d > "$work/anastasia-workflow.original.yml"
+          echo 'e4706736a23209f4da0f2d3f9c634544854e93ed2fff181c085e82ab2fa26fc5  '"$work/anastasia-workflow.original.yml" | sha256sum -c -
+
+          python3 - "$work/anastasia-workflow.original.yml" "$work/anastasia-workflow.rebound.yml" "$QUEEN_MAIN" "$QUEEN_TREE" "$EXPECTED_MAIN" "$EXPECTED_TREE" <<'PY'
+          from pathlib import Path
+          import sys
+          src, dst = map(Path, sys.argv[1:3])
+          old_main, old_tree, new_main, new_tree = sys.argv[3:]
+          text = src.read_text()
+          main_pattern = f'EXPECTED_MAIN: {old_main}'
+          tree_pattern = f'EXPECTED_TREE: {old_tree}'
+          main_count = text.count(main_pattern)
+          tree_count = text.count(tree_pattern)
+          if main_count < 1 or tree_count < 1:
+              raise SystemExit(f'sealed workflow binding counts invalid: main={main_count} tree={tree_count}')
+          rebound = text.replace(main_pattern, f'EXPECTED_MAIN: {new_main}')
+          rebound = rebound.replace(tree_pattern, f'EXPECTED_TREE: {new_tree}')
+          if main_pattern in rebound or tree_pattern in rebound:
+              raise SystemExit('stale expected canonical binding remains')
+          if rebound.count(f'EXPECTED_MAIN: {new_main}') != main_count:
+              raise SystemExit('rebound main count drifted')
+          if rebound.count(f'EXPECTED_TREE: {new_tree}') != tree_count:
+              raise SystemExit('rebound tree count drifted')
+          dst.write_text(rebound)
+          Path(str(dst) + '.counts').write_text(f'main={main_count}\ntree={tree_count}\n')
+          PY
+
+          grep -F 'agent/star-trek-anastasia-cycle-v1' "$work/anastasia-workflow.rebound.yml" >/dev/null
+          grep -F '.github/recovery/star-trek-anastasia-cycle-v1/cycle.trigger' "$work/anastasia-workflow.rebound.yml" >/dev/null
+          grep -F "EXPECTED_MAIN: $EXPECTED_MAIN" "$work/anastasia-workflow.rebound.yml" >/dev/null
+          grep -F "EXPECTED_TREE: $EXPECTED_TREE" "$work/anastasia-workflow.rebound.yml" >/dev/null
+          if grep -q 'MEDIA_CANONICAL_PARENT:' "$work/anastasia-workflow.rebound.yml"; then
+            grep -F "MEDIA_CANONICAL_PARENT: $QUEEN_MAIN" "$work/anastasia-workflow.rebound.yml" >/dev/null
+          fi
+
+          mkdir -p .github/workflows transport/star-trek-anastasia-cycle-v1
+          cp "$work/anastasia-workflow.rebound.yml" .github/workflows/star-trek-anastasia-cycle-v1.yml
+          original_workflow_sha="$(sha256sum "$work/anastasia-workflow.original.yml" | cut -d' ' -f1)"
+          rebound_workflow_sha="$(sha256sum "$work/anastasia-workflow.rebound.yml" | cut -d' ' -f1)"
+          controller_sha="$(sha256sum "$work/anastasia-controller.mjs" | cut -d' ' -f1)"
+          main_count="$(sed -n 's/^main=//p' "$work/anastasia-workflow.rebound.yml.counts")"
+          tree_count="$(sed -n 's/^tree=//p' "$work/anastasia-workflow.rebound.yml.counts")"
+          jq -n \
+            --arg status installed \
+            --arg queen_commit "$QUEEN_MAIN" \
+            --arg queen_tree "$QUEEN_TREE" \
+            --arg canonical_commit "$EXPECTED_MAIN" \
+            --arg canonical_tree "$EXPECTED_TREE" \
+            --arg original_workflow_sha256 "$original_workflow_sha" \
+            --arg rebound_workflow_sha256 "$rebound_workflow_sha" \
+            --arg controller_sha256 "$controller_sha" \
+            --argjson main_binding_count "$main_count" \
+            --argjson tree_binding_count "$tree_count" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            '{version:3,transaction:"INSTALL-STAR-TREK-ANASTASIA-CYCLE-V3",status:$status,run_id:$run_id,source_product:{commit:$queen_commit,tree:$queen_tree},canonical:{commit:$canonical_commit,tree:$canonical_tree},maintenance_delta_paths:["data/MEDIA-SEARCH-LATEST.json","data/journal/media-search.jsonl"],sealed:{original_workflow_sha256:$original_workflow_sha256,controller_sha256:$controller_sha256},rebound:{workflow_sha256:$rebound_workflow_sha256,main_binding_count:$main_binding_count,tree_binding_count:$tree_binding_count},lease_taken:false,canonical_mutation:false}' \
+            > transport/star-trek-anastasia-cycle-v1/install-v3.json
+
+          git config user.name undercast-anastasia-rebind-installer
+          git config user.email anastasia-rebind-installer@users.noreply.github.com
+          git add .github/workflows/star-trek-anastasia-cycle-v1.yml transport/star-trek-anastasia-cycle-v1/install-v3.json
+          git commit -m 'Install rebound Anastasia cycle workflow v3'
+          git push origin "HEAD:refs/heads/agent/star-trek-anastasia-cycle-v1"
