@@ -1,0 +1,272 @@
+name: star-trek-alice-media-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-alice-media-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-alice-media-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 91254f17fa1ebb6e8502c6201e9bc8651ef4d4ac
+  EXPECTED_MAIN_TREE: e395cd3e679aadf60243f5b7bfe0ee7b2b079874
+  CANDIDATE_BRANCH: agent/star-trek-alice-candidate-v1
+  CANDIDATE_COMMIT: 31499f3d871c7a4d8a749af5a90e361a50153a50
+  CANDIDATE_TREE: 9612f0169cc670847f468459d489aa408e79ec62
+  TASK_ID: ap_c7ff8298a99fe94fc55bbdbc
+  LEASE_ID: lease_e1da8637695057922f1840d4
+  SOURCE_FINGERPRINT: 9caf9645daf70d67203bd0056980531a7190659c5209e15b3899cf6bac016297
+  SOURCE_PAGEID: "8548"
+  SOURCE_REVISION: "3162267"
+  SOURCE_TIMESTAMP: 2024-05-31T19:27:25Z
+  SOURCE_CONTENT_SHA256: 522529e8b3c889cee9a8c61b32cf35606b728c7203d226988dcd9a5bb3b84c4a
+  RESULT_BRANCH: agent/star-trek-alice-media-result-v1
+  WORK: /tmp/star-trek-alice-candidate-media-v1
+  OUT: /tmp/star-trek-alice-media-v1
+
+jobs:
+  scout:
+    name: freeze-exact-alice-animation-and-nichols-portrait
+    if: ${{ github.event.head_commit.message == 'Prepare Star Trek Alice media v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Prepare source-bound, source-distinct media without product mutation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$WORK" "$OUT"
+          mkdir -p "$OUT"
+
+          git fetch --no-tags origin main "$CANDIDATE_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T refs/remotes/origin/main)" = "$EXPECTED_MAIN_TREE"
+          test "$(git show -s --format=%P refs/remotes/origin/main | wc -w | tr -d ' ')" = 1
+          test "$(git rev-parse "refs/remotes/origin/${CANDIDATE_BRANCH}")" = "$CANDIDATE_COMMIT"
+          test "$(git show -s --format=%T "refs/remotes/origin/${CANDIDATE_BRANCH}")" = "$CANDIDATE_TREE"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          git worktree add --detach "$WORK" "$CANDIDATE_COMMIT"
+          before="$(sha256sum "$WORK/data/AUTOPILOT.json" | awk '{print $1}')"
+          printf '%s\n' "$before" > "$OUT/autopilot-before.sha256"
+          python3 -m pip install --disable-pip-version-check --no-input Pillow==11.3.0
+
+          ROOT="$WORK" OUT="$OUT" BEFORE="$before" python3 - <<'PY'
+          from __future__ import annotations
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+          from io import BytesIO
+          from datetime import datetime, timezone
+          from PIL import Image
+          import hashlib, html, json, os, re
+
+          repo = Path(os.environ['ROOT'])
+          out = Path(os.environ['OUT'])
+          task_id = os.environ['TASK_ID']
+          lease_id = os.environ['LEASE_ID']
+          source_fingerprint = os.environ['SOURCE_FINGERPRINT']
+          source_pageid = int(os.environ['SOURCE_PAGEID'])
+          source_revision = int(os.environ['SOURCE_REVISION'])
+          source_timestamp = os.environ['SOURCE_TIMESTAMP']
+          source_sha = os.environ['SOURCE_CONTENT_SHA256']
+          main = os.environ['EXPECTED_MAIN']
+          main_tree = os.environ['EXPECTED_MAIN_TREE']
+          candidate_commit = os.environ['CANDIDATE_COMMIT']
+          candidate_tree = os.environ['CANDIDATE_TREE']
+          generated = datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00','Z')
+          ua = 'UNDERCAST-Alice-Media/1.0 (source and attribution audit)'
+
+          def stable(value):
+              if isinstance(value, dict): return {k: stable(value[k]) for k in sorted(value)}
+              if isinstance(value, list): return [stable(v) for v in value]
+              return value
+          def pretty(value): return json.dumps(stable(value), indent=2, ensure_ascii=False) + '\n'
+          def digest(value): return hashlib.sha256(value).hexdigest()
+          def request_bytes(url: str, referer: str | None = None) -> bytes:
+              headers = {'User-Agent': ua, 'Accept': '*/*'}
+              if referer: headers['Referer'] = referer
+              with urlopen(Request(url, headers=headers), timeout=120) as response:
+                  return response.read()
+          def api(base: str, params: dict) -> dict:
+              return json.loads(request_bytes(base + '?' + urlencode(params)))
+          def clean(value: str | None) -> str:
+              return html.unescape(re.sub(r'<[^>]+>', '', value or '')).strip()
+          def decode(data: bytes):
+              with Image.open(BytesIO(data)) as image:
+                  image.load()
+                  return image.convert('RGB'), image.size, image.format or 'unknown'
+          def normalized(data: bytes, facet: str):
+              image, original_size, source_format = decode(data)
+              image.thumbnail((1600,1600) if facet == 'still' else (1200,1500), Image.Resampling.LANCZOS)
+              buffer = BytesIO()
+              if facet == 'still': image.save(buffer, format='WEBP', quality=94, method=6)
+              else: image.save(buffer, format='JPEG', quality=94, optimize=True, progressive=False)
+              return buffer.getvalue(), original_size, source_format
+          def download_image(info: dict, referer: str) -> tuple[bytes,str]:
+              errors=[]
+              for url in (info.get('thumburl'), info.get('url')):
+                  if not url: continue
+                  try:
+                      data=request_bytes(url, referer)
+                      decode(data)
+                      return data,url
+                  except Exception as exc:
+                      errors.append(f'{url}:{type(exc).__name__}:{exc}')
+              raise RuntimeError('image download failed: ' + ' | '.join(errors))
+
+          autopilot = json.loads((repo/'data/AUTOPILOT.json').read_text())
+          task = next((row for row in autopilot['jobs'] if row.get('id') == task_id), None)
+          if not task: raise SystemExit('Alice task missing')
+          if task.get('performer') != 'Nichelle Nichols' or task.get('character') != 'Alice (character)': raise SystemExit('Alice identity drifted')
+          if task.get('source_fingerprint') != source_fingerprint: raise SystemExit('Alice source fingerprint drifted')
+          if task.get('status') != 'leased' or task.get('lease',{}).get('id') != lease_id or task.get('attempts') != 1: raise SystemExit('Alice lease drifted')
+
+          memory_api='https://memory-alpha.fandom.com/api.php'
+          source_api=api(memory_api,{
+              'action':'query','prop':'revisions','revids':str(source_revision),
+              'rvprop':'ids|timestamp|content','rvslots':'main','format':'json','formatversion':'2'
+          })
+          pages=source_api.get('query',{}).get('pages') or []
+          if len(pages)!=1: raise SystemExit('frozen Alice source cardinality drifted')
+          page=pages[0]; revisions=page.get('revisions') or []
+          if page.get('pageid')!=source_pageid or len(revisions)!=1: raise SystemExit('frozen Alice source identity drifted')
+          revision=revisions[0]; text=revision['slots']['main']['content']
+          if revision.get('revid')!=source_revision or revision.get('timestamp')!=source_timestamp or digest(text.encode())!=source_sha: raise SystemExit('frozen Alice source receipt drifted')
+          lower=text.lower()
+          required=['marcia brown','nichelle nichols','once upon a planet','shore leave']
+          for literal in required:
+              if literal not in lower: raise SystemExit(f'Alice source lost {literal}')
+          if 'voiced by' not in lower and '(voice)' not in lower: raise SystemExit('Nichelle Nichols voice wording absent')
+          if 'played by' not in lower and 'marcia brown' not in lower: raise SystemExit('Marcia Brown physical wording absent')
+          (out/'source-revision.json').write_text(pretty(source_api))
+          (out/'frozen-source.wikitext').write_text(text)
+
+          episode_api=api(memory_api,{
+              'action':'query','prop':'revisions','titles':'Once Upon a Planet (episode)',
+              'rvprop':'ids|timestamp|content','rvslots':'main','format':'json','formatversion':'2'
+          })
+          episode_page=(episode_api.get('query',{}).get('pages') or [None])[0]
+          if not episode_page or episode_page.get('missing'): raise SystemExit('Once Upon a Planet episode source missing')
+          episode_revision=(episode_page.get('revisions') or [None])[0]
+          episode_text=episode_revision['slots']['main']['content']
+          episode_receipt={
+              'source':'https://memory-alpha.fandom.com/wiki/Once_Upon_a_Planet_(episode)',
+              'pageid':episode_page['pageid'],'revision':episode_revision['revid'],
+              'timestamp':episode_revision['timestamp'],'content_sha256':digest(episode_text.encode())
+          }
+          (out/'episode-source-api.json').write_text(pretty(episode_api))
+          (out/'episode-receipt.json').write_text(pretty(episode_receipt))
+
+          still_api=api(memory_api,{
+              'action':'query','prop':'imageinfo','titles':'File:Alice, 2269.jpg',
+              'iiprop':'url|size|sha1|mime|timestamp|extmetadata','iiurlwidth':'1600',
+              'format':'json','formatversion':'2'
+          })
+          still_page=(still_api.get('query',{}).get('pages') or [None])[0]
+          infos=still_page.get('imageinfo') if still_page else None
+          if not still_page or still_page.get('title')!='File:Alice, 2269.jpg' or not infos or len(infos)!=1: raise SystemExit('Alice 2269 image identity drifted')
+          still_info=infos[0]; still_raw,still_url=download_image(still_info,'https://memory-alpha.fandom.com/')
+          still_bytes,still_size,still_format=normalized(still_raw,'still')
+          still_sha=digest(still_bytes)
+          (out/'alice-2269-still.webp').write_bytes(still_bytes)
+          (out/'still-imageinfo.json').write_text(pretty(still_api))
+
+          commons_api='https://commons.wikimedia.org/w/api.php'
+          portrait_title='File:Nichelle Nichols (46141497921).jpg'
+          portrait_api=api(commons_api,{
+              'action':'query','prop':'imageinfo','titles':portrait_title,
+              'iiprop':'url|size|sha1|mime|timestamp|extmetadata','iiurlwidth':'1200',
+              'format':'json','formatversion':'2'
+          })
+          portrait_page=(portrait_api.get('query',{}).get('pages') or [None])[0]
+          portrait_infos=portrait_page.get('imageinfo') if portrait_page else None
+          if not portrait_page or portrait_page.get('title')!=portrait_title or not portrait_infos or len(portrait_infos)!=1: raise SystemExit('Nichelle Nichols portrait identity drifted')
+          portrait_info=portrait_infos[0]; ext=portrait_info.get('extmetadata') or {}
+          description=clean((ext.get('ImageDescription') or ext.get('ObjectName') or {}).get('value'))
+          author=clean((ext.get('Artist') or {}).get('value'))
+          license_name=clean((ext.get('LicenseShortName') or {}).get('value'))
+          identity=(portrait_page['title']+' '+description).lower()
+          if 'nichelle' not in identity or 'nichols' not in identity: raise SystemExit('portrait metadata does not identify Nichelle Nichols')
+          if not any(token in license_name.lower() for token in ('cc by','cc0','public domain')): raise SystemExit(f'portrait license is not accepted: {license_name}')
+          portrait_raw,portrait_url=download_image(portrait_info,'https://commons.wikimedia.org/')
+          portrait_bytes,portrait_size,portrait_format=normalized(portrait_raw,'portrait')
+          portrait_sha=digest(portrait_bytes)
+          (out/'nichelle-nichols-portrait.jpg').write_bytes(portrait_bytes)
+          (out/'portrait-imageinfo.json').write_text(pretty(portrait_api))
+
+          if still_sha==portrait_sha: raise SystemExit('Alice facets collide')
+          existing={}
+          for file in (repo/'images').iterdir():
+              if file.is_file(): existing.setdefault(digest(file.read_bytes()),[]).append(str(file.relative_to(repo)))
+          if still_sha in existing: raise SystemExit(f'Alice still duplicates canonical bytes: {existing[still_sha]}')
+          if portrait_sha in existing: raise SystemExit(f'Nichols portrait duplicates canonical bytes: {existing[portrait_sha]}')
+          canonical='\n'.join((repo/p).read_text(errors='replace') for p in ('data/specimens.json','data/SOURCES.json','data/MEDIA-AUDIT.json'))
+          still_source=still_info.get('descriptionurl') or 'https://memory-alpha.fandom.com/wiki/File:Alice,_2269.jpg'
+          portrait_source=portrait_info.get('descriptionurl') or 'https://commons.wikimedia.org/wiki/File:Nichelle_Nichols_(46141497921).jpg'
+          if still_source in canonical or portrait_source in canonical or portrait_title in canonical: raise SystemExit('Alice media source is already canonical')
+
+          source_receipt={'source':'https://memory-alpha.fandom.com/wiki/Alice_(character)','pageid':source_pageid,'revision':source_revision,'timestamp':source_timestamp,'content_sha256':source_sha}
+          body={
+              'version':1,'transaction':'STAR-TREK-ALICE-MEDIA-SCOUT-V1','status':'success','generated_at':generated,
+              'canonical_parent':main,'canonical_tree':main_tree,
+              'candidate':{'branch':os.environ['CANDIDATE_BRANCH'],'commit':candidate_commit,'tree':candidate_tree},
+              'task':{'id':task_id,'performer':'Nichelle Nichols','character':'Alice (character)','source_fingerprint':source_fingerprint,'queued_mode_hint':task.get('performance_modes'),'source_receipts':task.get('source_receipts'),'lease_id':lease_id},
+              'source':source_receipt,'episode_receipt':episode_receipt,
+              'adjudication':{
+                  'performance_mode':'voice-animation','adjudicated_kind':'voice','nichelle_nichols_voice_performance':True,
+                  'marcia_brown_live_action_performance_separate':True,'physical_performance_attributed_to_nichelle_nichols':False,
+                  'animation_labor_attributed':False,'vocal_processing_attributed':False,'voice_direction_attributed':False,
+                  'sound_attributed':False,'character_design_attributed':False,'transformation_measured':False,
+                  'maker_attribution':'unresolved'
+              },
+              'still':{'title':still_page['title'],'descriptionurl':still_source,'origin':still_info.get('url'),'download_url':still_url,'sha256':still_sha,'bytes':len(still_bytes),'source_size':still_size,'source_format':still_format,'mime':still_info.get('mime'),'timestamp':still_info.get('timestamp'),'expected_subject':'Alice in the 2269 animated Once Upon a Planet appearance'},
+              'portrait':{'title':portrait_page['title'],'descriptionurl':portrait_source,'origin':portrait_source,'download_url':portrait_url,'sha256':portrait_sha,'bytes':len(portrait_bytes),'source_size':portrait_size,'source_format':portrait_format,'mime':portrait_info.get('mime'),'timestamp':portrait_info.get('timestamp'),'author':author,'license':license_name,'description':description,'expected_subject':'Nichelle Nichols'},
+              'boundary':{'exact_2269_animated_alice':True,'live_action_2267_alice_excluded':True,'devna_still_reuse':False,'source_collision':False,'byte_collision':False,'cross_facet_substitution':False,'honest_absence_allowed':True,'additional_lease_issued':False,'canonical_mutation':False}
+          }
+          receipt={**body,'receipt_sha256':digest(pretty(body).encode())}
+          (out/'media-scout.json').write_text(pretty(receipt))
+          (out/'task.json').write_text(pretty(task))
+          (out/'media-boundary.md').write_text(
+              '# Alice media and performance boundary\n\n'
+              'The frozen source separates two performances of Alice. Marcia Brown supplied the 2267 live-action performance in Shore Leave. Nichelle Nichols supplied the voice for the 2269 animated Alice in Once Upon a Planet. This candidate is limited to Nichols’s animated voice performance.\n\n'
+              'The character facet is the exact 2269 animated Alice image. The 2267 live-action Alice image and the existing Devna still are excluded. The performer facet is a separately licensed, source-distinct and byte-distinct Nichelle Nichols portrait. Animation, vocal processing, voice direction, sound, character design, physical performance, transformation measurement, and every other unsupported maker function remain unresolved.\n'
+          )
+          PY
+
+          after="$(sha256sum "$WORK/data/AUTOPILOT.json" | awk '{print $1}')"
+          printf '%s\n' "$after" > "$OUT/autopilot-after.sha256"
+          test "$before" = "$after"
+          git fetch --no-tags origin main "$CANDIDATE_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T refs/remotes/origin/main)" = "$EXPECTED_MAIN_TREE"
+          test "$(git rev-parse "refs/remotes/origin/${CANDIDATE_BRANCH}")" = "$CANDIDATE_COMMIT"
+          test "$(git show -s --format=%T "refs/remotes/origin/${CANDIDATE_BRANCH}")" = "$CANDIDATE_TREE"
+          git worktree remove --force "$WORK"
+
+          git config user.name undercast-alice-media
+          git config user.email undercast-alice-media@users.noreply.github.com
+          git checkout --orphan alice-media-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-alice-media-v1
+          cp -a "$OUT"/. transport/star-trek-alice-media-v1/
+          git add transport/star-trek-alice-media-v1
+          git commit -m 'Record exact Star Trek Alice media v1'
+          git push origin HEAD:"refs/heads/${RESULT_BRANCH}"
