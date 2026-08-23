@@ -1,0 +1,6 @@
+transaction=STAR-TREK-ANASTASIA-KOMANANOV-CYCLE-V1
+operation=synchronize-controlled-pr
+canonical=933415b505d1c6e40c7e4bd44bf132c61a5ea32d
+task_id=ap_82712ddec2c606e4c7d1a152
+lease_limit=1
+head_code_executed=false
