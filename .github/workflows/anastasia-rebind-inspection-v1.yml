@@ -1,0 +1,127 @@
+name: anastasia-rebind-inspection-v1
+
+on:
+  push:
+    branches:
+      - agent/anastasia-rebind-inspection-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: anastasia-rebind-inspection-v1
+  cancel-in-progress: false
+
+env:
+  QUEEN_MAIN: 97956ce415d565d968cc5f66067142183ec28a1f
+  QUEEN_TREE: ff8adadb6dd36ab84a21336bdd30ce3cb17b5335
+  EXPECTED_LIVE_MAIN: 933415b505d1c6e40c7e4bd44bf132c61a5ea32d
+  EXPECTED_LIVE_TREE: 651edbcfb9efd3b6d9189f8903afa1a8d88677d4
+  RESULT_BRANCH: agent/anastasia-rebind-inspection-result-v1
+  ROOT: /tmp/anastasia-rebind-inspection-v1
+
+jobs:
+  inspect:
+    if: ${{ github.event.head_commit.message == 'Trigger Anastasia rebind inspection v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct and inspect sealed Anastasia transaction
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          source_root=.github/recovery/star-trek-anastasia-cycle-v1
+
+          cat "$source_root"/controller.mjs.gz.b64.part-* > "$ROOT/controller.b64"
+          echo '523d20c4f656de45c5cff182694718f780f48c1153cb9fd2e3f4f3dc4359e2a8  '"$ROOT/controller.b64" | sha256sum -c -
+          base64 -d "$ROOT/controller.b64" | gzip -d > "$ROOT/anastasia-controller.mjs"
+          echo '2eaaa9de01ab5b529df6cf17183c72ad099fef1837177d5d5411365c1cf5f76d  '"$ROOT/anastasia-controller.mjs" | sha256sum -c -
+          node --check "$ROOT/anastasia-controller.mjs"
+
+          cat "$source_root"/workflow.yml.gz.b64.part-* > "$ROOT/workflow.b64"
+          echo '9a1a1957a34dc6ee255c1c159e0dd115cda28cecf390cbf6f5cd08c3c813bd7e  '"$ROOT/workflow.b64" | sha256sum -c -
+          base64 -d "$ROOT/workflow.b64" | gzip -d > "$ROOT/anastasia-workflow.yml"
+          echo 'e4706736a23209f4da0f2d3f9c634544854e93ed2fff181c085e82ab2fa26fc5  '"$ROOT/anastasia-workflow.yml" | sha256sum -c -
+
+          git fetch --filter=blob:none --no-tags origin main
+          live_main="$(git rev-parse refs/remotes/origin/main)"
+          live_tree="$(git rev-parse "${live_main}^{tree}")"
+          live_parent="$(git rev-parse "${live_main}^")"
+          test "$live_main" = "$EXPECTED_LIVE_MAIN"
+          test "$live_tree" = "$EXPECTED_LIVE_TREE"
+          test "$live_parent" = "$QUEEN_MAIN"
+          test "$(git rev-parse "${QUEEN_MAIN}^{tree}")" = "$QUEEN_TREE"
+
+          git diff --name-only "$QUEEN_MAIN" "$live_main" | LC_ALL=C sort -u > "$ROOT/live-delta-paths.txt"
+          cat > "$ROOT/allowed-live-delta-paths.txt" <<'PATHS'
+          data/MEDIA-SEARCH-LATEST.json
+          data/journal/media-search.jsonl
+          PATHS
+          cmp "$ROOT/allowed-live-delta-paths.txt" "$ROOT/live-delta-paths.txt"
+
+          grep -nE 'EXPECTED_MAIN|EXPECTED_TREE|MEDIA_CANONICAL_PARENT|97956ce415d565d968cc5f66067142183ec28a1f|ff8adadb6dd36ab84a21336bdd30ce3cb17b5335|rebase|MEDIA-SEARCH|media-search' "$ROOT/anastasia-controller.mjs" > "$ROOT/controller-bindings.txt" || true
+          grep -nE 'EXPECTED_MAIN|EXPECTED_TREE|MEDIA_CANONICAL_PARENT|97956ce415d565d968cc5f66067142183ec28a1f|ff8adadb6dd36ab84a21336bdd30ce3cb17b5335|rebase|MEDIA-SEARCH|media-search' "$ROOT/anastasia-workflow.yml" > "$ROOT/workflow-bindings.txt" || true
+
+          python3 - "$ROOT" "$QUEEN_MAIN" "$QUEEN_TREE" "$live_main" "$live_tree" "$live_parent" <<'PY'
+          from pathlib import Path
+          import hashlib, json, sys
+          root = Path(sys.argv[1])
+          queen_main, queen_tree, live_main, live_tree, live_parent = sys.argv[2:]
+          controller = (root / 'anastasia-controller.mjs').read_text()
+          workflow = (root / 'anastasia-workflow.yml').read_text()
+          sha = lambda p: hashlib.sha256(Path(p).read_bytes()).hexdigest()
+          result = {
+              'version': 1,
+              'transaction': 'ANASTASIA-REBIND-INSPECTION-V1',
+              'status': 'complete',
+              'canonical': {
+                  'queen_commit': queen_main,
+                  'queen_tree': queen_tree,
+                  'live_commit': live_main,
+                  'live_tree': live_tree,
+                  'live_parent': live_parent,
+                  'allowed_delta_paths': (root / 'live-delta-paths.txt').read_text().splitlines(),
+              },
+              'sealed': {
+                  'controller_sha256': sha(root / 'anastasia-controller.mjs'),
+                  'workflow_sha256': sha(root / 'anastasia-workflow.yml'),
+              },
+              'occurrences': {
+                  'controller_queen_commit': controller.count(queen_main),
+                  'controller_queen_tree': controller.count(queen_tree),
+                  'workflow_queen_commit': workflow.count(queen_main),
+                  'workflow_queen_tree': workflow.count(queen_tree),
+                  'controller_expected_main': controller.count('EXPECTED_MAIN'),
+                  'controller_expected_tree': controller.count('EXPECTED_TREE'),
+                  'controller_media_parent': controller.count('MEDIA_CANONICAL_PARENT'),
+                  'workflow_expected_main': workflow.count('EXPECTED_MAIN'),
+                  'workflow_expected_tree': workflow.count('EXPECTED_TREE'),
+                  'workflow_media_parent': workflow.count('MEDIA_CANONICAL_PARENT'),
+              },
+              'lease_taken': False,
+              'canonical_mutation': False,
+          }
+          (root / 'inspection.json').write_text(json.dumps(result, indent=2) + '\n')
+          PY
+
+          (cd "$ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+
+      - name: Publish inspection result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-anastasia-rebind-inspector
+          git config user.email anastasia-rebind-inspector@users.noreply.github.com
+          git switch --orphan inspection-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/anastasia-rebind-inspection-v1
+          cp -a "$ROOT"/. transport/anastasia-rebind-inspection-v1/
+          git add transport/anastasia-rebind-inspection-v1
+          git commit -m 'Publish Anastasia rebind inspection'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
