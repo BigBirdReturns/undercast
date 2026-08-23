@@ -1,0 +1,129 @@
+name: recover-queen-helper-v4
+
+on:
+  push:
+    branches:
+      - agent/recover-queen-helper-v4
+
+permissions:
+  contents: write
+
+concurrency:
+  group: recover-queen-helper-v4
+  cancel-in-progress: false
+
+env:
+  SOURCE_BRANCH: agent/star-trek-queen-of-hearts-cycle-v1
+  EXPECTED_HELPER_SHA256: 2bd41195123bfe860f01b1201cbf52a349e6f40231f97047c481e7fddcc36f65
+  ROOT: /tmp/recover-queen-helper-v4
+  RESULT_BRANCH: agent/recover-queen-helper-result-v4
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Fetch immutable Queen helper fragments
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/parts"
+          git fetch --no-tags origin "$SOURCE_BRANCH"
+          source_ref="refs/remotes/origin/${SOURCE_BRANCH}"
+          for part in 00 01 02 03 04 05; do
+            path=".github/recovery/star-trek-queen-of-hearts-cycle-v1/helper.mjs.gz.b64.part-${part}"
+            git show "${source_ref}:${path}" > "$ROOT/parts/part-${part}"
+          done
+          find "$ROOT/parts" -type f -maxdepth 1 -printf '%f %s bytes\n' | LC_ALL=C sort > "$ROOT/fragment-sizes.txt"
+      - name: Recover sealed helper by complete permutation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - "$EXPECTED_HELPER_SHA256" "$ROOT" <<'PY'
+          import base64
+          import gzip
+          import hashlib
+          import itertools
+          import json
+          import pathlib
+          import re
+          import sys
+
+          expected, root_text = sys.argv[1:]
+          root = pathlib.Path(root_text)
+          parts = sorted((root / 'parts').glob('part-*'))
+          if len(parts) != 6:
+              raise SystemExit(f'expected six helper fragments, found {len(parts)}')
+
+          attempts = 0
+          found = None
+          for permutation in itertools.permutations(parts):
+              attempts += 1
+              encoded = b''.join(re.sub(rb'\s+', b'', item.read_bytes()) for item in permutation)
+              try:
+                  compressed = base64.b64decode(encoded, validate=True)
+                  helper = gzip.decompress(compressed)
+              except Exception:
+                  continue
+              digest = hashlib.sha256(helper).hexdigest()
+              if digest == expected:
+                  found = {
+                      'order': [item.name for item in permutation],
+                      'base64_chars': len(encoded),
+                      'compressed_bytes': len(compressed),
+                      'helper_bytes': len(helper),
+                      'helper_lines': helper.count(b'\n'),
+                      'helper_sha256': digest,
+                  }
+                  (root / 'queen-helper.mjs').write_bytes(helper)
+                  break
+
+          result = {
+              'version': 4,
+              'transaction': 'RECOVER-QUEEN-HELPER-V4',
+              'expected_sha256': expected,
+              'fragment_count': len(parts),
+              'attempts': attempts,
+              'found': found,
+          }
+          (root / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+          if not found:
+              raise SystemExit('no fragment permutation reproduced the sealed helper')
+          PY
+          echo "$EXPECTED_HELPER_SHA256  $ROOT/queen-helper.mjs" | sha256sum -c -
+          node --check "$ROOT/queen-helper.mjs"
+          python3 - "$ROOT/result.json" <<'PY'
+          import json, pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          data = json.loads(path.read_text())
+          data['node_check'] = 'pass'
+          path.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+          grep -nE '^function |^async function |^const cmd|if \(cmd' "$ROOT/queen-helper.mjs" > "$ROOT/function-index.txt" || true
+          (cd "$ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recover-queen-helper-v4
+          path: /tmp/recover-queen-helper-v4/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish recovered helper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-queen-helper-recovery
+          git config user.email queen-helper-recovery@users.noreply.github.com
+          git switch --orphan queen-helper-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/recover-queen-helper-v4
+          cp -a "$ROOT"/. transport/recover-queen-helper-v4/
+          git add transport/recover-queen-helper-v4
+          git commit -m 'Recover sealed Queen helper v4'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
