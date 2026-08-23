@@ -1,0 +1,460 @@
+name: star-trek-anastasia-cycle-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-anastasia-cycle-v1
+    paths:
+      - .github/recovery/star-trek-anastasia-cycle-v1/cycle.trigger
+  pull_request:
+    types:
+      - closed
+    branches:
+      - agent/star-trek-anastasia-cycle-v1
+    paths:
+      - .github/recovery/star-trek-anastasia-cycle-v1/cycle.trigger
+
+permissions:
+  actions: write
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: star-trek-anastasia-cycle-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 97956ce415d565d968cc5f66067142183ec28a1f
+  EXPECTED_TREE: ff8adadb6dd36ab84a21336bdd30ce3cb17b5335
+  CARRIER_BRANCH: agent/star-trek-anastasia-cycle-v1
+  CANDIDATE_BRANCH: agent/star-trek-anastasia-candidate-v1
+  CONTROLLER_SHA256: 2eaaa9de01ab5b529df6cf17183c72ad099fef1837177d5d5411365c1cf5f76d
+  CONTROLLER_B64_SHA256: 523d20c4f656de45c5cff182694718f780f48c1153cb9fd2e3f4f3dc4359e2a8
+  CONTROLLER: /tmp/star-trek-anastasia-controller-v1.mjs
+  MEDIA_RUN: '32609675555'
+  MEDIA_HEAD: fd0c91d94128182423857d0be506f7a49bf934cd
+  MEDIA_ARTIFACT: '9485147987'
+  MEDIA_DIGEST: c7e507c8e791204c96fa5c54cdf27cb15a113487785868df6d78cf09444f0bfb
+  MEDIA_NAME: star-trek-anastasia-media-v1
+  MEDIA_ROOT: /tmp/star-trek-anastasia-media-v1
+  STAGE_ROOT: /tmp/star-trek-anastasia-stage-v1
+  REVIEW_ROOT: /tmp/star-trek-anastasia-review-v1
+  FINAL_ROOT: /tmp/star-trek-anastasia-final-v1
+
+jobs:
+  stage:
+    if: github.event_name == 'push' || github.event.pull_request.merged == true
+    name: stage-anastasia-komananov-candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      candidate_commit: ${{ steps.stage.outputs.candidate_commit }}
+      candidate_tree: ${{ steps.stage.outputs.candidate_tree }}
+      candidate_path_count: ${{ steps.stage.outputs.candidate_path_count }}
+      candidate_path_ledger_sha256: ${{ steps.stage.outputs.candidate_path_ledger_sha256 }}
+      wall_id: ${{ steps.stage.outputs.wall_id }}
+      lease_id: ${{ steps.stage.outputs.lease_id }}
+      artifact_id: ${{ steps.stage_artifact.outputs.artifact-id }}
+      artifact_digest: ${{ steps.stage_artifact.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Reconstruct and verify sealed Anastasia controller
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat .github/recovery/star-trek-anastasia-cycle-v1/controller.mjs.gz.b64.part-* > /tmp/anastasia-controller.b64
+          echo "$CONTROLLER_B64_SHA256  /tmp/anastasia-controller.b64" | sha256sum -c -
+          base64 -d /tmp/anastasia-controller.b64 | gzip -d > "$CONTROLLER"
+          echo "$CONTROLLER_SHA256  $CONTROLLER" | sha256sum -c -
+          node --check "$CONTROLLER"
+      - name: Verify live main and source-media custody
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$MEDIA_ROOT" "$STAGE_ROOT"
+          mkdir -p "$MEDIA_ROOT" "$STAGE_ROOT"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$EXPECTED_MAIN"
+          test "$(jq -r .commit.tree.sha <<<"$live")" = "$EXPECTED_TREE"
+          test "$(jq -r '.parents | length' <<<"$live")" = 1
+          printf '%s\n' "$live" | jq . > "$STAGE_ROOT/live-main.json"
+          test -z "$(git ls-remote --heads origin "refs/heads/${CANDIDATE_BRANCH}" || true)"
+          meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${MEDIA_ARTIFACT}")"
+          test "$(jq -r .expired <<<"$meta")" = false
+          test "$(jq -r .name <<<"$meta")" = "$MEDIA_NAME"
+          test "$(jq -r .digest <<<"$meta")" = "sha256:${MEDIA_DIGEST}"
+          test "$(jq -r .workflow_run.id <<<"$meta")" = "$MEDIA_RUN"
+          test "$(jq -r .workflow_run.head_sha <<<"$meta")" = "$MEDIA_HEAD"
+          printf '%s\n' "$meta" | jq . > "$STAGE_ROOT/source-media-artifact.json"
+      - uses: actions/download-artifact@v4
+        with:
+          name: star-trek-anastasia-media-v1
+          path: /tmp/star-trek-anastasia-media-v1
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 32609675555
+      - name: Verify source-media manifest
+        shell: bash
+        run: (cd "$MEDIA_ROOT" && sha256sum -c manifest.sha256)
+      - name: Stage exact Anastasia Komananov product
+        id: stage
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse "${EXPECTED_MAIN}^{tree}")" = "$EXPECTED_TREE"
+          git checkout --detach "$EXPECTED_MAIN"
+          git switch -c "$CANDIDATE_BRANCH"
+          npm ci --ignore-scripts --no-audit --no-fund
+          MEDIA_ROOT="$MEDIA_ROOT" STAGE_ROOT="$STAGE_ROOT" EXPECTED_MAIN="$EXPECTED_MAIN" EXPECTED_TREE="$EXPECTED_TREE" MEDIA_CANONICAL_PARENT="$EXPECTED_MAIN" \
+            node "$CONTROLLER" stage | tee "$STAGE_ROOT/stage.stdout.log"
+          rm -rf .luna
+          python3 - "$EXPECTED_MAIN" /tmp/anastasia-candidate-paths.z <<'PY'
+          from pathlib import Path
+          import subprocess, sys
+          base, out = sys.argv[1], Path(sys.argv[2])
+          paths = []
+          for command in (
+              ['git', 'diff', '--name-only', '-z', base],
+              ['git', 'ls-files', '--others', '--exclude-standard', '-z'],
+          ):
+              paths.extend(p.decode() for p in subprocess.check_output(command).split(b'\0') if p)
+          paths = sorted(set(paths))
+          if not paths:
+              raise SystemExit('Anastasia candidate produced no repository changes')
+          blocked = [p for p in paths if p.startswith(('.github/', 'transport/', '.luna/'))]
+          if blocked:
+              raise SystemExit('Anastasia candidate escaped product scope: ' + ', '.join(blocked))
+          out.write_bytes(b'\0'.join(p.encode() for p in paths) + b'\0')
+          PY
+          while IFS= read -r -d '' file; do git add -- "$file"; done < /tmp/anastasia-candidate-paths.z
+          test -n "$(git diff --cached --name-only)"
+          git config user.name undercast-star-trek-anastasia-stage
+          git config user.email star-trek-anastasia-stage@users.noreply.github.com
+          git commit -m 'Star Trek: stage Anastasia Komananov candidate'
+          candidate_commit="$(git rev-parse HEAD)"
+          candidate_tree="$(git rev-parse HEAD^{tree})"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_MAIN"
+          git diff --name-only "$EXPECTED_MAIN"..HEAD | LC_ALL=C sort -u > "$STAGE_ROOT/candidate-paths.txt"
+          candidate_path_count="$(wc -l < "$STAGE_ROOT/candidate-paths.txt" | tr -d ' ')"
+          candidate_path_ledger_sha256="$(sha256sum "$STAGE_ROOT/candidate-paths.txt" | cut -d' ' -f1)"
+          test -z "$(grep -E '^(\.github/|transport/)' "$STAGE_ROOT/candidate-paths.txt" || true)"
+          jq -n \
+            --arg canonical_parent "$EXPECTED_MAIN" \
+            --arg canonical_tree "$EXPECTED_TREE" \
+            --arg candidate_commit "$candidate_commit" \
+            --arg candidate_tree "$candidate_tree" \
+            --argjson candidate_path_count "$candidate_path_count" \
+            --arg candidate_path_ledger_sha256 "$candidate_path_ledger_sha256" \
+            --argjson workflow_run "$GITHUB_RUN_ID" \
+            '{version:1,transaction:"STAR-TREK-ANASTASIA-CANDIDATE-METADATA-V1",canonical_parent:$canonical_parent,canonical_tree:$canonical_tree,candidate_commit:$candidate_commit,candidate_tree:$candidate_tree,candidate_path_count:$candidate_path_count,candidate_path_ledger_sha256:$candidate_path_ledger_sha256,workflow_run:$workflow_run}' \
+            > "$STAGE_ROOT/candidate-metadata.json"
+          printf '%s  %s\n' "$CONTROLLER_SHA256" "$CONTROLLER" > "$STAGE_ROOT/controller.sha256"
+          git push origin "HEAD:refs/heads/${CANDIDATE_BRANCH}"
+          wall_id="$(jq -r .wall_id "$STAGE_ROOT/stage.json")"
+          lease_id="$(jq -r .lease.id "$STAGE_ROOT/stage.json")"
+          echo "candidate_commit=$candidate_commit" >> "$GITHUB_OUTPUT"
+          echo "candidate_tree=$candidate_tree" >> "$GITHUB_OUTPUT"
+          echo "candidate_path_count=$candidate_path_count" >> "$GITHUB_OUTPUT"
+          echo "candidate_path_ledger_sha256=$candidate_path_ledger_sha256" >> "$GITHUB_OUTPUT"
+          echo "wall_id=$wall_id" >> "$GITHUB_OUTPUT"
+          echo "lease_id=$lease_id" >> "$GITHUB_OUTPUT"
+          (cd "$STAGE_ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+      - name: Upload staged Anastasia candidate receipt
+        id: stage_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-anastasia-stage-v1
+          path: /tmp/star-trek-anastasia-stage-v1/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Preserve stage failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-anastasia-stage-failure-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-anastasia-stage-v1/
+            /tmp/star-trek-anastasia-controller-v1.mjs
+          if-no-files-found: warn
+          retention-days: 14
+
+  review:
+    name: independently-review-anastasia-komananov-candidate
+    needs: stage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_COMMIT: ${{ needs.stage.outputs.candidate_commit }}
+      CANDIDATE_TREE: ${{ needs.stage.outputs.candidate_tree }}
+      CANDIDATE_PATH_COUNT: ${{ needs.stage.outputs.candidate_path_count }}
+      CANDIDATE_PATH_LEDGER_SHA256: ${{ needs.stage.outputs.candidate_path_ledger_sha256 }}
+    outputs:
+      review_sha256: ${{ steps.review.outputs.review_sha256 }}
+      artifact_id: ${{ steps.review_artifact.outputs.artifact-id }}
+      artifact_digest: ${{ steps.review_artifact.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Reconstruct and verify sealed Anastasia controller
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat .github/recovery/star-trek-anastasia-cycle-v1/controller.mjs.gz.b64.part-* > /tmp/anastasia-controller.b64
+          echo "$CONTROLLER_B64_SHA256  /tmp/anastasia-controller.b64" | sha256sum -c -
+          base64 -d /tmp/anastasia-controller.b64 | gzip -d > "$CONTROLLER"
+          echo "$CONTROLLER_SHA256  $CONTROLLER" | sha256sum -c -
+          node --check "$CONTROLLER"
+      - uses: actions/download-artifact@v4
+        with:
+          name: star-trek-anastasia-stage-v1
+          path: /tmp/star-trek-anastasia-stage-v1
+      - name: Verify reviewed candidate custody
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          (cd "$STAGE_ROOT" && sha256sum -c manifest.sha256)
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$EXPECTED_MAIN"
+          test "$(jq -r .commit.tree.sha <<<"$live")" = "$EXPECTED_TREE"
+          test "$(git ls-remote origin "refs/heads/${CANDIDATE_BRANCH}" | cut -f1)" = "$CANDIDATE_COMMIT"
+          git fetch --filter=blob:none --no-tags origin main "$CANDIDATE_BRANCH"
+          git checkout --detach "$CANDIDATE_COMMIT"
+          test "$(git rev-parse HEAD^{tree})" = "$CANDIDATE_TREE"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_MAIN"
+          git diff --name-only "$EXPECTED_MAIN"..HEAD | LC_ALL=C sort -u > /tmp/review-live-paths.txt
+          cmp /tmp/review-live-paths.txt "$STAGE_ROOT/candidate-paths.txt"
+          test "$(wc -l < /tmp/review-live-paths.txt | tr -d ' ')" = "$CANDIDATE_PATH_COUNT"
+          test "$(sha256sum /tmp/review-live-paths.txt | cut -d' ' -f1)" = "$CANDIDATE_PATH_LEDGER_SHA256"
+          test -z "$(grep -E '^(\.github/|transport/)' /tmp/review-live-paths.txt || true)"
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Independently review exact Anastasia candidate
+        id: review
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$REVIEW_ROOT"
+          mkdir -p "$REVIEW_ROOT"
+          STAGE_ROOT="$STAGE_ROOT" REVIEW_ROOT="$REVIEW_ROOT" EXPECTED_MAIN="$EXPECTED_MAIN" EXPECTED_TREE="$EXPECTED_TREE" \
+            CANDIDATE_COMMIT="$CANDIDATE_COMMIT" CANDIDATE_TREE="$CANDIDATE_TREE" CANDIDATE_PATH_COUNT="$CANDIDATE_PATH_COUNT" CANDIDATE_PATH_LEDGER_SHA256="$CANDIDATE_PATH_LEDGER_SHA256" \
+            node "$CONTROLLER" review | tee "$REVIEW_ROOT/review.stdout.log"
+          jq -e '.transaction=="STAR-TREK-ANASTASIA-KOMANANOV-INDEPENDENT-REVIEW-V1" and .verdict=="pass"' "$REVIEW_ROOT/independent-review.json" >/dev/null
+          review_sha256="$(jq -r .review_sha256 "$REVIEW_ROOT/independent-review.json")"
+          echo "review_sha256=$review_sha256" >> "$GITHUB_OUTPUT"
+          (cd "$REVIEW_ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+      - name: Upload independent Anastasia review
+        id: review_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-anastasia-independent-review-v1
+          path: /tmp/star-trek-anastasia-review-v1/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Preserve review failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-anastasia-review-failure-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-anastasia-stage-v1/
+            /tmp/star-trek-anastasia-review-v1/
+          if-no-files-found: warn
+          retention-days: 14
+
+  finalize:
+    name: finalize-publish-and-deploy-anastasia-komananov-cycle
+    needs: [stage, review]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_COMMIT: ${{ needs.stage.outputs.candidate_commit }}
+      CANDIDATE_TREE: ${{ needs.stage.outputs.candidate_tree }}
+      CANDIDATE_PATH_COUNT: ${{ needs.stage.outputs.candidate_path_count }}
+      CANDIDATE_PATH_LEDGER_SHA256: ${{ needs.stage.outputs.candidate_path_ledger_sha256 }}
+      STAGE_ARTIFACT_ID: ${{ needs.stage.outputs.artifact_id }}
+      STAGE_ARTIFACT_DIGEST: ${{ needs.stage.outputs.artifact_digest }}
+      REVIEW_ARTIFACT_ID: ${{ needs.review.outputs.artifact_id }}
+      REVIEW_ARTIFACT_DIGEST: ${{ needs.review.outputs.artifact_digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Reconstruct and verify sealed Anastasia controller
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat .github/recovery/star-trek-anastasia-cycle-v1/controller.mjs.gz.b64.part-* > /tmp/anastasia-controller.b64
+          echo "$CONTROLLER_B64_SHA256  /tmp/anastasia-controller.b64" | sha256sum -c -
+          base64 -d /tmp/anastasia-controller.b64 | gzip -d > "$CONTROLLER"
+          echo "$CONTROLLER_SHA256  $CONTROLLER" | sha256sum -c -
+          node --check "$CONTROLLER"
+      - uses: actions/download-artifact@v4
+        with:
+          name: star-trek-anastasia-stage-v1
+          path: /tmp/star-trek-anastasia-stage-v1
+      - uses: actions/download-artifact@v4
+        with:
+          name: star-trek-anastasia-independent-review-v1
+          path: /tmp/star-trek-anastasia-review-v1
+      - name: Verify stage, review, and live-main custody
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          (cd "$STAGE_ROOT" && sha256sum -c manifest.sha256)
+          (cd "$REVIEW_ROOT" && sha256sum -c manifest.sha256)
+          test "$(jq -r .candidate.commit "$REVIEW_ROOT/independent-review.json")" = "$CANDIDATE_COMMIT"
+          test "$(jq -r .review_sha256 "$REVIEW_ROOT/independent-review.json")" = "${{ needs.review.outputs.review_sha256 }}"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$EXPECTED_MAIN"
+          test "$(jq -r .commit.tree.sha <<<"$live")" = "$EXPECTED_TREE"
+          test "$(git ls-remote origin "refs/heads/${CANDIDATE_BRANCH}" | cut -f1)" = "$CANDIDATE_COMMIT"
+          git fetch --filter=blob:none --no-tags origin main "$CANDIDATE_BRANCH"
+          git checkout --detach "$CANDIDATE_COMMIT"
+          test "$(git rev-parse HEAD^{tree})" = "$CANDIDATE_TREE"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_MAIN"
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Finalize exact Anastasia product and permanent receipt
+        id: finalize
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$FINAL_ROOT"
+          mkdir -p "$FINAL_ROOT"
+          STAGE_ROOT="$STAGE_ROOT" REVIEW_ROOT="$REVIEW_ROOT" FINAL_ROOT="$FINAL_ROOT" \
+            EXPECTED_MAIN="$EXPECTED_MAIN" EXPECTED_TREE="$EXPECTED_TREE" MEDIA_CANONICAL_PARENT="$EXPECTED_MAIN" CANDIDATE_BRANCH="$CANDIDATE_BRANCH" \
+            CANDIDATE_COMMIT="$CANDIDATE_COMMIT" CANDIDATE_TREE="$CANDIDATE_TREE" CANDIDATE_PATH_COUNT="$CANDIDATE_PATH_COUNT" CANDIDATE_PATH_LEDGER_SHA256="$CANDIDATE_PATH_LEDGER_SHA256" \
+            STAGE_ARTIFACT_ID="$STAGE_ARTIFACT_ID" STAGE_ARTIFACT_DIGEST="$STAGE_ARTIFACT_DIGEST" REVIEW_ARTIFACT_ID="$REVIEW_ARTIFACT_ID" REVIEW_ARTIFACT_DIGEST="$REVIEW_ARTIFACT_DIGEST" \
+            MEDIA_RUN="$MEDIA_RUN" MEDIA_ARTIFACT="$MEDIA_ARTIFACT" MEDIA_DIGEST="sha256:${MEDIA_DIGEST}" \
+            node "$CONTROLLER" finalize | tee "$FINAL_ROOT/finalize.stdout.log"
+          jq -e '.transaction=="STAR-TREK-ANASTASIA-KOMANANOV-FINALIZATION-V1" and .status=="qualified"' "$FINAL_ROOT/finalization.json" >/dev/null
+          python3 - "$CANDIDATE_COMMIT" /tmp/anastasia-finalizer-paths.z <<'PY'
+          from pathlib import Path
+          import subprocess, sys
+          base, out = sys.argv[1], Path(sys.argv[2])
+          paths = []
+          for command in (
+              ['git', 'diff', '--name-only', '-z', base],
+              ['git', 'ls-files', '--others', '--exclude-standard', '-z'],
+          ):
+              paths.extend(p.decode() for p in subprocess.check_output(command).split(b'\0') if p)
+          paths = sorted(set(paths))
+          if not paths:
+              raise SystemExit('Anastasia finalizer produced no repository changes')
+          blocked = [p for p in paths if p.startswith(('.github/', 'transport/', '.luna/'))]
+          if blocked:
+              raise SystemExit('Anastasia finalizer escaped product scope: ' + ', '.join(blocked))
+          out.write_bytes(b'\0'.join(p.encode() for p in paths) + b'\0')
+          PY
+          while IFS= read -r -d '' file; do git add -- "$file"; done < /tmp/anastasia-finalizer-paths.z
+          test -n "$(git diff --cached --name-only)"
+          git config user.name undercast-star-trek-anastasia-publisher
+          git config user.email star-trek-anastasia-publisher@users.noreply.github.com
+          product_tree="$(git write-tree)"
+          product_commit="$(printf '%s\n' 'Star Trek: publish Anastasia Komananov cycle' | git commit-tree "$product_tree" -p "$EXPECTED_MAIN")"
+          test "$(git rev-parse "${product_commit}^{tree}")" = "$product_tree"
+          test "$(git rev-parse "${product_commit}^")" = "$EXPECTED_MAIN"
+          git diff --name-only "$EXPECTED_MAIN" "$product_commit" | LC_ALL=C sort -u > "$FINAL_ROOT/product-paths.txt"
+          test -z "$(grep -E '^(\.github/|transport/)' "$FINAL_ROOT/product-paths.txt" || true)"
+          test "$(grep -c '^data/review/adapter-sdk/star-trek-anastasia-komananov-cycle.json$' "$FINAL_ROOT/product-paths.txt")" = 1
+          test "$(grep -c '^scripts/star-trek-anastasia-komananov-cycle.mjs$' "$FINAL_ROOT/product-paths.txt")" = 1
+          test "$(grep -c '^images/uc-1395-still.jpg$' "$FINAL_ROOT/product-paths.txt")" = 1
+          test "$(grep -c '^images/uc-1395-portrait.jpg$' "$FINAL_ROOT/product-paths.txt")" = 1
+          product_path_count="$(wc -l < "$FINAL_ROOT/product-paths.txt" | tr -d ' ')"
+          product_path_ledger_sha256="$(sha256sum "$FINAL_ROOT/product-paths.txt" | cut -d' ' -f1)"
+          git checkout --detach "$product_commit"
+          node scripts/star-trek-anastasia-komananov-cycle.mjs
+          node scripts/star-trek-queen-of-hearts-cycle.mjs
+          node scripts/thesis-rails.mjs validate
+          node scripts/media-audit.mjs gate --scope star-trek
+          node scripts/waterline.mjs validate
+          node scripts/corpus-ops.mjs validate
+          node scripts/validate.mjs
+          node scripts/gate.mjs --skip-rendered
+          test -z "$(git status --porcelain)"
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          test "$live" = "$EXPECTED_MAIN"
+          git push origin "${product_commit}:refs/heads/main"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$product_commit"
+          dispatch_epoch="$(date -u +%s)"
+          gh workflow run pages.yml --ref main
+          pages_run=''
+          for _ in $(seq 1 180); do
+            runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/pages.yml/runs?branch=main&event=workflow_dispatch&per_page=30")"
+            pages_run="$(jq -r --arg sha "$product_commit" --argjson epoch "$dispatch_epoch" '[.workflow_runs[] | select(.head_sha==$sha and ((.created_at|fromdateiso8601) >= $epoch))] | sort_by(.created_at) | last | .id // empty' <<<"$runs")"
+            if test -n "$pages_run"; then
+              status="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${pages_run}" --jq .status)"
+              if test "$status" = completed; then
+                test "$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${pages_run}" --jq .conclusion)" = success
+                break
+              fi
+            fi
+            sleep 5
+          done
+          test -n "$pages_run"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${pages_run}" --jq .conclusion)" = success
+          jq -n \
+            --arg product_commit "$product_commit" \
+            --arg product_tree "$product_tree" \
+            --argjson product_path_count "$product_path_count" \
+            --arg product_path_ledger_sha256 "$product_path_ledger_sha256" \
+            --argjson pages_run "$pages_run" \
+            --arg receipt_sha256 "$(jq -r .receipt_sha256 "$FINAL_ROOT/receipt.json")" \
+            --arg checker_sha256 "$(jq -r .checker_sha256 "$FINAL_ROOT/finalization.json")" \
+            --arg reviewed_cycle "$(jq -r .reviewed_cycle "$FINAL_ROOT/finalization.json")" \
+            --arg next_task "$(jq -r .next.task_id "$FINAL_ROOT/finalization.json")" \
+            '{version:1,transaction:"STAR-TREK-ANASTASIA-KOMANANOV-TERMINAL-V1",status:"published",product_commit:$product_commit,product_tree:$product_tree,product_path_count:$product_path_count,product_path_ledger_sha256:$product_path_ledger_sha256,pages_run:$pages_run,receipt_sha256:$receipt_sha256,checker_sha256:$checker_sha256,reviewed_cycle:$reviewed_cycle,next_task:$next_task}' \
+            > "$FINAL_ROOT/terminal.json"
+          cp "data/review/adapter-sdk/star-trek-anastasia-komananov-cycle.json" "$FINAL_ROOT/canonical-receipt.json"
+          cp "scripts/star-trek-anastasia-komananov-cycle.mjs" "$FINAL_ROOT/canonical-checker.mjs"
+          for branch in "$CANDIDATE_BRANCH" "$CARRIER_BRANCH"; do
+            git push origin --delete "$branch"
+          done
+          for _ in $(seq 1 30); do
+            test -z "$(git ls-remote --heads origin "refs/heads/${CANDIDATE_BRANCH}" "refs/heads/${CARRIER_BRANCH}")" && break
+            sleep 2
+          done
+          test -z "$(git ls-remote --heads origin "refs/heads/${CANDIDATE_BRANCH}" "refs/heads/${CARRIER_BRANCH}")"
+          jq -n --arg status complete --arg product_commit "$product_commit" '{version:1,transaction:"STAR-TREK-ANASTASIA-CLEANUP-V1",status:$status,product_commit:$product_commit,temporary_refs_remaining:0}' > "$FINAL_ROOT/cleanup.json"
+          (cd "$FINAL_ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+          echo "product_commit=$product_commit" >> "$GITHUB_OUTPUT"
+          echo "pages_run=$pages_run" >> "$GITHUB_OUTPUT"
+      - name: Upload terminal Anastasia execution
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-anastasia-terminal-v1
+          path: /tmp/star-trek-anastasia-final-v1/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Preserve finalization failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-anastasia-finalization-failure-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-anastasia-stage-v1/
+            /tmp/star-trek-anastasia-review-v1/
+            /tmp/star-trek-anastasia-final-v1/
+            /tmp/star-trek-anastasia-controller-v1.mjs
+          if-no-files-found: warn
+          retention-days: 14
