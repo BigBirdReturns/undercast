@@ -147,3 +147,75 @@ jobs:
           test "${{ steps.reproduce.outputs.exit_code }}" != "0"
           test -s "$DIAGNOSTIC_ROOT/ds9-dirty-paths.txt"
           grep -Fx dirty "$DIAGNOSTIC_ROOT/ds9-drift-state.txt"
+
+  publish_result:
+    name: publish-anastasia-ds9-diagnostic-result
+    needs: diagnose
+    if: ${{ always() && needs.diagnose.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DIAGNOSTIC_RESULT_BRANCH: agent/star-trek-anastasia-ds9-diagnostic-result-20260823-v1
+      RESULT_ROOT: /tmp/star-trek-anastasia-ds9-diagnostic-result-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download exact DS9 drift evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: star-trek-anastasia-ds9-diagnostic-${{ github.run_id }}
+          path: /tmp/star-trek-anastasia-ds9-diagnostic-v1
+
+      - name: Publish immutable diagnostic readback branch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          live_before="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live_before")" = "$CURRENT_MAIN"
+          test "$(jq -r .commit.tree.sha <<<"$live_before")" = "$CURRENT_TREE"
+          rm -rf "$RESULT_ROOT"
+          mkdir -p "$RESULT_ROOT/diagnostics"
+          cp -a /tmp/star-trek-anastasia-ds9-diagnostic-v1/. "$RESULT_ROOT/diagnostics/"
+          printf '%s\n' "$live_before" | jq . > "$RESULT_ROOT/main-before.json"
+          jq -n \
+            --arg transaction STAR-TREK-ANASTASIA-DS9-DIAGNOSTIC-V1 \
+            --arg status captured \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg head_sha "$GITHUB_SHA" \
+            --arg canonical_parent "$CURRENT_MAIN" \
+            --arg canonical_tree "$CURRENT_TREE" \
+            --arg result_branch "$DIAGNOSTIC_RESULT_BRANCH" \
+            '{version:1,transaction:$transaction,status:$status,run_id:($run_id|tonumber),run_attempt:($run_attempt|tonumber),head_sha:$head_sha,canonical_parent:$canonical_parent,canonical_tree:$canonical_tree,result_branch:$result_branch,canonical_write:false,additional_lease_issued:false}' \
+            > "$RESULT_ROOT/result.json"
+          (
+            cd "$RESULT_ROOT"
+            find . -type f ! -name manifest.sha256 -print0 | sort -z | xargs -0 sha256sum > manifest.sha256
+          )
+          git config user.name undercast-anastasia-diagnostic
+          git config user.email undercast-anastasia-diagnostic@users.noreply.github.com
+          worktree=/tmp/star-trek-anastasia-ds9-diagnostic-result-worktree
+          rm -rf "$worktree"
+          git worktree add --detach "$worktree" "$GITHUB_SHA"
+          (
+            cd "$worktree"
+            git checkout --orphan anastasia-ds9-diagnostic-result
+            git rm -rf .
+            cp -a "$RESULT_ROOT"/. .
+            git add -A
+            git commit -m "Record Anastasia DS9 projection drift diagnostic"
+            git push --force origin "HEAD:refs/heads/${DIAGNOSTIC_RESULT_BRANCH}"
+          )
+          git worktree remove --force "$worktree"
+          live_after="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live_after")" = "$CURRENT_MAIN"
+          test "$(jq -r .commit.tree.sha <<<"$live_after")" = "$CURRENT_TREE"
+          printf '%s\n' "$live_after" | jq . > /tmp/main-after.json
+          remote_result="$(git ls-remote --heads origin "refs/heads/${DIAGNOSTIC_RESULT_BRANCH}")"
+          test -n "$remote_result"
