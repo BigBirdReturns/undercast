@@ -27,13 +27,14 @@ jobs:
         with:
           fetch-depth: 0
           ref: agent/star-trek-anastasia-cycle-v1
-      - name: Reconstruct, verify, and install sealed cycle workflow
+      - name: Reconstruct, verify, and publish sealed workflow blobs
         shell: bash
         run: |
           set -Eeuo pipefail
           expected_main=97956ce415d565d968cc5f66067142183ec28a1f
           expected_tree=ff8adadb6dd36ab84a21336bdd30ce3cb17b5335
           root=.github/recovery/star-trek-anastasia-cycle-v1
+          out=transport/star-trek-anastasia-cycle-v1
           live_main="$(git ls-remote origin refs/heads/main | cut -f1)"
           test "$live_main" = "$expected_main"
           git fetch --filter=blob:none --no-tags origin main
@@ -55,20 +56,62 @@ jobs:
           grep -F 'EXPECTED_MAIN: 97956ce415d565d968cc5f66067142183ec28a1f' /tmp/anastasia-workflow.yml >/dev/null
           grep -F 'EXPECTED_TREE: ff8adadb6dd36ab84a21336bdd30ce3cb17b5335' /tmp/anastasia-workflow.yml >/dev/null
 
-          mkdir -p .github/workflows transport/star-trek-anastasia-cycle-v1
-          cp /tmp/anastasia-workflow.yml .github/workflows/star-trek-anastasia-cycle-v1.yml
+          python3 - /tmp/anastasia-workflow.yml /tmp/anastasia-workflow-pr.yml <<'PY'
+          from pathlib import Path
+          import sys
+          source, target = map(Path, sys.argv[1:])
+          text = source.read_text()
+          old = '''on:
+            push:
+              branches:
+                - agent/star-trek-anastasia-cycle-v1
+              paths:
+                - .github/recovery/star-trek-anastasia-cycle-v1/cycle.trigger
+          '''
+          new = '''on:
+            push:
+              branches:
+                - agent/star-trek-anastasia-cycle-v1
+              paths:
+                - .github/recovery/star-trek-anastasia-cycle-v1/cycle.trigger
+            pull_request:
+              types:
+                - closed
+              branches:
+                - agent/star-trek-anastasia-cycle-v1
+              paths:
+                - .github/recovery/star-trek-anastasia-cycle-v1/cycle.trigger
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('sealed Anastasia event block drifted')
+          text = text.replace(old, new)
+          old_stage = 'jobs:\n  stage:\n    name: stage-anastasia-komananov-candidate\n'
+          new_stage = "jobs:\n  stage:\n    if: ${{ github.event_name == 'push' || github.event.pull_request.merged == true }}\n    name: stage-anastasia-komananov-candidate\n"
+          if text.count(old_stage) != 1:
+              raise SystemExit('sealed Anastasia stage block drifted')
+          target.write_text(text.replace(old_stage, new_stage))
+          PY
+          grep -F 'pull_request:' /tmp/anastasia-workflow-pr.yml >/dev/null
+          grep -F "github.event.pull_request.merged == true" /tmp/anastasia-workflow-pr.yml >/dev/null
+          patched_sha="$(sha256sum /tmp/anastasia-workflow-pr.yml | cut -d' ' -f1)"
+
+          mkdir -p "$out"
+          cp /tmp/anastasia-workflow.yml "$out/sealed-workflow.yml"
+          cp /tmp/anastasia-workflow-pr.yml "$out/pr-event-workflow.yml"
           jq -n \
-            --arg status installed \
+            --arg status staged \
             --arg canonical_commit "$expected_main" \
             --arg canonical_tree "$expected_tree" \
             --arg workflow_sha256 e4706736a23209f4da0f2d3f9c634544854e93ed2fff181c085e82ab2fa26fc5 \
+            --arg pr_event_workflow_sha256 "$patched_sha" \
             --arg controller_sha256 2eaaa9de01ab5b529df6cf17183c72ad099fef1837177d5d5411365c1cf5f76d \
             --argjson run_id "$GITHUB_RUN_ID" \
-            '{version:2,transaction:"INSTALL-STAR-TREK-ANASTASIA-CYCLE-V2",status:$status,run_id:$run_id,canonical:{commit:$canonical_commit,tree:$canonical_tree},workflow_sha256:$workflow_sha256,controller_sha256:$controller_sha256,lease_taken:false,canonical_mutation:false}' \
-            > transport/star-trek-anastasia-cycle-v1/install.json
+            '{version:3,transaction:"STAGE-STAR-TREK-ANASTASIA-WORKFLOW-BLOBS-V3",status:$status,run_id:$run_id,canonical:{commit:$canonical_commit,tree:$canonical_tree},sealed_workflow_sha256:$workflow_sha256,pr_event_workflow_sha256:$pr_event_workflow_sha256,controller_sha256:$controller_sha256,lease_taken:false,canonical_mutation:false}' \
+            > "$out/install.json"
+          (cd "$out" && sha256sum sealed-workflow.yml pr-event-workflow.yml install.json > manifest.sha256 && sha256sum -c manifest.sha256)
 
           git config user.name undercast-anastasia-cycle-installer
           git config user.email anastasia-cycle-installer@users.noreply.github.com
-          git add .github/workflows/star-trek-anastasia-cycle-v1.yml transport/star-trek-anastasia-cycle-v1/install.json
-          git commit -m 'Install sealed Anastasia cycle workflow v2'
+          git add "$out/sealed-workflow.yml" "$out/pr-event-workflow.yml" "$out/install.json" "$out/manifest.sha256"
+          git commit -m 'Stage verified Anastasia workflow blobs v3'
           git push origin "HEAD:refs/heads/agent/star-trek-anastasia-cycle-v1"
