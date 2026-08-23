@@ -1,0 +1,330 @@
+name: star-trek-alice-qualification-v3
+
+on:
+  push:
+    branches:
+      - agent/star-trek-alice-qualification-v3
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-alice-qualification-v3
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 91254f17fa1ebb6e8502c6201e9bc8651ef4d4ac
+  EXPECTED_TREE: e395cd3e679aadf60243f5b7bfe0ee7b2b079874
+  EXPECTED_TASK: ap_c7ff8298a99fe94fc55bbdbc
+  EXPECTED_PERFORMER: Nichelle Nichols
+  EXPECTED_CHARACTER: Alice (character)
+  EXPECTED_FINGERPRINT: 9caf9645daf70d67203bd0056980531a7190659c5209e15b3899cf6bac016297
+  RESULT_BRANCH: agent/star-trek-alice-qualification-result-v3
+  OUT: /tmp/star-trek-alice-qualification-v3
+  WORK: /tmp/star-trek-alice-main-v3
+
+jobs:
+  qualify:
+    name: verify-exact-alice-successor-without-leasing
+    if: ${{ github.event.head_commit.message == 'Verify Star Trek Alice successor v3' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Qualify exact Alice task and performer boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT" "$WORK"
+          mkdir -p "$OUT/logs"
+
+          git fetch --no-tags origin main
+          start_commit="$(git rev-parse refs/remotes/origin/main)"
+          start_tree="$(git show -s --format=%T refs/remotes/origin/main)"
+          start_parents="$(git show -s --format=%P refs/remotes/origin/main)"
+          start_message="$(git show -s --format=%s refs/remotes/origin/main)"
+          test "$start_commit" = "$EXPECTED_MAIN"
+          test "$start_tree" = "$EXPECTED_TREE"
+          test "$(wc -w <<<"$start_parents" | tr -d ' ')" = 1
+
+          git worktree add --detach "$WORK" "$EXPECTED_MAIN"
+          before="$(sha256sum "$WORK/data/AUTOPILOT.json" | awk '{print $1}')"
+
+          capture() {
+            local name="$1"
+            shift
+            set +e
+            (cd "$WORK" && "$@") >"$OUT/logs/${name}.log" 2>&1
+            local rc=$?
+            set -e
+            printf '%s\n' "$rc" >"$OUT/logs/${name}.exit"
+          }
+
+          capture npm-ci npm ci --ignore-scripts
+          capture thesis-validate node scripts/thesis-rails.mjs validate
+          capture thesis-next node scripts/thesis-rails.mjs next --json
+          capture autopilot-validate node scripts/autopilot.mjs validate
+          capture media-gate node scripts/media-audit.mjs gate --scope star-trek
+          capture waterline-validate node scripts/waterline.mjs validate
+          cp "$OUT/logs/thesis-next.log" "$OUT/rail.json"
+          git ls-remote --heads origin 'refs/heads/*alice*' > "$OUT/alice-heads.txt" || true
+
+          ROOT="$WORK" OUT="$OUT" START_COMMIT="$start_commit" START_TREE="$start_tree" START_PARENTS="$start_parents" START_MESSAGE="$start_message" BEFORE="$before" node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const crypto = require('node:crypto');
+          const root = process.env.ROOT;
+          const out = process.env.OUT;
+          const expected = {
+            main: process.env.EXPECTED_MAIN,
+            tree: process.env.EXPECTED_TREE,
+            task_id: process.env.EXPECTED_TASK,
+            performer: process.env.EXPECTED_PERFORMER,
+            character: process.env.EXPECTED_CHARACTER,
+            source_fingerprint: process.env.EXPECTED_FINGERPRINT,
+          };
+          const read = (p) => fs.readFileSync(p, 'utf8');
+          const readRepo = (p) => read(path.join(root, p));
+          const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex');
+          const exitCode = (name) => Number(read(path.join(out, 'logs', `${name}.exit`)).trim());
+          const errors = [];
+          for (const name of ['npm-ci','thesis-validate','thesis-next','autopilot-validate','media-gate','waterline-validate']) {
+            if (exitCode(name) !== 0) errors.push(`${name}-failed`);
+          }
+
+          let rail = null;
+          try { rail = JSON.parse(read(path.join(out, 'rail.json'))); } catch { errors.push('rail-json-invalid'); }
+          const candidate = rail?.candidate || null;
+          if (rail?.phase !== 'ready-for-one-cycle') errors.push(`rail-phase:${rail?.phase ?? 'missing'}`);
+          if (rail?.scope_id !== 'star-trek') errors.push(`rail-scope:${rail?.scope_id ?? 'missing'}`);
+          for (const key of ['task_id','performer','character','source_fingerprint']) {
+            if (candidate?.[key] !== expected[key]) errors.push(`rail-${key}:${candidate?.[key] ?? 'missing'}`);
+          }
+          if (Number(candidate?.priority) !== 1330) errors.push(`rail-priority:${candidate?.priority ?? 'missing'}`);
+
+          const autopilot = JSON.parse(readRepo('data/AUTOPILOT.json'));
+          const jobs = Array.isArray(autopilot.jobs) ? autopilot.jobs : [];
+          const task = jobs.find((job) => job.id === expected.task_id) || null;
+          if (!task) errors.push('task-missing');
+          if (task?.performer !== expected.performer) errors.push(`task-performer:${task?.performer ?? 'missing'}`);
+          if (task?.character !== expected.character) errors.push(`task-character:${task?.character ?? 'missing'}`);
+          if (task?.source_fingerprint !== expected.source_fingerprint) errors.push(`task-fingerprint:${task?.source_fingerprint ?? 'missing'}`);
+          if (task?.status !== 'queued') errors.push(`task-status:${task?.status ?? 'missing'}`);
+          if (Number(task?.attempts ?? -1) !== 0) errors.push(`task-attempts:${task?.attempts ?? 'missing'}`);
+          if (!Array.isArray(task?.source_receipts) || task.source_receipts.length !== 1) errors.push('source-receipt-count');
+
+          const sameCharacterTasks = jobs
+            .filter((job) => job.scope === 'star-trek' && job.character === expected.character)
+            .map((job) => ({
+              id: job.id,
+              performer: job.performer,
+              character: job.character,
+              categories: job.categories,
+              performance_modes: job.performance_modes,
+              sources: job.sources,
+              source_receipts: job.source_receipts,
+              source_fingerprint: job.source_fingerprint,
+              priority: job.priority,
+              status: job.status,
+              attempts: job.attempts,
+              performer_on_wall: job.performer_on_wall,
+              role_on_wall: job.role_on_wall,
+              wall_ids: job.wall_ids,
+            }));
+          if (sameCharacterTasks.length < 2) errors.push(`same-character-task-count:${sameCharacterTasks.length}`);
+
+          const imagePaths = new Set();
+          const performerRecords = [];
+          const collectImages = (value) => {
+            if (typeof value === 'string' && /^(?:\.\/)?images\//.test(value)) imagePaths.add(value.replace(/^\.\//, ''));
+            else if (Array.isArray(value)) value.forEach(collectImages);
+            else if (value && typeof value === 'object') Object.values(value).forEach(collectImages);
+          };
+          const visit = (value, file, trail = '$') => {
+            if (!value || typeof value !== 'object' || performerRecords.length >= 150) return;
+            if (!Array.isArray(value)) {
+              if (value.performer === expected.performer || value.actor === expected.performer) {
+                collectImages(value);
+                performerRecords.push({
+                  file,
+                  path: trail,
+                  id: value.id ?? null,
+                  wall_id: value.wall_id ?? null,
+                  character: value.character ?? null,
+                  performer: value.performer ?? value.actor ?? null,
+                  portrait: value.portrait ?? null,
+                  still: value.still ?? null,
+                  asset: value.asset ?? null,
+                  status: value.status ?? null,
+                  source: value.source ?? null,
+                });
+              }
+            }
+            if (Array.isArray(value)) value.forEach((item, i) => visit(item, file, `${trail}[${i}]`));
+            else Object.entries(value).forEach(([key, item]) => visit(item, file, `${trail}.${key}`));
+          };
+          const files = [];
+          const walk = (dir) => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const absolute = path.join(dir, entry.name);
+              if (entry.isDirectory()) walk(absolute);
+              else if (entry.isFile() && absolute.endsWith('.json')) files.push(absolute);
+            }
+          };
+          walk(path.join(root, 'data'));
+          for (const absolute of files) {
+            let text;
+            try { text = read(absolute); } catch { continue; }
+            if (!text.includes(expected.performer)) continue;
+            try { visit(JSON.parse(text), path.relative(root, absolute)); } catch { /* retained as raw source elsewhere */ }
+          }
+          const assets = [...imagePaths].sort().map((relative) => {
+            const absolute = path.join(root, relative);
+            if (!fs.existsSync(absolute)) return { path: relative, exists: false };
+            const bytes = fs.readFileSync(absolute);
+            return { path: relative, exists: true, bytes: bytes.length, sha256: sha256(bytes) };
+          });
+
+          const heads = read(path.join(out, 'alice-heads.txt')).split(/\r?\n/).filter(Boolean);
+          const allowedRefs = new Set([
+            'refs/heads/agent/star-trek-alice-qualification-v1',
+            'refs/heads/agent/star-trek-alice-qualification-result-v1',
+            'refs/heads/agent/star-trek-alice-qualification-v2',
+            'refs/heads/agent/star-trek-alice-qualification-result-v2',
+            'refs/heads/agent/star-trek-alice-qualification-v3',
+            'refs/heads/agent/star-trek-alice-qualification-result-v3',
+          ]);
+          const disallowedHeads = heads.filter((line) => {
+            const ref = line.split(/\s+/)[1];
+            return ref && !allowedRefs.has(ref);
+          });
+          if (disallowedHeads.length) errors.push(`existing-alice-product-heads:${disallowedHeads.length}`);
+
+          const taskDoc = {
+            version: 1,
+            exact_task: task,
+            same_character_tasks: sameCharacterTasks,
+          };
+          const mediaDoc = {
+            version: 1,
+            performer: expected.performer,
+            character: expected.character,
+            performer_record_count: performerRecords.length,
+            performer_records: performerRecords,
+            image_asset_count: assets.length,
+            image_assets: assets,
+            exact_alice_still: 'unresolved-pending-source-adjudication',
+            neutral_nichelle_nichols_portrait: 'unresolved-pending-source-adjudication',
+            honest_absence_allowed: true,
+          };
+          const q = {
+            version: 3,
+            transaction: 'STAR-TREK-ALICE-QUALIFICATION-V3',
+            generated_at: new Date().toISOString(),
+            status: errors.length ? 'blocked-read-only' : 'qualified-read-only',
+            lease_taken: false,
+            canonical_mutation: false,
+            expected,
+            canonical_start: {
+              commit: process.env.START_COMMIT,
+              tree: process.env.START_TREE,
+              parents: process.env.START_PARENTS.split(/\s+/).filter(Boolean),
+              message: process.env.START_MESSAGE,
+            },
+            autopilot_sha256_before: process.env.BEFORE,
+            gates: Object.fromEntries(['npm-ci','thesis-validate','thesis-next','autopilot-validate','media-gate','waterline-validate'].map((name) => [name, exitCode(name)])),
+            rail,
+            exact_task: {
+              id: task?.id ?? null,
+              performer: task?.performer ?? null,
+              character: task?.character ?? null,
+              status: task?.status ?? null,
+              attempts: task?.attempts ?? null,
+              priority: task?.priority ?? null,
+              source_fingerprint: task?.source_fingerprint ?? null,
+              source_receipts: task?.source_receipts ?? null,
+              performance_modes: task?.performance_modes ?? null,
+              categories: task?.categories ?? null,
+            },
+            same_character_task_count: sameCharacterTasks.length,
+            performer_record_count: performerRecords.length,
+            image_asset_count: assets.length,
+            remote_alice_heads: heads,
+            disallowed_remote_alice_heads: disallowedHeads,
+            errors,
+          };
+          fs.writeFileSync(path.join(out, 'task-and-performer-boundary.json'), JSON.stringify(taskDoc, null, 2) + '\n');
+          fs.writeFileSync(path.join(out, 'media-inventory.json'), JSON.stringify(mediaDoc, null, 2) + '\n');
+          fs.writeFileSync(path.join(out, 'qualification.json'), JSON.stringify(q, null, 2) + '\n');
+          NODE
+
+          after="$(sha256sum "$WORK/data/AUTOPILOT.json" | awk '{print $1}')"
+          test "$before" = "$after"
+          git fetch --no-tags origin main
+          end_commit="$(git rev-parse refs/remotes/origin/main)"
+          end_tree="$(git show -s --format=%T refs/remotes/origin/main)"
+
+          OUT="$OUT" END_COMMIT="$end_commit" END_TREE="$end_tree" AFTER="$after" node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const out = process.env.OUT;
+          const file = path.join(out, 'qualification.json');
+          const q = JSON.parse(fs.readFileSync(file, 'utf8'));
+          q.autopilot_sha256_after = process.env.AFTER;
+          q.canonical_end = { commit: process.env.END_COMMIT, tree: process.env.END_TREE };
+          if (q.autopilot_sha256_before !== q.autopilot_sha256_after) {
+            q.errors.push('autopilot-mutated');
+            q.status = 'invalid-mutation';
+          }
+          if (q.canonical_end.commit !== q.expected.main || q.canonical_end.tree !== q.expected.tree) {
+            q.errors.push(`main-moved:${q.canonical_end.commit}:${q.canonical_end.tree}`);
+            q.status = 'stale-main';
+          }
+          fs.writeFileSync(file, JSON.stringify(q, null, 2) + '\n');
+          const md = [
+            '# Star Trek Alice read-only qualification v3',
+            '',
+            `Status: \`${q.status}\``,
+            `Canonical main: \`${q.canonical_end.commit}\``,
+            `Canonical tree: \`${q.canonical_end.tree}\``,
+            `Task: \`${q.exact_task.id}\``,
+            `Performer: ${q.exact_task.performer}`,
+            `Character: ${q.exact_task.character}`,
+            `Task status: \`${q.exact_task.status}\``,
+            `Attempts: \`${q.exact_task.attempts}\``,
+            `Same-character task count: \`${q.same_character_task_count}\``,
+            `Existing performer image assets: \`${q.image_asset_count}\``,
+            `Lease taken: \`${q.lease_taken}\``,
+            '',
+            'Errors:',
+            ...(q.errors.length ? q.errors.map((e) => `- ${e}`) : ['- none']),
+          ].join('\n') + '\n';
+          fs.writeFileSync(path.join(out, 'qualification.md'), md);
+          NODE
+
+          status="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).status)' "$OUT/qualification.json")"
+          git worktree remove --force "$WORK"
+
+          git config user.name undercast-alice-qualification
+          git config user.email undercast-alice-qualification@users.noreply.github.com
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git checkout --orphan alice-qualification-result-v3
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-alice-qualification-v3
+          cp -a "$OUT"/. transport/star-trek-alice-qualification-v3/
+          git add transport/star-trek-alice-qualification-v3
+          git commit -m 'Record read-only Star Trek Alice qualification v3'
+          git push origin HEAD:"refs/heads/${RESULT_BRANCH}"
+          test "$status" = qualified-read-only
