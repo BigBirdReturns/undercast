@@ -1,0 +1,2 @@
+transaction=INSPECT-ANASTASIA-INSTALL-V1
+triggered_at=2026-08-23T00:00:00Z
