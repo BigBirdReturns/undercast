@@ -1,0 +1,6 @@
+transaction=STAR-TREK-ANASTASIA-TERMINAL-V1
+carrier_branch=agent/star-trek-anastasia-cycle-v1
+expected_parent=933415b505d1c6e40c7e4bd44bf132c61a5ea32d
+task_id=ap_82712ddec2c606e4c7d1a152
+canonical_mutation=false
+lease_taken=false
