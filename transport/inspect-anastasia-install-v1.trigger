@@ -1,2 +1,3 @@
 transaction=INSPECT-ANASTASIA-INSTALL-V1
-triggered_at=2026-08-23T00:00:00Z
+triggered_at=2026-08-23T08:00:00Z
+cycle_trigger_commit=bec82af0e4bbdabbd68cc81e149e3b41d89a0bfc
