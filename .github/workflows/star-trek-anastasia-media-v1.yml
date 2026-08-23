@@ -1,0 +1,279 @@
+name: star-trek-anastasia-media-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-anastasia-media-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-anastasia-media-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 97956ce415d565d968cc5f66067142183ec28a1f
+  EXPECTED_TREE: ff8adadb6dd36ab84a21336bdd30ce3cb17b5335
+  TASK_ID: ap_82712ddec2c606e4c7d1a152
+  SOURCE_FINGERPRINT: 8c45968f68d0b1afab3be38b612d0cee8a3c0ed1ae424cbc3ff51993aac39060
+  SOURCE_REVISION: '3441447'
+  SOURCE_TIMESTAMP: 2026-02-23T08:48:48Z
+  SOURCE_CONTENT_SHA256: a5ef5c837f6a48aa9ef7cf2576e5ec43f6b8a2f32c17adf1dd58693c334543f3
+  PORTRAIT_TITLE: File:Nana Visitor (42105426150).jpg
+  ROOT: /tmp/star-trek-anastasia-media-v1
+  RESULT_BRANCH: agent/star-trek-anastasia-media-result-v1
+
+jobs:
+  scout:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify canonical boundary and collect revision-bound media
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse "${EXPECTED_MAIN}^{tree}")" = "$EXPECTED_TREE"
+          git checkout --detach "$EXPECTED_MAIN"
+          test -z "$(git status --porcelain)"
+
+          curl -fsSLG 'https://memory-alpha.fandom.com/api.php' \
+            --data-urlencode action=query \
+            --data-urlencode prop=revisions \
+            --data-urlencode revids="$SOURCE_REVISION" \
+            --data-urlencode 'rvprop=ids|timestamp|content' \
+            --data-urlencode rvslots=main \
+            --data-urlencode format=json \
+            --data-urlencode formatversion=2 \
+            > "$ROOT/source-revision.json"
+
+          python3 - "$ROOT" "$SOURCE_REVISION" "$SOURCE_TIMESTAMP" "$SOURCE_CONTENT_SHA256" <<'PY'
+          import hashlib, json, pathlib, re, sys
+          root = pathlib.Path(sys.argv[1])
+          expected_rev = int(sys.argv[2])
+          expected_ts = sys.argv[3]
+          expected_sha = sys.argv[4]
+          doc = json.loads((root / 'source-revision.json').read_text())
+          page = doc['query']['pages'][0]
+          rev = page['revisions'][0]
+          content = rev['slots']['main']['content']
+          assert page['pageid'] == 23346, page
+          assert rev['revid'] == expected_rev, rev
+          assert rev['timestamp'] == expected_ts, rev
+          digest = hashlib.sha256(content.encode()).hexdigest()
+          assert digest == expected_sha, (digest, expected_sha)
+          (root / 'source.wikitext').write_text(content)
+          sidebar = []
+          for line in content.splitlines():
+              match = re.match(r'^\|image\d*\s*=\s*(.*?)\s*$', line)
+              if match and match.group(1):
+                  sidebar.append(match.group(1))
+          linked = re.findall(r'\[\[(?:File|Image):([^\]|]+)', content, flags=re.I)
+          titles = []
+          for value in sidebar + linked:
+              title = value.strip().replace('_', ' ')
+              if title and title not in titles:
+                  titles.append(title)
+          assert titles, 'source revision exposes no image names'
+          result = {
+              'pageid': page['pageid'],
+              'title': page['title'],
+              'revision': rev['revid'],
+              'timestamp': rev['timestamp'],
+              'content_sha256': digest,
+              'sidebar_images': sidebar,
+              'all_image_names': titles,
+              'selected_lead_image': titles[0],
+          }
+          (root / 'source-receipt.json').write_text(json.dumps(result, indent=2) + '\n')
+          (root / 'image-titles.txt').write_text('|'.join('File:' + x for x in titles) + '\n')
+          PY
+
+          image_titles="$(cat "$ROOT/image-titles.txt")"
+          curl -fsSLG 'https://memory-alpha.fandom.com/api.php' \
+            --data-urlencode action=query \
+            --data-urlencode prop=imageinfo \
+            --data-urlencode titles="$image_titles" \
+            --data-urlencode 'iiprop=url|size|sha1|mime|extmetadata' \
+            --data-urlencode format=json \
+            --data-urlencode formatversion=2 \
+            > "$ROOT/source-imageinfo.json"
+
+          python3 - "$ROOT" <<'PY'
+          import json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          receipt = json.loads((root / 'source-receipt.json').read_text())
+          target = 'File:' + receipt['selected_lead_image'].replace('_', ' ')
+          doc = json.loads((root / 'source-imageinfo.json').read_text())
+          pages = doc['query']['pages']
+          page = next((x for x in pages if x.get('title', '').replace('_', ' ') == target), None)
+          assert page and page.get('imageinfo'), (target, pages)
+          info = page['imageinfo'][0]
+          (root / 'still-url.txt').write_text(info['url'] + '\n')
+          (root / 'selected-still-imageinfo.json').write_text(json.dumps({'title': page['title'], 'pageid': page['pageid'], 'imageinfo': info}, indent=2) + '\n')
+          PY
+          curl -fsSL "$(cat "$ROOT/still-url.txt")" -o "$ROOT/anastasia-komananov-still.jpg"
+
+          curl -fsSLG 'https://memory-alpha.fandom.com/api.php' \
+            --data-urlencode action=query \
+            --data-urlencode prop=revisions \
+            --data-urlencode 'titles=Our Man Bashir (episode)' \
+            --data-urlencode 'rvprop=ids|timestamp|content' \
+            --data-urlencode rvslots=main \
+            --data-urlencode rvlimit=1 \
+            --data-urlencode format=json \
+            --data-urlencode formatversion=2 \
+            > "$ROOT/episode-revision.json"
+          python3 - "$ROOT" <<'PY'
+          import hashlib, json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          doc = json.loads((root / 'episode-revision.json').read_text())
+          page = doc['query']['pages'][0]
+          rev = page['revisions'][0]
+          content = rev['slots']['main']['content']
+          out = {
+              'source': 'https://memory-alpha.fandom.com/wiki/Our_Man_Bashir_(episode)',
+              'pageid': page['pageid'],
+              'revision': rev['revid'],
+              'timestamp': rev['timestamp'],
+              'content_sha256': hashlib.sha256(content.encode()).hexdigest(),
+          }
+          (root / 'episode-receipt.json').write_text(json.dumps(out, indent=2) + '\n')
+          PY
+
+          curl -fsSLG 'https://commons.wikimedia.org/w/api.php' \
+            --data-urlencode action=query \
+            --data-urlencode prop=imageinfo \
+            --data-urlencode titles="$PORTRAIT_TITLE" \
+            --data-urlencode 'iiprop=url|size|sha1|mime|extmetadata' \
+            --data-urlencode format=json \
+            --data-urlencode formatversion=2 \
+            > "$ROOT/portrait-imageinfo.json"
+          python3 - "$ROOT" <<'PY'
+          import json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          doc = json.loads((root / 'portrait-imageinfo.json').read_text())
+          page = doc['query']['pages'][0]
+          assert page.get('imageinfo'), page
+          info = page['imageinfo'][0]
+          meta = info.get('extmetadata', {})
+          short = meta.get('LicenseShortName', {}).get('value', '')
+          artist = meta.get('Artist', {}).get('value', '')
+          assert 'CC BY 2.0' in short, short
+          assert artist, meta
+          (root / 'portrait-url.txt').write_text(info['url'] + '\n')
+          PY
+          curl -fsSL "$(cat "$ROOT/portrait-url.txt")" -o "$ROOT/nana-visitor-portrait.jpg"
+
+          python3 - "$ROOT" "$TASK_ID" "$SOURCE_FINGERPRINT" "$EXPECTED_MAIN" <<'PY'
+          import hashlib, json, pathlib, re, sys
+          root = pathlib.Path(sys.argv[1])
+          task_id, fingerprint, canonical = sys.argv[2:]
+          source = json.loads((root / 'source-receipt.json').read_text())
+          still_info = json.loads((root / 'selected-still-imageinfo.json').read_text())
+          portrait_info = json.loads((root / 'portrait-imageinfo.json').read_text())
+          episode = json.loads((root / 'episode-receipt.json').read_text())
+          still = root / 'anastasia-komananov-still.jpg'
+          portrait = root / 'nana-visitor-portrait.jpg'
+          def digest(p): return hashlib.sha256(p.read_bytes()).hexdigest()
+          portrait_sha = digest(portrait)
+          existing = []
+          for p in pathlib.Path('images').iterdir():
+              if p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest() == portrait_sha:
+                  existing.append(str(p))
+          assert not existing, existing
+          info = portrait_info['query']['pages'][0]['imageinfo'][0]
+          meta = info.get('extmetadata', {})
+          artist_html = meta.get('Artist', {}).get('value', '')
+          artist = re.sub('<[^>]+>', '', artist_html).strip()
+          out = {
+              'version': 1,
+              'transaction': 'STAR-TREK-ANASTASIA-MEDIA-SCOUT-V1',
+              'canonical_parent': canonical,
+              'task': {
+                  'id': task_id,
+                  'performer': 'Nana Visitor',
+                  'character': 'Anastasia Komananov',
+                  'source_fingerprint': fingerprint,
+                  'queued_mode_hint': ['physical-prosthetic'],
+              },
+              'source': source,
+              'episode_receipt': episode,
+              'still': {
+                  'path': still.name,
+                  'title': still_info['title'],
+                  'descriptionurl': still_info['imageinfo']['descriptionurl'],
+                  'sha256': digest(still),
+                  'bytes': still.stat().st_size,
+                  'width': still_info['imageinfo']['width'],
+                  'height': still_info['imageinfo']['height'],
+                  'mime': still_info['imageinfo']['mime'],
+                  'status': 'candidate-for-visual-review',
+              },
+              'portrait': {
+                  'path': portrait.name,
+                  'title': portrait_info['query']['pages'][0]['title'],
+                  'descriptionurl': info['descriptionurl'],
+                  'sha256': portrait_sha,
+                  'bytes': portrait.stat().st_size,
+                  'width': info['width'],
+                  'height': info['height'],
+                  'mime': info['mime'],
+                  'author': artist,
+                  'license': meta.get('LicenseShortName', {}).get('value'),
+                  'status': 'candidate-for-visual-review',
+                  'duplicate_existing_paths': existing,
+              },
+              'boundary': {
+                  'komananov_hologram_and_kira_body_distinguished': True,
+                  'nana_visitor_physical_performance_through_kira_body': True,
+                  'hologram_creator_or_costume_maker_attributed': False,
+                  'transformation_measured': False,
+                  'cross_facet_substitution': False,
+                  'lease_taken': False,
+                  'canonical_mutation': False,
+              },
+          }
+          (root / 'media-scout.json').write_text(json.dumps(out, indent=2) + '\n')
+          PY
+          (cd "$ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+      - id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-anastasia-media-v1
+          path: /tmp/star-trek-anastasia-media-v1/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish media scout receipt
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq --argjson run_id "$GITHUB_RUN_ID" --argjson artifact_id "$ARTIFACT_ID" --arg artifact_digest "${ARTIFACT_DIGEST#sha256:}" '. + {workflow_run:$run_id,artifact:{id:$artifact_id,sha256:$artifact_digest}}' "$ROOT/media-scout.json" > "$ROOT/media-scout-published.json"
+          mv "$ROOT/media-scout-published.json" "$ROOT/media-scout.json"
+          git config user.name undercast-anastasia-media-scout
+          git config user.email anastasia-media-scout@users.noreply.github.com
+          git switch --orphan media-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/star-trek-anastasia-media-v1
+          cp "$ROOT/media-scout.json" "$ROOT/source-receipt.json" "$ROOT/episode-receipt.json" "$ROOT/selected-still-imageinfo.json" "$ROOT/portrait-imageinfo.json" "$ROOT/manifest.sha256" transport/star-trek-anastasia-media-v1/
+          git add transport/star-trek-anastasia-media-v1
+          git commit -m 'Record Anastasia media scout'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
+      - name: Preserve failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-anastasia-media-failure-${{ github.run_id }}
+          path: /tmp/star-trek-anastasia-media-v1/
+          if-no-files-found: warn
+          retention-days: 14
