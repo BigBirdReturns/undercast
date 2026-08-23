@@ -1,0 +1,5 @@
+transaction=ANASTASIA-REBIND-INSPECTION-V1
+canonical_parent=97956ce415d565d968cc5f66067142183ec28a1f
+live_main=933415b505d1c6e40c7e4bd44bf132c61a5ea32d
+lease_taken=false
+canonical_mutation=false
