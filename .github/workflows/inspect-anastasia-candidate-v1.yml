@@ -1,0 +1,182 @@
+name: inspect-anastasia-candidate-v1
+
+on:
+  push:
+    branches:
+      - agent/inspect-anastasia-candidate-v1
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: inspect-anastasia-candidate-v1
+  cancel-in-progress: false
+
+env:
+  TASK_ID: ap_82712ddec2c606e4c7d1a152
+  CANDIDATE_BRANCH: agent/star-trek-anastasia-candidate-v1
+  CYCLE_BRANCH: agent/star-trek-anastasia-cycle-v1
+  CYCLE_WORKFLOW: star-trek-anastasia-cycle-v1.yml
+  RESULT_BRANCH: agent/inspect-anastasia-candidate-result-v1
+  ROOT: /tmp/inspect-anastasia-candidate-v1
+
+jobs:
+  inspect:
+    if: ${{ github.event.head_commit.message == 'Trigger Anastasia candidate inspection v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Inspect candidate, lease, review, and cycle runs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/runs"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/commits/main" | jq . > "$ROOT/main.json"
+          candidate_head="$(git ls-remote origin "refs/heads/${CANDIDATE_BRANCH}" | cut -f1)"
+          cycle_head="$(git ls-remote origin "refs/heads/${CYCLE_BRANCH}" | cut -f1)"
+          test -n "$candidate_head"
+          printf '%s\n' "$candidate_head" > "$ROOT/candidate-head.txt"
+          printf '%s\n' "$cycle_head" > "$ROOT/cycle-head.txt"
+
+          git fetch --filter=blob:none --no-tags origin "$CANDIDATE_BRANCH"
+          git checkout --detach "$candidate_head"
+          candidate_tree="$(git rev-parse HEAD^{tree})"
+          candidate_parent="$(git rev-parse HEAD^)"
+          candidate_message="$(git show -s --format=%s HEAD)"
+          git show -s --format='%H%n%T%n%P%n%s' HEAD > "$ROOT/candidate-commit.txt"
+          git diff --name-only "$candidate_parent"..HEAD | LC_ALL=C sort -u > "$ROOT/candidate-paths.txt"
+          candidate_path_count="$(wc -l < "$ROOT/candidate-paths.txt" | tr -d ' ')"
+          candidate_path_sha="$(sha256sum "$ROOT/candidate-paths.txt" | cut -d' ' -f1)"
+
+          node - "$TASK_ID" "$ROOT/candidate-state.json" <<'NODE'
+          const fs = require('fs');
+          const [taskId, out] = process.argv.slice(2);
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const rows = state.jobs.filter((row) => row.scope === 'star-trek');
+          const task = rows.find((row) => row.id === taskId) || null;
+          const queue = {
+            total: rows.length,
+            queued: rows.filter((row) => row.status === 'queued').length,
+            resolved: rows.filter((row) => row.status === 'resolved').length,
+            blocked: rows.filter((row) => row.status === 'blocked').length,
+            rejected: rows.filter((row) => row.status === 'rejected').length,
+            in_flight: rows.filter((row) => ['leased','drafted','merged'].includes(row.status)).length,
+          };
+          const cards = JSON.parse(fs.readFileSync('data/specimens.json', 'utf8'));
+          const wallIds = task?.wall_ids || [];
+          const card = cards.find((row) => wallIds.includes(row.id)) || cards.find((row) => row.actor === 'Nana Visitor' && row.character === 'Anastasia Komananov') || null;
+          const sources = JSON.parse(fs.readFileSync('data/SOURCES.json', 'utf8'));
+          const source = card ? sources.find((row) => row.id === card.id) || null : null;
+          const audit = JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json', 'utf8'));
+          const facets = card ? audit.items.filter((row) => row.wall_id === card.id).sort((a,b) => a.side.localeCompare(b.side)) : [];
+          const claims = fs.readFileSync('data/journal/autopilot.jsonl', 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse).filter((row) => row.op === 'lease.claimed' && row.task_id === taskId);
+          const cycles = JSON.parse(fs.readFileSync('data/WATERLINE-STATE.json', 'utf8')).cycles.filter((row) => row.scope_id === 'star-trek' && claims.some((claim) => claim.lease_id === row.lease_id));
+          fs.writeFileSync(out, JSON.stringify({task, queue, card, source, facets, claims, cycles}, null, 2) + '\n');
+          NODE
+
+          npm ci --ignore-scripts
+          set +e
+          node scripts/validate.mjs > "$ROOT/validate.log" 2>&1
+          validate_rc=$?
+          node scripts/thesis-rails.mjs validate > "$ROOT/thesis-validate.log" 2>&1
+          thesis_rc=$?
+          node scripts/media-audit.mjs gate --scope star-trek > "$ROOT/media-gate.log" 2>&1
+          media_rc=$?
+          node scripts/waterline.mjs status --scope star-trek --json > "$ROOT/waterline.json" 2> "$ROOT/waterline.stderr"
+          waterline_rc=$?
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json" 2> "$ROOT/thesis-next.stderr"
+          next_rc=$?
+          set -e
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/${CYCLE_WORKFLOW}/runs?branch=${CYCLE_BRANCH}&per_page=100" | jq . > "$ROOT/workflow-runs.json" || printf '{"workflow_runs":[]}\n' > "$ROOT/workflow-runs.json"
+          for run_id in $(jq -r '.workflow_runs[].id' "$ROOT/workflow-runs.json"); do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" | jq . > "$ROOT/runs/${run_id}-jobs.json" || true
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" | jq . > "$ROOT/runs/${run_id}-artifacts.json" || true
+          done
+
+          node - "$ROOT" <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const root = process.argv[2];
+          const runs = JSON.parse(fs.readFileSync(path.join(root, 'workflow-runs.json'), 'utf8')).workflow_runs || [];
+          const summary = runs.map((run) => {
+            const jobsPath = path.join(root, 'runs', `${run.id}-jobs.json`);
+            const artifactsPath = path.join(root, 'runs', `${run.id}-artifacts.json`);
+            const jobs = fs.existsSync(jobsPath) ? JSON.parse(fs.readFileSync(jobsPath, 'utf8')).jobs || [] : [];
+            const artifacts = fs.existsSync(artifactsPath) ? JSON.parse(fs.readFileSync(artifactsPath, 'utf8')).artifacts || [] : [];
+            return {
+              id: run.id,
+              run_number: run.run_number,
+              head_sha: run.head_sha,
+              status: run.status,
+              conclusion: run.conclusion,
+              created_at: run.created_at,
+              updated_at: run.updated_at,
+              jobs: jobs.map((job) => ({id: job.id, name: job.name, status: job.status, conclusion: job.conclusion})),
+              artifacts: artifacts.map((item) => ({id: item.id, name: item.name, digest: item.digest, expired: item.expired})),
+            };
+          });
+          fs.writeFileSync(path.join(root, 'runs-summary.json'), JSON.stringify(summary, null, 2) + '\n');
+          NODE
+
+          task_status="$(jq -r '.task.status // "missing"' "$ROOT/candidate-state.json")"
+          task_lease="$(jq -r '.claims | last | .lease_id // ""' "$ROOT/candidate-state.json")"
+          task_wall="$(jq -r '.task.wall_ids[0] // .card.id // ""' "$ROOT/candidate-state.json")"
+          claim_count="$(jq -r '.claims | length' "$ROOT/candidate-state.json")"
+          reviewed_cycle_count="$(jq -r '.cycles | length' "$ROOT/candidate-state.json")"
+          facet_count="$(jq -r '.facets | length' "$ROOT/candidate-state.json")"
+          verified_facet_count="$(jq -r '[.facets[] | select(.status=="verified")] | length' "$ROOT/candidate-state.json")"
+          queue_in_flight="$(jq -r '.queue.in_flight' "$ROOT/candidate-state.json")"
+          jq -n \
+            --arg status complete \
+            --arg candidate_head "$candidate_head" \
+            --arg candidate_tree "$candidate_tree" \
+            --arg candidate_parent "$candidate_parent" \
+            --arg candidate_message "$candidate_message" \
+            --argjson candidate_path_count "$candidate_path_count" \
+            --arg candidate_path_ledger_sha256 "$candidate_path_sha" \
+            --arg task_status "$task_status" \
+            --arg lease_id "$task_lease" \
+            --arg wall_id "$task_wall" \
+            --argjson claim_count "$claim_count" \
+            --argjson reviewed_cycle_count "$reviewed_cycle_count" \
+            --argjson facet_count "$facet_count" \
+            --argjson verified_facet_count "$verified_facet_count" \
+            --argjson queue_in_flight "$queue_in_flight" \
+            --argjson validate_rc "$validate_rc" \
+            --argjson thesis_rc "$thesis_rc" \
+            --argjson media_rc "$media_rc" \
+            --argjson waterline_rc "$waterline_rc" \
+            --argjson next_rc "$next_rc" \
+            --argjson run_count "$(jq '. | length' "$ROOT/runs-summary.json")" \
+            '{version:1,transaction:"INSPECT-ANASTASIA-CANDIDATE-V1",status:$status,candidate:{commit:$candidate_head,tree:$candidate_tree,parent:$candidate_parent,message:$candidate_message,path_count:$candidate_path_count,path_ledger_sha256:$candidate_path_ledger_sha256},task:{status:$task_status,lease_id:(if $lease_id=="" then null else $lease_id end),wall_id:(if $wall_id=="" then null else $wall_id end),claim_count:$claim_count,reviewed_cycle_count:$reviewed_cycle_count},media:{facet_count:$facet_count,verified_facet_count:$verified_facet_count},queue:{in_flight:$queue_in_flight},checks:{validate:$validate_rc,thesis_validate:$thesis_rc,media_gate:$media_rc,waterline_status:$waterline_rc,thesis_next:$next_rc},workflow_run_count:$run_count,canonical_mutation:false,lease_taken:false}' \
+            > "$ROOT/summary.json"
+          (cd "$ROOT" && find . -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+
+      - name: Publish candidate inspection
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-anastasia-candidate-inspector
+          git config user.email anastasia-candidate-inspector@users.noreply.github.com
+          git switch --orphan inspection-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/inspect-anastasia-candidate-v1
+          cp -a "$ROOT"/. transport/inspect-anastasia-candidate-v1/
+          git add transport/inspect-anastasia-candidate-v1
+          git commit -m 'Publish Anastasia candidate inspection'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
