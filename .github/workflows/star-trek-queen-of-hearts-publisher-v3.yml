@@ -1,0 +1,371 @@
+name: star-trek-queen-of-hearts-publisher-v3
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - agent/queen-publisher-base-v3
+    paths:
+      - .github/recovery/queen-publisher-v3.trigger
+
+permissions:
+  actions: write
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: star-trek-queen-of-hearts-publisher-v3
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  EXPECTED_MAIN: 6e9aa87be07411fdb42bc4e55b6e480135826d35
+  EXPECTED_TREE: 521d688da380123c76a129b618439a4889f2232f
+  EXPECTED_PARENT: 4900668f614a060f31ceeefb5009f7ee93cb17c1
+  EXPECTED_MESSAGE: "Star Trek: publish Maryl cycle"
+  CONTROLLER_SHA256: b9648023ac3930680d00bfd450ab8b3c70929eaf3767eb727fd563bea41f1315
+  CONTROLLER_GZIP_SHA256: 3c11263349811e67c9033efde2a3c8035182b757c64f698fd89b7cb6cfa8de63
+  CONTROLLER_BASE64_SHA256: 14dd03806ae600b71a1fe7ebb56248e70266392b88ba27e799961e2d82f87be0
+  CONTROLLER: /tmp/queen-controller-v3.mjs
+  MEDIA_RUN: "32558377593"
+  MEDIA_HEAD: 530bd427e90c9d49fd4b36c8e3087d3f61a410f9
+  MEDIA_ARTIFACT: "9472070841"
+  MEDIA_DIGEST: sha256:325897cfcb79fa359404ef1039e0a7b8f9d7dc6cee0292ebb1418370f807ad8b
+  MEDIA_CANONICAL_PARENT: 4900668f614a060f31ceeefb5009f7ee93cb17c1
+  CANDIDATE_BRANCH: agent/star-trek-queen-of-hearts-candidate-v3
+  STAGE_ROOT: /tmp/queen-stage-v3
+  REVIEW_ROOT: /tmp/queen-review-v3
+  FINAL_ROOT: /tmp/queen-final-v3
+  MEDIA_ROOT: /tmp/queen-media-v3
+  REVIEW_WORKTREE: /tmp/queen-review-worktree-v3
+  FINAL_WORKTREE: /tmp/queen-final-worktree-v3
+
+jobs:
+  publish:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/queen-publisher-trigger-v3' &&
+      github.event.pull_request.base.ref == 'agent/queen-publisher-base-v3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 480
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Bind exact PR, controller, canonical main, and media artifact
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ github.event.pull_request.head.repo.full_name }}" = "$GITHUB_REPOSITORY"
+          test "${{ github.event.pull_request.head.ref }}" = agent/queen-publisher-trigger-v3
+          test "${{ github.event.pull_request.base.ref }}" = agent/queen-publisher-base-v3
+          git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" | LC_ALL=C sort -u > /tmp/queen-pr-paths.txt
+          printf '%s\n' '.github/recovery/queen-publisher-v3.trigger' > /tmp/queen-expected-pr-paths.txt
+          cmp /tmp/queen-expected-pr-paths.txt /tmp/queen-pr-paths.txt
+
+          cat .github/recovery/queen-publisher-v3/controller.mjs.gz.b64.part-* \
+            | tr -d '\r\n\t ' > /tmp/queen-controller-v3.b64
+          test "$(sha256sum /tmp/queen-controller-v3.b64 | cut -d' ' -f1)" = "$CONTROLLER_BASE64_SHA256"
+          base64 -d /tmp/queen-controller-v3.b64 > /tmp/queen-controller-v3.mjs.gz
+          test "$(sha256sum /tmp/queen-controller-v3.mjs.gz | cut -d' ' -f1)" = "$CONTROLLER_GZIP_SHA256"
+          gzip -dc /tmp/queen-controller-v3.mjs.gz > "$CONTROLLER"
+          test "$(sha256sum "$CONTROLLER" | cut -d' ' -f1)" = "$CONTROLLER_SHA256"
+          node --check "$CONTROLLER"
+
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$EXPECTED_MAIN"
+          test "$(jq -r .commit.tree.sha <<<"$live")" = "$EXPECTED_TREE"
+          test "$(jq -r '.parents | length' <<<"$live")" = 1
+          test "$(jq -r .parents[0].sha <<<"$live")" = "$EXPECTED_PARENT"
+          test "$(jq -r .commit.message <<<"$live")" = "$EXPECTED_MESSAGE"
+          printf '%s\n' "$live" | jq . > /tmp/queen-live-main.json
+
+          meta="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${MEDIA_ARTIFACT}")"
+          test "$(jq -r .expired <<<"$meta")" = false
+          test "$(jq -r .name <<<"$meta")" = star-trek-queen-hearts-media-v1
+          test "$(jq -r .digest <<<"$meta")" = "$MEDIA_DIGEST"
+          test "$(jq -r .workflow_run.id <<<"$meta")" = "$MEDIA_RUN"
+          test "$(jq -r .workflow_run.head_sha <<<"$meta")" = "$MEDIA_HEAD"
+          printf '%s\n' "$meta" | jq . > /tmp/queen-media-artifact.json
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${MEDIA_ARTIFACT}/zip" > /tmp/queen-media-v3.zip
+          echo "${MEDIA_DIGEST#sha256:}  /tmp/queen-media-v3.zip" | sha256sum -c -
+          rm -rf "$MEDIA_ROOT"
+          mkdir -p "$MEDIA_ROOT"
+          unzip -q /tmp/queen-media-v3.zip -d "$MEDIA_ROOT"
+          for file in media-preparation.json source-revision.json episode-receipt.json queen-of-hearts-still.jpg majel-barrett-portrait.jpg; do
+            test -n "$(find "$MEDIA_ROOT" -type f -name "$file" -print -quit)"
+          done
+
+      - name: Stage exact Queen of Hearts candidate
+        id: stage
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$STAGE_ROOT" "$REVIEW_ROOT" "$FINAL_ROOT" "$REVIEW_WORKTREE" "$FINAL_WORKTREE" .luna
+          mkdir -p "$STAGE_ROOT" "$REVIEW_ROOT" "$FINAL_ROOT"
+          git fetch --no-tags origin main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          git checkout --detach "$EXPECTED_MAIN"
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          test -z "$(git status --porcelain)"
+          test -z "$(git ls-remote --heads origin "refs/heads/${CANDIDATE_BRANCH}")"
+          npm ci --ignore-scripts
+
+          MEDIA_ROOT="$MEDIA_ROOT" STAGE_ROOT="$STAGE_ROOT" EXPECTED_MAIN="$EXPECTED_MAIN" MEDIA_CANONICAL_PARENT="$MEDIA_CANONICAL_PARENT" \
+            node "$CONTROLLER" stage | tee "$STAGE_ROOT/stage.stdout.log"
+          rm -rf .luna
+
+          python3 - "$EXPECTED_MAIN" /tmp/queen-candidate-paths.z <<'PY'
+          from pathlib import Path
+          import subprocess, sys
+          base, out = sys.argv[1], Path(sys.argv[2])
+          paths = []
+          for command in (
+              ['git', 'diff', '--name-only', '-z', base],
+              ['git', 'ls-files', '--others', '--exclude-standard', '-z'],
+          ):
+              paths.extend(p.decode() for p in subprocess.check_output(command).split(b'\0') if p)
+          paths = sorted(set(paths))
+          if not paths:
+              raise SystemExit('Queen candidate produced no repository changes')
+          blocked = [p for p in paths if p.startswith(('.github/', 'transport/', '.luna/', '.queen/'))]
+          if blocked:
+              raise SystemExit('Queen candidate escaped product scope: ' + ', '.join(blocked))
+          out.write_bytes(b'\0'.join(p.encode() for p in paths) + b'\0')
+          PY
+          while IFS= read -r -d '' file; do git add -- "$file"; done < /tmp/queen-candidate-paths.z
+          test -n "$(git diff --cached --name-only)"
+
+          git config user.name undercast-star-trek-queen-stage
+          git config user.email star-trek-queen-stage@users.noreply.github.com
+          git commit -m 'Star Trek: stage Queen of Hearts candidate'
+          candidate_commit="$(git rev-parse HEAD)"
+          candidate_tree="$(git rev-parse HEAD^{tree})"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_MAIN"
+          git diff --name-only "$EXPECTED_MAIN"..HEAD | LC_ALL=C sort -u > "$STAGE_ROOT/candidate-paths.txt"
+          candidate_path_count="$(wc -l < "$STAGE_ROOT/candidate-paths.txt" | tr -d ' ')"
+          candidate_path_ledger_sha256="$(sha256sum "$STAGE_ROOT/candidate-paths.txt" | cut -d' ' -f1)"
+          test -z "$(grep -E '^(\.github/|transport/)' "$STAGE_ROOT/candidate-paths.txt" || true)"
+          jq -n \
+            --arg canonical_parent "$EXPECTED_MAIN" \
+            --arg candidate_commit "$candidate_commit" \
+            --arg candidate_tree "$candidate_tree" \
+            --argjson candidate_path_count "$candidate_path_count" \
+            --arg candidate_path_ledger_sha256 "$candidate_path_ledger_sha256" \
+            --arg controller_sha256 "$CONTROLLER_SHA256" \
+            --arg workflow_run "$GITHUB_RUN_ID" \
+            '{version:3,transaction:"STAR-TREK-QUEEN-OF-HEARTS-CANDIDATE-METADATA-V3",canonical_parent:$canonical_parent,candidate_commit:$candidate_commit,candidate_tree:$candidate_tree,candidate_path_count:$candidate_path_count,candidate_path_ledger_sha256:$candidate_path_ledger_sha256,controller_sha256:$controller_sha256,workflow_run:($workflow_run|tonumber)}' \
+            > "$STAGE_ROOT/candidate-metadata.json"
+          cp /tmp/queen-live-main.json /tmp/queen-media-artifact.json "$STAGE_ROOT/"
+          (cd "$STAGE_ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+          git push origin "HEAD:refs/heads/${CANDIDATE_BRANCH}"
+          test "$(git ls-remote --heads origin "refs/heads/${CANDIDATE_BRANCH}" | cut -f1)" = "$candidate_commit"
+          echo "candidate_commit=$candidate_commit" >> "$GITHUB_OUTPUT"
+          echo "candidate_tree=$candidate_tree" >> "$GITHUB_OUTPUT"
+          echo "candidate_path_count=$candidate_path_count" >> "$GITHUB_OUTPUT"
+          echo "candidate_path_ledger_sha256=$candidate_path_ledger_sha256" >> "$GITHUB_OUTPUT"
+          echo "wall_id=$(jq -r .wall_id "$STAGE_ROOT/stage.json")" >> "$GITHUB_OUTPUT"
+          echo "lease_id=$(jq -r .lease.id "$STAGE_ROOT/stage.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload staged Queen candidate
+        id: stage_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-queen-of-hearts-stage-v3
+          path: /tmp/queen-stage-v3/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Independently review exact candidate in a fresh worktree
+        id: review
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ steps.stage.outputs.candidate_commit }}
+          CANDIDATE_TREE: ${{ steps.stage.outputs.candidate_tree }}
+          CANDIDATE_PATH_COUNT: ${{ steps.stage.outputs.candidate_path_count }}
+          CANDIDATE_PATH_LEDGER_SHA256: ${{ steps.stage.outputs.candidate_path_ledger_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          (cd "$STAGE_ROOT" && sha256sum -c manifest.sha256)
+          git worktree add --detach "$REVIEW_WORKTREE" "$CANDIDATE_COMMIT"
+          cd "$REVIEW_WORKTREE"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT"
+          test "$(git rev-parse HEAD^{tree})" = "$CANDIDATE_TREE"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_MAIN"
+          git diff --name-only "$EXPECTED_MAIN"..HEAD | LC_ALL=C sort -u > /tmp/queen-review-paths.txt
+          cmp /tmp/queen-review-paths.txt "$STAGE_ROOT/candidate-paths.txt"
+          test "$(wc -l < /tmp/queen-review-paths.txt | tr -d ' ')" = "$CANDIDATE_PATH_COUNT"
+          test "$(sha256sum /tmp/queen-review-paths.txt | cut -d' ' -f1)" = "$CANDIDATE_PATH_LEDGER_SHA256"
+          npm ci --ignore-scripts
+          STAGE_ROOT="$STAGE_ROOT" REVIEW_ROOT="$REVIEW_ROOT" EXPECTED_MAIN="$EXPECTED_MAIN" \
+            CANDIDATE_COMMIT="$CANDIDATE_COMMIT" CANDIDATE_TREE="$CANDIDATE_TREE" \
+            CANDIDATE_PATH_COUNT="$CANDIDATE_PATH_COUNT" CANDIDATE_PATH_LEDGER_SHA256="$CANDIDATE_PATH_LEDGER_SHA256" \
+            node "$CONTROLLER" review | tee "$REVIEW_ROOT/review.stdout.log"
+          test -z "$(git status --porcelain)"
+          review_sha256="$(jq -r .review_sha256 "$REVIEW_ROOT/independent-review.json")"
+          (cd "$REVIEW_ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+          echo "review_sha256=$review_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload independent Queen review
+        id: review_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-queen-of-hearts-independent-review-v3
+          path: /tmp/queen-review-v3/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Finalize, qualify, publish, deploy, and retire exact Queen cycle
+        id: finalize
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ steps.stage.outputs.candidate_commit }}
+          CANDIDATE_TREE: ${{ steps.stage.outputs.candidate_tree }}
+          CANDIDATE_PATH_COUNT: ${{ steps.stage.outputs.candidate_path_count }}
+          CANDIDATE_PATH_LEDGER_SHA256: ${{ steps.stage.outputs.candidate_path_ledger_sha256 }}
+          STAGE_ARTIFACT_ID: ${{ steps.stage_artifact.outputs.artifact-id }}
+          STAGE_ARTIFACT_DIGEST: ${{ steps.stage_artifact.outputs.artifact-digest }}
+          REVIEW_ARTIFACT_ID: ${{ steps.review_artifact.outputs.artifact-id }}
+          REVIEW_ARTIFACT_DIGEST: ${{ steps.review_artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          (cd "$STAGE_ROOT" && sha256sum -c manifest.sha256)
+          (cd "$REVIEW_ROOT" && sha256sum -c manifest.sha256)
+          test "$(jq -r .review_sha256 "$REVIEW_ROOT/independent-review.json")" = "${{ steps.review.outputs.review_sha256 }}"
+
+          git worktree add --detach "$FINAL_WORKTREE" "$CANDIDATE_COMMIT"
+          cd "$FINAL_WORKTREE"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT"
+          test "$(git rev-parse HEAD^{tree})" = "$CANDIDATE_TREE"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_MAIN"
+          npm ci --ignore-scripts
+
+          STAGE_ROOT="$STAGE_ROOT" REVIEW_ROOT="$REVIEW_ROOT" FINAL_ROOT="$FINAL_ROOT" \
+            EXPECTED_MAIN="$EXPECTED_MAIN" MEDIA_CANONICAL_PARENT="$MEDIA_CANONICAL_PARENT" \
+            CANDIDATE_COMMIT="$CANDIDATE_COMMIT" CANDIDATE_TREE="$CANDIDATE_TREE" \
+            CANDIDATE_PATH_COUNT="$CANDIDATE_PATH_COUNT" CANDIDATE_PATH_LEDGER_SHA256="$CANDIDATE_PATH_LEDGER_SHA256" \
+            STAGE_ARTIFACT_ID="$STAGE_ARTIFACT_ID" STAGE_ARTIFACT_DIGEST="$STAGE_ARTIFACT_DIGEST" \
+            REVIEW_ARTIFACT_ID="$REVIEW_ARTIFACT_ID" REVIEW_ARTIFACT_DIGEST="$REVIEW_ARTIFACT_DIGEST" \
+            MEDIA_RUN="$MEDIA_RUN" MEDIA_ARTIFACT="$MEDIA_ARTIFACT" MEDIA_DIGEST="$MEDIA_DIGEST" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+            node "$CONTROLLER" finalize | tee "$FINAL_ROOT/finalize.stdout.log"
+          rm -rf .luna
+
+          git add -A
+          test -n "$(git diff --cached --name-only)"
+          test -z "$(git diff --cached --name-only | grep -E '^(\.github/|transport/|\.luna/)' || true)"
+          git config user.name undercast-star-trek-queen-publisher
+          git config user.email star-trek-queen-publisher@users.noreply.github.com
+          product_tree="$(git write-tree)"
+          product_commit="$(printf '%s\n' 'Star Trek: publish Queen of Hearts cycle' | git commit-tree "$product_tree" -p "$EXPECTED_MAIN")"
+          test "$(git rev-parse "${product_commit}^{tree}")" = "$product_tree"
+          test "$(git rev-parse "${product_commit}^")" = "$EXPECTED_MAIN"
+          git diff --name-only "$EXPECTED_MAIN" "$product_commit" | LC_ALL=C sort -u > "$FINAL_ROOT/product-paths.txt"
+          test -z "$(grep -E '^(\.github/|transport/|\.luna/)' "$FINAL_ROOT/product-paths.txt" || true)"
+          for required in \
+            data/review/adapter-sdk/BASELINE.json \
+            data/review/adapter-sdk/star-trek-queen-of-hearts-cycle.json \
+            scripts/star-trek-queen-of-hearts-cycle.mjs \
+            images/uc-1394-still.jpg \
+            images/uc-1394-portrait.jpg; do
+            test "$(grep -Fxc "$required" "$FINAL_ROOT/product-paths.txt")" = 1
+          done
+          product_path_count="$(wc -l < "$FINAL_ROOT/product-paths.txt" | tr -d ' ')"
+          product_path_ledger_sha256="$(sha256sum "$FINAL_ROOT/product-paths.txt" | cut -d' ' -f1)"
+
+          git checkout --detach "$product_commit"
+          git reset --hard "$product_commit"
+          test -z "$(git status --porcelain)"
+          npm install --ignore-scripts --no-save --package-lock=false --no-audit --no-fund yaml@2.9.0
+          node scripts/star-trek-queen-of-hearts-cycle.mjs
+          node scripts/star-trek-maryl-cycle.mjs
+          node scripts/census-adapter.mjs check
+          node scripts/gate.mjs --skip-rendered
+          npx playwright install --with-deps chromium
+          npm run test:rendered
+          npm run test:ux:chromium
+          node scripts/site-sweep.mjs
+          test -z "$(git status --porcelain)"
+
+          live="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main")"
+          test "$(jq -r .sha <<<"$live")" = "$EXPECTED_MAIN"
+          test "$(jq -r .commit.tree.sha <<<"$live")" = "$EXPECTED_TREE"
+          git push origin "${product_commit}:refs/heads/main"
+          for _ in $(seq 1 30); do
+            observed="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+            test "$observed" = "$product_commit" && break
+            sleep 2
+          done
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$product_commit"
+
+          dispatch_epoch="$(date -u +%s)"
+          gh workflow run pages.yml --ref main
+          pages_run=''
+          for _ in $(seq 1 180); do
+            runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/pages.yml/runs?branch=main&event=workflow_dispatch&per_page=30")"
+            pages_run="$(jq -r --arg sha "$product_commit" --argjson epoch "$dispatch_epoch" '[.workflow_runs[] | select(.head_sha==$sha and ((.created_at|fromdateiso8601) >= $epoch))] | sort_by(.created_at) | last | .id // empty' <<<"$runs")"
+            if test -n "$pages_run"; then
+              status="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${pages_run}" --jq .status)"
+              if test "$status" = completed; then
+                test "$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${pages_run}" --jq .conclusion)" = success
+                break
+              fi
+            fi
+            sleep 10
+          done
+          test -n "$pages_run"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${pages_run}" --jq .conclusion)" = success
+
+          jq -n \
+            --arg product_commit "$product_commit" \
+            --arg product_tree "$product_tree" \
+            --argjson product_path_count "$product_path_count" \
+            --arg product_path_ledger_sha256 "$product_path_ledger_sha256" \
+            --argjson pages_run "$pages_run" \
+            --arg receipt_sha256 "$(jq -r .receipt_sha256 "$FINAL_ROOT/receipt.json")" \
+            --arg checker_sha256 "$(jq -r .checker_sha256 "$FINAL_ROOT/finalization.json")" \
+            --arg reviewed_cycle "$(jq -r .reviewed_cycle "$FINAL_ROOT/finalization.json")" \
+            --arg next_task "$(jq -r .candidate.task_id "$FINAL_ROOT/next.json")" \
+            '{version:3,transaction:"STAR-TREK-QUEEN-OF-HEARTS-TERMINAL-V3",status:"published",product_commit:$product_commit,product_tree:$product_tree,product_path_count:$product_path_count,product_path_ledger_sha256:$product_path_ledger_sha256,pages_run:$pages_run,receipt_sha256:$receipt_sha256,checker_sha256:$checker_sha256,reviewed_cycle:$reviewed_cycle,next_task:$next_task}' \
+            > "$FINAL_ROOT/terminal.json"
+          cp "$FINAL_ROOT/product-paths.txt" "$FINAL_ROOT/terminal-product-paths.txt"
+          printf '%s\n' "$product_commit" > "$FINAL_ROOT/product-commit.txt"
+          printf '%s\n' "$product_tree" > "$FINAL_ROOT/product-tree.txt"
+          printf '%s\n' "$pages_run" > "$FINAL_ROOT/pages-run.txt"
+          git push origin --delete "$CANDIDATE_BRANCH"
+          test -z "$(git ls-remote --heads origin "refs/heads/${CANDIDATE_BRANCH}")"
+          (cd "$FINAL_ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+          echo "product_commit=$product_commit" >> "$GITHUB_OUTPUT"
+          echo "product_tree=$product_tree" >> "$GITHUB_OUTPUT"
+          echo "pages_run=$pages_run" >> "$GITHUB_OUTPUT"
+
+      - name: Upload terminal Queen execution
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-queen-of-hearts-terminal-v3
+          path: /tmp/queen-final-v3/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Preserve failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-queen-of-hearts-publisher-v3-failure-${{ github.run_id }}
+          path: |
+            /tmp/queen-stage-v3/
+            /tmp/queen-review-v3/
+            /tmp/queen-final-v3/
+            /tmp/queen-live-main.json
+            /tmp/queen-media-artifact.json
+            /tmp/queen-controller-v3.mjs
+          if-no-files-found: warn
+          retention-days: 30
