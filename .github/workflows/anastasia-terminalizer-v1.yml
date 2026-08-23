@@ -1,0 +1,191 @@
+name: anastasia-terminalizer-v1
+
+on:
+  push:
+    branches:
+      - agent/anastasia-terminalizer-v1
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: anastasia-terminalizer-v1
+  cancel-in-progress: false
+
+env:
+  CARRIER_BRANCH: agent/star-trek-anastasia-cycle-v1
+  WORKFLOW_FILE: star-trek-anastasia-cycle-v1.yml
+  EXPECTED_PARENT: 933415b505d1c6e40c7e4bd44bf132c61a5ea32d
+  TASK_ID: ap_82712ddec2c606e4c7d1a152
+  RESULT_BRANCH: agent/anastasia-terminal-result-v1
+  ROOT: /tmp/anastasia-terminalizer-v1
+
+jobs:
+  terminalize:
+    if: ${{ github.event.head_commit.message == 'Trigger Anastasia terminal verifier v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact cycle and canonical product
+        id: verify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          carrier_head="$(git ls-remote origin "refs/heads/${CARRIER_BRANCH}" | cut -f1)"
+          test -n "$carrier_head"
+          printf '%s\n' "$carrier_head" > "$ROOT/carrier-head.txt"
+
+          run_id=''
+          for _ in $(seq 1 240); do
+            runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?branch=${CARRIER_BRANCH}&event=push&per_page=50" 2>/dev/null || printf '{\"workflow_runs\":[]}')"
+            run_id="$(jq -r --arg sha "$carrier_head" '[.workflow_runs[] | select(.head_sha==$sha)] | sort_by(.created_at) | last | .id // empty' <<<"$runs")"
+            if [[ "$run_id" =~ ^[0-9]+$ ]]; then
+              printf '%s\n' "$runs" | jq . > "$ROOT/runs.json"
+              break
+            fi
+            sleep 5
+          done
+          test "$run_id" != ''
+          printf '%s\n' "$run_id" > "$ROOT/run-id.txt"
+
+          conclusion=''
+          for _ in $(seq 1 1200); do
+            run="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            printf '%s\n' "$run" | jq . > "$ROOT/run.json"
+            status="$(jq -r .status <<<"$run")"
+            if test "$status" = completed; then
+              conclusion="$(jq -r '.conclusion // ""' <<<"$run")"
+              break
+            fi
+            sleep 5
+          done
+          test "$conclusion" != ''
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" | jq . > "$ROOT/jobs.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" | jq . > "$ROOT/artifacts.json"
+          test "$conclusion" = success
+
+          git fetch --filter=blob:none --no-tags origin main
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          main_tree="$(git rev-parse "${main_sha}^{tree}")"
+          main_parent="$(git rev-parse "${main_sha}^")"
+          main_message="$(git show -s --format=%s "$main_sha")"
+          test "$main_parent" = "$EXPECTED_PARENT"
+          git checkout --detach "$main_sha"
+
+          receipt_file="$(grep -l --fixed-strings "$TASK_ID" data/review/adapter-sdk/*.json | LC_ALL=C sort | tail -1)"
+          test -n "$receipt_file"
+          cp "$receipt_file" "$ROOT/canonical-receipt.json"
+          checker_file="$(jq -r '.qualification.checker_path // empty' "$receipt_file")"
+          if test -z "$checker_file"; then
+            checker_file="$(grep -l --fixed-strings "$TASK_ID" scripts/*cycle*.mjs | LC_ALL=C sort | tail -1)"
+          fi
+          test -n "$checker_file"
+          test -f "$checker_file"
+          cp "$checker_file" "$ROOT/canonical-checker.mjs"
+          node "$checker_file" > "$ROOT/checker.log" 2>&1
+          node scripts/validate.mjs > "$ROOT/validate.log" 2>&1
+          node scripts/thesis-rails.mjs validate > "$ROOT/thesis-validate.log" 2>&1
+          node scripts/thesis-rails.mjs next --json > "$ROOT/thesis-next.json"
+          node scripts/waterline.mjs status --scope star-trek --json > "$ROOT/waterline.json"
+
+          node - "$TASK_ID" "$ROOT/task-and-queue.json" <<'NODE'
+          const fs = require('fs');
+          const [taskId, out] = process.argv.slice(2);
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const rows = state.jobs.filter((row) => row.scope === 'star-trek');
+          const task = rows.find((row) => row.id === taskId);
+          if (!task || task.status !== 'resolved') throw new Error('Anastasia task is not resolved');
+          const counts = {
+            total: rows.length,
+            queued: rows.filter((row) => row.status === 'queued').length,
+            resolved: rows.filter((row) => row.status === 'resolved').length,
+            blocked: rows.filter((row) => row.status === 'blocked').length,
+            rejected: rows.filter((row) => row.status === 'rejected').length,
+            in_flight: rows.filter((row) => ['leased','drafted','merged'].includes(row.status)).length,
+          };
+          if (counts.in_flight !== 0) throw new Error(`Star Trek still has ${counts.in_flight} task(s) in flight`);
+          fs.writeFileSync(out, JSON.stringify({task, queue: counts}, null, 2) + '\n');
+          NODE
+
+          receipt_sha="$(jq -r '.receipt_sha256 // empty' "$receipt_file")"
+          wall_id="$(jq -r '.canonical.wall_id // empty' "$receipt_file")"
+          reviewed_cycle="$(jq -r '.reviewed_cycle.id // empty' "$receipt_file")"
+          next_task="$(jq -r '.candidate.task_id // empty' "$ROOT/thesis-next.json")"
+          jq -n \
+            --arg status success \
+            --argjson run_id "$run_id" \
+            --arg carrier_head "$carrier_head" \
+            --arg commit "$main_sha" \
+            --arg tree "$main_tree" \
+            --arg parent "$main_parent" \
+            --arg message "$main_message" \
+            --arg task_id "$TASK_ID" \
+            --arg wall_id "$wall_id" \
+            --arg receipt_path "$receipt_file" \
+            --arg receipt_sha256 "$receipt_sha" \
+            --arg checker_path "$checker_file" \
+            --arg reviewed_cycle "$reviewed_cycle" \
+            --arg next_task "$next_task" \
+            '{version:1,transaction:"STAR-TREK-ANASTASIA-TERMINAL-V1",status:$status,run_id:$run_id,carrier_head:$carrier_head,canonical:{commit:$commit,tree:$tree,parent:$parent,message:$message},task_id:$task_id,wall_id:$wall_id,receipt:{path:$receipt_path,sha256:$receipt_sha256},checker_path:$checker_path,reviewed_cycle:$reviewed_cycle,next_task:$next_task,checker_pass:true,repository_validation_pass:true,thesis_validation_pass:true,lease_taken_by_terminalizer:false,canonical_mutation_by_terminalizer:false}' \
+            > "$ROOT/status.json"
+          (cd "$ROOT" && find . -maxdepth 1 -type f ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | while read -r file; do sha256sum "$file"; done > manifest.sha256 && sha256sum -c manifest.sha256)
+
+      - name: Publish terminal evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-anastasia-terminalizer
+          git config user.email anastasia-terminalizer@users.noreply.github.com
+          git switch --orphan terminal-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/anastasia-terminalizer-v1
+          cp -a "$ROOT"/. transport/anastasia-terminalizer-v1/
+          git add transport/anastasia-terminalizer-v1
+          git commit -m 'Publish Anastasia terminal evidence'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+      - name: Retire temporary Anastasia execution refs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for branch in \
+            agent/star-trek-anastasia-cycle-v1 \
+            agent/star-trek-anastasia-candidate-v1 \
+            agent/observe-anastasia-cycle-v1 \
+            agent/anastasia-rebind-inspection-v1 \
+            agent/anastasia-rebind-inspection-result-v1; do
+            if git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null 2>&1; then
+              git push origin --delete "$branch"
+            fi
+          done
+          git ls-remote --heads origin '*anastasia*' > "$ROOT/remaining-anastasia-refs.txt"
+
+      - name: Publish failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p "$ROOT"
+          jq -n \
+            --arg status failure \
+            --arg note 'The terminal verifier did not satisfy its fail-closed publication contract.' \
+            '{version:1,transaction:"STAR-TREK-ANASTASIA-TERMINAL-V1",status:$status,note:$note,canonical_mutation_by_terminalizer:false,lease_taken_by_terminalizer:false}' \
+            > "$ROOT/failure.json"
+          git config user.name undercast-anastasia-terminalizer
+          git config user.email anastasia-terminalizer@users.noreply.github.com
+          git switch --orphan terminal-failure
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/anastasia-terminalizer-v1
+          cp -a "$ROOT"/. transport/anastasia-terminalizer-v1/ 2>/dev/null || true
+          git add transport/anastasia-terminalizer-v1
+          git commit -m 'Publish Anastasia terminal failure evidence' || true
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}" || true
