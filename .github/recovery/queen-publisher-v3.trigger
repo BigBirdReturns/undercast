@@ -1,0 +1,4 @@
+transaction=STAR-TREK-QUEEN-OF-HEARTS-PUBLISHER-V3
+canonical_parent=6e9aa87be07411fdb42bc4e55b6e480135826d35
+task_id=ap_a2fc2c7b0d3dec8a244ef048
+source_fingerprint=d961ab1ce5d5406871727bbdce05423f4716a92a8cd505f2c4bc44400d3fbd47
