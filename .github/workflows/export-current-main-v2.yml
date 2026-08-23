@@ -1,0 +1,69 @@
+name: export-current-main-v2
+
+on:
+  push:
+    branches:
+      - agent/export-current-main-v2
+
+permissions:
+  contents: write
+
+env:
+  EXPECTED_MAIN: 97956ce415d565d968cc5f66067142183ec28a1f
+  EXPECTED_TREE: ff8adadb6dd36ab84a21336bdd30ce3cb17b5335
+  ROOT: /tmp/undercast-current-main-v2
+  RESULT_BRANCH: agent/export-current-main-result-v2
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Package exact canonical source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          git fetch --filter=blob:none --no-tags origin main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse "${EXPECTED_MAIN}^{tree}")" = "$EXPECTED_TREE"
+          git checkout --detach "$EXPECTED_MAIN"
+          test -z "$(git status --porcelain)"
+          git archive --format=tar.gz --prefix=undercast-current-main-v2/ "$EXPECTED_MAIN" > "$ROOT/undercast-current-main-v2.tar.gz"
+          sha256sum "$ROOT/undercast-current-main-v2.tar.gz" > "$ROOT/undercast-current-main-v2.tar.gz.sha256"
+          git show -s --format='%H%n%T%n%P%n%s' "$EXPECTED_MAIN" > "$ROOT/commit.txt"
+      - id: archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: undercast-current-main-v2
+          path: /tmp/undercast-current-main-v2/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Publish export status
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.archive.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.archive.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq -n \
+            --arg status complete \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --argjson artifact_id "$ARTIFACT_ID" \
+            --arg artifact_digest "${ARTIFACT_DIGEST#sha256:}" \
+            --arg commit "$EXPECTED_MAIN" \
+            --arg tree "$EXPECTED_TREE" \
+            '{version:2,transaction:"EXPORT-CURRENT-MAIN-V2",status:$status,run_id:$run_id,artifact:{id:$artifact_id,digest:$artifact_digest},canonical:{commit:$commit,tree:$tree}}' > "$ROOT/status.json"
+          git config user.name undercast-current-main-export
+          git config user.email current-main-export@users.noreply.github.com
+          git switch --orphan export-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p transport/export-current-main-v2
+          cp "$ROOT/status.json" "$ROOT/commit.txt" transport/export-current-main-v2/
+          git add transport/export-current-main-v2
+          git commit -m 'Export exact Queen canonical main'
+          git push --force origin "HEAD:refs/heads/${RESULT_BRANCH}"
