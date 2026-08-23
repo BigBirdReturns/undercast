@@ -1,0 +1,3 @@
+transaction=RECOVER-QUEEN-HELPER-V4
+source_branch=agent/star-trek-queen-of-hearts-cycle-v1
+expected_sha256=2bd41195123bfe860f01b1201cbf52a349e6f40231f97047c481e7fddcc36f65
