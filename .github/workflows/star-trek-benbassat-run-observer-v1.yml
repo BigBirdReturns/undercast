@@ -1,0 +1,69 @@
+name: star-trek-benbassat-run-observer-v1
+
+on:
+  push:
+    branches: [agent/star-trek-benbassat-run-observer-v1]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-run-observer-v1
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: agent/star-trek-rolling-continuation-v1
+  TARGET_V1: 0464a7dcaa20655f4d7315a36fe1af285d04cf0d
+  TARGET_V2: d7511e6ea41ba4d041842a05d436280b04b15bdc
+  RESULT_BRANCH: agent/star-trek-benbassat-run-observer-result-v1
+  OUT: /tmp/star-trek-benbassat-run-observer-v1
+
+jobs:
+  observe:
+    if: ${{ github.event.head_commit.message == 'Observe Star Trek Benbassat source runs v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Capture exact probe runs, jobs, artifacts, and logs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          gh run list --repo "$GITHUB_REPOSITORY" --branch "$TARGET_BRANCH" --limit 100 --json databaseId,name,workflowName,status,conclusion,headSha,event,displayTitle,createdAt,updatedAt,url > "$OUT/runs.json"
+          for pair in v1:$TARGET_V1 v2:$TARGET_V2; do
+            label="${pair%%:*}"
+            sha="${pair#*:}"
+            run_id="$(jq -r --arg sha "$sha" '[.[] | select(.headSha==$sha)] | sort_by(.databaseId) | last.databaseId // empty' "$OUT/runs.json")"
+            test -n "$run_id"
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/${label}-run.json"
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=latest&per_page=100" > "$OUT/${label}-jobs.json"
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/${label}-artifacts.json"
+            jq -r '.jobs[].id' "$OUT/${label}-jobs.json" | while read -r job_id; do
+              gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --job "$job_id" --log > "$OUT/${label}-job-${job_id}.log" 2>&1 || true
+            done
+          done
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main.json"
+          jq -n --arg transaction STAR-TREK-BENBASSAT-RUN-OBSERVER-V1 --arg main "$(jq -r .commit.sha "$OUT/main.json")" --slurpfile v1 "$OUT/v1-run.json" --slurpfile v2 "$OUT/v2-run.json" '{version:1,transaction:$transaction,status:"captured",main:$main,v1:{id:$v1[0].id,status:$v1[0].status,conclusion:$v1[0].conclusion,head_sha:$v1[0].head_sha},v2:{id:$v2[0].id,status:$v2[0].status,conclusion:$v2[0].conclusion,head_sha:$v2[0].head_sha},canonical_mutation:false,lease_mutation:false}' > "$OUT/status.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+      - name: Publish observer result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-benbassat-run-observer
+          git config user.email benbassat-run-observer@users.noreply.github.com
+          git checkout --orphan benbassat-run-observer-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-run-observer-v1
+          cp -a "$OUT"/. transport/star-trek-benbassat-run-observer-v1/
+          git add transport/star-trek-benbassat-run-observer-v1
+          git commit -m 'Record Star Trek Benbassat run observer v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
