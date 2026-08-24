@@ -1,0 +1,394 @@
+name: star-trek-benbassat-media-recovery-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-media-recovery-v2
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-media-recovery-v2
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  WALL_ID: UC-1397
+  CLAIM_BRANCH: agent/star-trek-benbassat-claim-result-v1
+  SOURCE_REVIEW_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  SOURCE_REVIEW_PREFIX: transport/star-trek-benbassat-source-review-v1
+  RESULT_BRANCH: agent/star-trek-benbassat-media-result-v1
+  OUT: /tmp/star-trek-benbassat-media-recovery-v2
+  REVIEW_ROOT: /tmp/star-trek-benbassat-media-recovery-v2/source-review
+
+jobs:
+  prepare:
+    name: prepare-source-distinct-benbassat-media
+    if: ${{ github.event.head_commit.message == 'Prepare Star Trek Benbassat media recovery v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-benbassat-claim-result-v1
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify durable claim, source review, wall slot, and canonical custody
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$REVIEW_ROOT" "$OUT/media"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git fetch --no-tags origin main "$CLAIM_BRANCH" "$SOURCE_REVIEW_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          claim_ref="refs/remotes/origin/${CLAIM_BRANCH}"
+          claim_commit="$(git rev-parse "$claim_ref")"
+          test "$(git rev-parse HEAD)" = "$claim_commit"
+          test "$(git show -s --format=%P "$claim_ref")" = "$EXPECTED_MAIN"
+          test -f data/review/adapter-sdk/star-trek-benbassat-claim.json
+          jq -e \
+            --arg parent "$EXPECTED_MAIN" \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg fp "$EXPECTED_FINGERPRINT" \
+            '.transaction == "STAR-TREK-BENBASSAT-CLAIM-V1"
+             and .canonical_parent == $parent
+             and .task.id == $task
+             and .task.performer == $performer
+             and .task.character == $character
+             and .task.source_fingerprint == $fp
+             and .task.status == "leased"
+             and (.lease.id | type == "string" and length > 0)
+             and .source_review.verdict == "pass"
+             and .source_review.adjudicated_kind == "voice"
+             and .source_review.performance_mode == "voice-only"
+             and .source_review.production == "Star Trek: Picard"
+             and .source_review.episode == "Võx"
+             and .queue.after.in_flight == 1
+             and .boundary.additional_lease_issued == false
+             and .boundary.canonical_mutation == false
+             and .boundary.off_screen_voiceover == true' \
+            data/review/adapter-sdk/star-trek-benbassat-claim.json >/dev/null
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json
+          path = Path('data/review/adapter-sdk/star-trek-benbassat-claim.json')
+          receipt = json.loads(path.read_text())
+          expected = receipt['receipt_sha256']
+          body = dict(receipt)
+          body.pop('receipt_sha256', None)
+          def stable(value):
+              if isinstance(value, dict): return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list): return [stable(item) for item in value]
+              return value
+          actual = hashlib.sha256((json.dumps(stable(body), indent=2, ensure_ascii=False) + '\n').encode()).hexdigest()
+          if actual != expected:
+              raise SystemExit(f'claim receipt identity mismatch: {actual} != {expected}')
+          PY
+
+          package_extract="$OUT/package-extract"
+          mkdir -p "$package_extract"
+          git archive "refs/remotes/origin/${SOURCE_REVIEW_BRANCH}" "$SOURCE_REVIEW_PREFIX" | tar -x -C "$package_extract"
+          cp -a "$package_extract/$SOURCE_REVIEW_PREFIX"/. "$REVIEW_ROOT"/
+          manifest="$REVIEW_ROOT/manifest.sha256"
+          manifest_origin_root="$(awk '$2 ~ /\/source-review\.json$/ {path=$2; sub(/\/source-review\.json$/, "", path); print path; exit}' "$manifest")"
+          test -n "$manifest_origin_root"
+          while read -r digest original_path; do
+            case "$original_path" in
+              "$manifest_origin_root"/*) rel="${original_path#"$manifest_origin_root"/}" ;;
+              *) echo "manifest path outside package root: $original_path" >&2; exit 1 ;;
+            esac
+            file="$REVIEW_ROOT/$rel"
+            test -f "$file"
+            test "$(sha256sum "$file" | awk '{print $1}')" = "$digest"
+          done < "$manifest"
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg fp "$EXPECTED_FINGERPRINT" \
+            --arg review "$(jq -r .source_review.review_sha256 data/review/adapter-sdk/star-trek-benbassat-claim.json)" \
+            '.transaction == "STAR-TREK-BENBASSAT-SOURCE-REVIEW-V1"
+             and .verdict == "pass"
+             and .review_sha256 == $review
+             and .task.id == $task
+             and .task.performer == $performer
+             and .task.character == $character
+             and .task.source_fingerprint == $fp
+             and .production_source.series == "Star Trek: Picard"
+             and .production_source.title == "Võx"
+             and .adjudication.performance_mode == "voice-only"
+             and .adjudication.physical_performance_attributed == false
+             and .adjudication.prosthetic_performance_attributed == false
+             and .adjudication.animation_performance_attributed == false
+             and .adjudication.maker_attribution == "unresolved"' \
+            "$REVIEW_ROOT/source-review.json" >/dev/null
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const trek = state.jobs.filter((row) => row.scope === 'star-trek');
+          const task = trek.find((row) => row.id === process.env.TASK_ID);
+          const active = trek.filter((row) => ['leased','drafted','merged'].includes(row.status));
+          const counts = {
+            total: trek.length,
+            queued: trek.filter((row) => row.status === 'queued').length,
+            resolved: trek.filter((row) => row.status === 'resolved').length,
+            blocked: trek.filter((row) => row.status === 'blocked').length,
+            rejected: trek.filter((row) => row.status === 'rejected').length,
+            in_flight: active.length,
+          };
+          if (!task || task.status !== 'leased' || !task.lease?.id) throw new Error('Benbassat lease missing');
+          if (active.length !== 1 || active[0].id !== process.env.TASK_ID) throw new Error('another Star Trek task is active');
+          const expected = {total:2228,queued:1797,resolved:428,blocked:0,rejected:2,in_flight:1};
+          if (JSON.stringify(counts) !== JSON.stringify(expected)) throw new Error(`leased queue drifted: ${JSON.stringify(counts)}`);
+          fs.writeFileSync(process.env.OUT + '/leased-task.json', JSON.stringify({task, counts}, null, 2) + '\n');
+          NODE
+          if grep -R --exclude='star-trek-benbassat-claim.json' -n --fixed-strings "$WALL_ID" data records 2>/dev/null; then
+            echo "$WALL_ID is already occupied" >&2
+            exit 1
+          fi
+          printf '%s\n' "$claim_commit" > "$OUT/claim-commit.txt"
+          cp data/review/adapter-sdk/star-trek-benbassat-claim.json "$OUT/claim-receipt.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
+          test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$EXPECTED_MAIN"
+
+      - name: Resolve exact character and performer media
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          from html import unescape
+          from pathlib import Path
+          from urllib.parse import urlencode, quote
+          from urllib.request import Request, urlopen
+          import hashlib, json, os
+
+          out = Path(os.environ['OUT'])
+          review_root = Path(os.environ['REVIEW_ROOT'])
+          media_root = out / 'media'
+          source_review = json.loads((review_root / 'source-review.json').read_text())
+          source_api = json.loads((review_root / 'benbassat-source-api.json').read_text())
+          leased = json.loads((out / 'leased-task.json').read_text())
+          task = leased['task']
+          lease_id = task['lease']['id']
+
+          def api_get(base, query, user_agent):
+              url = base + '?' + urlencode(query)
+              request = Request(url, headers={'User-Agent': user_agent, 'Accept': 'application/json'})
+              with urlopen(request, timeout=120) as response:
+                  return json.load(response)
+
+          def fetch_bytes(url, user_agent):
+              request = Request(url, headers={'User-Agent': user_agent, 'Accept': 'image/*'})
+              with urlopen(request, timeout=180) as response:
+                  return response.read(), response.headers.get_content_type()
+
+          canonical_hashes = {}
+          for path in Path('images').rglob('*'):
+              if path.is_file():
+                  canonical_hashes.setdefault(hashlib.sha256(path.read_bytes()).hexdigest(), []).append(str(path))
+
+          pages = source_api.get('query', {}).get('pages', [])
+          if len(pages) != 1:
+              raise SystemExit('Benbassat source API page cardinality drifted')
+          source_page = pages[0]
+          page_image = source_page.get('pageimage')
+          still = {'status': 'absent', 'reason': 'The frozen Benbassat character source exposes no source-bound page image.'}
+          if page_image:
+              image_api = api_get('https://memory-alpha.fandom.com/api.php', {
+                  'action': 'query', 'prop': 'imageinfo', 'titles': 'File:' + page_image,
+                  'iiprop': 'url|extmetadata|sha1|size|mime|timestamp', 'format': 'json', 'formatversion': '2',
+              }, 'UNDERCAST-Benbassat-Media-Recovery/2.0')
+              image_pages = image_api.get('query', {}).get('pages', [])
+              if len(image_pages) != 1 or image_pages[0].get('missing'):
+                  raise SystemExit('Benbassat page image metadata is missing')
+              infos = image_pages[0].get('imageinfo') or []
+              if len(infos) != 1:
+                  raise SystemExit('Benbassat imageinfo cardinality drifted')
+              info = infos[0]
+              blob, content_type = fetch_bytes(info['url'], 'UNDERCAST-Benbassat-Media-Recovery/2.0')
+              digest = hashlib.sha256(blob).hexdigest()
+              if digest in canonical_hashes:
+                  raise SystemExit(f'Benbassat still duplicates canonical bytes: {canonical_hashes[digest]}')
+              suffix = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp'}.get(content_type) or Path(info['url'].split('?', 1)[0]).suffix.lower() or '.img'
+              path = media_root / f'{os.environ["WALL_ID"].lower()}-still{suffix}'
+              path.write_bytes(blob)
+              still = {
+                  'status': 'verified', 'subject': os.environ['EXPECTED_CHARACTER'], 'path': 'media/' + path.name,
+                  'sha256': digest, 'bytes': len(blob), 'width': info.get('width'), 'height': info.get('height'),
+                  'mime': info.get('mime') or content_type,
+                  'source_file': 'https://memory-alpha.fandom.com/wiki/' + quote(('File:' + page_image).replace(' ', '_'), safe=':_()'),
+                  'download_url': info['url'], 'source_sha1': info.get('sha1'), 'source_timestamp': info.get('timestamp'),
+                  'identity_basis': 'The frozen Benbassat page selected this exact page image; no facial recognition was used.',
+              }
+              (out / 'benbassat-image-api.json').write_text(json.dumps(image_api, indent=2, ensure_ascii=False) + '\n')
+
+          commons_api = api_get('https://commons.wikimedia.org/w/api.php', {
+              'action': 'query', 'generator': 'search', 'gsrsearch': 'intitle:"Nolan North" filetype:bitmap',
+              'gsrnamespace': '6', 'gsrlimit': '40', 'prop': 'imageinfo',
+              'iiprop': 'url|extmetadata|sha1|size|mime|timestamp', 'format': 'json', 'formatversion': '2',
+          }, 'UNDERCAST-Benbassat-Media-Recovery/2.0')
+          candidates = []
+          for page in commons_api.get('query', {}).get('pages', []):
+              title = page.get('title', '')
+              infos = page.get('imageinfo') or []
+              if len(infos) != 1 or 'nolan north' not in title.lower():
+                  continue
+              info = infos[0]
+              if info.get('mime') not in {'image/jpeg', 'image/png', 'image/webp'}:
+                  continue
+              meta = info.get('extmetadata') or {}
+              get = lambda key: unescape(str((meta.get(key) or {}).get('value') or '')).strip()
+              license_name = get('LicenseShortName')
+              if not (license_name.startswith('CC BY') or license_name.lower().startswith('public domain')):
+                  continue
+              identity_text = ' '.join([title, get('ObjectName'), get('ImageDescription')]).lower()
+              if 'nolan north' not in identity_text:
+                  continue
+              score = (10 if title.lower().startswith('file:nolan north') else 0) + (5 if 'gage skidmore' in get('Artist').lower() else 0) + (2 if (info.get('width') or 0) >= 1000 and (info.get('height') or 0) >= 1000 else 0)
+              candidates.append((score, title, info, {
+                  'artist': get('Artist'), 'credit': get('Credit'), 'license': license_name,
+                  'license_url': get('LicenseUrl'), 'description': get('ImageDescription'),
+                  'object_name': get('ObjectName'), 'date_time_original': get('DateTimeOriginal'),
+              }))
+          candidates.sort(key=lambda row: (-row[0], row[1]))
+          portrait = {'status': 'absent', 'reason': 'No compliant source-identified, licensed, byte-distinct Nolan North portrait was available.'}
+          attempts = []
+          for score, title, info, meta in candidates:
+              try:
+                  blob, content_type = fetch_bytes(info['url'], 'UNDERCAST-Benbassat-Media-Recovery/2.0')
+              except Exception as exc:
+                  attempts.append({'title': title, 'status': 'download-failed', 'error': str(exc)})
+                  continue
+              digest = hashlib.sha256(blob).hexdigest()
+              if digest in canonical_hashes or (still.get('sha256') and digest == still['sha256']):
+                  attempts.append({'title': title, 'status': 'duplicate', 'sha256': digest})
+                  continue
+              suffix = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp'}.get(content_type) or Path(info['url'].split('?', 1)[0]).suffix.lower() or '.img'
+              path = media_root / f'{os.environ["WALL_ID"].lower()}-portrait{suffix}'
+              path.write_bytes(blob)
+              portrait = {
+                  'status': 'verified', 'subject': os.environ['EXPECTED_PERFORMER'], 'path': 'media/' + path.name,
+                  'sha256': digest, 'bytes': len(blob), 'width': info.get('width'), 'height': info.get('height'),
+                  'mime': info.get('mime') or content_type,
+                  'source_file': 'https://commons.wikimedia.org/wiki/' + quote(title.replace(' ', '_'), safe=':_()'),
+                  'download_url': info['url'], 'source_sha1': info.get('sha1'), 'source_timestamp': info.get('timestamp'),
+                  'author': meta['artist'], 'credit': meta['credit'], 'license': meta['license'],
+                  'license_url': meta['license_url'], 'identity_basis': 'The Commons title and metadata explicitly identify Nolan North; no facial recognition was used.',
+              }
+              attempts.append({'title': title, 'status': 'selected', 'sha256': digest, 'score': score})
+              break
+
+          if still.get('status') == 'verified' and portrait.get('status') == 'verified':
+              if still['sha256'] == portrait['sha256']:
+                  raise SystemExit('media facets reuse bytes')
+              if still['source_file'] == portrait['source_file']:
+                  raise SystemExit('media facets reuse source')
+
+          receipt = {
+              'version': 2,
+              'transaction': 'STAR-TREK-BENBASSAT-MEDIA-V1',
+              'generated_at': datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
+              'status': 'complete',
+              'canonical_parent': os.environ['EXPECTED_MAIN'],
+              'canonical_tree': os.environ['EXPECTED_TREE'],
+              'claim_commit': (out / 'claim-commit.txt').read_text().strip(),
+              'task': {
+                  'id': os.environ['TASK_ID'], 'lease_id': lease_id, 'performer': os.environ['EXPECTED_PERFORMER'],
+                  'character': os.environ['EXPECTED_CHARACTER'], 'source_fingerprint': os.environ['EXPECTED_FINGERPRINT'],
+                  'performance_mode': 'voice-only', 'wall_id_reserved': os.environ['WALL_ID'],
+              },
+              'source_review': {
+                  'branch': os.environ['SOURCE_REVIEW_BRANCH'], 'review_sha256': source_review['review_sha256'],
+                  'production': 'Star Trek: Picard', 'episode': 'Võx', 'first_aired': '13 April 2023',
+              },
+              'facets': {'still': still, 'portrait': portrait},
+              'boundary': {
+                  'source_distinct': True, 'byte_distinct': True, 'cross_facet_substitution': False,
+                  'canonical_mutation': False, 'lease_mutation': False, 'physical_performance_attributed': False,
+                  'prosthetic_performance_attributed': False, 'animation_performance_attributed': False,
+                  'maker_attribution': 'unresolved', 'transformation_measured': False,
+              },
+          }
+          def stable(value):
+              if isinstance(value, dict): return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list): return [stable(item) for item in value]
+              return value
+          receipt['receipt_sha256'] = hashlib.sha256((json.dumps(stable(receipt), indent=2, ensure_ascii=False) + '\n').encode()).hexdigest()
+          (out / 'media-receipt.json').write_text(json.dumps(stable(receipt), indent=2, ensure_ascii=False) + '\n')
+          (out / 'commons-search-api.json').write_text(json.dumps(commons_api, indent=2, ensure_ascii=False) + '\n')
+          (out / 'portrait-attempts.json').write_text(json.dumps(attempts, indent=2, ensure_ascii=False) + '\n')
+          PY
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg wall "$WALL_ID" \
+            '.transaction == "STAR-TREK-BENBASSAT-MEDIA-V1"
+             and .status == "complete"
+             and .task.id == $task
+             and .task.performer == $performer
+             and .task.character == $character
+             and .task.performance_mode == "voice-only"
+             and .task.wall_id_reserved == $wall
+             and (.facets.still.status == "verified" or .facets.still.status == "absent")
+             and (.facets.portrait.status == "verified" or .facets.portrait.status == "absent")
+             and .boundary.source_distinct == true
+             and .boundary.byte_distinct == true
+             and .boundary.canonical_mutation == false
+             and .boundary.lease_mutation == false' \
+            "$OUT/media-receipt.json" >/dev/null
+          cp "$REVIEW_ROOT/source-review.json" "$OUT/source-review.json"
+          cp "$REVIEW_ROOT/source-probe.json" "$OUT/source-probe.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after.json"
+          test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$EXPECTED_MAIN"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload corrected Benbassat media evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-media-recovery-v2
+          path: /tmp/star-trek-benbassat-media-recovery-v2/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable media result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq --argjson id "$ARTIFACT_ID" --arg digest "$ARTIFACT_DIGEST" '.artifact={id:$id,digest:$digest}' "$OUT/media-receipt.json" > "$OUT/media-receipt.tmp"
+          mv "$OUT/media-receipt.tmp" "$OUT/media-receipt.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-benbassat-media-recovery
+          git config user.email undercast-benbassat-media-recovery@users.noreply.github.com
+          git checkout --orphan benbassat-media-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-media-v1
+          cp -a "$OUT"/. transport/star-trek-benbassat-media-v1/
+          git add transport/star-trek-benbassat-media-v1
+          git commit -m 'Record corrected Star Trek Benbassat media v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
