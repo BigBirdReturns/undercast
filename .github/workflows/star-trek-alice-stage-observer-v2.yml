@@ -1,0 +1,91 @@
+name: star-trek-alice-stage-observer-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-alice-stage-observer-v2
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-alice-stage-observer-v2
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: agent/star-trek-alice-stage-v1
+  TARGET_WORKFLOW: star-trek-alice-stage-v1.yml
+  RESULT_BRANCH: agent/star-trek-alice-stage-observer-result-v2
+  ROOT: /tmp/star-trek-alice-stage-observer-v2
+
+jobs:
+  observe:
+    name: observe-exact-patched-alice-stage
+    if: ${{ github.event.head_commit.message == 'Trigger Star Trek Alice stage observer v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Observe the exact target workflow run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/logs"
+          target_sha="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
+          test -n "$target_sha"
+          printf '%s\n' "$target_sha" > "$ROOT/target.sha"
+
+          run=''
+          for attempt in $(seq 1 180); do
+            payload="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/workflows/${TARGET_WORKFLOW}/runs" -f branch="$TARGET_BRANCH" -f event=push -f per_page=30)"
+            run="$(jq -c --arg sha "$target_sha" '[.workflow_runs[] | select(.head_sha == $sha)] | sort_by(.created_at) | last // empty' <<<"$payload")"
+            if test -n "$run"; then
+              status="$(jq -r .status <<<"$run")"
+              if test "$status" = completed; then break; fi
+            fi
+            sleep 5
+          done
+          test -n "$run"
+          test "$(jq -r .status <<<"$run")" = completed
+          printf '%s\n' "$run" | jq . > "$ROOT/run.json"
+          run_id="$(jq -r .id <<<"$run")"
+          conclusion="$(jq -r .conclusion <<<"$run")"
+          gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs" -f filter=latest -f per_page=100 > "$ROOT/jobs.json"
+
+          jq -r '.jobs[].id' "$ROOT/jobs.json" | while read -r job_id; do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/jobs/${job_id}/logs" > "$ROOT/logs/job-${job_id}.log" 2>&1 || true
+          done
+
+          jq -n \
+            --argjson run_id "$run_id" \
+            --arg status completed \
+            --arg conclusion "$conclusion" \
+            --arg target_sha "$target_sha" \
+            --arg target_branch "$TARGET_BRANCH" \
+            --arg workflow "$TARGET_WORKFLOW" \
+            '{version:2,transaction:"STAR-TREK-ALICE-STAGE-OBSERVER-V2",run_id:$run_id,status:$status,conclusion:$conclusion,target_sha:$target_sha,target_branch:$target_branch,workflow:$workflow,canonical_mutation:false,lease_mutation:false}' \
+            > "$ROOT/status.json"
+          find "$ROOT" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$ROOT/manifest.sha256"
+
+      - name: Publish observer result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-alice-stage-observer
+          git config user.email undercast-alice-stage-observer@users.noreply.github.com
+          git checkout --orphan alice-stage-observer-result-v2
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-alice-stage-observer-v2
+          cp -a "$ROOT"/. transport/star-trek-alice-stage-observer-v2/
+          git add transport/star-trek-alice-stage-observer-v2
+          git commit -m 'Record Star Trek Alice stage observer v2'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
