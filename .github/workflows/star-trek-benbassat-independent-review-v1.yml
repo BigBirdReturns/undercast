@@ -1,0 +1,297 @@
+name: star-trek-benbassat-independent-review-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-independent-review-v1
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-independent-review-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  WALL_ID: UC-1397
+  OBSERVER_BRANCH: agent/star-trek-benbassat-candidate-observer-result-v1
+  OBSERVER_PREFIX: transport/star-trek-benbassat-candidate-observer-v1
+  CANDIDATE_BRANCH: agent/star-trek-benbassat-candidate-result-v1
+  CLAIM_BRANCH: agent/star-trek-benbassat-claim-result-v1
+  SOURCE_REVIEW_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  SOURCE_REVIEW_PREFIX: transport/star-trek-benbassat-source-review-v1
+  MEDIA_BRANCH: agent/star-trek-benbassat-media-result-v1
+  MEDIA_PREFIX: transport/star-trek-benbassat-media-v1
+  REVIEW_RESULT_BRANCH: agent/star-trek-benbassat-independent-review-result-v1
+  DIAGNOSIS_RESULT_BRANCH: agent/star-trek-benbassat-candidate-diagnosis-result-v1
+  OUT: /tmp/star-trek-benbassat-independent-review-v1
+  OBSERVER_ROOT: /tmp/star-trek-benbassat-independent-review-v1/observer
+  CANDIDATE_ROOT: /tmp/star-trek-benbassat-independent-review-v1/candidate-evidence
+  SOURCE_REVIEW_ROOT: /tmp/star-trek-benbassat-independent-review-v1/source-review
+  MEDIA_ROOT: /tmp/star-trek-benbassat-independent-review-v1/media-layer
+  REVIEWER_SOURCE: .github/recovery/star-trek-benbassat-independent-review-v1/reviewer.py
+  REVIEWER: /tmp/star-trek-benbassat-independent-review-v1.py
+
+jobs:
+  classify:
+    name: classify-candidate-carrier
+    if: ${{ github.event.head_commit.message == 'Review Star Trek Benbassat candidate v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    outputs:
+      status: ${{ steps.classify.outputs.status }}
+      candidate_sha: ${{ steps.classify.outputs.candidate_sha }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Wait for immutable observer result and classify the carrier
+        id: classify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OBSERVER_ROOT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${REVIEW_RESULT_BRANCH}")"
+          test -z "$(git ls-remote --heads origin "refs/heads/${DIAGNOSIS_RESULT_BRANCH}")"
+          observer_sha=''
+          for _ in $(seq 1 1080); do
+            observer_sha="$(git ls-remote --heads origin "refs/heads/${OBSERVER_BRANCH}" | awk '{print $1}')"
+            test -n "$observer_sha" && break
+            sleep 5
+          done
+          test -n "$observer_sha"
+          git fetch --no-tags origin "$OBSERVER_BRANCH"
+          observer_ref="refs/remotes/origin/${OBSERVER_BRANCH}"
+          test "$(git rev-parse "$observer_ref")" = "$observer_sha"
+          git archive "$observer_ref" "$OBSERVER_PREFIX" | tar -x -C "$OUT"
+          cp -a "$OUT/$OBSERVER_PREFIX"/. "$OBSERVER_ROOT"/
+          while read -r digest original_path; do
+            file="$OBSERVER_ROOT/$(basename "$original_path")"
+            test -f "$file"
+            test "$(sha256sum "$file" | awk '{print $1}')" = "$digest"
+          done < "$OBSERVER_ROOT/manifest.sha256"
+          status="$(jq -r .status "$OBSERVER_ROOT/status.json")"
+          candidate_sha="$(jq -r '.candidate_sha // ""' "$OBSERVER_ROOT/status.json")"
+          test "$(jq -r .main_sha "$OBSERVER_ROOT/status.json")" = "$EXPECTED_MAIN"
+          test "$(jq -r .canonical_mutation "$OBSERVER_ROOT/status.json")" = false
+          test "$(jq -r .lease_mutation "$OBSERVER_ROOT/status.json")" = false
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "candidate_sha=$candidate_sha" >> "$GITHUB_OUTPUT"
+          if test "$status" = success; then
+            test -n "$candidate_sha"
+            exit 0
+          fi
+
+          category='unclassified-candidate-failure'
+          if grep -R -q 'no submit variant succeeded' "$OBSERVER_ROOT"; then category='autopilot-submit-contract'; fi
+          if grep -R -q 'no complete variant succeeded' "$OBSERVER_ROOT"; then category='autopilot-complete-contract'; fi
+          if grep -R -q 'primary record' "$OBSERVER_ROOT"; then category='primary-record-discovery'; fi
+          if grep -R -q 'media facet' "$OBSERVER_ROOT"; then category='media-facet-discovery'; fi
+          if grep -R -q 'adapter-sdk:.*stale\|BASELINE.json is stale' "$OBSERVER_ROOT"; then category='adapter-baseline'; fi
+          if grep -R -q 'invariant gate.*FAIL\|invariant violation' "$OBSERVER_ROOT"; then category='repository-invariant'; fi
+          if grep -R -q 'autopilot:fixtures failed\|npm run autopilot:fixtures failed' "$OBSERVER_ROOT"; then category='autopilot-fixtures'; fi
+          if grep -R -q 'candidate receipt' "$OBSERVER_ROOT"; then category='candidate-receipt'; fi
+          python3 - "$category" <<'PY'
+          from pathlib import Path
+          import json
+          import os
+          import sys
+
+          category = sys.argv[1]
+          root = Path(os.environ['OBSERVER_ROOT'])
+          status = json.loads((root / 'status.json').read_text())
+          excerpts = []
+          needles = ('error', 'failed', 'exception', 'drifted', 'unexpected', 'no submit variant', 'no complete variant', 'violation')
+          for path in sorted(root.rglob('*')):
+              if not path.is_file() or path.stat().st_size > 10_000_000:
+                  continue
+              try:
+                  text = path.read_text(errors='replace')
+              except Exception:
+                  continue
+              selected = [line for line in text.splitlines() if any(needle in line.lower() for needle in needles)]
+              if selected:
+                  excerpts.append({'file': str(path.relative_to(root)), 'lines': selected[-200:]})
+          diagnosis = {
+              'version': 1,
+              'transaction': 'STAR-TREK-BENBASSAT-CANDIDATE-DIAGNOSIS-V1',
+              'status': 'candidate-failed',
+              'category': category,
+              'observer': status,
+              'excerpts': excerpts,
+              'canonical_mutation': False,
+              'lease_mutation': False,
+              'additional_lease_issued': False,
+          }
+          out = Path(os.environ['OUT'])
+          (out / 'diagnosis.json').write_text(json.dumps(diagnosis, indent=2, ensure_ascii=False) + '\n')
+          (out / 'verdict.txt').write_text(f'FAIL\nBenbassat candidate failed\nCategory {category}\nRun {status.get("run_id")}\n')
+          PY
+          cp -a "$OBSERVER_ROOT" "$OUT/observer-evidence"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Publish candidate diagnosis when the carrier failed
+        if: steps.classify.outputs.status != 'success'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-benbassat-candidate-diagnosis
+          git config user.email undercast-benbassat-candidate-diagnosis@users.noreply.github.com
+          git checkout --orphan benbassat-candidate-diagnosis-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-candidate-diagnosis-v1
+          cp -a "$OUT"/. transport/star-trek-benbassat-candidate-diagnosis-v1/
+          git add transport/star-trek-benbassat-candidate-diagnosis-v1
+          git commit -m 'Record Star Trek Benbassat candidate diagnosis v1'
+          git push origin "HEAD:refs/heads/${DIAGNOSIS_RESULT_BRANCH}"
+
+  review:
+    name: independently-review-benbassat-product
+    needs: classify
+    if: needs.classify.outputs.status == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_SHA: ${{ needs.classify.outputs.candidate_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.classify.outputs.candidate_sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Extract exact candidate, source-review, and media receipts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$CANDIDATE_ROOT" "$SOURCE_REVIEW_ROOT" "$MEDIA_ROOT"
+          cp "$REVIEWER_SOURCE" "$REVIEWER"
+          chmod +x "$REVIEWER"
+          python3 -m py_compile "$REVIEWER"
+          git fetch --no-tags origin main "$CANDIDATE_BRANCH" "$CLAIM_BRANCH" "$SOURCE_REVIEW_BRANCH" "$MEDIA_BRANCH"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse "refs/remotes/origin/${CANDIDATE_BRANCH}")" = "$CANDIDATE_SHA"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          claim_sha="$(git rev-parse "refs/remotes/origin/${CLAIM_BRANCH}")"
+          test "$(git show -s --format=%P HEAD)" = "$claim_sha"
+          cp data/review/adapter-sdk/star-trek-benbassat-candidate.json "$CANDIDATE_ROOT/candidate-receipt.json"
+          git diff-tree --no-commit-id --name-only -r HEAD | LC_ALL=C sort > "$CANDIDATE_ROOT/candidate-paths.txt"
+
+          extract_layer() {
+            local branch="$1" prefix="$2" target="$3"
+            git archive "refs/remotes/origin/${branch}" "$prefix" | tar -x -C "$OUT"
+            cp -a "$OUT/$prefix"/. "$target"/
+            while read -r digest original_path; do
+              file="$target/$(basename "$original_path")"
+              test -f "$file"
+              test "$(sha256sum "$file" | awk '{print $1}')" = "$digest"
+            done < "$target/manifest.sha256"
+          }
+          extract_layer "$SOURCE_REVIEW_BRANCH" "$SOURCE_REVIEW_PREFIX" "$SOURCE_REVIEW_ROOT"
+          extract_layer "$MEDIA_BRANCH" "$MEDIA_PREFIX" "$MEDIA_ROOT"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
+          test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$EXPECTED_MAIN"
+
+      - name: Run independent gates and exact-product review
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm ci --ignore-scripts
+          node scripts/validate.mjs | tee "$OUT/repository-validate.log"
+          npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate.log"
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate.log"
+          npm run autopilot:fixtures | tee "$OUT/autopilot-fixtures.log"
+          python3 "$REVIEWER"
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg wall "$WALL_ID" \
+            --arg commit "$CANDIDATE_SHA" \
+            '.transaction == "STAR-TREK-BENBASSAT-INDEPENDENT-REVIEW-V1"
+             and .verdict == "pass"
+             and .candidate.commit == $commit
+             and .task.id == $task
+             and .task.performer == $performer
+             and .task.character == $character
+             and .task.status == "resolved"
+             and .task.wall_id == $wall
+             and .queue.resolved == 429
+             and .queue.in_flight == 0
+             and .boundary.performance_mode == "voice-animation"
+             and .boundary.queued_physical_prosthetic_hint_rejected == true
+             and .boundary.physical_performance_attributed == false
+             and .boundary.prosthetic_performance_attributed == false
+             and .boundary.maker_attribution == "unresolved"
+             and .boundary.waterline_cycle_recorded == false
+             and .boundary.canonical_mutation == false
+             and .boundary.lease_mutation == false
+             and .boundary.additional_lease_issued == false' \
+            "$OUT/independent-review.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after.json"
+          test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$EXPECTED_MAIN"
+          cp data/review/adapter-sdk/star-trek-benbassat-candidate.json "$OUT/candidate-receipt.json"
+          cp data/AUTOPILOT.json "$OUT/autopilot-state.json"
+          cp data/WATERLINE-STATE.json "$OUT/waterline-state.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload independent Benbassat review
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-independent-review-v1
+          path: /tmp/star-trek-benbassat-independent-review-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable independent-review result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq --argjson id "$ARTIFACT_ID" --arg digest "$ARTIFACT_DIGEST" '.artifact={id:$id,digest:$digest}' "$OUT/independent-review.json" > "$OUT/independent-review.tmp"
+          mv "$OUT/independent-review.tmp" "$OUT/independent-review.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          test -z "$(git ls-remote --heads origin "refs/heads/${REVIEW_RESULT_BRANCH}")"
+          git config user.name undercast-benbassat-independent-review
+          git config user.email undercast-benbassat-independent-review@users.noreply.github.com
+          git checkout --orphan benbassat-independent-review-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-independent-review-v1
+          cp -a "$OUT"/. transport/star-trek-benbassat-independent-review-v1/
+          git add transport/star-trek-benbassat-independent-review-v1
+          git commit -m 'Record independent Star Trek Benbassat review v1'
+          git push origin "HEAD:refs/heads/${REVIEW_RESULT_BRANCH}"
+
+  fail-closed:
+    name: fail-closed-after-diagnosis
+    needs: classify
+    if: needs.classify.outputs.status != 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Refuse review when candidate failed
+        run: |
+          echo 'Candidate carrier failed; immutable diagnosis was published.' >&2
+          exit 1
