@@ -1,0 +1,71 @@
+name: star-trek-rolling-source-array-patch-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-rolling-continuation-v1
+
+concurrency:
+  group: star-trek-rolling-source-array-patch-v1
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Patch the current task source-array contract and replay the lease-free probe once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow=.github/workflows/star-trek-rolling-probe-v1.yml
+          state=transport/star-trek-rolling-continuation-v1/state.json
+          python3 - "$workflow" "$state" <<'PY'
+          from pathlib import Path
+          import json, sys
+          workflow=Path(sys.argv[1]); state_path=Path(sys.argv[2])
+          text=workflow.read_text()
+          old="          source=task['source']; title=source.rsplit('/',1)[-1].replace('_',' ')\n"
+          new=(
+              "          sources=task.get('sources') or ([task.get('source')] if task.get('source') else [])\n"
+              "          if len(sources)!=1:raise SystemExit(f'source cardinality drifted: {sources}')\n"
+              "          source=sources[0]; title=source.rsplit('/',1)[-1].replace('_',' ')\n"
+          )
+          if old not in text:
+              if new in text:
+                  raise SystemExit(0)
+              raise SystemExit('rolling source-array patch anchor drifted')
+          workflow.write_text(text.replace(old,new,1))
+          state=json.loads(state_path.read_text())
+          boundary=state.get('boundary') or {}
+          if state.get('expected_predecessor')!='ed79424013b92460d16c01cad4e590eca01e6bff':
+              raise SystemExit('rolling predecessor drifted')
+          if boundary.get('kind')!='probe-stage-failure' or boundary.get('workflow_run')!=32723412676:
+              raise SystemExit(f'unexpected rolling boundary: {boundary}')
+          state['status']='bootstrap'
+          state['stage']='bootstrap'
+          state['boundary']=None
+          recovery=state.setdefault('recovery',{})
+          recovery['source_array_patch']={
+              'workflow':'star-trek-rolling-source-array-patch-v1',
+              'failed_probe_run':32723412676,
+              'old_contract':'task.source',
+              'current_contract':'task.sources[0]',
+              'canonical_mutation':False,
+              'lease_taken':False,
+          }
+          state_path.write_text(json.dumps(state,indent=2,ensure_ascii=False)+'\n')
+          PY
+          git diff --check
+          git config user.name undercast-star-trek-rolling-source-array-patcher
+          git config user.email rolling-source-array-patcher@users.noreply.github.com
+          git add "$workflow" "$state"
+          git diff --cached --quiet && exit 0
+          git commit -m 'Star Trek rolling continuation: support task source arrays'
+          git push origin HEAD:agent/star-trek-rolling-continuation-v1
