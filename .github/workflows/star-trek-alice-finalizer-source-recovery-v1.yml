@@ -1,0 +1,77 @@
+name: star-trek-alice-finalizer-source-recovery-v1
+
+on:
+  push:
+    branches: [agent/star-trek-alice-finalizer-v1]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-alice-finalizer-source-recovery-v1
+  cancel-in-progress: false
+
+env:
+  RESULT_BRANCH: agent/star-trek-alice-finalizer-source-recovery-result-v1
+  OUT: /tmp/star-trek-alice-finalizer-source-recovery-v1
+  CONTROLLER_B64: .github/recovery/star-trek-alice-finalizer-v1/controller.mjs.gz.b64
+  DRIVER_B64: .github/recovery/star-trek-alice-finalizer-v1/driver.sh.gz.b64
+  CONTROLLER_B64_SHA256: 76660d641670ea98436cd001d31720de8111b859c5544b44aa0994d2b6bb0851
+  CONTROLLER_SHA256: bdb9d77c5116bdb130d0e3b5a946b2a8397e966070b2e3448dd3340c6b3fac5d
+
+jobs:
+  recover:
+    name: recover-sealed-alice-finalizer-sources
+    if: ${{ github.event.head_commit.message == 'Recover Star Trek Alice finalizer sources v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Decode intact controller and recover driver prefix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          echo "$CONTROLLER_B64_SHA256  $CONTROLLER_B64" | sha256sum -c -
+          base64 -d "$CONTROLLER_B64" | gzip -d > "$OUT/controller.mjs"
+          echo "$CONTROLLER_SHA256  $OUT/controller.mjs" | sha256sum -c -
+          node --check "$OUT/controller.mjs"
+          set +e
+          base64 -d "$DRIVER_B64" > "$OUT/driver.partial.gz" 2> "$OUT/base64.stderr"
+          base64_status=$?
+          gzip -dc "$OUT/driver.partial.gz" > "$OUT/driver-partial.sh" 2> "$OUT/gzip.stderr"
+          gzip_status=$?
+          set -e
+          printf '%s\n' "$base64_status" > "$OUT/base64.exit"
+          printf '%s\n' "$gzip_status" > "$OUT/gzip.exit"
+          sha256sum "$CONTROLLER_B64" "$DRIVER_B64" "$OUT/controller.mjs" "$OUT/driver.partial.gz" "$OUT/driver-partial.sh" > "$OUT/source-hashes.sha256"
+          wc -c "$CONTROLLER_B64" "$DRIVER_B64" "$OUT/controller.mjs" "$OUT/driver.partial.gz" "$OUT/driver-partial.sh" > "$OUT/source-sizes.txt"
+          bash -n "$OUT/driver-partial.sh" > "$OUT/partial-bash-n.stdout" 2> "$OUT/partial-bash-n.stderr" || true
+          jq -n \
+            --arg transaction STAR-TREK-ALICE-FINALIZER-SOURCE-RECOVERY-V1 \
+            --arg source_branch "$GITHUB_REF_NAME" \
+            --arg source_sha "$GITHUB_SHA" \
+            --argjson base64_exit "$base64_status" \
+            --argjson gzip_exit "$gzip_status" \
+            --arg controller_sha256 "$(sha256sum "$OUT/controller.mjs" | awk '{print $1}')" \
+            --arg driver_partial_sha256 "$(sha256sum "$OUT/driver-partial.sh" | awk '{print $1}')" \
+            --argjson driver_partial_bytes "$(wc -c < "$OUT/driver-partial.sh")" \
+            '{version:1,transaction:$transaction,source_branch:$source_branch,source_sha:$source_sha,base64_exit:$base64_exit,gzip_exit:$gzip_exit,controller_sha256:$controller_sha256,driver_partial_sha256:$driver_partial_sha256,driver_partial_bytes:$driver_partial_bytes,canonical_mutation:false,lease_mutation:false}' > "$OUT/status.json"
+      - name: Publish source-recovery result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          git config user.name undercast-alice-source-recovery
+          git config user.email undercast-alice-source-recovery@users.noreply.github.com
+          git checkout --orphan alice-finalizer-source-recovery-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-alice-finalizer-source-recovery-v1
+          cp -a "$OUT"/. transport/star-trek-alice-finalizer-source-recovery-v1/
+          git add transport/star-trek-alice-finalizer-source-recovery-v1
+          git commit -m 'Record Star Trek Alice finalizer source recovery v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
