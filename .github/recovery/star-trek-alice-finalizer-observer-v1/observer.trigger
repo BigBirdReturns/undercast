@@ -1,4 +1,4 @@
-transaction=STAR-TREK-ALICE-FINALIZER-OBSERVER-V4
+transaction=STAR-TREK-ALICE-FINALIZER-OBSERVER-V5
 target_branch=agent/star-trek-alice-finalizer-v1
-target_sha=0427318d8d6387f257e711ebaeb07486f2371011
+target_sha=9d268e6b3499b813cb49e83746147ee08a80b0b6
 workflow=star-trek-alice-finalizer-v1.yml
