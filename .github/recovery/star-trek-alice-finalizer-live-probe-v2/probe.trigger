@@ -1,3 +1,3 @@
-transaction=STAR-TREK-ALICE-FINALIZER-LIVE-PROBE-V2
-target_sha=9d268e6b3499b813cb49e83746147ee08a80b0b6
-workflow=star-trek-alice-finalizer-v1.yml
+transaction=STAR-TREK-ALICE-FINALIZER-LIVE-PROBE-V3
+target_sha=44be76593fcfd391be70e911b7ea6a100d60d076
+workflow=star-trek-alice-finalizer-resume-v1.yml
