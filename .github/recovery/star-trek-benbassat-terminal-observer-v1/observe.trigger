@@ -1,0 +1,9 @@
+transaction=STAR-TREK-BENBASSAT-TERMINAL-OBSERVER-V1
+target_branch=agent/star-trek-benbassat-finalizer-v1
+target_workflow=star-trek-benbassat-finalizer-v1.yml
+terminal_branch=agent/star-trek-benbassat-finalizer-result-v1
+finalizer_status=agent/star-trek-benbassat-finalizer-status-v1
+candidate_diagnosis=agent/star-trek-benbassat-candidate-diagnosis-result-v1
+alice_main=ed79424013b92460d16c01cad4e590eca01e6bff
+canonical_mutation=false
+lease_mutation=false
