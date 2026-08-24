@@ -1,0 +1,211 @@
+name: star-trek-post-benbassat-next-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-post-benbassat-next-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-post-benbassat-next-v1
+  cancel-in-progress: false
+
+env:
+  SETTLEMENT_BRANCH: agent/star-trek-benbassat-public-settlement-result-v1
+  SETTLEMENT_PREFIX: transport/star-trek-benbassat-public-settlement-v1
+  CLAIM_RESULT_BRANCH: agent/star-trek-post-benbassat-claim-result-v1
+  STATUS_RESULT_BRANCH: agent/star-trek-post-benbassat-status-v1
+  OUT: /tmp/star-trek-post-benbassat-next-v1
+  SETTLEMENT_ROOT: /tmp/star-trek-post-benbassat-next-v1/settlement
+
+jobs:
+  continue:
+    name: claim-exact-post-benbassat-successor-or-fail-closed
+    if: ${{ github.event.head_commit.message == 'Continue after Star Trek Benbassat v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Read the independent Benbassat settlement
+        id: settlement
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$SETTLEMENT_ROOT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${CLAIM_RESULT_BRANCH}")"
+          test -z "$(git ls-remote --heads origin "refs/heads/${STATUS_RESULT_BRANCH}")"
+          settlement_sha=''
+          for _ in $(seq 1 1800); do
+            settlement_sha="$(git ls-remote --heads origin "refs/heads/${SETTLEMENT_BRANCH}" | awk '{print $1}')"
+            test -n "$settlement_sha" && break
+            sleep 5
+          done
+          test -n "$settlement_sha"
+          git fetch --no-tags origin "$SETTLEMENT_BRANCH"
+          settlement_ref="refs/remotes/origin/${SETTLEMENT_BRANCH}"
+          test "$(git rev-parse "$settlement_ref")" = "$settlement_sha"
+          git archive "$settlement_ref" "$SETTLEMENT_PREFIX" | tar -x -C "$OUT"
+          cp -a "$OUT/$SETTLEMENT_PREFIX"/. "$SETTLEMENT_ROOT"/
+          while read -r digest original_path; do
+            file="$SETTLEMENT_ROOT/$(basename "$original_path")"
+            test -f "$file"
+            test "$(sha256sum "$file" | awk '{print $1}')" = "$digest"
+          done < "$SETTLEMENT_ROOT/manifest.sha256"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,os
+          path=Path(os.environ['SETTLEMENT_ROOT'])/'settlement.json'
+          payload=json.loads(path.read_text()); expected=payload['settlement_sha256']; body=dict(payload); body.pop('settlement_sha256',None); body.pop('artifact',None)
+          def stable(v):
+              if isinstance(v,dict): return {k:stable(v[k]) for k in sorted(v)}
+              if isinstance(v,list): return [stable(x) for x in v]
+              return v
+          actual=hashlib.sha256((json.dumps(stable(body),indent=2,ensure_ascii=False)+'\n').encode()).hexdigest()
+          if actual!=expected: raise SystemExit(f'settlement identity mismatch: {actual} != {expected}')
+          PY
+          verdict="$(jq -r .verdict "$SETTLEMENT_ROOT/settlement.json")"
+          classification="$(jq -r .classification "$SETTLEMENT_ROOT/settlement.json")"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          echo "classification=$classification" >> "$GITHUB_OUTPUT"
+          if test "$verdict" != PASS; then
+            jq -n --arg verdict "$verdict" --arg classification "$classification" --arg settlement_sha "$settlement_sha" '{version:1,transaction:"STAR-TREK-POST-BENBASSAT-NEXT-V1",status:"refused",verdict:$verdict,classification:$classification,settlement_sha:$settlement_sha,canonical_mutation:false,lease_mutation:false}' > "$OUT/status.json"
+            cp "$SETTLEMENT_ROOT/settlement.json" "$OUT/benbassat-settlement.json"
+            find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+            exit 0
+          fi
+          jq -e '.status == "published-and-deployed" and .queue.in_flight == 0 and .next.phase == "ready-for-one-cycle" and (.next.candidate.task_id | type == "string" and length > 0)' "$SETTLEMENT_ROOT/settlement.json" >/dev/null
+          canonical="$(jq -r .canonical.commit "$SETTLEMENT_ROOT/settlement.json")"
+          task="$(jq -r .next.candidate.task_id "$SETTLEMENT_ROOT/settlement.json")"
+          performer="$(jq -r .next.candidate.performer "$SETTLEMENT_ROOT/settlement.json")"
+          character="$(jq -r .next.candidate.character "$SETTLEMENT_ROOT/settlement.json")"
+          fingerprint="$(jq -r .next.candidate.source_fingerprint "$SETTLEMENT_ROOT/settlement.json")"
+          echo "CANONICAL=$canonical" >> "$GITHUB_ENV"
+          echo "NEXT_TASK=$task" >> "$GITHUB_ENV"
+          echo "NEXT_PERFORMER=$performer" >> "$GITHUB_ENV"
+          echo "NEXT_CHARACTER=$character" >> "$GITHUB_ENV"
+          echo "NEXT_FINGERPRINT=$fingerprint" >> "$GITHUB_ENV"
+
+      - name: Publish refusal without mutation
+        if: steps.settlement.outputs.verdict != 'PASS'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-post-benbassat-status
+          git config user.email undercast-post-benbassat-status@users.noreply.github.com
+          git checkout --orphan post-benbassat-status-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-post-benbassat-status-v1
+          cp -a "$OUT"/. transport/star-trek-post-benbassat-status-v1/
+          git add transport/star-trek-post-benbassat-status-v1
+          git commit -m 'Record post-Benbassat continuation refusal v1'
+          git push origin "HEAD:refs/heads/${STATUS_RESULT_BRANCH}"
+
+      - name: Verify exact successor and take one native lease
+        if: steps.settlement.outputs.verdict == 'PASS'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$CANONICAL"
+          git checkout --detach "$CANONICAL"
+          npm ci --ignore-scripts
+          node scripts/thesis-rails.mjs validate > "$OUT/thesis-validate-before.log"
+          node scripts/thesis-rails.mjs next --json > "$OUT/thesis-next-before.json"
+          jq -e \
+            --arg task "$NEXT_TASK" \
+            --arg performer "$NEXT_PERFORMER" \
+            --arg character "$NEXT_CHARACTER" \
+            --arg fp "$NEXT_FINGERPRINT" \
+            '.phase == "ready-for-one-cycle"
+             and .estate_id == "star-trek"
+             and .scope_id == "star-trek"
+             and .candidate.task_id == $task
+             and .candidate.performer == $performer
+             and .candidate.character == $character
+             and .candidate.source_fingerprint == $fp' \
+            "$OUT/thesis-next-before.json" >/dev/null
+          node - <<'NODE'
+          const fs=require('fs'); const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json')); const trek=state.jobs.filter(x=>x.scope==='star-trek'); const task=trek.find(x=>x.id===process.env.NEXT_TASK); const active=trek.filter(x=>['leased','drafted','merged'].includes(x.status)); const counts={total:trek.length,queued:trek.filter(x=>x.status==='queued').length,resolved:trek.filter(x=>x.status==='resolved').length,blocked:trek.filter(x=>x.status==='blocked').length,rejected:trek.filter(x=>x.status==='rejected').length,in_flight:active.length}; if(!task||task.status!=='queued'||Number(task.attempts||0)!==0||task.lease!=null) throw Error('successor is not unclaimed'); if(task.performer!==process.env.NEXT_PERFORMER||task.character!==process.env.NEXT_CHARACTER||task.source_fingerprint!==process.env.NEXT_FINGERPRINT) throw Error('successor identity drifted'); if(active.length!==0||counts.in_flight!==0) throw Error('pre-claim work is in flight'); fs.writeFileSync(process.env.OUT+'/pre-claim.json',JSON.stringify({task,counts},null,2)+'\n');
+          NODE
+          mkdir -p .luna
+          npm run autopilot -- next --agent luna --scope star-trek --capability-profile text-vision --limit 1 --out .luna/batch.json --prompt .luna/AUTOPILOT-PROMPT.md | tee "$OUT/autopilot-next.log"
+          cp .luna/batch.json "$OUT/batch.json"
+          cp .luna/AUTOPILOT-PROMPT.md "$OUT/AUTOPILOT-PROMPT.md"
+          jq -e --arg task "$NEXT_TASK" '.tasks | length == 1 and .[0].id == $task' "$OUT/batch.json" >/dev/null
+          node - <<'NODE'
+          const fs=require('fs'); const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json')); const trek=state.jobs.filter(x=>x.scope==='star-trek'); const task=trek.find(x=>x.id===process.env.NEXT_TASK); const active=trek.filter(x=>['leased','drafted','merged'].includes(x.status)); const counts={total:trek.length,queued:trek.filter(x=>x.status==='queued').length,resolved:trek.filter(x=>x.status==='resolved').length,blocked:trek.filter(x=>x.status==='blocked').length,rejected:trek.filter(x=>x.status==='rejected').length,in_flight:active.length}; if(!task||task.status!=='leased'||!task.lease?.id||!task.lease?.readiness_token) throw Error('successor lease was not created'); if(active.length!==1||active[0].id!==process.env.NEXT_TASK) throw Error('more than one task became active'); fs.writeFileSync(process.env.OUT+'/post-claim.json',JSON.stringify({task,counts,active},null,2)+'\n'); fs.writeFileSync(process.env.OUT+'/lease-id.txt',task.lease.id+'\n');
+          NODE
+          rm -rf .luna
+          git diff --name-only | LC_ALL=C sort > "$OUT/claim-paths.txt"
+          while read -r path; do
+            case "$path" in
+              data/AUTOPILOT.json|data/ESTATE-REGISTRY.json|data/journal/*|data/AUTOPILOT-JOURNAL.jsonl) ;;
+              *) echo "unexpected successor claim mutation: $path" >&2; exit 1 ;;
+            esac
+          done < "$OUT/claim-paths.txt"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after-claim.json"
+          test "$(jq -r .commit.sha "$OUT/main-after-claim.json")" = "$CANONICAL"
+
+      - name: Commit the exact successor lease
+        if: steps.settlement.outputs.verdict == 'PASS'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          lease_id="$(cat "$OUT/lease-id.txt")"
+          python3 - "$lease_id" <<'PY'
+          from datetime import datetime,timezone
+          from pathlib import Path
+          import hashlib,json,os,sys
+          lease=sys.argv[1]; out=Path(os.environ['OUT']); pre=json.loads((out/'pre-claim.json').read_text()); post=json.loads((out/'post-claim.json').read_text()); rail=json.loads((out/'thesis-next-before.json').read_text())
+          receipt={'version':1,'transaction':'STAR-TREK-POST-BENBASSAT-CLAIM-V1','generated_at':datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z'),'canonical_parent':os.environ['CANONICAL'],'benbassat_settlement':{'branch':os.environ['SETTLEMENT_BRANCH'],'settlement_sha256':json.loads((Path(os.environ['SETTLEMENT_ROOT'])/'settlement.json').read_text())['settlement_sha256']},'task':{'id':post['task']['id'],'performer':post['task']['performer'],'character':post['task']['character'],'source_fingerprint':post['task']['source_fingerprint'],'status':post['task']['status'],'attempts':post['task'].get('attempts',0)},'lease':post['task']['lease'],'rail':{'phase':rail['phase'],'candidate':rail['candidate']},'queue':{'before':pre['counts'],'after':post['counts']},'changed_paths':(out/'claim-paths.txt').read_text().splitlines(),'boundary':{'benbassat_terminal_verified':True,'additional_lease_issued':False,'canonical_mutation':False,'product_staged':False}}
+          def stable(v):
+              if isinstance(v,dict): return {k:stable(v[k]) for k in sorted(v)}
+              if isinstance(v,list): return [stable(x) for x in v]
+              return v
+          receipt['receipt_sha256']=hashlib.sha256((json.dumps(stable(receipt),indent=2,ensure_ascii=False)+'\n').encode()).hexdigest()
+          Path('data/review/adapter-sdk/star-trek-post-benbassat-claim.json').write_text(json.dumps(stable(receipt),indent=2,ensure_ascii=False)+'\n')
+          (out/'claim-receipt.json').write_text(json.dumps(stable(receipt),indent=2,ensure_ascii=False)+'\n')
+          PY
+          jq -e --arg task "$NEXT_TASK" --arg lease "$lease_id" '.transaction == "STAR-TREK-POST-BENBASSAT-CLAIM-V1" and .task.id == $task and .task.status == "leased" and .lease.id == $lease and .boundary.benbassat_terminal_verified == true and .boundary.additional_lease_issued == false and .boundary.canonical_mutation == false and .boundary.product_staged == false' "$OUT/claim-receipt.json" >/dev/null
+          git checkout -b post-benbassat-claim-product-v1
+          git add data/AUTOPILOT.json data/ESTATE-REGISTRY.json data/journal data/review/adapter-sdk/star-trek-post-benbassat-claim.json
+          if test -f data/AUTOPILOT-JOURNAL.jsonl; then git add data/AUTOPILOT-JOURNAL.jsonl; fi
+          git diff --cached --name-only | LC_ALL=C sort > "$OUT/staged-paths.txt"
+          git config user.name undercast-post-benbassat-claim
+          git config user.email undercast-post-benbassat-claim@users.noreply.github.com
+          git commit -m "Star Trek: claim ${NEXT_CHARACTER} cycle"
+          claim_commit="$(git rev-parse HEAD)"
+          claim_tree="$(git show -s --format=%T HEAD)"
+          jq --arg commit "$claim_commit" --arg tree "$claim_tree" '.claim_commit=$commit | .claim_tree=$tree' "$OUT/claim-receipt.json" > "$OUT/claim-receipt.tmp"
+          mv "$OUT/claim-receipt.tmp" "$OUT/claim-receipt.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          git push origin "HEAD:refs/heads/${CLAIM_RESULT_BRANCH}"
+
+      - name: Upload post-Benbassat continuation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-post-benbassat-next-v1
+          path: /tmp/star-trek-post-benbassat-next-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Fail closed after refusal
+        if: steps.settlement.outputs.verdict != 'PASS'
+        shell: bash
+        run: |
+          echo 'Post-Benbassat continuation was refused because Benbassat did not settle PASS.' >&2
+          exit 1
