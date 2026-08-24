@@ -1,0 +1,268 @@
+name: star-trek-benbassat-source-review-recovery-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-source-review-recovery-v2
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-source-review-recovery-v2
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  SOURCE_BRANCH: agent/star-trek-benbassat-source-result-v3
+  SOURCE_PREFIX: transport/star-trek-benbassat-source-v3
+  RESULT_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  OUT: /tmp/star-trek-benbassat-source-review-recovery-v2
+  SOURCE_ROOT: /tmp/star-trek-benbassat-source-review-recovery-v2/source
+
+jobs:
+  review:
+    name: independently-adjudicate-benbassat-as-picard-voiceover
+    if: ${{ github.event.head_commit.message == 'Review Star Trek Benbassat source recovery v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify frozen Benbassat source and live rail
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$SOURCE_ROOT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git fetch --no-tags origin main "$SOURCE_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          git archive "refs/remotes/origin/${SOURCE_BRANCH}" "$SOURCE_PREFIX" | tar -x -C "$OUT"
+          cp -a "$OUT/$SOURCE_PREFIX"/. "$SOURCE_ROOT"/
+          while read -r digest original_path; do
+            file="$SOURCE_ROOT/$(basename "$original_path")"
+            test -f "$file"
+            test "$(sha256sum "$file" | awk '{print $1}')" = "$digest"
+          done < "$SOURCE_ROOT/manifest.sha256"
+          jq -e \
+            --arg parent "$EXPECTED_MAIN" \
+            --arg tree "$EXPECTED_TREE" \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg fp "$EXPECTED_FINGERPRINT" \
+            '.transaction == "STAR-TREK-BENBASSAT-SOURCE-PROBE-V3"
+             and .status == "source-frozen-pending-performance-mode-review"
+             and .canonical_parent == $parent
+             and .canonical_tree == $tree
+             and .task.id == $task
+             and .task.performer == $performer
+             and .task.character == $character
+             and .task.source_fingerprint == $fp
+             and .task.status == "queued"
+             and .task.attempts == 0
+             and .performer_present == true
+             and (.attribution_markers.voice | length) > 0
+             and (.attribution_markers.physical | length) == 0
+             and (.attribution_markers.prosthetic | length) == 0
+             and .canonical_mutation == false
+             and .lease_taken == false' \
+            "$SOURCE_ROOT/source-probe.json" >/dev/null
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,os
+          path=Path(os.environ['SOURCE_ROOT'])/'source-probe.json'
+          payload=json.loads(path.read_text()); expected=payload['receipt_sha256']; body=dict(payload); body.pop('receipt_sha256',None); body.pop('artifact',None)
+          def stable(v):
+              if isinstance(v,dict): return {k:stable(v[k]) for k in sorted(v)}
+              if isinstance(v,list): return [stable(x) for x in v]
+              return v
+          actual=hashlib.sha256((json.dumps(stable(body),indent=2,ensure_ascii=False)+'\n').encode()).hexdigest()
+          if actual!=expected: raise SystemExit(f'source receipt identity mismatch: {actual} != {expected}')
+          PY
+          git checkout --detach "$EXPECTED_MAIN"
+          npm ci --ignore-scripts
+          node scripts/thesis-rails.mjs validate > "$OUT/thesis-validate.log"
+          node scripts/thesis-rails.mjs next --json > "$OUT/thesis-next.json"
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg fp "$EXPECTED_FINGERPRINT" \
+            '.phase == "ready-for-one-cycle"
+             and .candidate.task_id == $task
+             and .candidate.performer == $performer
+             and .candidate.character == $character
+             and .candidate.source_fingerprint == $fp' \
+            "$OUT/thesis-next.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
+          test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$EXPECTED_MAIN"
+
+      - name: Freeze the Võx episode source and write the corrected independent review
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+          import hashlib,json,os,re
+
+          out=Path(os.environ['OUT']); source_root=Path(os.environ['SOURCE_ROOT'])
+          probe=json.loads((source_root/'source-probe.json').read_text())
+          role_text=(source_root/'frozen-source.wikitext').read_text()
+          lower=role_text.lower()
+          if '[[nolan north]] (voice)' not in lower and 'voiced by [[nolan north]]' not in lower:
+              raise SystemExit('frozen Benbassat source does not establish Nolan North voice credit')
+          if not re.search(r'\{\{\s*pic\s*\|\s*vox\s*\}\}', role_text, flags=re.I):
+              raise SystemExit('frozen Benbassat source does not bind the role to PIC: Vox')
+          if any(token in lower for token in ('portrayed by', 'played by', 'suit performer', 'prosthetic performer')):
+              raise SystemExit('unexpected physical-performance wording appeared in the frozen role source')
+
+          query={'action':'query','prop':'revisions','titles':'Võx (episode)','rvprop':'ids|timestamp|content','rvslots':'main','format':'json','formatversion':'2'}
+          url='https://memory-alpha.fandom.com/api.php?'+urlencode(query)
+          req=Request(url,headers={'User-Agent':'UNDERCAST-Benbassat-Source-Review-Recovery/2.0','Accept':'application/json'})
+          with urlopen(req,timeout=90) as response: api=json.load(response)
+          pages=api.get('query',{}).get('pages',[])
+          if len(pages)!=1 or pages[0].get('missing'): raise SystemExit(f'Võx source missing: {pages}')
+          page=pages[0]; revisions=page.get('revisions') or []
+          if len(revisions)!=1: raise SystemExit('Võx revision cardinality drifted')
+          revision=revisions[0]; episode_text=revision['slots']['main']['content']; episode_lower=episode_text.lower()
+          if 'nolan north' not in episode_lower or 'benbassat' not in episode_lower or 'voice' not in episode_lower:
+              raise SystemExit('Võx source does not establish Nolan North as Benbassat voice')
+          if not re.search(r'13\s+april\s+2023|2023-04-13|2023', episode_lower):
+              raise SystemExit('Võx source does not establish the 2023 production year')
+
+          role_lines=[]
+          for number,line in enumerate(role_text.splitlines(),1):
+              if any(token in line.lower() for token in ('nolan north','voice','{{pic|vox','benbassat')):
+                  role_lines.append({'line':number,'text':line})
+          episode_lines=[]
+          for number,line in enumerate(episode_text.splitlines(),1):
+              if any(token in line.lower() for token in ('nolan north','benbassat','voice','2023','13 april')):
+                  episode_lines.append({'line':number,'text':line})
+
+          review={
+            'version':2,
+            'transaction':'STAR-TREK-BENBASSAT-SOURCE-REVIEW-V1',
+            'reviewed_at':datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z'),
+            'reviewer':'chatgpt-benbassat-source-second-desk',
+            'reviewed_role':'second-desk',
+            'verdict':'pass',
+            'canonical_parent':os.environ['EXPECTED_MAIN'],
+            'canonical_tree':os.environ['EXPECTED_TREE'],
+            'task':{
+              'id':os.environ['TASK_ID'],'performer':os.environ['EXPECTED_PERFORMER'],'character':os.environ['EXPECTED_CHARACTER'],
+              'source_fingerprint':os.environ['EXPECTED_FINGERPRINT'],'status':'queued','attempts':0,
+            },
+            'source_probe':{
+              'transaction':probe['transaction'],'receipt_sha256':probe['receipt_sha256'],'source':probe['task']['source'],
+              'pageid':probe['source_revision']['pageid'],'revision':probe['source_revision']['revision'],
+              'timestamp':probe['source_revision']['timestamp'],'content_sha256':probe['source_revision']['content_sha256'],
+            },
+            'production_source':{
+              'source':'https://memory-alpha.fandom.com/wiki/V%C3%B5x_(episode)','title':'Võx','series':'Star Trek: Picard',
+              'pageid':page['pageid'],'revision':revision['revid'],'timestamp':revision['timestamp'],
+              'content_sha256':hashlib.sha256(episode_text.encode()).hexdigest(),'year':'2023',
+            },
+            'adjudication':{
+              'queued_mode_hint':probe['task'].get('performance_modes') or [],
+              'performance_mode':'voice-only',
+              'performance_scope':'Nolan North’s off-screen voiceover as Captain Benbassat in the Star Trek: Picard episode Võx (2023).',
+              'physical_prosthetic_hint_accepted':False,
+              'physical_performance_attributed':False,
+              'prosthetic_performance_attributed':False,
+              'animation_performance_attributed':False,
+              'voice_distance_measured':False,
+              'transformation_measured':False,
+              'maker_attribution':'unresolved','makeup_attribution':'unresolved','costume_attribution':'unresolved',
+              'character_design_attribution':'unresolved','animation_labor_attribution':'unresolved',
+              'voice_direction_attribution':'unresolved','vocal_processing_attribution':'unresolved',
+              'sound_attribution':'unresolved','editing_attribution':'unresolved','production_shop_attribution':'unresolved',
+            },
+            'evidence_excerpt':{'benbassat':role_lines,'production':episode_lines},
+            'boundary':{
+              'off_screen_voiceover':True,'canonical_mutation':False,'lease_taken':False,'product_staged':False,
+              'cross_facet_substitution':False,'outside_human_dependency':False,
+            },
+          }
+          def stable(v):
+              if isinstance(v,dict): return {k:stable(v[k]) for k in sorted(v)}
+              if isinstance(v,list): return [stable(x) for x in v]
+              return v
+          body=json.dumps(stable(review),indent=2,ensure_ascii=False)+'\n'
+          review['review_sha256']=hashlib.sha256(body.encode()).hexdigest()
+          (out/'source-review.json').write_text(json.dumps(stable(review),indent=2,ensure_ascii=False)+'\n')
+          (out/'vox-source.wikitext').write_text(episode_text)
+          (out/'vox-source-api.json').write_text(json.dumps(api,indent=2,ensure_ascii=False)+'\n')
+          (out/'benbassat-evidence-lines.json').write_text(json.dumps(role_lines,indent=2,ensure_ascii=False)+'\n')
+          (out/'vox-evidence-lines.json').write_text(json.dumps(episode_lines,indent=2,ensure_ascii=False)+'\n')
+          PY
+          jq -e \
+            --arg task "$TASK_ID" --arg performer "$EXPECTED_PERFORMER" --arg character "$EXPECTED_CHARACTER" --arg fp "$EXPECTED_FINGERPRINT" \
+            '.transaction == "STAR-TREK-BENBASSAT-SOURCE-REVIEW-V1"
+             and .verdict == "pass"
+             and .task.id == $task and .task.performer == $performer and .task.character == $character and .task.source_fingerprint == $fp
+             and .adjudication.performance_mode == "voice-only"
+             and .adjudication.physical_prosthetic_hint_accepted == false
+             and .adjudication.physical_performance_attributed == false
+             and .adjudication.prosthetic_performance_attributed == false
+             and .adjudication.animation_performance_attributed == false
+             and .adjudication.maker_attribution == "unresolved"
+             and .boundary.off_screen_voiceover == true
+             and .boundary.canonical_mutation == false and .boundary.lease_taken == false and .boundary.product_staged == false' \
+            "$OUT/source-review.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after.json"
+          test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$EXPECTED_MAIN"
+          cp "$SOURCE_ROOT/source-probe.json" "$OUT/source-probe.json"
+          cp "$SOURCE_ROOT/frozen-source.wikitext" "$OUT/benbassat-source.wikitext"
+          cp "$SOURCE_ROOT/frozen-source-api.json" "$OUT/benbassat-source-api.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload corrected independent source review
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-source-review-recovery-v2
+          path: /tmp/star-trek-benbassat-source-review-recovery-v2/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish the immutable source-review result expected by the claim rail
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq --argjson id "$ARTIFACT_ID" --arg digest "$ARTIFACT_DIGEST" '.artifact={id:$id,digest:$digest}' "$OUT/source-review.json" > "$OUT/source-review.tmp"
+          mv "$OUT/source-review.tmp" "$OUT/source-review.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-benbassat-source-review-recovery
+          git config user.email undercast-benbassat-source-review-recovery@users.noreply.github.com
+          git checkout --orphan benbassat-source-review-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-source-review-v1
+          cp -a "$OUT"/. transport/star-trek-benbassat-source-review-v1/
+          git add transport/star-trek-benbassat-source-review-v1
+          git commit -m 'Record corrected Star Trek Benbassat source review v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
