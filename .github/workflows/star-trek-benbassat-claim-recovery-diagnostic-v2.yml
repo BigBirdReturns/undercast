@@ -1,0 +1,88 @@
+name: star-trek-benbassat-claim-recovery-diagnostic-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-claim-recovery-diagnostic-v2
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-claim-recovery-diagnostic-v2
+  cancel-in-progress: false
+
+env:
+  CLAIM_CARRIER_BRANCH: agent/star-trek-benbassat-claim-v1
+  CLAIM_CARRIER_HEAD: 85d2106fc504148bc585286fa2408823048f9f6c
+  RESULT_BRANCH: agent/star-trek-benbassat-claim-recovery-diagnostic-result-v2
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  OUT: /tmp/star-trek-benbassat-claim-recovery-diagnostic-v2
+
+jobs:
+  diagnose:
+    name: preserve-benbassat-claim-run-and-artifacts
+    if: ${{ github.event.head_commit.message == 'Diagnose Star Trek Benbassat claim recovery v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Capture exact claim run without enforcing product assertions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/downloaded"
+          gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" \
+            -f branch="$CLAIM_CARRIER_BRANCH" -f per_page=100 > "$OUT/all-runs.json"
+          jq --arg name star-trek-benbassat-claim-v1 --arg branch "$CLAIM_CARRIER_BRANCH" --arg head "$CLAIM_CARRIER_HEAD" \
+            '[.workflow_runs[] | select(.name == $name and .head_branch == $branch and .head_sha == $head)] | sort_by(.created_at)' \
+            "$OUT/all-runs.json" > "$OUT/claim-runs.json"
+          run_id="$(jq -r 'last.id // empty' "$OUT/claim-runs.json")"
+          test -n "$run_id"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/run.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=latest&per_page=100" > "$OUT/jobs.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/artifacts.json"
+          gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log > "$OUT/run.log" 2>&1 || true
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --dir "$OUT/downloaded" || true
+          find "$OUT/downloaded" -type f -print | LC_ALL=C sort > "$OUT/downloaded-paths.txt"
+          find "$OUT/downloaded" -type f \( -name 'claim-receipt.json' -o -name 'post-claim.json' -o -name 'lease-id.txt' -o -name 'manifest.sha256' \) -print | LC_ALL=C sort > "$OUT/key-paths.txt"
+          grep -Eo '[0-9a-f]{40}' "$OUT/run.log" | LC_ALL=C sort -u > "$OUT/log-shas.txt" || true
+          main="$(gh api "/repos/${GITHUB_REPOSITORY}/branches/main")"
+          test "$(jq -r .commit.sha <<<"$main")" = "$EXPECTED_MAIN"
+          printf '%s\n' "$main" | jq . > "$OUT/main.json"
+          git ls-remote --heads origin 'refs/heads/agent/star-trek-benbassat-claim-result-v1' > "$OUT/claim-result-ref.txt"
+          jq -n \
+            --arg transaction STAR-TREK-BENBASSAT-CLAIM-RECOVERY-DIAGNOSTIC-V2 \
+            --argjson run_id "$run_id" \
+            --arg run_status "$(jq -r .status "$OUT/run.json")" \
+            --arg run_conclusion "$(jq -r .conclusion "$OUT/run.json")" \
+            --arg head_sha "$(jq -r .head_sha "$OUT/run.json")" \
+            --arg canonical "$EXPECTED_MAIN" \
+            --arg claim_result_ref "$(cat "$OUT/claim-result-ref.txt")" \
+            --argjson artifact_count "$(jq -r .total_count "$OUT/artifacts.json")" \
+            --argjson downloaded_count "$(wc -l < "$OUT/downloaded-paths.txt" | tr -d ' ')" \
+            '{version:2,transaction:$transaction,status:"captured",run:{id:$run_id,status:$run_status,conclusion:$run_conclusion,head_sha:$head_sha},artifact_count:$artifact_count,downloaded_file_count:$downloaded_count,claim_result_ref:$claim_result_ref,canonical:{commit:$canonical},canonical_mutation:false,lease_mutation:false,additional_lease_issued:false}' > "$OUT/status.json"
+
+      - name: Publish diagnostic evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          git config user.name undercast-benbassat-claim-diagnostic
+          git config user.email undercast-benbassat-claim-diagnostic@users.noreply.github.com
+          git checkout --orphan benbassat-claim-recovery-diagnostic-result-v2
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-claim-recovery-diagnostic-v2
+          cp -a "$OUT"/. transport/star-trek-benbassat-claim-recovery-diagnostic-v2/
+          git add transport/star-trek-benbassat-claim-recovery-diagnostic-v2
+          git commit -m 'Record Star Trek Benbassat claim recovery diagnostic v2'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
