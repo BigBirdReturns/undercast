@@ -41,10 +41,11 @@ env:
   STAGE_ROOT: /tmp/star-trek-alice-stage-input-v1
   REVIEW_ROOT: /tmp/star-trek-alice-independent-review-v2
   FINAL_ROOT: /tmp/star-trek-alice-final-v1
-  DIAGNOSTIC_ROOT: /tmp/star-trek-alice-finalizer-diagnostics-resume-v1
+  DIAGNOSTIC_ROOT: /tmp/star-trek-alice-finalizer-diagnostics-resume-v2
   CONTROLLER: /tmp/star-trek-alice-finalizer-controller.mjs
   DRIVER: /tmp/star-trek-alice-finalizer-driver-resume-v1.sh
-  CONTROLLER_SHA256: bdb9d77c5116bdb130d0e3b5a946b2a8397e966070b2e3448dd3340c6b3fac5d
+  ORIGINAL_CONTROLLER_SHA256: bdb9d77c5116bdb130d0e3b5a946b2a8397e966070b2e3448dd3340c6b3fac5d
+  CONTROLLER_SHA256: 3be5754247a279ed447f998ed13f6e4e2f75740906ccc6d785002a29915e7d63
   CONTROLLER_B64_SHA256: 76660d641670ea98436cd001d31720de8111b859c5544b44aa0994d2b6bb0851
   DRIVER_SHA256: c4c68764ce51ba8e0de3fe39b12a0dcdabcb1ea1e7e5948b61b2611ce5981e0d
   DRIVER_B64_SHA256: 63da7a23c19b4c3d842052dab803c6d78205854728f55b7a87faf1b2b7b0b837
@@ -55,7 +56,7 @@ env:
 jobs:
   finalize:
     name: resume-finalize-publish-and-deploy-alice
-    if: ${{ github.event.head_commit.message == 'Resume Star Trek Alice finalizer v1' }}
+    if: ${{ github.event.head_commit.message == 'Resume Star Trek Alice finalizer v2' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     env:
@@ -137,6 +138,18 @@ jobs:
           echo "$DRIVER_B64_SHA256  $driver_b64" | sha256sum -c -
           base64 -d "$controller_b64" | gzip -d > "$CONTROLLER"
           base64 -d "$driver_b64" | gzip -d > "$DRIVER"
+          echo "$ORIGINAL_CONTROLLER_SHA256  $CONTROLLER" | sha256sum -c -
+          python - "$CONTROLLER" <<'PY'
+          from pathlib import Path
+          import sys
+          path = Path(sys.argv[1])
+          text = path.read_text()
+          old = "  npm(['run', 'autopilot:fixtures']);"
+          new = "  npm(['run', 'adapter:write']);\n  node('scripts/validate.mjs');\n  npm(['run', 'autopilot:fixtures']);"
+          if text.count(old) != 1:
+              raise SystemExit('Alice controller fixture insertion point drifted')
+          path.write_text(text.replace(old, new))
+          PY
           echo "$CONTROLLER_SHA256  $CONTROLLER" | sha256sum -c -
           echo "$DRIVER_SHA256  $DRIVER" | sha256sum -c -
           node --check "$CONTROLLER"
@@ -152,7 +165,7 @@ jobs:
         id: artifact
         uses: actions/upload-artifact@v4
         with:
-          name: star-trek-alice-terminal-resume-v1
+          name: star-trek-alice-terminal-resume-v2
           path: /tmp/star-trek-alice-final-v1/
           if-no-files-found: error
           retention-days: 30
@@ -168,12 +181,12 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: star-trek-alice-finalizer-resume-failure-${{ github.run_id }}
+          name: star-trek-alice-finalizer-resume-v2-failure-${{ github.run_id }}
           path: |
             /tmp/star-trek-alice-stage-input-v1/
             /tmp/star-trek-alice-independent-review-v2/
             /tmp/star-trek-alice-final-v1/
-            /tmp/star-trek-alice-finalizer-diagnostics-resume-v1/
+            /tmp/star-trek-alice-finalizer-diagnostics-resume-v2/
             /tmp/star-trek-alice-finalizer-controller.mjs
             /tmp/star-trek-alice-finalizer-driver-resume-v1.sh
           if-no-files-found: warn
