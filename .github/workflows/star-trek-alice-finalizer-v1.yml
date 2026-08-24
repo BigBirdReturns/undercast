@@ -1,0 +1,189 @@
+name: star-trek-alice-finalizer-v1
+
+on:
+  push:
+    branches: [agent/star-trek-alice-finalizer-v1]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-alice-finalizer-v1
+  cancel-in-progress: false
+
+env:
+  CURRENT_MAIN: 6377c4c7ba5ed4fa7d7eb3c499d32c258aec9834
+  CURRENT_TREE: 88217773527b4e97c1bc4d97a9d6f7433231c801
+  ORIGINAL_MAIN: 91254f17fa1ebb6e8502c6201e9bc8651ef4d4ac
+  ORIGINAL_TREE: e395cd3e679aadf60243f5b7bfe0ee7b2b079874
+  CLAIM_COMMIT: 31499f3d871c7a4d8a749af5a90e361a50153a50
+  CLAIM_TREE: 9612f0169cc670847f468459d489aa408e79ec62
+  ORIGINAL_CANDIDATE_BRANCH: agent/star-trek-alice-candidate-v1
+  ORIGINAL_CANDIDATE_COMMIT: 2e34c0e3f6435132608c8a5cdbf75c4e71f09ed3
+  ORIGINAL_CANDIDATE_TREE: 2d033986aa32071bc99795405f34ea52947b849d
+  REBASED_CANDIDATE_BRANCH: agent/star-trek-alice-candidate-rebased-v1
+  STAGE_RESULT_BRANCH: agent/star-trek-alice-stage-result-v1
+  STAGE_PREFIX: transport/star-trek-alice-stage-v1
+  MEDIA_RESULT_BRANCH: agent/star-trek-alice-media-result-v1
+  FINALIZER_BRANCH: agent/star-trek-alice-finalizer-v1
+  RESULT_BRANCH: agent/star-trek-alice-finalizer-result-v1
+  STAGE_ROOT: /tmp/star-trek-alice-stage-input-v1
+  REVIEW_ROOT: /tmp/star-trek-alice-independent-review-v2
+  FINAL_ROOT: /tmp/star-trek-alice-final-v1
+  DIAGNOSTIC_ROOT: /tmp/star-trek-alice-finalizer-diagnostics-v1
+  CONTROLLER: /tmp/star-trek-alice-finalizer-controller.mjs
+  DRIVER: /tmp/star-trek-alice-finalizer-driver.sh
+  CONTROLLER_SHA256: bdb9d77c5116bdb130d0e3b5a946b2a8397e966070b2e3448dd3340c6b3fac5d
+  CONTROLLER_B64_SHA256: 76660d641670ea98436cd001d31720de8111b859c5544b44aa0994d2b6bb0851
+  DRIVER_SHA256: 1f25170694ca3b6c7b46039f7c8ab0a22d474d672b2b65c9d05b2ebf4044082e
+  DRIVER_B64_SHA256: a501b9ecea60350a3b8084ad82dca531376248753d3a8feefc7a6a7b02020a71
+  TASK_ID: ap_c7ff8298a99fe94fc55bbdbc
+  LEASE_ID: lease_e1da8637695057922f1840d4
+  WALL_ID: UC-1396
+
+jobs:
+  review:
+    name: rebase-and-independently-review-alice
+    if: ${{ github.event.head_commit.message == 'Trigger Star Trek Alice finalizer v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      candidate_commit: ${{ steps.pipeline.outputs.candidate_commit }}
+      candidate_tree: ${{ steps.pipeline.outputs.candidate_tree }}
+      path_count: ${{ steps.pipeline.outputs.path_count }}
+      path_ledger_sha256: ${{ steps.pipeline.outputs.path_ledger_sha256 }}
+      stage_receipt_sha256: ${{ steps.pipeline.outputs.stage_receipt_sha256 }}
+      review_sha256: ${{ steps.pipeline.outputs.review_sha256 }}
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      artifact_digest: ${{ steps.artifact.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-node@v4
+        with: {node-version: 24, cache: npm}
+      - name: Reconstruct sealed finalizer programs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          controller_b64=.github/recovery/star-trek-alice-finalizer-v1/controller.mjs.gz.b64
+          driver_b64=.github/recovery/star-trek-alice-finalizer-v1/driver.sh.gz.b64
+          echo "$CONTROLLER_B64_SHA256  $controller_b64" | sha256sum -c -
+          echo "$DRIVER_B64_SHA256  $driver_b64" | sha256sum -c -
+          base64 -d "$controller_b64" | gzip -d > "$CONTROLLER"
+          base64 -d "$driver_b64" | gzip -d > "$DRIVER"
+          echo "$CONTROLLER_SHA256  $CONTROLLER" | sha256sum -c -
+          echo "$DRIVER_SHA256  $DRIVER" | sha256sum -c -
+          node --check "$CONTROLLER"
+          bash -n "$DRIVER"
+          chmod +x "$DRIVER"
+      - name: Rebase and independently review exact Alice candidate
+        id: pipeline
+        shell: bash
+        run: "$DRIVER review"
+      - name: Upload independent Alice review
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-alice-independent-review-v2
+          path: /tmp/star-trek-alice-independent-review-v2/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Preserve review failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-alice-review-failure-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-alice-stage-input-v1/
+            /tmp/star-trek-alice-independent-review-v2/
+            /tmp/star-trek-alice-finalizer-diagnostics-v1/
+          if-no-files-found: warn
+          retention-days: 30
+
+  finalize:
+    name: finalize-publish-and-deploy-alice
+    needs: review
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REBASED_CANDIDATE_COMMIT: ${{ needs.review.outputs.candidate_commit }}
+      REBASED_CANDIDATE_TREE: ${{ needs.review.outputs.candidate_tree }}
+      CANDIDATE_PATH_COUNT: ${{ needs.review.outputs.path_count }}
+      CANDIDATE_PATH_LEDGER_SHA256: ${{ needs.review.outputs.path_ledger_sha256 }}
+      STAGE_RECEIPT_SHA256: ${{ needs.review.outputs.stage_receipt_sha256 }}
+      REVIEW_SHA256: ${{ needs.review.outputs.review_sha256 }}
+      REVIEW_ARTIFACT_ID: ${{ needs.review.outputs.artifact_id }}
+      REVIEW_ARTIFACT_DIGEST: ${{ needs.review.outputs.artifact_digest }}
+    outputs:
+      product_commit: ${{ steps.pipeline.outputs.product_commit }}
+      product_tree: ${{ steps.pipeline.outputs.product_tree }}
+      pages_run: ${{ steps.pipeline.outputs.pages_run }}
+      receipt_sha256: ${{ steps.pipeline.outputs.receipt_sha256 }}
+      checker_sha256: ${{ steps.pipeline.outputs.checker_sha256 }}
+      reviewed_cycle: ${{ steps.pipeline.outputs.reviewed_cycle }}
+      next_task: ${{ steps.pipeline.outputs.next_task }}
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      artifact_digest: ${{ steps.artifact.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.review.outputs.candidate_commit }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with: {node-version: 24, cache: npm}
+      - uses: actions/download-artifact@v4
+        with:
+          name: star-trek-alice-independent-review-v2
+          path: /tmp/star-trek-alice-independent-review-v2
+      - name: Reconstruct sealed finalizer programs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin "$FINALIZER_BRANCH"
+          controller_b64=/tmp/controller.mjs.gz.b64
+          driver_b64=/tmp/driver.sh.gz.b64
+          git show "refs/remotes/origin/${FINALIZER_BRANCH}:.github/recovery/star-trek-alice-finalizer-v1/controller.mjs.gz.b64" > "$controller_b64"
+          git show "refs/remotes/origin/${FINALIZER_BRANCH}:.github/recovery/star-trek-alice-finalizer-v1/driver.sh.gz.b64" > "$driver_b64"
+          echo "$CONTROLLER_B64_SHA256  $controller_b64" | sha256sum -c -
+          echo "$DRIVER_B64_SHA256  $driver_b64" | sha256sum -c -
+          base64 -d "$controller_b64" | gzip -d > "$CONTROLLER"
+          base64 -d "$driver_b64" | gzip -d > "$DRIVER"
+          echo "$CONTROLLER_SHA256  $CONTROLLER" | sha256sum -c -
+          echo "$DRIVER_SHA256  $DRIVER" | sha256sum -c -
+          node --check "$CONTROLLER"
+          bash -n "$DRIVER"
+          chmod +x "$DRIVER"
+      - name: Finalize, publish, deploy, and read back Alice
+        id: pipeline
+        shell: bash
+        run: "$DRIVER finalize"
+      - name: Upload terminal Alice evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-alice-terminal-v1
+          path: /tmp/star-trek-alice-final-v1/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish terminal locator branch
+        shell: bash
+        env:
+          TERMINAL_ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          TERMINAL_ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: "$DRIVER publish-result"
+      - name: Preserve finalization failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-alice-finalizer-failure-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-alice-stage-input-v1/
+            /tmp/star-trek-alice-independent-review-v2/
+            /tmp/star-trek-alice-final-v1/
+            /tmp/star-trek-alice-finalizer-diagnostics-v1/
+          if-no-files-found: warn
+          retention-days: 30
