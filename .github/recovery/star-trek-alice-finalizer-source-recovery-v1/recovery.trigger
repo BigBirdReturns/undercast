@@ -1,0 +1,3 @@
+transaction=STAR-TREK-ALICE-FINALIZER-SOURCE-RECOVERY-V1
+source_branch=agent/star-trek-alice-finalizer-v1
+controller_sha256=bdb9d77c5116bdb130d0e3b5a946b2a8397e966070b2e3448dd3340c6b3fac5d
