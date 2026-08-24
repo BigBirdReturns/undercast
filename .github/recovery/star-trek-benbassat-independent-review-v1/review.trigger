@@ -1,0 +1,13 @@
+transaction=STAR-TREK-BENBASSAT-INDEPENDENT-REVIEW-V1
+observer=agent/star-trek-benbassat-candidate-observer-result-v1
+candidate=agent/star-trek-benbassat-candidate-result-v1
+claim=agent/star-trek-benbassat-claim-result-v1
+source_review=agent/star-trek-benbassat-source-review-result-v1
+media=agent/star-trek-benbassat-media-result-v1
+task=ap_dd7d1c73ed237230cd6e1d0b
+performer=Nolan North
+character=Benbassat
+wall_id=UC-1397
+canonical=ed79424013b92460d16c01cad4e590eca01e6bff
+canonical_mutation=false
+lease_mutation=false
