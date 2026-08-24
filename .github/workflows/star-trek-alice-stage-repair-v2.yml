@@ -1,0 +1,73 @@
+name: star-trek-alice-stage-repair-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-alice-stage-repair-v2
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-alice-stage-repair-v2
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 91254f17fa1ebb6e8502c6201e9bc8651ef4d4ac
+  EXPECTED_STAGE_HEAD: b0dd9d1492552dbb334624d000252643a2a221d6
+  TARGET_BRANCH: agent/star-trek-alice-stage-v1
+  TARGET_FILE: .github/recovery/star-trek-alice-stage-v1/stage.mjs
+
+jobs:
+  repair:
+    name: repair-alice-still-subject-binding
+    if: ${{ github.event.head_commit.message == 'Trigger Star Trek Alice stage repair v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch the exact failed stage without changing lease or media custody
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          live_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test "$live_main" = "$EXPECTED_MAIN"
+          live_stage="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
+          test "$live_stage" = "$EXPECTED_STAGE_HEAD"
+
+          git fetch --no-tags origin main "$TARGET_BRANCH"
+          git switch -C "$TARGET_BRANCH" "refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_STAGE_HEAD"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/recovery/star-trek-alice-stage-v1/stage.mjs')
+          text = path.read_text()
+          old = "subject: 'Alice in the 2269 animated Once Upon a Planet appearance'"
+          new = "subject: CHARACTER"
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one stale Alice subject binding, found {count}')
+          path.write_text(text.replace(old, new))
+          PY
+
+          node --check "$TARGET_FILE"
+          git diff --check
+          test "$(git diff --name-only | wc -l | tr -d ' ')" = 1
+          test "$(git diff --name-only)" = "$TARGET_FILE"
+
+          git config user.name undercast-alice-stage-repair
+          git config user.email undercast-alice-stage-repair@users.noreply.github.com
+          git add "$TARGET_FILE"
+          git commit -m 'Stage Star Trek Alice candidate v1'
+          patched="$(git rev-parse HEAD)"
+          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_STAGE_HEAD"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          test "$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')" = "$patched"
+
+          live_main_after="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test "$live_main_after" = "$EXPECTED_MAIN"
