@@ -1,0 +1,6 @@
+transaction=STAR-TREK-BENBASSAT-CLAIM-RECOVERY-V3-MONITOR
+canonical=ed79424013b92460d16c01cad4e590eca01e6bff
+target_branch=agent/star-trek-benbassat-claim-recovery-v3
+target_head=73362d6fa3123fc2cde3b3673cb54ad8f3214594
+target_result=agent/star-trek-benbassat-claim-result-v1
+canonical_mutation=false
