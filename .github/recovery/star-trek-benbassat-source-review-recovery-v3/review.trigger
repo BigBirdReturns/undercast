@@ -1,0 +1,11 @@
+transaction=STAR-TREK-BENBASSAT-SOURCE-REVIEW-RECOVERY-V3
+canonical=ed79424013b92460d16c01cad4e590eca01e6bff
+canonical_tree=7f9057770c8e622d71ef41b183811fe47fcdd6ed
+task=ap_dd7d1c73ed237230cd6e1d0b
+performer=Nolan North
+character=Benbassat
+source_result=agent/star-trek-benbassat-source-result-v3
+result_branch=agent/star-trek-benbassat-source-review-result-v1
+performance_mode=voice-only
+canonical_mutation=false
+lease_taken=false
