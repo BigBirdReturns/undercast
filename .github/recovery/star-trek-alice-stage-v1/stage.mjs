@@ -212,7 +212,7 @@ function main() {
     reviewed_by: 'chatgpt-alice-source-review',
     lease_id: LEASE_ID,
     reviews: [{ task_id: TASK_ID, records: [{ wall_id: WALL_ID,
-      still: { disposition: 'verified', subject: 'Alice in the 2269 animated Once Upon a Planet appearance', source: media.still.descriptionurl, note: 'The exact 2269 animated Alice frame is separate from Marcia Brown’s 2267 live-action performance.' },
+      still: { disposition: 'verified', subject: CHARACTER, source: media.still.descriptionurl, note: 'The exact 2269 animated Alice frame is separate from Marcia Brown’s 2267 live-action performance.' },
       portrait: { disposition: 'verified', subject: PERFORMER, source: media.portrait.descriptionurl, note: 'The licensed portrait identifies Nichelle Nichols as a neutral human performer and is separate from character evidence.' },
     }] }],
   };
