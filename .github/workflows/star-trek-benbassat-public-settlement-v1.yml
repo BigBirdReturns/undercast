@@ -1,0 +1,321 @@
+name: star-trek-benbassat-public-settlement-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-public-settlement-v1
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-public-settlement-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_ALICE_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  WALL_ID: UC-1397
+  OBSERVER_BRANCH: agent/star-trek-benbassat-terminal-observer-result-v1
+  OBSERVER_PREFIX: transport/star-trek-benbassat-terminal-observer-v1
+  TERMINAL_BRANCH: agent/star-trek-benbassat-finalizer-result-v1
+  TERMINAL_PREFIX: transport/star-trek-benbassat-terminal-v1
+  DIAGNOSIS_BRANCH: agent/star-trek-benbassat-candidate-diagnosis-result-v1
+  DIAGNOSIS_PREFIX: transport/star-trek-benbassat-candidate-diagnosis-v1
+  FINALIZER_STATUS_BRANCH: agent/star-trek-benbassat-finalizer-status-v1
+  FINALIZER_STATUS_PREFIX: transport/star-trek-benbassat-finalizer-status-v1
+  RESULT_BRANCH: agent/star-trek-benbassat-public-settlement-result-v1
+  OUT: /tmp/star-trek-benbassat-public-settlement-v1
+  OBSERVER_ROOT: /tmp/star-trek-benbassat-public-settlement-v1/observer
+  TERMINAL_ROOT: /tmp/star-trek-benbassat-public-settlement-v1/terminal
+
+jobs:
+  settle:
+    name: independently-settle-benbassat-publication
+    if: ${{ github.event.head_commit.message == 'Settle Star Trek Benbassat publication v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Wait for terminal observer and capture the controlling classification
+        id: classify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OBSERVER_ROOT" "$TERMINAL_ROOT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          observer_sha=''
+          for _ in $(seq 1 1800); do
+            observer_sha="$(git ls-remote --heads origin "refs/heads/${OBSERVER_BRANCH}" | awk '{print $1}')"
+            test -n "$observer_sha" && break
+            sleep 5
+          done
+          test -n "$observer_sha"
+          git fetch --no-tags origin "$OBSERVER_BRANCH"
+          observer_ref="refs/remotes/origin/${OBSERVER_BRANCH}"
+          test "$(git rev-parse "$observer_ref")" = "$observer_sha"
+          git archive "$observer_ref" "$OBSERVER_PREFIX" | tar -x -C "$OUT"
+          cp -a "$OUT/$OBSERVER_PREFIX"/. "$OBSERVER_ROOT"/
+          while read -r digest original_path; do
+            file="$OBSERVER_ROOT/$(basename "$original_path")"
+            test -f "$file"
+            test "$(sha256sum "$file" | awk '{print $1}')" = "$digest"
+          done < "$OBSERVER_ROOT/manifest.sha256"
+          classification="$(jq -r .classification "$OBSERVER_ROOT/status.json")"
+          terminal_sha="$(jq -r '.terminal_sha // ""' "$OBSERVER_ROOT/status.json")"
+          echo "classification=$classification" >> "$GITHUB_OUTPUT"
+          echo "terminal_sha=$terminal_sha" >> "$GITHUB_OUTPUT"
+          cp "$OBSERVER_ROOT/status.json" "$OUT/observer-status.json"
+          if test "$classification" != published; then
+            diagnosis_sha="$(jq -r '.candidate_diagnosis_sha // ""' "$OBSERVER_ROOT/status.json")"
+            status_sha="$(jq -r '.finalizer_status_sha // ""' "$OBSERVER_ROOT/status.json")"
+            if test -n "$diagnosis_sha"; then
+              git fetch --no-tags origin "$DIAGNOSIS_BRANCH"
+              git archive "refs/remotes/origin/${DIAGNOSIS_BRANCH}" "$DIAGNOSIS_PREFIX" | tar -x -C "$OUT"
+            fi
+            if test -n "$status_sha"; then
+              git fetch --no-tags origin "$FINALIZER_STATUS_BRANCH"
+              git archive "refs/remotes/origin/${FINALIZER_STATUS_BRANCH}" "$FINALIZER_STATUS_PREFIX" | tar -x -C "$OUT"
+            fi
+          fi
+
+      - name: Verify exact terminal receipt, canonical product, and deployment
+        if: steps.classify.outputs.classification == 'published'
+        shell: bash
+        env:
+          TERMINAL_SHA: ${{ steps.classify.outputs.terminal_sha }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$TERMINAL_SHA"
+          git fetch --no-tags origin main "$TERMINAL_BRANCH"
+          terminal_ref="refs/remotes/origin/${TERMINAL_BRANCH}"
+          test "$(git rev-parse "$terminal_ref")" = "$TERMINAL_SHA"
+          git archive "$terminal_ref" "$TERMINAL_PREFIX" | tar -x -C "$OUT"
+          cp -a "$OUT/$TERMINAL_PREFIX"/. "$TERMINAL_ROOT"/
+          while read -r digest original_path; do
+            file="$TERMINAL_ROOT/$(basename "$original_path")"
+            test -f "$file"
+            test "$(sha256sum "$file" | awk '{print $1}')" = "$digest"
+          done < "$TERMINAL_ROOT/manifest.sha256"
+          publication="$TERMINAL_ROOT/publication.json"
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg wall "$WALL_ID" \
+            '.transaction == "STAR-TREK-BENBASSAT-TERMINALIZATION-V1"
+             and .status == "published-and-deployed"
+             and .task.id == $task
+             and .task.performer == $performer
+             and .task.character == $character
+             and .task.status == "resolved"
+             and .task.wall_id == $wall
+             and .queue.total == 2228
+             and .queue.resolved == 429
+             and .queue.in_flight == 0
+             and .reviewed_cycle.outcome == "completed"
+             and .independent_review.verdict == "pass"
+             and .pages.status == "completed"
+             and .pages.conclusion == "success"
+             and .pages.head_sha == .canonical.commit
+             and .next.phase == "ready-for-one-cycle"
+             and .next.candidate.task_id != $task
+             and .boundary.performance_mode == "voice-animation"
+             and .boundary.physical_prosthetic_hint_rejected == true
+             and .boundary.physical_performance_attributed == false
+             and .boundary.prosthetic_performance_attributed == false
+             and .boundary.maker_attribution == "unresolved"
+             and .boundary.additional_lease_issued == false
+             and .boundary.canonical_mutation_by_terminalizer == false' \
+            "$publication" >/dev/null
+          product_commit="$(jq -r .canonical.commit "$publication")"
+          product_tree="$(jq -r .canonical.tree "$publication")"
+          product_parent="$(jq -r .canonical.parent "$publication")"
+          test "$product_parent" = "$EXPECTED_ALICE_MAIN"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$product_commit"
+          test "$(git show -s --format=%T "$product_commit")" = "$product_tree"
+          test "$(git show -s --format=%P "$product_commit")" = "$product_parent"
+          test "$(git show -s --format=%s "$product_commit")" = 'Star Trek: publish Benbassat cycle'
+          git checkout --detach "$product_commit"
+          npm ci --ignore-scripts
+          receipt_path="$(jq -r .receipt.path "$publication")"
+          checker_path="$(jq -r .receipt.checker_path "$publication")"
+          receipt_sha="$(jq -r .receipt.receipt_sha256 "$publication")"
+          checker_sha="$(jq -r .receipt.checker_sha256 "$publication")"
+          test -f "$receipt_path"
+          test -f "$checker_path"
+          test "$(jq -r .receipt_sha256 "$receipt_path")" = "$receipt_sha"
+          test "$(sha256sum "$checker_path" | awk '{print $1}')" = "$checker_sha"
+          python3 - "$receipt_path" <<'PY'
+          from pathlib import Path
+          import hashlib,json,sys
+          path=Path(sys.argv[1]); payload=json.loads(path.read_text()); expected=payload['receipt_sha256']; body=dict(payload); body.pop('receipt_sha256',None)
+          def stable(v):
+              if isinstance(v,dict): return {k:stable(v[k]) for k in sorted(v)}
+              if isinstance(v,list): return [stable(x) for x in v]
+              return v
+          actual=hashlib.sha256((json.dumps(stable(body),indent=2,ensure_ascii=False)+'\n').encode()).hexdigest()
+          if actual!=expected: raise SystemExit(f'receipt identity mismatch: {actual} != {expected}')
+          PY
+          node "$checker_path" | tee "$OUT/benbassat-checker.log"
+          node scripts/star-trek-alice-cycle.mjs | tee "$OUT/alice-checker.log"
+          node scripts/validate.mjs | tee "$OUT/repository-validate.log"
+          npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate.log"
+          node scripts/waterline.mjs validate --scope star-trek | tee "$OUT/waterline-validate.log"
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate.log"
+          node scripts/thesis-rails.mjs next --json > "$OUT/thesis-next.json"
+          test "$(jq -r .phase "$OUT/thesis-next.json")" = ready-for-one-cycle
+          test "$(jq -r .candidate.task_id "$OUT/thesis-next.json")" = "$(jq -r .next.candidate.task_id "$publication")"
+          test "$(jq -r .candidate.source_fingerprint "$OUT/thesis-next.json")" = "$(jq -r .next.candidate.source_fingerprint "$publication")"
+          pages_run="$(jq -r .pages.run_id "$publication")"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${pages_run}" > "$OUT/pages-run-live.json"
+          test "$(jq -r .status "$OUT/pages-run-live.json")" = completed
+          test "$(jq -r .conclusion "$OUT/pages-run-live.json")" = success
+          test "$(jq -r .head_sha "$OUT/pages-run-live.json")" = "$product_commit"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${pages_run}/jobs?filter=latest&per_page=100" > "$OUT/pages-jobs-live.json"
+          jq -e '.jobs | any(.name=="deploy" and .status=="completed" and .conclusion=="success")' "$OUT/pages-jobs-live.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-live.json"
+          test "$(jq -r .commit.sha "$OUT/main-live.json")" = "$product_commit"
+          cp "$publication" "$OUT/publication.json"
+          cp "$receipt_path" "$OUT/canonical-receipt.json"
+          cp "$checker_path" "$OUT/canonical-checker.mjs"
+          cp data/AUTOPILOT.json "$OUT/autopilot-state.json"
+          cp data/WATERLINE-STATE.json "$OUT/waterline-state.json"
+
+      - name: Build public settlement ledger
+        shell: bash
+        env:
+          CLASSIFICATION: ${{ steps.classify.outputs.classification }}
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+
+          out=Path(os.environ['OUT'])
+          classification=os.environ['CLASSIFICATION']
+          observer=json.loads((out/'observer-status.json').read_text())
+          settlement={
+              'version':1,
+              'transaction':'STAR-TREK-BENBASSAT-PUBLIC-SETTLEMENT-V1',
+              'settled_at':datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z'),
+              'classification':classification,
+              'observer':observer,
+              'canonical_mutation_by_settler':False,
+              'lease_mutation_by_settler':False,
+          }
+          if classification=='published':
+              publication=json.loads((out/'publication.json').read_text())
+              next_doc=json.loads((out/'thesis-next.json').read_text())
+              settlement.update({
+                  'verdict':'PASS',
+                  'status':'published-and-deployed',
+                  'canonical':publication['canonical'],
+                  'task':publication['task'],
+                  'receipt':publication['receipt'],
+                  'queue':publication['queue'],
+                  'reviewed_cycle':publication['reviewed_cycle'],
+                  'independent_review':publication['independent_review'],
+                  'pages':publication['pages'],
+                  'next':next_doc,
+                  'boundary':publication['boundary'],
+                  'controls':{
+                      'canonical_readback':True,
+                      'receipt_identity':True,
+                      'checker_identity':True,
+                      'checker_pass':True,
+                      'repository_validate':True,
+                      'media_gate':True,
+                      'waterline_validate':True,
+                      'thesis_validate':True,
+                      'pages_exact_head':True,
+                      'successor_exact_match':True,
+                  },
+              })
+              verdict=(
+                  'PASS\nBenbassat cycle is published and deployed\n'
+                  f"Product {publication['canonical']['commit']}\n"
+                  f"Task {publication['task']['id']}\n"
+                  f"Lease {publication['task']['lease_id']}\n"
+                  f"Wall {publication['task']['wall_id']}\n"
+                  f"Pages {publication['pages']['run_id']}\n"
+                  f"Next {next_doc['candidate']['task_id']} {next_doc['candidate']['performer']} as {next_doc['candidate']['character']}\n"
+              )
+          else:
+              settlement.update({
+                  'verdict':'FAIL-CLOSED',
+                  'status':classification,
+                  'canonical':{'commit':observer.get('main_sha')},
+                  'remaining_control':'The candidate or finalizer did not satisfy the terminal publication contract; inspect the attached observer and diagnosis ledgers before any recovery.',
+              })
+              verdict=(
+                  'FAIL-CLOSED\nBenbassat publication did not reach terminal acceptance\n'
+                  f"Classification {classification}\n"
+                  f"Finalizer run {observer.get('run_id')} conclusion {observer.get('conclusion')}\n"
+                  f"Main {observer.get('main_sha')}\n"
+              )
+          def stable(v):
+              if isinstance(v,dict): return {k:stable(v[k]) for k in sorted(v)}
+              if isinstance(v,list): return [stable(x) for x in v]
+              return v
+          body=(json.dumps(stable(settlement),indent=2,ensure_ascii=False)+'\n').encode()
+          settlement['settlement_sha256']=hashlib.sha256(body).hexdigest()
+          (out/'settlement.json').write_text(json.dumps(stable(settlement),indent=2,ensure_ascii=False)+'\n')
+          (out/'verdict.txt').write_text(verdict)
+          PY
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload public Benbassat settlement
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-public-settlement-v1
+          path: /tmp/star-trek-benbassat-public-settlement-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable public settlement branch
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq --argjson id "$ARTIFACT_ID" --arg digest "$ARTIFACT_DIGEST" '.artifact={id:$id,digest:$digest}' "$OUT/settlement.json" > "$OUT/settlement.tmp"
+          mv "$OUT/settlement.tmp" "$OUT/settlement.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          git config user.name undercast-benbassat-public-settler
+          git config user.email undercast-benbassat-public-settler@users.noreply.github.com
+          git checkout --orphan benbassat-public-settlement-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-public-settlement-v1
+          cp -a "$OUT"/. transport/star-trek-benbassat-public-settlement-v1/
+          git add transport/star-trek-benbassat-public-settlement-v1
+          git commit -m 'Record Star Trek Benbassat public settlement v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+      - name: Fail closed when settlement did not pass
+        if: steps.classify.outputs.classification != 'published'
+        shell: bash
+        run: |
+          echo 'Benbassat public settlement is fail-closed; see the immutable result branch.' >&2
+          exit 1
