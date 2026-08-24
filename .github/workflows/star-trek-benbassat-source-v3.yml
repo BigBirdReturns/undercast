@@ -1,0 +1,275 @@
+name: star-trek-benbassat-source-v3
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-source-v3
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-source-v3
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  RESULT_BRANCH: agent/star-trek-benbassat-source-result-v3
+  OUT: /tmp/star-trek-benbassat-source-v3
+
+jobs:
+  freeze:
+    name: freeze-benbassat-source-without-lease
+    if: ${{ github.event.head_commit.message == 'Freeze Star Trek Benbassat source v3' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify exact Alice parent and repository-selected Benbassat task
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git fetch --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          git checkout --detach "$EXPECTED_MAIN"
+          npm ci --ignore-scripts
+          node scripts/thesis-rails.mjs validate > "$OUT/thesis-validate.log"
+          node scripts/thesis-rails.mjs next --json > "$OUT/thesis-next.json"
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg fp "$EXPECTED_FINGERPRINT" \
+            '.phase == "ready-for-one-cycle"
+             and .estate_id == "star-trek"
+             and .scope_id == "star-trek"
+             and .candidate.task_id == $task
+             and .candidate.performer == $performer
+             and .candidate.character == $character
+             and .candidate.source_fingerprint == $fp
+             and .candidate.priority == 1330' \
+            "$OUT/thesis-next.json" >/dev/null
+          node - <<'NODE'
+          const fs = require('fs');
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const trek = state.jobs.filter((row) => row.scope === 'star-trek');
+          const task = trek.find((row) => row.id === process.env.TASK_ID);
+          if (!task) throw new Error('Benbassat task missing');
+          const sources = Array.isArray(task.sources)
+            ? task.sources.filter(Boolean)
+            : (task.source ? [task.source] : []);
+          const counts = {
+            total: trek.length,
+            queued: trek.filter((row) => row.status === 'queued').length,
+            resolved: trek.filter((row) => row.status === 'resolved').length,
+            blocked: trek.filter((row) => row.status === 'blocked').length,
+            rejected: trek.filter((row) => row.status === 'rejected').length,
+            in_flight: trek.filter((row) => ['leased', 'drafted', 'merged'].includes(row.status)).length,
+          };
+          if (task.status !== 'queued' || Number(task.attempts || 0) !== 0) throw new Error('Benbassat task already mutated');
+          if (task.lease != null) throw new Error('Benbassat task already has a lease');
+          if (task.performer !== process.env.EXPECTED_PERFORMER || task.character !== process.env.EXPECTED_CHARACTER) throw new Error('Benbassat identity drifted');
+          if (task.source_fingerprint !== process.env.EXPECTED_FINGERPRINT) throw new Error('Benbassat fingerprint drifted');
+          if (sources.length !== 1 || sources[0] !== 'https://memory-alpha.fandom.com/wiki/Benbassat') throw new Error(`Benbassat source set drifted: ${JSON.stringify(sources)}`);
+          const expected = {total:2228,queued:1798,resolved:428,blocked:0,rejected:2,in_flight:0};
+          if (JSON.stringify(counts) !== JSON.stringify(expected)) throw new Error(`Star Trek queue drifted: ${JSON.stringify(counts)}`);
+          fs.writeFileSync(process.env.OUT + '/task-and-queue.json', JSON.stringify({task, sources, counts}, null, 2) + '\n');
+          fs.writeFileSync(process.env.OUT + '/source-url.txt', sources[0] + '\n');
+          NODE
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
+          test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$EXPECTED_MAIN"
+
+      - name: Freeze exact Memory Alpha revision and preserve attribution markers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from urllib.parse import urlencode, unquote
+          from urllib.request import Request, urlopen
+          import hashlib
+          import json
+          import os
+          import re
+
+          root = Path(os.environ['OUT'])
+          payload = json.loads((root / 'task-and-queue.json').read_text())
+          task = payload['task']
+          source = payload['sources'][0]
+          title = unquote(source.rsplit('/', 1)[-1]).replace('_', ' ')
+          query = {
+              'action': 'query',
+              'prop': 'revisions|pageimages',
+              'titles': title,
+              'rvprop': 'ids|timestamp|content',
+              'rvslots': 'main',
+              'piprop': 'original|name',
+              'format': 'json',
+              'formatversion': '2',
+          }
+          url = 'https://memory-alpha.fandom.com/api.php?' + urlencode(query)
+          request = Request(url, headers={
+              'User-Agent': 'UNDERCAST-Benbassat-Source-Probe/3.0',
+              'Accept': 'application/json',
+          })
+          with urlopen(request, timeout=90) as response:
+              api = json.load(response)
+          pages = api.get('query', {}).get('pages', [])
+          if len(pages) != 1 or pages[0].get('missing'):
+              raise SystemExit(f'Benbassat source missing: {pages!r}')
+          page = pages[0]
+          revisions = page.get('revisions') or []
+          if len(revisions) != 1:
+              raise SystemExit('Benbassat source revision cardinality drifted')
+          revision = revisions[0]
+          text = revision['slots']['main']['content']
+          lower = text.lower()
+          performer = task['performer']
+          if performer.lower() not in lower:
+              raise SystemExit('Nolan North attribution absent from frozen source')
+
+          patterns = {
+              'voice': [r'\bvoiced\b', r'\bvoice actor\b', r'\bvoice of\b', r'\bvoice performance\b'],
+              'physical': [r'\bportrayed by\b', r'\bplayed by\b', r'\bsuit performer\b', r'\bphysical performer\b'],
+              'animation': [r'\banimated\b', r'\banimation\b', r'\bprodigy\b'],
+              'prosthetic': [r'\bprosthetic\b', r'\bmakeup\b', r'\bmake-up\b'],
+          }
+          markers = {
+              key: [pattern for pattern in values if re.search(pattern, lower, flags=re.I)]
+              for key, values in patterns.items()
+          }
+          evidence_lines = []
+          needles = ('nolan north', 'voice', 'voiced', 'portrayed', 'played by', 'actor', 'prodigy', 'benbassat')
+          for number, line in enumerate(text.splitlines(), 1):
+              lowered = line.lower()
+              if any(needle in lowered for needle in needles):
+                  evidence_lines.append(f'{number}: {line}')
+
+          receipt = {
+              'version': 3,
+              'transaction': 'STAR-TREK-BENBASSAT-SOURCE-PROBE-V3',
+              'status': 'source-frozen-pending-performance-mode-review',
+              'generated_at': datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
+              'canonical_parent': os.environ['EXPECTED_MAIN'],
+              'canonical_tree': os.environ['EXPECTED_TREE'],
+              'task': {
+                  'id': task['id'],
+                  'performer': task['performer'],
+                  'character': task['character'],
+                  'status': task['status'],
+                  'attempts': int(task.get('attempts') or 0),
+                  'source_fingerprint': task['source_fingerprint'],
+                  'performance_modes': task.get('performance_modes') or [],
+                  'source': source,
+              },
+              'source_revision': {
+                  'pageid': page['pageid'],
+                  'revision': revision['revid'],
+                  'timestamp': revision['timestamp'],
+                  'content_sha256': hashlib.sha256(text.encode()).hexdigest(),
+                  'page_image': page.get('original'),
+              },
+              'attribution_markers': markers,
+              'performer_present': True,
+              'performance_mode_adjudication': 'pending-independent-source-review',
+              'maker_attribution': 'unresolved',
+              'makeup_attribution': 'unresolved',
+              'costume_attribution': 'unresolved',
+              'character_design_attribution': 'unresolved',
+              'direction_attribution': 'unresolved',
+              'editing_attribution': 'unresolved',
+              'sound_attribution': 'unresolved',
+              'production_shop_attribution': 'unresolved',
+              'transformation_measured': False,
+              'canonical_mutation': False,
+              'lease_taken': False,
+          }
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          body = json.dumps(stable(receipt), indent=2, ensure_ascii=False) + '\n'
+          receipt['receipt_sha256'] = hashlib.sha256(body.encode()).hexdigest()
+          (root / 'source-probe.json').write_text(json.dumps(stable(receipt), indent=2, ensure_ascii=False) + '\n')
+          (root / 'frozen-source.wikitext').write_text(text)
+          (root / 'frozen-source-api.json').write_text(json.dumps(api, indent=2, ensure_ascii=False) + '\n')
+          (root / 'evidence-lines.txt').write_text('\n'.join(evidence_lines) + '\n')
+          PY
+          jq -e \
+            --arg parent "$EXPECTED_MAIN" \
+            --arg tree "$EXPECTED_TREE" \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg fp "$EXPECTED_FINGERPRINT" \
+            '.status == "source-frozen-pending-performance-mode-review"
+             and .canonical_parent == $parent
+             and .canonical_tree == $tree
+             and .task.id == $task
+             and .task.performer == $performer
+             and .task.character == $character
+             and .task.source_fingerprint == $fp
+             and .task.status == "queued"
+             and .task.attempts == 0
+             and .maker_attribution == "unresolved"
+             and .canonical_mutation == false
+             and .lease_taken == false' \
+            "$OUT/source-probe.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after.json"
+          test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$EXPECTED_MAIN"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload Benbassat source evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-source-v3
+          path: /tmp/star-trek-benbassat-source-v3/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable source result branch
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq --argjson id "$ARTIFACT_ID" --arg digest "$ARTIFACT_DIGEST" '.artifact={id:$id,digest:$digest}' "$OUT/source-probe.json" > "$OUT/source-probe.tmp"
+          mv "$OUT/source-probe.tmp" "$OUT/source-probe.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-benbassat-source-probe
+          git config user.email undercast-benbassat-source-probe@users.noreply.github.com
+          git checkout --orphan benbassat-source-result-v3
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-source-v3
+          cp -a "$OUT"/. transport/star-trek-benbassat-source-v3/
+          git add transport/star-trek-benbassat-source-v3
+          git commit -m 'Record frozen Star Trek Benbassat source v3'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
