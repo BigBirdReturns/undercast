@@ -1,0 +1,99 @@
+name: star-trek-benbassat-boundary-observer-v2
+
+on:
+  push:
+    branches: [agent/star-trek-benbassat-boundary-observer-v2]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-boundary-observer-v2
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  ROLLING_BRANCH: agent/star-trek-rolling-continuation-v1
+  RESULT_BRANCH: agent/star-trek-benbassat-boundary-observer-result-v2
+  OUT: /tmp/star-trek-benbassat-boundary-observer-v2
+
+jobs:
+  inspect:
+    if: ${{ github.event.head_commit.message == 'Observe Star Trek Benbassat boundary v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify and capture boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/rolling-files"
+          git fetch --no-tags origin main "$ROLLING_BRANCH"
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          main_tree="$(git show -s --format=%T "$main_sha")"
+          rolling_sha="$(git rev-parse "refs/remotes/origin/${ROLLING_BRANCH}")"
+          rolling_tree="$(git show -s --format=%T "$rolling_sha")"
+          test "$main_sha" = "$EXPECTED_MAIN"
+          test "$main_tree" = "$EXPECTED_TREE"
+          git show -s --format='%H%n%T%n%P%n%s' "$main_sha" > "$OUT/main.txt"
+          git show -s --format='%H%n%T%n%P%n%s' "$rolling_sha" > "$OUT/rolling.txt"
+          git diff --name-status "$main_sha" "$rolling_sha" > "$OUT/main-to-rolling.diff.txt" || true
+          git ls-tree -r --name-only "$rolling_sha" | grep -E '(star-trek-rolling|rolling-continuation|continuation-state|THESIS-CONTINUATION)' > "$OUT/rolling-matching-paths.txt" || true
+          while IFS= read -r path; do
+            test -n "$path" || continue
+            mkdir -p "$OUT/rolling-files/$(dirname "$path")"
+            git show "$rolling_sha:$path" > "$OUT/rolling-files/$path"
+          done < "$OUT/rolling-matching-paths.txt"
+          git grep -n -I -E 'STAR-TREK-ROLLING|star-trek-rolling-continuation|rolling-continuation|ap_dd7d1c73ed237230cd6e1d0b|Benbassat' "$rolling_sha" -- .github scripts data > "$OUT/rolling-grep.txt" || true
+          git ls-remote --heads origin '*benbassat*' '*dd7d1c*' > "$OUT/existing-benbassat-refs.txt"
+          test ! -s "$OUT/existing-benbassat-refs.txt"
+          npm ci --ignore-scripts
+          node scripts/thesis-rails.mjs validate > "$OUT/thesis-validate.log"
+          node scripts/thesis-rails.mjs next --json > "$OUT/thesis-next.json"
+          test "$(jq -r .phase "$OUT/thesis-next.json")" = ready-for-one-cycle
+          test "$(jq -r .candidate.task_id "$OUT/thesis-next.json")" = "$TASK_ID"
+          test "$(jq -r .candidate.performer "$OUT/thesis-next.json")" = "$EXPECTED_PERFORMER"
+          test "$(jq -r .candidate.character "$OUT/thesis-next.json")" = "$EXPECTED_CHARACTER"
+          test "$(jq -r .candidate.source_fingerprint "$OUT/thesis-next.json")" = "$EXPECTED_FINGERPRINT"
+          node - <<'NODE'
+          const fs=require('fs');
+          const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const trek=state.jobs.filter(x=>x.scope==='star-trek');
+          const task=trek.find(x=>x.id===process.env.TASK_ID);
+          const counts={total:trek.length,queued:trek.filter(x=>x.status==='queued').length,resolved:trek.filter(x=>x.status==='resolved').length,blocked:trek.filter(x=>x.status==='blocked').length,rejected:trek.filter(x=>x.status==='rejected').length,in_flight:trek.filter(x=>['leased','drafted','merged'].includes(x.status)).length};
+          if(!task) throw Error('Benbassat task missing');
+          if(task.status!=='queued'||Number(task.attempts||0)!==0) throw Error('Benbassat task already mutated');
+          if(task.performer!==process.env.EXPECTED_PERFORMER||task.character!==process.env.EXPECTED_CHARACTER||task.source_fingerprint!==process.env.EXPECTED_FINGERPRINT) throw Error('Benbassat identity drifted');
+          if(JSON.stringify(counts)!==JSON.stringify({total:2228,queued:1798,resolved:428,blocked:0,rejected:2,in_flight:0})) throw Error('queue drifted '+JSON.stringify(counts));
+          fs.writeFileSync(process.env.OUT+'/task-and-queue.json',JSON.stringify({task,counts},null,2)+'\n');
+          NODE
+          jq -n --arg main "$main_sha" --arg main_tree "$main_tree" --arg rolling_branch "$ROLLING_BRANCH" --arg rolling_sha "$rolling_sha" --arg rolling_tree "$rolling_tree" --slurpfile rail "$OUT/thesis-next.json" --slurpfile durable "$OUT/task-and-queue.json" '{version:2,transaction:"STAR-TREK-BENBASSAT-BOUNDARY-OBSERVER-V2",status:"observed",canonical:{commit:$main,tree:$main_tree},rolling:{branch:$rolling_branch,commit:$rolling_sha,tree:$rolling_tree},rail:$rail[0],durable:$durable[0],existing_benbassat_refs:0,canonical_mutation:false,lease_mutation:false}' > "$OUT/status.json"
+      - name: Publish result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          git config user.name undercast-benbassat-observer
+          git config user.email undercast-benbassat-observer@users.noreply.github.com
+          git checkout --orphan benbassat-boundary-observer-result-v2
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-boundary-observer-v2
+          cp -a "$OUT"/. transport/star-trek-benbassat-boundary-observer-v2/
+          git add transport/star-trek-benbassat-boundary-observer-v2
+          git commit -m 'Record Star Trek Benbassat boundary observer v2'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
