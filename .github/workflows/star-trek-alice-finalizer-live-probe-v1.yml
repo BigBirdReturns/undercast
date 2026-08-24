@@ -1,0 +1,79 @@
+name: star-trek-alice-finalizer-live-probe-v1
+
+on:
+  push:
+    branches: [agent/star-trek-alice-finalizer-live-probe-v1]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-alice-finalizer-live-probe-v1
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: agent/star-trek-alice-finalizer-v1
+  TARGET_SHA: 9d268e6b3499b813cb49e83746147ee08a80b0b6
+  TARGET_WORKFLOW: star-trek-alice-finalizer-v1.yml
+  RESULT_BRANCH: agent/star-trek-alice-finalizer-live-probe-result-v1
+  TERMINAL_BRANCH: agent/star-trek-alice-finalizer-result-v1
+  CANDIDATE_BRANCH: agent/star-trek-alice-candidate-rebased-v1
+  OUT: /tmp/star-trek-alice-finalizer-live-probe-v1
+
+jobs:
+  probe:
+    name: snapshot-exact-alice-finalizer-run
+    if: ${{ github.event.head_commit.message == 'Probe Star Trek Alice finalizer v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Capture exact run and repository state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          run_id=''
+          for _ in $(seq 1 120); do
+            gh run list --repo "$GITHUB_REPOSITORY" --workflow "$TARGET_WORKFLOW" --branch "$TARGET_BRANCH" --event push --limit 50 --json databaseId,status,conclusion,headSha,displayTitle,createdAt,updatedAt,url,attempt > "$OUT/run-list.json"
+            run_id="$(jq -r --arg sha "$TARGET_SHA" '[.[] | select(.headSha==$sha)][0].databaseId // empty' "$OUT/run-list.json")"
+            test -n "$run_id" && break
+            sleep 2
+          done
+          test -n "$run_id"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/run.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=latest&per_page=100" > "$OUT/jobs.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/artifacts.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main.json"
+          candidate_sha="$(git ls-remote --heads origin "refs/heads/${CANDIDATE_BRANCH}" | awk '{print $1}')"
+          terminal_sha="$(git ls-remote --heads origin "refs/heads/${TERMINAL_BRANCH}" | awk '{print $1}')"
+          jq -n \
+            --argjson run_id "$run_id" \
+            --arg status "$(jq -r .status "$OUT/run.json")" \
+            --arg conclusion "$(jq -r '.conclusion // ""' "$OUT/run.json")" \
+            --arg target_sha "$TARGET_SHA" \
+            --arg main_sha "$(jq -r .commit.sha "$OUT/main.json")" \
+            --arg candidate_sha "$candidate_sha" \
+            --arg terminal_sha "$terminal_sha" \
+            '{version:1,transaction:"STAR-TREK-ALICE-FINALIZER-LIVE-PROBE-V1",run_id:$run_id,status:$status,conclusion:$conclusion,target_sha:$target_sha,main_sha:$main_sha,candidate_sha:$candidate_sha,terminal_sha:$terminal_sha,canonical_mutation:false,lease_mutation:false}' > "$OUT/status.json"
+      - name: Publish live-probe result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          git config user.name undercast-alice-live-probe
+          git config user.email undercast-alice-live-probe@users.noreply.github.com
+          git checkout --orphan alice-finalizer-live-probe-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-alice-finalizer-live-probe-v1
+          cp -a "$OUT"/. transport/star-trek-alice-finalizer-live-probe-v1/
+          git add transport/star-trek-alice-finalizer-live-probe-v1
+          git commit -m 'Record Star Trek Alice finalizer live probe v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
