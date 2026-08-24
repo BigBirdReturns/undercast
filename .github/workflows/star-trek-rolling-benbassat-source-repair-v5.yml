@@ -1,0 +1,127 @@
+name: star-trek-rolling-benbassat-source-repair-v5
+
+on:
+  push:
+    branches:
+      - agent/star-trek-rolling-continuation-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-rolling-benbassat-source-repair-v5
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  CONTROL_BRANCH: agent/star-trek-rolling-continuation-v1
+  STATE_PATH: transport/star-trek-rolling-continuation-v1/state.json
+  PROBE_WORKFLOW: .github/workflows/star-trek-rolling-probe-v1.yml
+
+jobs:
+  repair:
+    name: patch-benbassat-source-contract-in-place
+    if: ${{ github.event.head_commit.message == 'Repair Benbassat rolling probe v5' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch only the source contract and reopen the verified bootstrap
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$CONTROL_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T refs/remotes/origin/main)" = "$EXPECTED_TREE"
+          git checkout -B "$CONTROL_BRANCH" "refs/remotes/origin/${CONTROL_BRANCH}"
+          test -f "$STATE_PATH"
+          test -f "$PROBE_WORKFLOW"
+
+          status="$(jq -r .status "$STATE_PATH")"
+          stage="$(jq -r .stage "$STATE_PATH")"
+          if test "$status" != boundary || test "$stage" != boundary; then
+            echo "rolling lane already left the repair boundary; no mutation required"
+            exit 0
+          fi
+          test "$(jq -r .expected_predecessor "$STATE_PATH")" = "$EXPECTED_MAIN"
+          test "$(jq -r '.boundary.lease_taken // false' "$STATE_PATH")" = false
+          test "$(jq -r '.boundary.canonical_mutation // false' "$STATE_PATH")" = false
+
+          git checkout --detach "$EXPECTED_MAIN"
+          jq --arg id "$TASK_ID" '.jobs[] | select(.id == $id)' data/AUTOPILOT.json > /tmp/benbassat-task.json
+          jq -e --arg fp "$EXPECTED_FINGERPRINT" '.status == "queued" and (.attempts // 0) == 0 and .performer == "Nolan North" and .character == "Benbassat" and .source_fingerprint == $fp' /tmp/benbassat-task.json >/dev/null
+          node - <<'NODE'
+          const fs = require('fs');
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const trek = state.jobs.filter((row) => row.scope === 'star-trek');
+          const counts = {
+            total: trek.length,
+            queued: trek.filter((row) => row.status === 'queued').length,
+            resolved: trek.filter((row) => row.status === 'resolved').length,
+            blocked: trek.filter((row) => row.status === 'blocked').length,
+            rejected: trek.filter((row) => row.status === 'rejected').length,
+            in_flight: trek.filter((row) => ['leased', 'drafted', 'merged'].includes(row.status)).length,
+          };
+          const expected = {total:2228,queued:1798,resolved:428,blocked:0,rejected:2,in_flight:0};
+          if (JSON.stringify(counts) !== JSON.stringify(expected)) throw new Error(`queue drifted: ${JSON.stringify(counts)}`);
+          NODE
+
+          git checkout -B "$CONTROL_BRANCH" "refs/remotes/origin/${CONTROL_BRANCH}"
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, os
+
+          workflow = Path(os.environ['PROBE_WORKFLOW'])
+          text = workflow.read_text()
+          old_source = "          source=task['source']; title=source.rsplit('/',1)[-1].replace('_',' ')\n"
+          new_source = "          sources=task.get('sources') or []\n          source=task.get('source') or (sources[0] if sources else None)\n          if not source:raise SystemExit('task source contract is empty')\n          title=source.rsplit('/',1)[-1].replace('_',' ')\n"
+          if old_source in text:
+              text = text.replace(old_source, new_source, 1)
+          elif new_source not in text:
+              raise SystemExit('rolling source-field patch anchor drifted')
+
+          old_mode = "          voice_wording=any(value in lower for value in ('voice','voiced by','voice actor','voice actors'))\n          physical_wording=any(value in lower for value in ('portrayed by','played by','suit performer','physical performer'))\n          queued_voice='voice-animation' in modes\n          queued_physical='physical-prosthetic' in modes or 'physical-and-voice' in modes\n          if queued_voice and voice_wording:\n              kind='voice';adjudicated='voice / voice-only'\n          elif queued_physical and physical_wording:\n              kind='face';adjudicated='physical / live-action'\n          else:\n              kind='unresolved';adjudicated='unresolved'\n"
+          new_mode = "          import re\n          positions=[m.start() for m in re.finditer(re.escape(performer.lower()),lower)]\n          windows=[lower[max(0,pos-700):pos+700] for pos in positions]\n          voice_terms=('voice','voiced','voice actor','voice actors')\n          physical_terms=('portrayed by','played by','suit performer','physical performer')\n          voice_wording=any(any(value in window for value in voice_terms) for window in windows)\n          physical_wording=any(any(value in window for value in physical_terms) for window in windows)\n          queued_voice='voice-animation' in modes\n          queued_physical='physical-prosthetic' in modes or 'physical-and-voice' in modes\n          if voice_wording and not physical_wording:\n              kind='voice';adjudicated='voice / voice-only'\n          elif physical_wording and not voice_wording:\n              kind='face';adjudicated='physical / live-action'\n          elif queued_voice and voice_wording:\n              kind='voice';adjudicated='voice / voice-only'\n          elif queued_physical and physical_wording:\n              kind='face';adjudicated='physical / live-action'\n          else:\n              kind='unresolved';adjudicated='unresolved'\n"
+          if old_mode in text:
+              text = text.replace(old_mode, new_mode, 1)
+          elif new_mode not in text:
+              raise SystemExit('rolling modality patch anchor drifted')
+          workflow.write_text(text)
+
+          state_path = Path(os.environ['STATE_PATH'])
+          state = json.loads(state_path.read_text())
+          state['status'] = 'bootstrap'
+          state['stage'] = 'bootstrap'
+          state['expected_predecessor'] = os.environ['EXPECTED_MAIN']
+          state['boundary'] = None
+          recovery = state.setdefault('recovery', {})
+          recovery['benbassat_source_contract_repair'] = {
+              'version': 5,
+              'task_id': os.environ['TASK_ID'],
+              'performer': os.environ['EXPECTED_PERFORMER'],
+              'character': os.environ['EXPECTED_CHARACTER'],
+              'source_fingerprint': os.environ['EXPECTED_FINGERPRINT'],
+              'canonical_mutation': False,
+              'lease_taken': False,
+          }
+          state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False) + '\n')
+          PY
+
+          git diff --check
+          grep -F "sources=task.get('sources') or []" "$PROBE_WORKFLOW" >/dev/null
+          test "$(jq -r .status "$STATE_PATH")" = bootstrap
+          test "$(jq -r .stage "$STATE_PATH")" = bootstrap
+          test "$(jq -r .boundary "$STATE_PATH")" = null
+          git config user.name undercast-benbassat-source-repair
+          git config user.email undercast-benbassat-source-repair@users.noreply.github.com
+          git add "$PROBE_WORKFLOW" "$STATE_PATH"
+          git commit -m 'Star Trek rolling continuation: repair Benbassat source contract v5'
+          git push origin "HEAD:refs/heads/${CONTROL_BRANCH}"
