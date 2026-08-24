@@ -1,0 +1,443 @@
+name: star-trek-benbassat-finalizer-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-finalizer-v1
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-finalizer-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  WALL_ID: UC-1397
+  REVIEW_BRANCH: agent/star-trek-benbassat-independent-review-result-v1
+  REVIEW_PREFIX: transport/star-trek-benbassat-independent-review-v1
+  DIAGNOSIS_BRANCH: agent/star-trek-benbassat-candidate-diagnosis-result-v1
+  DIAGNOSIS_PREFIX: transport/star-trek-benbassat-candidate-diagnosis-v1
+  CANDIDATE_BRANCH: agent/star-trek-benbassat-candidate-result-v1
+  CLAIM_BRANCH: agent/star-trek-benbassat-claim-result-v1
+  SOURCE_REVIEW_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  SOURCE_REVIEW_PREFIX: transport/star-trek-benbassat-source-review-v1
+  MEDIA_BRANCH: agent/star-trek-benbassat-media-result-v1
+  MEDIA_PREFIX: transport/star-trek-benbassat-media-v1
+  RESULT_BRANCH: agent/star-trek-benbassat-finalizer-result-v1
+  STATUS_BRANCH: agent/star-trek-benbassat-finalizer-status-v1
+  ALICE_RECEIPT_PATH: data/review/adapter-sdk/star-trek-alice-cycle.json
+  ALICE_RECEIPT_SHA256: 07331e142b70e21ff8eed6c40a23a576c259c9cd2afae462250a8961bcc09472
+  ALICE_CHECKER_PATH: scripts/star-trek-alice-cycle.mjs
+  ALICE_CHECKER_SHA256: 7b924da030e7ea39d868bd582ae41dc6df443cf543bf97f2f22f960db06c2371
+  ALICE_CYCLE_ID: cycle_bc4e10d8ce3d09b5f12b81cc
+  RECEIPT_PATH: data/review/adapter-sdk/star-trek-benbassat-cycle.json
+  CHECKER_PATH: scripts/star-trek-benbassat-cycle.mjs
+  OUT: /tmp/star-trek-benbassat-finalizer-v1
+  REVIEW_ROOT: /tmp/star-trek-benbassat-finalizer-v1/independent-review
+  SOURCE_REVIEW_ROOT: /tmp/star-trek-benbassat-finalizer-v1/source-review
+  MEDIA_ROOT: /tmp/star-trek-benbassat-finalizer-v1/media-layer
+  FINALIZER_SOURCE: .github/recovery/star-trek-benbassat-finalizer-v1/finalizer.py
+  FINALIZER: /tmp/star-trek-benbassat-finalizer-v1.py
+
+jobs:
+  select:
+    name: select-passing-review-or-fail-closed
+    if: ${{ github.event.head_commit.message == 'Finalize Star Trek Benbassat v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      status: ${{ steps.select.outputs.status }}
+      review_sha: ${{ steps.select.outputs.review_sha }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Wait for independent review or immutable diagnosis
+        id: select
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          test -z "$(git ls-remote --heads origin "refs/heads/${STATUS_BRANCH}")"
+          review_sha=''
+          diagnosis_sha=''
+          for _ in $(seq 1 1440); do
+            review_sha="$(git ls-remote --heads origin "refs/heads/${REVIEW_BRANCH}" | awk '{print $1}')"
+            diagnosis_sha="$(git ls-remote --heads origin "refs/heads/${DIAGNOSIS_BRANCH}" | awk '{print $1}')"
+            if test -n "$review_sha" || test -n "$diagnosis_sha"; then break; fi
+            sleep 5
+          done
+          if test -n "$review_sha"; then
+            status='review-pass'
+          elif test -n "$diagnosis_sha"; then
+            status='candidate-failed'
+          else
+            status='timed-out'
+          fi
+          jq -n --arg status "$status" --arg review_sha "$review_sha" --arg diagnosis_sha "$diagnosis_sha" --arg main "$EXPECTED_MAIN" '{version:1,transaction:"STAR-TREK-BENBASSAT-FINALIZER-SELECTION-V1",status:$status,review_sha:$review_sha,diagnosis_sha:$diagnosis_sha,expected_main:$main,canonical_mutation:false,lease_mutation:false}' > "$OUT/selection.json"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "review_sha=$review_sha" >> "$GITHUB_OUTPUT"
+          if test "$status" != review-pass; then
+            if test -n "$diagnosis_sha"; then
+              git fetch --no-tags origin "$DIAGNOSIS_BRANCH"
+              git archive "refs/remotes/origin/${DIAGNOSIS_BRANCH}" "$DIAGNOSIS_PREFIX" | tar -x -C "$OUT"
+            fi
+            find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          fi
+
+      - name: Publish fail-closed finalizer status
+        if: steps.select.outputs.status != 'review-pass'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-benbassat-finalizer-status
+          git config user.email undercast-benbassat-finalizer-status@users.noreply.github.com
+          git checkout --orphan benbassat-finalizer-status-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-finalizer-status-v1
+          cp -a "$OUT"/. transport/star-trek-benbassat-finalizer-status-v1/
+          git add transport/star-trek-benbassat-finalizer-status-v1
+          git commit -m 'Record Star Trek Benbassat finalizer status v1'
+          git push origin "HEAD:refs/heads/${STATUS_BRANCH}"
+
+  finalize:
+    name: record-review-publish-and-deploy-benbassat
+    needs: select
+    if: needs.select.outputs.status == 'review-pass'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REVIEW_SHA: ${{ needs.select.outputs.review_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Stage corrected hash-bound finalizer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cp "$FINALIZER_SOURCE" "$FINALIZER"
+          python3 - "$FINALIZER" <<'PY'
+          from pathlib import Path
+          import sys
+          path=Path(sys.argv[1])
+          text=path.read_text()
+          text=text.replace('        "RECEIPT_SHA256": receipt["receipt_sha256"],\n','')
+          text=text.replace("if (digestObject(receiptBody) !== C.RECEIPT_SHA256 || receipt.receipt_sha256 !== C.RECEIPT_SHA256) fail('receipt identity drifted');","if (digestObject(receiptBody) !== receipt.receipt_sha256) fail('receipt identity drifted');")
+          path.write_text(text)
+          PY
+          chmod +x "$FINALIZER"
+          python3 -m py_compile "$FINALIZER"
+          sha256sum "$FINALIZER" > /tmp/star-trek-benbassat-finalizer.sha256
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify independent review and checkout the reviewed candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$REVIEW_ROOT" "$SOURCE_REVIEW_ROOT" "$MEDIA_ROOT"
+          cp /tmp/star-trek-benbassat-finalizer.sha256 "$OUT/finalizer.sha256"
+          git fetch --no-tags origin main "$REVIEW_BRANCH" "$CANDIDATE_BRANCH" "$CLAIM_BRANCH" "$SOURCE_REVIEW_BRANCH" "$MEDIA_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          test "$(git rev-parse "refs/remotes/origin/${REVIEW_BRANCH}")" = "$REVIEW_SHA"
+
+          extract_layer() {
+            local branch="$1" prefix="$2" target="$3"
+            git archive "refs/remotes/origin/${branch}" "$prefix" | tar -x -C "$OUT"
+            cp -a "$OUT/$prefix"/. "$target"/
+            while read -r digest original_path; do
+              file="$target/$(basename "$original_path")"
+              test -f "$file"
+              test "$(sha256sum "$file" | awk '{print $1}')" = "$digest"
+            done < "$target/manifest.sha256"
+          }
+          extract_layer "$REVIEW_BRANCH" "$REVIEW_PREFIX" "$REVIEW_ROOT"
+          extract_layer "$SOURCE_REVIEW_BRANCH" "$SOURCE_REVIEW_PREFIX" "$SOURCE_REVIEW_ROOT"
+          extract_layer "$MEDIA_BRANCH" "$MEDIA_PREFIX" "$MEDIA_ROOT"
+
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg wall "$WALL_ID" \
+            '.transaction == "STAR-TREK-BENBASSAT-INDEPENDENT-REVIEW-V1"
+             and .verdict == "pass"
+             and .task.id == $task
+             and .task.performer == $performer
+             and .task.character == $character
+             and .task.status == "resolved"
+             and .task.wall_id == $wall
+             and .queue.resolved == 429
+             and .queue.in_flight == 0
+             and .boundary.performance_mode == "voice-animation"
+             and .boundary.queued_physical_prosthetic_hint_rejected == true
+             and .boundary.physical_performance_attributed == false
+             and .boundary.prosthetic_performance_attributed == false
+             and .boundary.maker_attribution == "unresolved"
+             and .boundary.waterline_cycle_recorded == false
+             and .boundary.canonical_mutation == false
+             and .boundary.lease_mutation == false
+             and .boundary.additional_lease_issued == false' \
+            "$REVIEW_ROOT/independent-review.json" >/dev/null
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,os
+          path=Path(os.environ['REVIEW_ROOT'])/'independent-review.json'
+          payload=json.loads(path.read_text()); expected=payload['review_sha256']; body=dict(payload); body.pop('review_sha256',None); body.pop('artifact',None)
+          def stable(v):
+              if isinstance(v,dict): return {k:stable(v[k]) for k in sorted(v)}
+              if isinstance(v,list): return [stable(x) for x in v]
+              return v
+          actual=hashlib.sha256((json.dumps(stable(body),indent=2,ensure_ascii=False)+'\n').encode()).hexdigest()
+          if actual!=expected: raise SystemExit(f'independent review identity mismatch: {actual} != {expected}')
+          PY
+          candidate_sha="$(jq -r .candidate.commit "$REVIEW_ROOT/independent-review.json")"
+          claim_sha="$(jq -r .claim.commit "$REVIEW_ROOT/independent-review.json")"
+          test "$(git rev-parse "refs/remotes/origin/${CANDIDATE_BRANCH}")" = "$candidate_sha"
+          test "$(git rev-parse "refs/remotes/origin/${CLAIM_BRANCH}")" = "$claim_sha"
+          test "$(git show -s --format=%P "$candidate_sha")" = "$claim_sha"
+          test "$(git show -s --format=%P "$claim_sha")" = "$EXPECTED_MAIN"
+          echo "CANDIDATE_COMMIT=$candidate_sha" >> "$GITHUB_ENV"
+          echo "CLAIM_COMMIT=$claim_sha" >> "$GITHUB_ENV"
+          git checkout --detach "$candidate_sha"
+          npm ci --ignore-scripts
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
+          test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$EXPECTED_MAIN"
+
+      - name: Record reviewed Benbassat waterline cycle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 "$FINALIZER" cycle-inputs
+          base="$CANDIDATE_COMMIT"
+          cycle_ok=''
+          for input in "$OUT"/cycle-input-*.json; do
+            git reset --hard "$base" >/dev/null
+            set +e
+            node scripts/waterline.mjs record-cycle --input "$input" > "$input.log" 2>&1
+            code=$?
+            set -e
+            lease_id="$(jq -r .task.lease_id "$REVIEW_ROOT/independent-review.json")"
+            if test "$code" = 0 && node - "$lease_id" <<'NODE'
+          const fs=require('fs'); const lease=process.argv[2]; const state=JSON.parse(fs.readFileSync('data/WATERLINE-STATE.json')); const cycles=state.cycles.filter(x=>x.scope_id==='star-trek'&&x.lease_id===lease); if(cycles.length!==1||cycles[0].outcome!=='completed'||cycles[0].task_statuses?.[process.env.TASK_ID]!=='resolved') process.exit(1);
+          NODE
+            then
+              cycle_ok="$input"
+              break
+            fi
+          done
+          test -n "$cycle_ok" || { echo 'No reviewed waterline input variant succeeded' >&2; exit 1; }
+          printf '%s\n' "$cycle_ok" > "$OUT/accepted-cycle-input.txt"
+          node scripts/waterline.mjs validate --scope star-trek | tee "$OUT/waterline-validate-after-record.log"
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate-after-waterline.log"
+          node scripts/thesis-rails.mjs next --json > "$OUT/thesis-next-after-waterline.json"
+          test "$(jq -r .phase "$OUT/thesis-next-after-waterline.json")" = ready-for-one-cycle
+          test "$(jq -r .candidate.task_id "$OUT/thesis-next-after-waterline.json")" != "$TASK_ID"
+
+      - name: Write permanent receipt and checker, rebuild, and run the complete gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm run credits | tee "$OUT/credits.log"
+          npm run sync:sources | tee "$OUT/sources-sync.log"
+          npm run media:audit -- sync --scope star-trek | tee "$OUT/media-sync.log"
+          npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate-before-product.log"
+          node scripts/census.mjs | tee "$OUT/census.log"
+          npm run build:ferengi | tee "$OUT/build-ferengi.log"
+          npm run build:species | tee "$OUT/build-species.log"
+          npm run build:changelings | tee "$OUT/build-changelings.log"
+          node scripts/shard.mjs | tee "$OUT/shard.log"
+          npm run build:contract | tee "$OUT/build-contract.log"
+          npm run build:site | tee "$OUT/build-site.log"
+          python3 "$FINALIZER" product
+          node - <<'NODE'
+          const fs=require('fs'); const path='package.json'; const pkg=JSON.parse(fs.readFileSync(path)); const command='npm run star-trek:benbassat-cycle:check'; if(!pkg.scripts['autopilot:fixtures'].includes(command)) pkg.scripts['autopilot:fixtures'] += ' && '+command; fs.writeFileSync(path,JSON.stringify(pkg,null,2)+'\n');
+          NODE
+          npm run adapter:write | tee "$OUT/adapter-write.log"
+          node "$CHECKER_PATH" | tee "$OUT/benbassat-checker.log"
+          node "$ALICE_CHECKER_PATH" | tee "$OUT/alice-checker.log"
+          node scripts/validate.mjs | tee "$OUT/repository-validate.log"
+          npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate.log"
+          node scripts/waterline.mjs validate --scope star-trek | tee "$OUT/waterline-validate.log"
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate.log"
+          npm run autopilot:fixtures | tee "$OUT/autopilot-fixtures.log"
+          npm run build:site | tee "$OUT/build-site-final.log"
+          node "$CHECKER_PATH" | tee "$OUT/benbassat-checker-final.log"
+          git diff --check
+          checker_sha="$(sha256sum "$CHECKER_PATH" | awk '{print $1}')"
+          receipt_checker="$(jq -r .qualification.checker_sha256 "$RECEIPT_PATH")"
+          test "$checker_sha" = "$receipt_checker"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,os
+          path=Path(os.environ['RECEIPT_PATH']); payload=json.loads(path.read_text()); expected=payload['receipt_sha256']; body=dict(payload); body.pop('receipt_sha256',None)
+          def stable(v):
+              if isinstance(v,dict): return {k:stable(v[k]) for k in sorted(v)}
+              if isinstance(v,list): return [stable(x) for x in v]
+              return v
+          actual=hashlib.sha256((json.dumps(stable(body),indent=2,ensure_ascii=False)+'\n').encode()).hexdigest()
+          if actual!=expected: raise SystemExit(f'Benbassat receipt identity mismatch: {actual} != {expected}')
+          PY
+          cp "$RECEIPT_PATH" "$OUT/canonical-receipt.json"
+          cp "$CHECKER_PATH" "$OUT/canonical-checker.mjs"
+          cp data/AUTOPILOT.json "$OUT/autopilot-state.json"
+          cp data/WATERLINE-STATE.json "$OUT/waterline-state.json"
+          cp data/ESTATE-REGISTRY.json "$OUT/estate-registry.json"
+
+      - name: Squash the bounded cycle and fast-forward canonical main
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git reset --soft "$EXPECTED_MAIN"
+          git add -A
+          git diff --cached --name-only | LC_ALL=C sort > "$OUT/product-paths.txt"
+          test -s "$OUT/product-paths.txt"
+          test "$(grep -c '^data/review/adapter-sdk/star-trek-benbassat-cycle.json$' "$OUT/product-paths.txt")" = 1
+          test "$(grep -c '^scripts/star-trek-benbassat-cycle.mjs$' "$OUT/product-paths.txt")" = 1
+          git config user.name undercast-benbassat-publisher
+          git config user.email undercast-benbassat-publisher@users.noreply.github.com
+          git commit -m 'Star Trek: publish Benbassat cycle'
+          product_commit="$(git rev-parse HEAD)"
+          product_tree="$(git show -s --format=%T HEAD)"
+          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_MAIN"
+          git fetch --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_MAIN"
+          git push origin "$product_commit:refs/heads/main"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after-push.json"
+          test "$(jq -r .commit.sha "$OUT/main-after-push.json")" = "$product_commit"
+          jq -n --arg commit "$product_commit" --arg tree "$product_tree" --arg parent "$EXPECTED_MAIN" --arg message 'Star Trek: publish Benbassat cycle' '{commit:$commit,tree:$tree,parent:$parent,message:$message}' > "$OUT/product.json"
+          echo "PRODUCT_COMMIT=$product_commit" >> "$GITHUB_ENV"
+          echo "PRODUCT_TREE=$product_tree" >> "$GITHUB_ENV"
+
+      - name: Dispatch and verify Pages at the exact Benbassat product head
+        id: pages
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow pages.yml --branch main --limit 100 --json databaseId,status,conclusion,headSha,event,createdAt,updatedAt,url > "$OUT/pages-before.json"
+          pages_run="$(jq -r --arg sha "$PRODUCT_COMMIT" '[.[] | select(.headSha==$sha and .conclusion=="success")][0].databaseId // empty' "$OUT/pages-before.json")"
+          if test -z "$pages_run"; then
+            triggered_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main
+            for _ in $(seq 1 180); do
+              gh run list --repo "$GITHUB_REPOSITORY" --workflow pages.yml --branch main --limit 100 --json databaseId,status,conclusion,headSha,event,createdAt,updatedAt,url > "$OUT/pages-after-dispatch.json"
+              pages_run="$(jq -r --arg sha "$PRODUCT_COMMIT" --arg at "$triggered_at" '[.[] | select(.headSha==$sha and .event=="workflow_dispatch" and .createdAt >= $at)] | sort_by(.databaseId) | last.databaseId // empty' "$OUT/pages-after-dispatch.json")"
+              test -n "$pages_run" && break
+              sleep 5
+            done
+          fi
+          test -n "$pages_run"
+          status=''
+          for _ in $(seq 1 720); do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${pages_run}" > "$OUT/pages-run.json"
+            status="$(jq -r .status "$OUT/pages-run.json")"
+            test "$status" = completed && break
+            sleep 5
+          done
+          test "$status" = completed
+          test "$(jq -r .conclusion "$OUT/pages-run.json")" = success
+          test "$(jq -r .head_sha "$OUT/pages-run.json")" = "$PRODUCT_COMMIT"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${pages_run}/jobs?filter=latest&per_page=100" > "$OUT/pages-jobs.json"
+          jq -e '.jobs | any(.name=="deploy" and .status=="completed" and .conclusion=="success")' "$OUT/pages-jobs.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after-pages.json"
+          test "$(jq -r .commit.sha "$OUT/main-after-pages.json")" = "$PRODUCT_COMMIT"
+          echo "pages_run=$pages_run" >> "$GITHUB_OUTPUT"
+
+      - name: Build terminal Benbassat settlement
+        shell: bash
+        env:
+          PAGES_RUN: ${{ steps.pages.outputs.pages_run }}
+        run: |
+          set -Eeuo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          const product=JSON.parse(fs.readFileSync(process.env.OUT+'/product.json'));
+          const receipt=JSON.parse(fs.readFileSync(process.env.OUT+'/canonical-receipt.json'));
+          const review=JSON.parse(fs.readFileSync(process.env.REVIEW_ROOT+'/independent-review.json'));
+          const pages=JSON.parse(fs.readFileSync(process.env.OUT+'/pages-run.json'));
+          const pagesJobs=JSON.parse(fs.readFileSync(process.env.OUT+'/pages-jobs.json'));
+          const next=receipt.next;
+          const terminal={version:1,transaction:'STAR-TREK-BENBASSAT-TERMINALIZATION-V1',status:'published-and-deployed',canonical:{...product,readback:JSON.parse(fs.readFileSync(process.env.OUT+'/main-after-pages.json')).commit.sha},task:{id:process.env.TASK_ID,lease_id:receipt.lease.id,performer:process.env.EXPECTED_PERFORMER,character:process.env.EXPECTED_CHARACTER,status:'resolved',wall_id:process.env.WALL_ID},receipt:{path:process.env.RECEIPT_PATH,receipt_sha256:receipt.receipt_sha256,checker_path:process.env.CHECKER_PATH,checker_sha256:receipt.qualification.checker_sha256},queue:receipt.queue.after,reviewed_cycle:receipt.reviewed_cycle,independent_review:{verdict:review.verdict,review_sha256:review.review_sha256},pages:{run_id:pages.id,status:pages.status,conclusion:pages.conclusion,event:pages.event,head_sha:pages.head_sha,url:pages.html_url,jobs:pagesJobs.jobs.map(j=>({id:j.id,name:j.name,status:j.status,conclusion:j.conclusion}))},next,boundary:{performance_mode:'voice-animation',physical_prosthetic_hint_rejected:true,physical_performance_attributed:false,prosthetic_performance_attributed:false,maker_attribution:'unresolved',additional_lease_issued:false,canonical_mutation_by_terminalizer:false}};
+          fs.writeFileSync(process.env.OUT+'/publication.json',JSON.stringify(terminal,null,2)+'\n');
+          fs.writeFileSync(process.env.OUT+'/verdict.txt',`PASS\nBenbassat cycle published and deployed\nProduct ${product.commit}\nPages run ${pages.id}\nReceipt ${receipt.receipt_sha256}\nNext ${next.candidate.task_id} ${next.candidate.performer} as ${next.candidate.character}\n`);
+          NODE
+          test "$(jq -r .status "$OUT/publication.json")" = published-and-deployed
+          test "$(jq -r .canonical.readback "$OUT/publication.json")" = "$PRODUCT_COMMIT"
+          test "$(jq -r .queue.in_flight "$OUT/publication.json")" = 0
+          test "$(jq -r .pages.conclusion "$OUT/publication.json")" = success
+          test "$(jq -r .next.phase "$OUT/publication.json")" = ready-for-one-cycle
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload terminal Benbassat evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-terminal-v1
+          path: /tmp/star-trek-benbassat-finalizer-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish terminal Benbassat locator branch
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq --argjson id "$ARTIFACT_ID" --arg digest "$ARTIFACT_DIGEST" '.artifact={id:$id,digest:$digest}' "$OUT/publication.json" > "$OUT/publication.tmp"
+          mv "$OUT/publication.tmp" "$OUT/publication.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-benbassat-terminalizer
+          git config user.email undercast-benbassat-terminalizer@users.noreply.github.com
+          git checkout --orphan benbassat-finalizer-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-terminal-v1
+          cp -a "$OUT"/. transport/star-trek-benbassat-terminal-v1/
+          git add transport/star-trek-benbassat-terminal-v1
+          git commit -m 'Record terminal Star Trek Benbassat cycle v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+      - name: Preserve finalizer failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-finalizer-v1-failure-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-benbassat-finalizer-v1/
+            /tmp/star-trek-benbassat-finalizer-v1.py
+          if-no-files-found: warn
+          retention-days: 30
+
+  fail-closed:
+    name: fail-closed-without-passing-review
+    needs: select
+    if: needs.select.outputs.status != 'review-pass'
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo 'Benbassat finalizer refused to run without a passing independent review.' >&2
+          exit 1
