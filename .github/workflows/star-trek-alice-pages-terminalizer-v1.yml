@@ -1,0 +1,211 @@
+name: star-trek-alice-pages-terminalizer-v1
+
+on:
+  push:
+    branches: [agent/star-trek-alice-pages-terminalizer-v1]
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: star-trek-alice-pages-terminalizer-v1
+  cancel-in-progress: false
+
+env:
+  PRODUCT_COMMIT: ed79424013b92460d16c01cad4e590eca01e6bff
+  PRODUCT_TREE: 7f90577715ec9eee8c597589328aa10b402ad04e
+  PRODUCT_PARENT: 6377c4c7ba5ed4fa7d7eb3c499d32c258aec9834
+  PRODUCT_MESSAGE: Star Trek: publish Alice (character) cycle
+  TASK_ID: ap_c7ff8298a99fe94fc55bbdbc
+  LEASE_ID: lease_e1da8637695057922f1840d4
+  WALL_ID: UC-1396
+  RECEIPT_PATH: data/review/adapter-sdk/star-trek-alice-cycle.json
+  RECEIPT_SHA256: 07331e142b70e21ff8eed6c40a23a576c259c9cd2afae462250a8961bcc09472
+  CHECKER_PATH: scripts/star-trek-alice-cycle.mjs
+  CHECKER_SHA256: 7b924da030e7ea39d868bd582ae41dc6df443cf543bf97f2f22f960db06c2371
+  REVIEWED_CYCLE: cycle_bc4e10d8ce3d09b5f12b81cc
+  WATERLINE_EVENT: waterline_1f6af3906b619ae1988e863b
+  NEXT_TASK: ap_dd7d1c73ed237230cd6e1d0b
+  NEXT_PERFORMER: Nolan North
+  NEXT_CHARACTER: Benbassat
+  NEXT_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  RESULT_BRANCH: agent/star-trek-alice-finalizer-result-v1
+  OUT: /tmp/star-trek-alice-terminal-v1
+
+jobs:
+  terminalize:
+    name: dispatch-pages-and-terminalize-alice
+    if: ${{ github.event.head_commit.message == 'Terminalize Star Trek Alice Pages v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ed79424013b92460d16c01cad4e590eca01e6bff
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify canonical Alice product and durable controls
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$PRODUCT_COMMIT"
+          test "$(git show -s --format=%T HEAD)" = "$PRODUCT_TREE"
+          test "$(git show -s --format=%P HEAD)" = "$PRODUCT_PARENT"
+          test "$(git show -s --format=%s HEAD)" = "$PRODUCT_MESSAGE"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          test "$(jq -r .transaction "$RECEIPT_PATH")" = STAR-TREK-CYCLE-ALICE
+          test "$(jq -r .receipt_sha256 "$RECEIPT_PATH")" = "$RECEIPT_SHA256"
+          test "$(jq -r .reviewed_cycle.id "$RECEIPT_PATH")" = "$REVIEWED_CYCLE"
+          test "$(jq -r .reviewed_cycle.event_id "$RECEIPT_PATH")" = "$WATERLINE_EVENT"
+          test "$(jq -r .task.id "$RECEIPT_PATH")" = "$TASK_ID"
+          test "$(jq -r .lease.id "$RECEIPT_PATH")" = "$LEASE_ID"
+          test "$(jq -r .canonical.wall_id "$RECEIPT_PATH")" = "$WALL_ID"
+          test "$(jq -r .qualification.checker_sha256 "$RECEIPT_PATH")" = "$CHECKER_SHA256"
+          test "$(sha256sum "$CHECKER_PATH" | awk '{print $1}')" = "$CHECKER_SHA256"
+          npm ci --ignore-scripts
+          node "$CHECKER_PATH" | tee "$OUT/alice-checker.log"
+          node scripts/star-trek-anastasia-komananov-cycle.mjs | tee "$OUT/anastasia-checker.log"
+          node scripts/validate.mjs | tee "$OUT/repository-validate.log"
+          npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate.log"
+          node scripts/waterline.mjs validate --scope star-trek | tee "$OUT/waterline-validate.log"
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate.log"
+          node scripts/thesis-rails.mjs next --json > "$OUT/next.json"
+          test "$(jq -r .phase "$OUT/next.json")" = ready-for-one-cycle
+          test "$(jq -r .candidate.task_id "$OUT/next.json")" = "$NEXT_TASK"
+          test "$(jq -r .candidate.performer "$OUT/next.json")" = "$NEXT_PERFORMER"
+          test "$(jq -r .candidate.character "$OUT/next.json")" = "$NEXT_CHARACTER"
+          test "$(jq -r .candidate.source_fingerprint "$OUT/next.json")" = "$NEXT_FINGERPRINT"
+          node - <<'NODE'
+          const fs=require('fs');
+          const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json'));
+          const trek=state.jobs.filter(x=>x.scope==='star-trek');
+          const task=trek.find(x=>x.id===process.env.TASK_ID);
+          const counts={total:trek.length,queued:trek.filter(x=>x.status==='queued').length,resolved:trek.filter(x=>x.status==='resolved').length,blocked:trek.filter(x=>x.status==='blocked').length,rejected:trek.filter(x=>x.status==='rejected').length,in_flight:trek.filter(x=>['leased','drafted','merged'].includes(x.status)).length};
+          if(!task||task.status!=='resolved'||task.performer!=='Nichelle Nichols'||task.character!=='Alice (character)'||task.wall_ids?.[0]!==process.env.WALL_ID) throw Error('Alice durable task drifted');
+          if(JSON.stringify(counts)!==JSON.stringify({total:2228,queued:1798,resolved:428,blocked:0,rejected:2,in_flight:0})) throw Error('Alice queue drifted: '+JSON.stringify(counts));
+          const water=JSON.parse(fs.readFileSync('data/WATERLINE-STATE.json'));
+          const cycle=water.cycles.find(x=>x.id===process.env.REVIEWED_CYCLE&&x.scope_id==='star-trek'&&x.lease_id===process.env.LEASE_ID);
+          if(!cycle||cycle.outcome!=='completed'||cycle.task_statuses?.[process.env.TASK_ID]!=='resolved') throw Error('Alice reviewed cycle drifted');
+          if(!fs.readFileSync('sitemap.xml','utf8').includes('records/'+process.env.WALL_ID+'/')) throw Error('Alice route missing');
+          fs.writeFileSync(process.env.OUT+'/durable.json',JSON.stringify({task,counts,cycle},null,2)+'\n');
+          NODE
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before-pages.json"
+          test "$(jq -r .commit.sha "$OUT/main-before-pages.json")" = "$PRODUCT_COMMIT"
+          cp "$RECEIPT_PATH" "$OUT/canonical-receipt.json"
+          cp "$CHECKER_PATH" "$OUT/canonical-checker.mjs"
+          cp data/WATERLINE-STATE.json "$OUT/waterline-state.json"
+          cp data/ESTATE-REGISTRY.json "$OUT/estate-registry.json"
+
+      - name: Dispatch and verify GitHub Pages at the exact Alice product head
+        id: pages
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow pages.yml --branch main --limit 100 --json databaseId,status,conclusion,headSha,event,createdAt,updatedAt,url > "$OUT/pages-before.json"
+          pages_run="$(jq -r --arg sha "$PRODUCT_COMMIT" '[.[] | select(.headSha==$sha and .conclusion=="success")][0].databaseId // empty' "$OUT/pages-before.json")"
+          if test -z "$pages_run"; then
+            triggered_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main
+            for _ in $(seq 1 180); do
+              gh run list --repo "$GITHUB_REPOSITORY" --workflow pages.yml --branch main --limit 100 --json databaseId,status,conclusion,headSha,event,createdAt,updatedAt,url > "$OUT/pages-after-dispatch.json"
+              pages_run="$(jq -r --arg sha "$PRODUCT_COMMIT" --arg at "$triggered_at" '[.[] | select(.headSha==$sha and .event=="workflow_dispatch" and .createdAt >= $at)] | sort_by(.databaseId) | last.databaseId // empty' "$OUT/pages-after-dispatch.json")"
+              test -n "$pages_run" && break
+              sleep 5
+            done
+          fi
+          test -n "$pages_run"
+          status=''
+          for _ in $(seq 1 720); do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${pages_run}" > "$OUT/pages-run.json"
+            status="$(jq -r .status "$OUT/pages-run.json")"
+            test "$status" = completed && break
+            sleep 5
+          done
+          test "$status" = completed
+          test "$(jq -r .conclusion "$OUT/pages-run.json")" = success
+          test "$(jq -r .head_sha "$OUT/pages-run.json")" = "$PRODUCT_COMMIT"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${pages_run}/jobs?filter=latest&per_page=100" > "$OUT/pages-jobs.json"
+          jq -e '.jobs | any(.name=="deploy" and .status=="completed" and .conclusion=="success")' "$OUT/pages-jobs.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after-pages.json"
+          test "$(jq -r .commit.sha "$OUT/main-after-pages.json")" = "$PRODUCT_COMMIT"
+          echo "pages_run=$pages_run" >> "$GITHUB_OUTPUT"
+
+      - name: Build terminal Alice publication receipt
+        shell: bash
+        env:
+          PAGES_RUN: ${{ steps.pages.outputs.pages_run }}
+        run: |
+          set -Eeuo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          const main=JSON.parse(fs.readFileSync(process.env.OUT+'/main-after-pages.json'));
+          const durable=JSON.parse(fs.readFileSync(process.env.OUT+'/durable.json'));
+          const receipt=JSON.parse(fs.readFileSync(process.env.OUT+'/canonical-receipt.json'));
+          const pages=JSON.parse(fs.readFileSync(process.env.OUT+'/pages-run.json'));
+          const pagesJobs=JSON.parse(fs.readFileSync(process.env.OUT+'/pages-jobs.json'));
+          const next=JSON.parse(fs.readFileSync(process.env.OUT+'/next.json'));
+          const terminal={
+            version:1,
+            transaction:'STAR-TREK-ALICE-TERMINALIZATION-V1',
+            status:'published-and-deployed',
+            canonical:{commit:process.env.PRODUCT_COMMIT,tree:process.env.PRODUCT_TREE,parent:process.env.PRODUCT_PARENT,message:process.env.PRODUCT_MESSAGE,readback:main.commit.sha},
+            task:{id:durable.task.id,lease_id:process.env.LEASE_ID,performer:durable.task.performer,character:durable.task.character,status:durable.task.status,wall_id:durable.task.wall_ids?.[0],attempts:durable.task.attempts},
+            receipt:{path:process.env.RECEIPT_PATH,receipt_sha256:receipt.receipt_sha256,checker_path:process.env.CHECKER_PATH,checker_sha256:receipt.qualification.checker_sha256},
+            queue:durable.counts,
+            reviewed_cycle:receipt.reviewed_cycle,
+            pages:{run_id:pages.id,status:pages.status,conclusion:pages.conclusion,event:pages.event,head_sha:pages.head_sha,url:pages.html_url,jobs:pagesJobs.jobs.map(j=>({id:j.id,name:j.name,status:j.status,conclusion:j.conclusion}))},
+            next,
+            boundary:{marcia_brown_live_action_performance_separate:true,physical_performance_attributed_to_nichelle_nichols:false,unsupported_maker_functions_promoted:false,additional_lease_issued:false,canonical_mutation_by_terminalizer:false}
+          };
+          fs.writeFileSync(process.env.OUT+'/publication.json',JSON.stringify(terminal,null,2)+'\n');
+          fs.writeFileSync(process.env.OUT+'/verdict.txt',`PASS\nAlice cycle published and deployed\nProduct ${process.env.PRODUCT_COMMIT}\nPages run ${pages.id}\nReceipt ${receipt.receipt_sha256}\nNext ${next.candidate.task_id} ${next.candidate.performer} as ${next.candidate.character}\n`);
+          NODE
+          test "$(jq -r .status "$OUT/publication.json")" = published-and-deployed
+          test "$(jq -r .canonical.readback "$OUT/publication.json")" = "$PRODUCT_COMMIT"
+          test "$(jq -r .queue.in_flight "$OUT/publication.json")" = 0
+          test "$(jq -r .pages.conclusion "$OUT/publication.json")" = success
+          test "$(jq -r .next.candidate.task_id "$OUT/publication.json")" = "$NEXT_TASK"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload terminal Alice evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-alice-terminal-v1
+          path: /tmp/star-trek-alice-terminal-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish terminal Alice locator branch
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq --argjson id "$ARTIFACT_ID" --arg digest "$ARTIFACT_DIGEST" '.artifact={id:$id,digest:$digest}' "$OUT/publication.json" > "$OUT/publication.tmp"
+          mv "$OUT/publication.tmp" "$OUT/publication.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-alice-terminalizer
+          git config user.email undercast-alice-terminalizer@users.noreply.github.com
+          git checkout --orphan alice-terminal-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-alice-terminal-v1
+          cp -a "$OUT"/. transport/star-trek-alice-terminal-v1/
+          git add transport/star-trek-alice-terminal-v1
+          git commit -m 'Record terminal Star Trek Alice cycle v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
