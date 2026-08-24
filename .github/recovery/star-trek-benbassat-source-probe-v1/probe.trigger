@@ -1,0 +1,7 @@
+transaction=STAR-TREK-BENBASSAT-SOURCE-PROBE-V1
+canonical_parent=ed79424013b92460d16c01cad4e590eca01e6bff
+task=ap_dd7d1c73ed237230cd6e1d0b
+performer=Nolan North
+character=Benbassat
+canonical_mutation=false
+lease_taken=false
