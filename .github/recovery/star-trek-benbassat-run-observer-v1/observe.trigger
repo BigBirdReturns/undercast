@@ -1,0 +1,6 @@
+transaction=STAR-TREK-BENBASSAT-RUN-OBSERVER-V1
+target_branch=agent/star-trek-rolling-continuation-v1
+target_v1=0464a7dcaa20655f4d7315a36fe1af285d04cf0d
+target_v2=d7511e6ea41ba4d041842a05d436280b04b15bdc
+canonical_mutation=false
+lease_mutation=false
