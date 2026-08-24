@@ -1,0 +1,7 @@
+transaction=STAR-TREK-ALICE-PAGES-TERMINALIZER-OBSERVER-V1
+target_workflow=star-trek-alice-pages-terminalizer-v2.yml
+target_branch=agent/star-trek-alice-pages-terminalizer-v1
+target_sha=d66f2c7bf8efab6fb645ed938f6450f38f2c5886
+product_commit=ed79424013b92460d16c01cad4e590eca01e6bff
+canonical_mutation=false
+lease_mutation=false
