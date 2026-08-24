@@ -1,0 +1,113 @@
+name: star-trek-benbassat-source-probe-v2
+
+on:
+  push:
+    branches: [agent/star-trek-rolling-continuation-v1]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-source-probe-v2
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  RESULT_BRANCH: agent/star-trek-benbassat-source-result-v2
+  OUT: /tmp/star-trek-benbassat-source-probe-v2
+
+jobs:
+  probe:
+    if: ${{ github.event.head_commit.message == 'Probe Star Trek Benbassat source v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ed79424013b92460d16c01cad4e590eca01e6bff
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Freeze exact task and source without taking a lease
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T HEAD)" = "$EXPECTED_TREE"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          npm ci --ignore-scripts
+          node scripts/star-trek-alice-cycle.mjs > "$OUT/alice-checker.log"
+          node scripts/thesis-rails.mjs validate > "$OUT/thesis-validate.log"
+          node scripts/thesis-rails.mjs next --json > "$OUT/thesis-next.json"
+          jq -e --arg task "$TASK_ID" --arg performer "$EXPECTED_PERFORMER" --arg character "$EXPECTED_CHARACTER" --arg fp "$EXPECTED_FINGERPRINT" '.phase=="ready-for-one-cycle" and .candidate.task_id==$task and .candidate.performer==$performer and .candidate.character==$character and .candidate.source_fingerprint==$fp' "$OUT/thesis-next.json" >/dev/null
+          node - <<'NODE'
+          const fs=require('fs');
+          const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json','utf8'));
+          const trek=state.jobs.filter(x=>x.scope==='star-trek');
+          const task=trek.find(x=>x.id===process.env.TASK_ID);
+          const counts={total:trek.length,queued:trek.filter(x=>x.status==='queued').length,resolved:trek.filter(x=>x.status==='resolved').length,blocked:trek.filter(x=>x.status==='blocked').length,rejected:trek.filter(x=>x.status==='rejected').length,in_flight:trek.filter(x=>['leased','drafted','merged'].includes(x.status)).length};
+          if(!task) throw Error('Benbassat task missing');
+          if(task.status!=='queued'||Number(task.attempts||0)!==0||task.lease) throw Error('Benbassat task is no longer unclaimed');
+          if(task.performer!==process.env.EXPECTED_PERFORMER||task.character!==process.env.EXPECTED_CHARACTER||task.source_fingerprint!==process.env.EXPECTED_FINGERPRINT) throw Error('Benbassat task identity drifted');
+          if(JSON.stringify(counts)!==JSON.stringify({total:2228,queued:1798,resolved:428,blocked:0,rejected:2,in_flight:0})) throw Error('Star Trek queue drifted '+JSON.stringify(counts));
+          fs.writeFileSync(process.env.OUT+'/task-and-queue.json',JSON.stringify({task,counts},null,2)+'\n');
+          NODE
+          python3 - <<'PY'
+          from pathlib import Path
+          from urllib.parse import urlencode, unquote
+          from urllib.request import Request, urlopen
+          from datetime import datetime, timezone
+          import hashlib, json, os
+          root=Path(os.environ['OUT']); task=json.loads((root/'task-and-queue.json').read_text())['task']
+          sources=task.get('sources') or ([task.get('source')] if task.get('source') else [])
+          if len(sources)!=1: raise SystemExit(f'Benbassat source cardinality drifted: {sources}')
+          source=sources[0]; title=unquote(source.rsplit('/',1)[-1]).replace('_',' ')
+          url='https://memory-alpha.fandom.com/api.php?'+urlencode({'action':'query','prop':'revisions|pageimages','titles':title,'rvprop':'ids|timestamp|content','rvslots':'main','piprop':'original|name','format':'json','formatversion':'2'})
+          request=Request(url,headers={'User-Agent':'UNDERCAST-Benbassat-Source-Probe/2.0','Accept':'application/json'})
+          with urlopen(request,timeout=90) as response: data=json.load(response)
+          pages=data['query']['pages']
+          if len(pages)!=1 or pages[0].get('missing'): raise SystemExit(f'Benbassat source missing: {pages}')
+          page=pages[0]; revisions=page.get('revisions') or []
+          if len(revisions)!=1: raise SystemExit('Benbassat source revision cardinality drifted')
+          revision=revisions[0]; text=revision['slots']['main']['content']; lower=text.lower()
+          if task['performer'].lower() not in lower: raise SystemExit('Nolan North attribution absent from frozen Benbassat source')
+          receipt={'version':2,'transaction':'STAR-TREK-BENBASSAT-SOURCE-PROBE-V2','status':'success','generated_at':datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00','Z'),'canonical_parent':os.environ['EXPECTED_MAIN'],'canonical_tree':os.environ['EXPECTED_TREE'],'task_id':os.environ['TASK_ID'],'source_fingerprint':os.environ['EXPECTED_FINGERPRINT'],'performer':task['performer'],'character':task['character'],'production':task.get('production'),'years':task.get('years'),'categories':task.get('categories') or [],'queued_mode_hint':task.get('performance_modes') or [],'source':source,'pageid':page['pageid'],'revision':revision['revid'],'revision_timestamp':revision['timestamp'],'content_sha256':hashlib.sha256(text.encode()).hexdigest(),'page_image':page.get('original'),'performer_attribution_present':True,'physical_wording_present':any(v in lower for v in ('portrayed by','played by','suit performer','physical performer','actor =','actor=')),'voice_wording_present':any(v in lower for v in ('voice','voiced by','voice actor','voice actors')),'adjudication':'source-frozen; exact physical-performance and media boundary pending independent review','maker_attribution':'unresolved','makeup_attribution':'unresolved','costume_attribution':'unresolved','prosthetic_design_attribution':'unresolved','direction_attribution':'unresolved','editing_attribution':'unresolved','sound_attribution':'unresolved','production_shop_attribution':'unresolved','transformation_measured':False,'canonical_mutation':False,'lease_taken':False}
+          def stable(v):
+              if isinstance(v,dict): return {k:stable(v[k]) for k in sorted(v)}
+              if isinstance(v,list): return [stable(x) for x in v]
+              return v
+          body=json.dumps(stable(receipt),indent=2,ensure_ascii=False)+'\n'; receipt['receipt_sha256']=hashlib.sha256(body.encode()).hexdigest()
+          (root/'source-probe.json').write_text(json.dumps(stable(receipt),indent=2,ensure_ascii=False)+'\n')
+          (root/'frozen-source.wikitext').write_text(text)
+          (root/'frozen-source-api.json').write_text(json.dumps(data,indent=2,ensure_ascii=False)+'\n')
+          PY
+          jq -e --arg task "$TASK_ID" --arg fp "$EXPECTED_FINGERPRINT" '.status=="success" and .task_id==$task and .source_fingerprint==$fp and .performer=="Nolan North" and .character=="Benbassat" and .performer_attribution_present==true and .maker_attribution=="unresolved" and .canonical_mutation==false and .lease_taken==false' "$OUT/source-probe.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-readback.json"
+          test "$(jq -r .commit.sha "$OUT/main-readback.json")" = "$EXPECTED_MAIN"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+      - name: Publish source result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-benbassat-source-probe
+          git config user.email benbassat-source-probe@users.noreply.github.com
+          git checkout --orphan benbassat-source-result-v2
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-source-probe-v2
+          cp -a "$OUT"/. transport/star-trek-benbassat-source-probe-v2/
+          git add transport/star-trek-benbassat-source-probe-v2
+          git commit -m 'Record Star Trek Benbassat source probe v2'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
