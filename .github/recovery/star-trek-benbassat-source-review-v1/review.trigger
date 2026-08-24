@@ -6,5 +6,6 @@ task=ap_dd7d1c73ed237230cd6e1d0b
 performer=Nolan North
 character=Benbassat
 source_fingerprint=78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+retry=source-review-result-recovery-v1
 canonical_mutation=false
 lease_taken=false
