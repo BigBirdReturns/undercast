@@ -1,0 +1,174 @@
+name: star-trek-benbassat-claim-recovery-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-claim-recovery-v2
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-claim-recovery-v2
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  SOURCE_REVIEW_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  SOURCE_REVIEW_PREFIX: transport/star-trek-benbassat-source-review-v1
+  RESULT_BRANCH: agent/star-trek-benbassat-claim-result-v1
+  OUT: /tmp/star-trek-benbassat-claim-recovery-v2
+  REVIEW_ROOT: /tmp/star-trek-benbassat-claim-recovery-v2/source-review
+
+jobs:
+  claim:
+    name: take-first-and-only-benbassat-lease
+    if: ${{ github.event.head_commit.message == 'Claim Star Trek Benbassat recovery v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ed79424013b92460d16c01cad4e590eca01e6bff
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify corrected source review and exact claimable rail
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$REVIEW_ROOT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git fetch --no-tags origin main "$SOURCE_REVIEW_BRANCH"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T HEAD)" = "$EXPECTED_TREE"
+          review_ref="refs/remotes/origin/${SOURCE_REVIEW_BRANCH}"
+          git archive "$review_ref" "$SOURCE_REVIEW_PREFIX" | tar -x -C "$OUT"
+          cp -a "$OUT/$SOURCE_REVIEW_PREFIX"/. "$REVIEW_ROOT"/
+          while read -r digest original_path; do
+            file="$REVIEW_ROOT/$(basename "$original_path")"
+            test -f "$file"
+            test "$(sha256sum "$file" | awk '{print $1}')" = "$digest"
+          done < "$REVIEW_ROOT/manifest.sha256"
+          jq -e \
+            --arg task "$TASK_ID" --arg performer "$EXPECTED_PERFORMER" --arg character "$EXPECTED_CHARACTER" --arg fp "$EXPECTED_FINGERPRINT" \
+            '.transaction == "STAR-TREK-BENBASSAT-SOURCE-REVIEW-V1"
+             and .verdict == "pass"
+             and .task.id == $task and .task.performer == $performer and .task.character == $character and .task.source_fingerprint == $fp
+             and .task.status == "queued" and .task.attempts == 0
+             and .adjudication.performance_mode == "voice-only"
+             and .adjudication.physical_prosthetic_hint_accepted == false
+             and .adjudication.physical_performance_attributed == false
+             and .adjudication.prosthetic_performance_attributed == false
+             and .adjudication.animation_performance_attributed == false
+             and .adjudication.maker_attribution == "unresolved"
+             and .boundary.off_screen_voiceover == true
+             and .boundary.canonical_mutation == false and .boundary.lease_taken == false and .boundary.product_staged == false' \
+            "$REVIEW_ROOT/source-review.json" >/dev/null
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,os
+          path=Path(os.environ['REVIEW_ROOT'])/'source-review.json'
+          payload=json.loads(path.read_text()); expected=payload['review_sha256']; body=dict(payload); body.pop('review_sha256',None); body.pop('artifact',None)
+          def stable(v):
+              if isinstance(v,dict): return {k:stable(v[k]) for k in sorted(v)}
+              if isinstance(v,list): return [stable(x) for x in v]
+              return v
+          actual=hashlib.sha256((json.dumps(stable(body),indent=2,ensure_ascii=False)+'\n').encode()).hexdigest()
+          if actual!=expected: raise SystemExit(f'source review identity mismatch: {actual} != {expected}')
+          PY
+          npm ci --ignore-scripts
+          node scripts/thesis-rails.mjs validate > "$OUT/thesis-validate-before.log"
+          node scripts/thesis-rails.mjs next --json > "$OUT/thesis-next-before.json"
+          jq -e \
+            --arg task "$TASK_ID" --arg performer "$EXPECTED_PERFORMER" --arg character "$EXPECTED_CHARACTER" --arg fp "$EXPECTED_FINGERPRINT" \
+            '.phase == "ready-for-one-cycle" and .estate_id == "star-trek" and .scope_id == "star-trek"
+             and .candidate.task_id == $task and .candidate.performer == $performer and .candidate.character == $character
+             and .candidate.source_fingerprint == $fp and .candidate.priority == 1330' \
+            "$OUT/thesis-next-before.json" >/dev/null
+          node - <<'NODE'
+          const fs=require('fs'); const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json')); const trek=state.jobs.filter(x=>x.scope==='star-trek'); const task=trek.find(x=>x.id===process.env.TASK_ID);
+          const counts={total:trek.length,queued:trek.filter(x=>x.status==='queued').length,resolved:trek.filter(x=>x.status==='resolved').length,blocked:trek.filter(x=>x.status==='blocked').length,rejected:trek.filter(x=>x.status==='rejected').length,in_flight:trek.filter(x=>['leased','drafted','merged'].includes(x.status)).length};
+          if(!task||task.status!=='queued'||Number(task.attempts||0)!==0||task.lease!=null) throw Error('Benbassat is not unclaimed');
+          if(task.performer!==process.env.EXPECTED_PERFORMER||task.character!==process.env.EXPECTED_CHARACTER||task.source_fingerprint!==process.env.EXPECTED_FINGERPRINT) throw Error('Benbassat identity drifted');
+          const expected={total:2228,queued:1798,resolved:428,blocked:0,rejected:2,in_flight:0}; if(JSON.stringify(counts)!==JSON.stringify(expected)) throw Error('pre-claim queue drifted: '+JSON.stringify(counts));
+          fs.writeFileSync(process.env.OUT+'/pre-claim.json',JSON.stringify({task,counts},null,2)+'\n');
+          NODE
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
+          test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$EXPECTED_MAIN"
+
+      - name: Take exactly one repository-native lease
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .luna
+          npm run autopilot -- next --agent luna --scope star-trek --capability-profile text-vision --limit 1 --out .luna/batch.json --prompt .luna/AUTOPILOT-PROMPT.md | tee "$OUT/autopilot-next.log"
+          cp .luna/batch.json "$OUT/batch.json"
+          cp .luna/AUTOPILOT-PROMPT.md "$OUT/AUTOPILOT-PROMPT.md"
+          jq -e --arg task "$TASK_ID" '.tasks | length == 1 and .[0].id == $task' "$OUT/batch.json" >/dev/null
+          node - <<'NODE'
+          const fs=require('fs'); const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json')); const trek=state.jobs.filter(x=>x.scope==='star-trek'); const task=trek.find(x=>x.id===process.env.TASK_ID); const active=trek.filter(x=>['leased','drafted','merged'].includes(x.status));
+          const counts={total:trek.length,queued:trek.filter(x=>x.status==='queued').length,resolved:trek.filter(x=>x.status==='resolved').length,blocked:trek.filter(x=>x.status==='blocked').length,rejected:trek.filter(x=>x.status==='rejected').length,in_flight:active.length};
+          if(!task||task.status!=='leased'||!task.lease?.id||!task.lease?.readiness_token) throw Error('Benbassat lease was not created');
+          if(active.length!==1||active[0].id!==process.env.TASK_ID) throw Error('claim created more than one active task');
+          const expected={total:2228,queued:1797,resolved:428,blocked:0,rejected:2,in_flight:1}; if(JSON.stringify(counts)!==JSON.stringify(expected)) throw Error('post-claim queue drifted: '+JSON.stringify(counts));
+          fs.writeFileSync(process.env.OUT+'/post-claim.json',JSON.stringify({task,counts,active},null,2)+'\n'); fs.writeFileSync(process.env.OUT+'/lease-id.txt',task.lease.id+'\n');
+          NODE
+          rm -rf .luna
+          git diff --name-only | LC_ALL=C sort > "$OUT/claim-paths.txt"
+          test -s "$OUT/claim-paths.txt"
+          while read -r path; do
+            case "$path" in
+              data/AUTOPILOT.json|data/ESTATE-REGISTRY.json|data/journal/*|data/AUTOPILOT-JOURNAL.jsonl) ;;
+              *) echo "unexpected claim mutation: $path" >&2; exit 1 ;;
+            esac
+          done < "$OUT/claim-paths.txt"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after-claim.json"
+          test "$(jq -r .commit.sha "$OUT/main-after-claim.json")" = "$EXPECTED_MAIN"
+
+      - name: Commit bounded lease and claim receipt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          lease_id="$(cat "$OUT/lease-id.txt")"
+          review_sha="$(jq -r .review_sha256 "$REVIEW_ROOT/source-review.json")"
+          node - "$lease_id" "$review_sha" <<'NODE'
+          const fs=require('fs'),crypto=require('crypto'); const leaseId=process.argv[2],reviewSha=process.argv[3]; const pre=JSON.parse(fs.readFileSync(process.env.OUT+'/pre-claim.json')); const post=JSON.parse(fs.readFileSync(process.env.OUT+'/post-claim.json')); const rail=JSON.parse(fs.readFileSync(process.env.OUT+'/thesis-next-before.json')); const paths=fs.readFileSync(process.env.OUT+'/claim-paths.txt','utf8').trim().split(/\n/).filter(Boolean);
+          const receipt={version:2,transaction:'STAR-TREK-BENBASSAT-CLAIM-V1',canonical_parent:process.env.EXPECTED_MAIN,canonical_tree:process.env.EXPECTED_TREE,task:{id:post.task.id,performer:post.task.performer,character:post.task.character,source_fingerprint:post.task.source_fingerprint,status:post.task.status,attempts:post.task.attempts},lease:post.task.lease,source_review:{branch:process.env.SOURCE_REVIEW_BRANCH,review_sha256:reviewSha,verdict:'pass',performance_mode:'voice-only'},rail:{phase:rail.phase,task_id:rail.candidate.task_id,strategy:post.task.lease.selection?.strategy,profile_id:post.task.lease.selection?.profile_id},queue:{before:pre.counts,after:post.counts},changed_paths:paths,boundary:{additional_lease_issued:false,canonical_mutation:false,product_staged:false,off_screen_voiceover:true,physical_performance_attributed:false,prosthetic_performance_attributed:false,animation_performance_attributed:false,maker_attribution:'unresolved'}};
+          const stable=v=>Array.isArray(v)?v.map(stable):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,stable(v[k])])):v; const body=JSON.stringify(stable(receipt),null,2)+'\n'; receipt.receipt_sha256=crypto.createHash('sha256').update(body).digest('hex');
+          fs.mkdirSync('data/review/adapter-sdk',{recursive:true}); fs.writeFileSync('data/review/adapter-sdk/star-trek-benbassat-claim.json',JSON.stringify(stable(receipt),null,2)+'\n'); fs.writeFileSync(process.env.OUT+'/claim-receipt.json',JSON.stringify(stable(receipt),null,2)+'\n');
+          NODE
+          jq -e --arg task "$TASK_ID" --arg lease "$lease_id" '.transaction == "STAR-TREK-BENBASSAT-CLAIM-V1" and .task.id == $task and .task.status == "leased" and .lease.id == $lease and .source_review.performance_mode == "voice-only" and .queue.before.in_flight == 0 and .queue.after.in_flight == 1 and .boundary.additional_lease_issued == false and .boundary.canonical_mutation == false and .boundary.product_staged == false' "$OUT/claim-receipt.json" >/dev/null
+          git checkout -b benbassat-claim-product-v2
+          git add data/AUTOPILOT.json data/ESTATE-REGISTRY.json data/journal data/review/adapter-sdk/star-trek-benbassat-claim.json
+          test ! -f data/AUTOPILOT-JOURNAL.jsonl || git add data/AUTOPILOT-JOURNAL.jsonl
+          git diff --cached --name-only | LC_ALL=C sort > "$OUT/staged-paths.txt"
+          git config user.name undercast-benbassat-claim-recovery
+          git config user.email undercast-benbassat-claim-recovery@users.noreply.github.com
+          git commit -m 'Star Trek: claim Benbassat cycle'
+          claim_commit="$(git rev-parse HEAD)"; claim_tree="$(git show -s --format=%T HEAD)"
+          jq --arg commit "$claim_commit" --arg tree "$claim_tree" '.claim_commit=$commit | .claim_tree=$tree' "$OUT/claim-receipt.json" > "$OUT/claim-receipt.tmp"; mv "$OUT/claim-receipt.tmp" "$OUT/claim-receipt.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+      - name: Upload Benbassat claim evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-claim-recovery-v2
+          path: /tmp/star-trek-benbassat-claim-recovery-v2/
+          if-no-files-found: error
+          retention-days: 30
