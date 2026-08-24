@@ -1,0 +1,372 @@
+name: star-trek-benbassat-candidate-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-candidate-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-candidate-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  ALICE_TASK_ID: ap_c7ff8298a99fe94fc55bbdbc
+  ALICE_WALL_ID: UC-1396
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  WALL_ID: UC-1397
+  CLAIM_BRANCH: agent/star-trek-benbassat-claim-result-v1
+  SOURCE_REVIEW_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  SOURCE_REVIEW_PREFIX: transport/star-trek-benbassat-source-review-v1
+  MEDIA_BRANCH: agent/star-trek-benbassat-media-result-v1
+  MEDIA_PREFIX: transport/star-trek-benbassat-media-v1
+  SETTLEMENT_BRANCH: agent/star-trek-benbassat-preproduct-settlement-result-v1
+  SETTLEMENT_PREFIX: transport/star-trek-benbassat-preproduct-settlement-v1
+  RESULT_BRANCH: agent/star-trek-benbassat-candidate-result-v1
+  OUT: /tmp/star-trek-benbassat-candidate-v1
+  REVIEW_ROOT: /tmp/star-trek-benbassat-candidate-v1/source-review
+  MEDIA_ROOT: /tmp/star-trek-benbassat-candidate-v1/media-layer
+  SETTLEMENT_ROOT: /tmp/star-trek-benbassat-candidate-v1/preproduct-settlement
+  BUILDER_SOURCE: .github/recovery/star-trek-benbassat-candidate-v1/candidate-builder.py
+  BUILDER: /tmp/star-trek-benbassat-candidate-builder-v1.py
+
+jobs:
+  stage:
+    name: stage-one-reviewed-benbassat-candidate
+    if: ${{ github.event.head_commit.message == 'Stage Star Trek Benbassat candidate v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Stage the candidate builder
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cp "$BUILDER_SOURCE" "$BUILDER"
+          chmod +x "$BUILDER"
+          python3 -m py_compile "$BUILDER"
+          sha256sum "$BUILDER" > /tmp/star-trek-benbassat-builder.sha256
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify immutable pre-product layers and checkout the durable claim
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$REVIEW_ROOT" "$MEDIA_ROOT" "$SETTLEMENT_ROOT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git fetch --no-tags origin main "$CLAIM_BRANCH" "$SOURCE_REVIEW_BRANCH" "$MEDIA_BRANCH" "$SETTLEMENT_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+
+          extract_layer() {
+            local branch="$1" prefix="$2" target="$3"
+            git archive "refs/remotes/origin/${branch}" "$prefix" | tar -x -C "$OUT"
+            cp -a "$OUT/$prefix"/. "$target"/
+            while read -r digest original_path; do
+              file="$target/$(basename "$original_path")"
+              test -f "$file"
+              test "$(sha256sum "$file" | awk '{print $1}')" = "$digest"
+            done < "$target/manifest.sha256"
+          }
+
+          extract_layer "$SOURCE_REVIEW_BRANCH" "$SOURCE_REVIEW_PREFIX" "$REVIEW_ROOT"
+          extract_layer "$MEDIA_BRANCH" "$MEDIA_PREFIX" "$MEDIA_ROOT"
+          extract_layer "$SETTLEMENT_BRANCH" "$SETTLEMENT_PREFIX" "$SETTLEMENT_ROOT"
+
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg wall "$WALL_ID" \
+            '.transaction == "STAR-TREK-BENBASSAT-PREPRODUCT-SETTLEMENT-V1"
+             and .status == "preproduct-ready"
+             and .task.id == $task
+             and .task.performer == $performer
+             and .task.character == $character
+             and .task.status == "leased"
+             and .task.wall_id_reserved == $wall
+             and .queue.in_flight == 1
+             and .adjudication.performance_mode == "voice-animation"
+             and .boundary.source_frozen == true
+             and .boundary.independent_source_reviewed == true
+             and .boundary.single_lease_durable == true
+             and .boundary.media_facets_complete == true
+             and .boundary.product_staged == false
+             and .boundary.canonical_mutation == false
+             and .boundary.additional_lease_issued == false' \
+            "$SETTLEMENT_ROOT/settlement.json" >/dev/null
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            '.transaction == "STAR-TREK-BENBASSAT-SOURCE-REVIEW-V1"
+             and .verdict == "pass"
+             and .task.id == $task
+             and .task.performer == $performer
+             and .task.character == $character
+             and .adjudication.performance_mode == "voice-animation"
+             and .adjudication.physical_performance_attributed == false
+             and .adjudication.maker_attribution == "unresolved"' \
+            "$REVIEW_ROOT/source-review.json" >/dev/null
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg wall "$WALL_ID" \
+            '.transaction == "STAR-TREK-BENBASSAT-MEDIA-V1"
+             and .status == "complete"
+             and .task.id == $task
+             and .task.wall_id_reserved == $wall
+             and .boundary.source_distinct == true
+             and .boundary.byte_distinct == true
+             and .boundary.canonical_mutation == false
+             and .boundary.lease_mutation == false' \
+            "$MEDIA_ROOT/media-receipt.json" >/dev/null
+
+          claim_ref="refs/remotes/origin/${CLAIM_BRANCH}"
+          claim_commit="$(git rev-parse "$claim_ref")"
+          test "$(git show -s --format=%P "$claim_ref")" = "$EXPECTED_MAIN"
+          echo "CLAIM_COMMIT=$claim_commit" >> "$GITHUB_ENV"
+          git checkout --detach "$claim_ref"
+          npm ci --ignore-scripts
+          node - <<'NODE'
+          const fs = require('fs');
+          const state = JSON.parse(fs.readFileSync('data/AUTOPILOT.json', 'utf8'));
+          const trek = state.jobs.filter((row) => row.scope === 'star-trek');
+          const task = trek.find((row) => row.id === process.env.TASK_ID);
+          const active = trek.filter((row) => ['leased','drafted','merged'].includes(row.status));
+          const counts = {total:trek.length,queued:trek.filter(x=>x.status==='queued').length,resolved:trek.filter(x=>x.status==='resolved').length,blocked:trek.filter(x=>x.status==='blocked').length,rejected:trek.filter(x=>x.status==='rejected').length,in_flight:active.length};
+          if (!task || task.status !== 'leased' || !task.lease?.id || !task.lease?.readiness_token) throw new Error('Benbassat durable claim is missing');
+          if (active.length !== 1 || active[0].id !== process.env.TASK_ID) throw new Error('another Star Trek task is active');
+          if (JSON.stringify(counts)!==JSON.stringify({total:2228,queued:1797,resolved:428,blocked:0,rejected:2,in_flight:1})) throw new Error('claim queue drifted: '+JSON.stringify(counts));
+          fs.writeFileSync(process.env.OUT+'/claim-state.json',JSON.stringify({task,counts},null,2)+'\n');
+          fs.writeFileSync(process.env.OUT+'/lease-id.txt',task.lease.id+'\n');
+          NODE
+          git diff-tree --no-commit-id --name-only -r "$EXPECTED_MAIN" | LC_ALL=C sort > "$OUT/alice-product-paths.txt"
+          cp /tmp/star-trek-benbassat-builder.sha256 "$OUT/builder.sha256"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
+          test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$EXPECTED_MAIN"
+
+      - name: Build the candidate core and transition the existing lease
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 "$BUILDER" prepare
+          git config user.name undercast-benbassat-candidate
+          git config user.email undercast-benbassat-candidate@users.noreply.github.com
+          git checkout -b benbassat-candidate-working-v1
+          git add -A
+          git commit -m 'Temporary Benbassat candidate core'
+          core_commit="$(git rev-parse HEAD)"
+          lease_id="$(cat "$OUT/lease-id.txt")"
+
+          node scripts/autopilot.mjs submit --help > "$OUT/autopilot-submit-help.txt" 2>&1 || true
+          node scripts/autopilot.mjs complete --help > "$OUT/autopilot-complete-help.txt" 2>&1 || true
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          source = Path('scripts/autopilot.mjs').read_text()
+          def body(name):
+              marker = f'function {name}'
+              start = source.find(marker)
+              if start < 0:
+                  marker = f'async function {name}'
+                  start = source.find(marker)
+              if start < 0:
+                  return ''
+              brace = source.find('{', start)
+              depth = 0
+              for index in range(brace, len(source)):
+                  if source[index] == '{': depth += 1
+                  elif source[index] == '}':
+                      depth -= 1
+                      if depth == 0:
+                          return source[start:index+1]
+              return source[start:]
+          out = Path(__import__('os').environ['OUT'])
+          for name in ('submitCommand','completeCommand'):
+              text = body(name)
+              (out/f'{name}.txt').write_text(text)
+              flags = sorted(set(re.findall(r'--[a-z0-9-]+', text)))
+              (out/f'{name}-flags.json').write_text(__import__('json').dumps(flags, indent=2)+'\n')
+          PY
+
+          task_status() {
+            node -e 'const s=require("./data/AUTOPILOT.json"); const t=s.jobs.find(x=>x.id===process.env.TASK_ID); process.stdout.write(t?.status||"")'
+          }
+          task_wall() {
+            node -e 'const s=require("./data/AUTOPILOT.json"); const t=s.jobs.find(x=>x.id===process.env.TASK_ID); process.stdout.write(JSON.stringify(t?.wall_ids||[]))'
+          }
+
+          submit_commands=(
+            "node scripts/autopilot.mjs submit --agent luna --task-id '$TASK_ID' --task '$TASK_ID' --lease-id '$lease_id' --lease '$lease_id' --input '$OUT/submission.json' --submission '$OUT/submission.json' --draft '$OUT/submission.json'"
+            "node scripts/autopilot.mjs submit --agent luna --task '$TASK_ID' --lease '$lease_id' --input '$OUT/submission.json'"
+            "node scripts/autopilot.mjs submit --agent luna --task-id '$TASK_ID' --lease-id '$lease_id' --input '$OUT/submission.json'"
+            "node scripts/autopilot.mjs submit --agent luna --lease '$lease_id' --input '$OUT/submission.json'"
+            "node scripts/autopilot.mjs submit --agent luna --lease-id '$lease_id' --input '$OUT/submission.json'"
+            "node scripts/autopilot.mjs submit '$TASK_ID' --lease '$lease_id' --input '$OUT/submission.json'"
+          )
+          submit_ok=''
+          for index in "${!submit_commands[@]}"; do
+            git reset --hard "$core_commit" >/dev/null
+            command="${submit_commands[$index]}"
+            set +e
+            bash -lc "$command" > "$OUT/submit-$index.log" 2>&1
+            code=$?
+            set -e
+            status="$(task_status)"
+            printf 'exit=%s status=%s command=%s\n' "$code" "$status" "$command" > "$OUT/submit-$index.status"
+            if test "$code" = 0 && [[ "$status" =~ ^(drafted|merged|resolved)$ ]]; then
+              submit_ok="$command"
+              break
+            fi
+          done
+          test -n "$submit_ok" || { echo 'no submit variant succeeded' >&2; exit 1; }
+          printf '%s\n' "$submit_ok" > "$OUT/submit-command.txt"
+          submit_status="$(task_status)"
+
+          if test "$submit_status" = resolved; then
+            printf '%s\n' 'submit-resolved-directly' > "$OUT/complete-command.txt"
+          else
+            git add -A
+            git commit -m 'Temporary Benbassat submission'
+            submit_commit="$(git rev-parse HEAD)"
+            complete_commands=(
+              "node scripts/autopilot.mjs complete --agent luna --task-id '$TASK_ID' --task '$TASK_ID' --lease-id '$lease_id' --lease '$lease_id' --wall-id '$WALL_ID' --wall '$WALL_ID' --review '$OUT/outcome-review.json' --outcome-review '$OUT/outcome-review.json' --media-review '$OUT/outcome-review.json' --input '$OUT/outcome-review.json' --result '$OUT/outcome-review.json'"
+              "node scripts/autopilot.mjs complete --agent luna --task '$TASK_ID' --lease '$lease_id' --wall-id '$WALL_ID' --review '$OUT/outcome-review.json'"
+              "node scripts/autopilot.mjs complete --agent luna --task-id '$TASK_ID' --lease-id '$lease_id' --wall-id '$WALL_ID' --review '$OUT/outcome-review.json'"
+              "node scripts/autopilot.mjs complete --agent luna --lease '$lease_id' --wall-id '$WALL_ID' --review '$OUT/outcome-review.json'"
+              "node scripts/autopilot.mjs complete --agent luna --lease '$lease_id' --input '$OUT/outcome-review.json'"
+              "node scripts/autopilot.mjs complete '$TASK_ID' --lease '$lease_id' --wall-id '$WALL_ID' --review '$OUT/outcome-review.json'"
+            )
+            complete_ok=''
+            for index in "${!complete_commands[@]}"; do
+              git reset --hard "$submit_commit" >/dev/null
+              command="${complete_commands[$index]}"
+              set +e
+              bash -lc "$command" > "$OUT/complete-$index.log" 2>&1
+              code=$?
+              set -e
+              status="$(task_status)"
+              wall="$(task_wall)"
+              printf 'exit=%s status=%s wall=%s command=%s\n' "$code" "$status" "$wall" "$command" > "$OUT/complete-$index.status"
+              if test "$code" = 0 && test "$status" = resolved && test "$wall" = '["UC-1397"]'; then
+                complete_ok="$command"
+                break
+              fi
+            done
+            test -n "$complete_ok" || { echo 'no complete variant succeeded' >&2; exit 1; }
+            printf '%s\n' "$complete_ok" > "$OUT/complete-command.txt"
+          fi
+
+          node - <<'NODE'
+          const fs=require('fs'); const s=JSON.parse(fs.readFileSync('data/AUTOPILOT.json')); const trek=s.jobs.filter(x=>x.scope==='star-trek'); const task=trek.find(x=>x.id===process.env.TASK_ID); const counts={total:trek.length,queued:trek.filter(x=>x.status==='queued').length,resolved:trek.filter(x=>x.status==='resolved').length,blocked:trek.filter(x=>x.status==='blocked').length,rejected:trek.filter(x=>x.status==='rejected').length,in_flight:trek.filter(x=>['leased','drafted','merged'].includes(x.status)).length}; if(!task||task.status!=='resolved'||JSON.stringify(task.wall_ids)!=='["UC-1397"]') throw Error('Benbassat transition failed'); if(JSON.stringify(counts)!==JSON.stringify({total:2228,queued:1797,resolved:429,blocked:0,rejected:2,in_flight:0})) throw Error('resolved queue drifted: '+JSON.stringify(counts)); fs.writeFileSync(process.env.OUT+'/resolved-task.json',JSON.stringify({task,counts},null,2)+'\n');
+          NODE
+
+      - name: Rebuild permanent projections and qualify the candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm run credits | tee "$OUT/credits.log"
+          npm run sync:sources | tee "$OUT/sources-sync.log"
+          npm run media:audit -- sync --scope star-trek | tee "$OUT/media-sync.log"
+          npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate.log"
+          node scripts/census.mjs | tee "$OUT/census.log"
+          npm run build:ferengi | tee "$OUT/build-ferengi.log"
+          npm run build:species | tee "$OUT/build-species.log"
+          npm run build:changelings | tee "$OUT/build-changelings.log"
+          node scripts/shard.mjs | tee "$OUT/shard.log"
+          npm run build:contract | tee "$OUT/build-contract.log"
+          npm run build:site | tee "$OUT/build-site.log"
+          node scripts/validate.mjs | tee "$OUT/validate-before-receipt.log"
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate.log"
+          node scripts/thesis-rails.mjs next --json > "$OUT/thesis-next-after.json" || true
+          python3 "$BUILDER" receipt
+          npm run adapter:write | tee "$OUT/adapter-write.log"
+          node scripts/validate.mjs | tee "$OUT/validate-after-receipt.log"
+          npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate-after.log"
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate-after.log"
+          npm run autopilot:fixtures | tee "$OUT/autopilot-fixtures.log"
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg wall "$WALL_ID" \
+            '.transaction == "STAR-TREK-BENBASSAT-CANDIDATE-V1"
+             and .status == "candidate-ready-for-independent-review"
+             and .task.id == $task
+             and .task.status == "resolved"
+             and .task.wall_ids == [$wall]
+             and .queue.resolved == 429
+             and .queue.in_flight == 0
+             and .source_review.verdict == "pass"
+             and .source_review.performance_mode == "voice-animation"
+             and .boundary.physical_prosthetic_hint_accepted == false
+             and .boundary.physical_performance_attributed == false
+             and .boundary.prosthetic_performance_attributed == false
+             and .boundary.maker_attribution == "unresolved"
+             and .boundary.independent_product_review_complete == false
+             and .boundary.waterline_cycle_recorded == false
+             and .boundary.canonical_mutation == false
+             and .boundary.additional_lease_issued == false' \
+            "$OUT/candidate-receipt.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after.json"
+          test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$EXPECTED_MAIN"
+          git diff --check
+
+      - name: Squash and publish the candidate product branch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git reset --soft "$CLAIM_COMMIT"
+          git add -A
+          git diff --cached --name-only | LC_ALL=C sort > "$OUT/candidate-paths.txt"
+          test -s "$OUT/candidate-paths.txt"
+          test "$(grep -c '^data/review/adapter-sdk/star-trek-benbassat-candidate.json$' "$OUT/candidate-paths.txt")" = 1
+          test "$(grep -c '^images/uc-1397-' "$OUT/candidate-paths.txt" || true)" -le 2
+          git commit -m 'Star Trek: stage Benbassat candidate'
+          candidate_commit="$(git rev-parse HEAD)"
+          candidate_tree="$(git show -s --format=%T HEAD)"
+          test "$(git show -s --format=%P HEAD)" = "$CLAIM_COMMIT"
+          jq -n \
+            --arg commit "$candidate_commit" \
+            --arg tree "$candidate_tree" \
+            --arg parent "$CLAIM_COMMIT" \
+            --arg task "$TASK_ID" \
+            --arg wall "$WALL_ID" \
+            '{version:1,transaction:"STAR-TREK-BENBASSAT-CANDIDATE-PUBLICATION-V1",commit:$commit,tree:$tree,parent:$parent,task_id:$task,wall_id:$wall,canonical_mutation:false,independent_review_pending:true,waterline_pending:true}' \
+            > "$OUT/candidate-commit.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+      - name: Upload Benbassat candidate evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-candidate-v1
+          path: /tmp/star-trek-benbassat-candidate-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Preserve candidate failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-candidate-v1-failure-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-benbassat-candidate-v1/
+            /tmp/star-trek-benbassat-candidate-builder-v1.py
+          if-no-files-found: warn
+          retention-days: 30
