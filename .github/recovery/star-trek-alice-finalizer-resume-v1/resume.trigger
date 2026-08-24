@@ -1,4 +1,4 @@
-transaction=STAR-TREK-ALICE-FINALIZER-RESUME-V1
+transaction=STAR-TREK-ALICE-FINALIZER-RESUME-V2
 canonical=6377c4c7ba5ed4fa7d7eb3c499d32c258aec9834
 canonical_tree=882177302edde4fea93563a9c6bd63deb0514483
 candidate=2f61ae8527b49b52ee9f5beb3f6d954e70551d2f
@@ -8,4 +8,6 @@ review_artifact=9515617615
 review_sha256=ab8afb35a596ebe1cb1a77fb284d6528abd54346755c19c4ef01475dda7083a6
 lease=lease_e1da8637695057922f1840d4
 task=ap_c7ff8298a99fe94fc55bbdbc
+controller_patch=adapter-write-before-fixtures
+controller_sha256=3be5754247a279ed447f998ed13f6e4e2f75740906ccc6d785002a29915e7d63
 additional_lease_issued=false
