@@ -1,0 +1,6 @@
+transaction=STAR-TREK-BENBASSAT-CLAIM-RECOVERY-DIAGNOSTIC-V2
+claim_carrier=agent/star-trek-benbassat-claim-v1
+claim_carrier_head=85d2106fc504148bc585286fa2408823048f9f6c
+canonical=ed79424013b92460d16c01cad4e590eca01e6bff
+canonical_mutation=false
+lease_mutation=false
