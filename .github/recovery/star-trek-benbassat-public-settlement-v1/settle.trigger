@@ -1,0 +1,12 @@
+transaction=STAR-TREK-BENBASSAT-PUBLIC-SETTLEMENT-V1
+observer=agent/star-trek-benbassat-terminal-observer-result-v1
+terminal=agent/star-trek-benbassat-finalizer-result-v1
+diagnosis=agent/star-trek-benbassat-candidate-diagnosis-result-v1
+finalizer_status=agent/star-trek-benbassat-finalizer-status-v1
+task=ap_dd7d1c73ed237230cd6e1d0b
+performer=Nolan North
+character=Benbassat
+wall_id=UC-1397
+alice_main=ed79424013b92460d16c01cad4e590eca01e6bff
+canonical_mutation=false
+lease_mutation=false
