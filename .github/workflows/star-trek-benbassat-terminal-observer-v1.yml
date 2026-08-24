@@ -1,0 +1,109 @@
+name: star-trek-benbassat-terminal-observer-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-terminal-observer-v1
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-terminal-observer-v1
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: agent/star-trek-benbassat-finalizer-v1
+  TARGET_WORKFLOW: star-trek-benbassat-finalizer-v1.yml
+  TERMINAL_BRANCH: agent/star-trek-benbassat-finalizer-result-v1
+  FINALIZER_STATUS_BRANCH: agent/star-trek-benbassat-finalizer-status-v1
+  CANDIDATE_DIAGNOSIS_BRANCH: agent/star-trek-benbassat-candidate-diagnosis-result-v1
+  RESULT_BRANCH: agent/star-trek-benbassat-terminal-observer-result-v1
+  ALICE_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  OUT: /tmp/star-trek-benbassat-terminal-observer-v1
+
+jobs:
+  observe:
+    name: observe-exact-benbassat-finalizer
+    if: ${{ github.event.head_commit.message == 'Observe Star Trek Benbassat terminal v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 210
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Wait for and capture exact finalizer run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          target_sha="$(git ls-remote --heads origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
+          test -n "$target_sha"
+          run_id=''
+          for _ in $(seq 1 600); do
+            gh run list --repo "$GITHUB_REPOSITORY" --workflow "$TARGET_WORKFLOW" --branch "$TARGET_BRANCH" --event push --limit 100 --json databaseId,status,conclusion,headSha,displayTitle,createdAt,updatedAt,url,attempt > "$OUT/run-list.json"
+            run_id="$(jq -r --arg sha "$target_sha" '[.[] | select(.headSha==$sha)][0].databaseId // empty' "$OUT/run-list.json")"
+            test -n "$run_id" && break
+            sleep 5
+          done
+          test -n "$run_id"
+          run_status=''
+          for _ in $(seq 1 2160); do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/run.json"
+            run_status="$(jq -r .status "$OUT/run.json")"
+            test "$run_status" = completed && break
+            sleep 5
+          done
+          test "$run_status" = completed
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=latest&per_page=100" > "$OUT/jobs.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/artifacts.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main.json"
+          terminal_sha="$(git ls-remote --heads origin "refs/heads/${TERMINAL_BRANCH}" | awk '{print $1}')"
+          status_sha="$(git ls-remote --heads origin "refs/heads/${FINALIZER_STATUS_BRANCH}" | awk '{print $1}')"
+          diagnosis_sha="$(git ls-remote --heads origin "refs/heads/${CANDIDATE_DIAGNOSIS_BRANCH}" | awk '{print $1}')"
+          conclusion="$(jq -r '.conclusion // ""' "$OUT/run.json")"
+          main_sha="$(jq -r .commit.sha "$OUT/main.json")"
+          classification='finalizer-failed'
+          if test "$conclusion" = success && test -n "$terminal_sha" && test "$main_sha" != "$ALICE_MAIN"; then
+            classification='published'
+          elif test -n "$diagnosis_sha"; then
+            classification='candidate-failed'
+          elif test -n "$status_sha"; then
+            classification='finalizer-refused'
+          fi
+          for job_id in $(jq -r '.jobs[].id' "$OUT/jobs.json"); do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/jobs/${job_id}/logs" > "$OUT/job-${job_id}.log" || true
+          done
+          jq -n \
+            --arg classification "$classification" \
+            --argjson run_id "$run_id" \
+            --arg conclusion "$conclusion" \
+            --arg target_sha "$target_sha" \
+            --arg main_sha "$main_sha" \
+            --arg terminal_sha "$terminal_sha" \
+            --arg status_sha "$status_sha" \
+            --arg diagnosis_sha "$diagnosis_sha" \
+            '{version:1,transaction:"STAR-TREK-BENBASSAT-TERMINAL-OBSERVER-V1",classification:$classification,run_id:$run_id,conclusion:$conclusion,target_sha:$target_sha,main_sha:$main_sha,terminal_sha:$terminal_sha,finalizer_status_sha:$status_sha,candidate_diagnosis_sha:$diagnosis_sha,canonical_mutation_by_observer:false,lease_mutation_by_observer:false}' \
+            > "$OUT/status.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Publish immutable terminal observer result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-benbassat-terminal-observer
+          git config user.email undercast-benbassat-terminal-observer@users.noreply.github.com
+          git checkout --orphan benbassat-terminal-observer-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-terminal-observer-v1
+          cp -a "$OUT"/. transport/star-trek-benbassat-terminal-observer-v1/
+          git add transport/star-trek-benbassat-terminal-observer-v1
+          git commit -m 'Record Star Trek Benbassat terminal observer v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
