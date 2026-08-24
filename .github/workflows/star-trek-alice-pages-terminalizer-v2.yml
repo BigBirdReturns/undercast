@@ -1,0 +1,101 @@
+name: star-trek-alice-pages-terminalizer-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-alice-pages-terminalizer-v1
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: star-trek-alice-pages-terminalizer-v2
+  cancel-in-progress: false
+
+env:
+  PRODUCT_COMMIT: ed79424013b92460d16c01cad4e590eca01e6bff
+  PRODUCT_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  PRODUCT_PARENT: 6377c4c7ba5ed4fa7d7eb3c499d32c258aec9834
+  TASK_ID: ap_c7ff8298a99fe94fc55bbdbc
+  LEASE_ID: lease_e1da8637695057922f1840d4
+  WALL_ID: UC-1396
+  RECEIPT_PATH: data/review/adapter-sdk/star-trek-alice-cycle.json
+  RECEIPT_SHA256: 07331e142b70e21ff8eed6c40a23a576c259c9cd2afae462250a8961bcc09472
+  CHECKER_PATH: scripts/star-trek-alice-cycle.mjs
+  CHECKER_SHA256: 7b924da030e7ea39d868bd582ae41dc6df443cf543bf97f2f22f960db06c2371
+  REVIEWED_CYCLE: cycle_bc4e10d8ce3d09b5f12b81cc
+  WATERLINE_EVENT: waterline_1f6af3906b619ae1988e863b
+  NEXT_TASK: ap_dd7d1c73ed237230cd6e1d0b
+  NEXT_PERFORMER: Nolan North
+  NEXT_CHARACTER: Benbassat
+  NEXT_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  RESULT_BRANCH: agent/star-trek-alice-finalizer-result-v1
+  OUT: /tmp/star-trek-alice-terminal-v1
+  TERMINALIZER_SOURCE: .github/recovery/star-trek-alice-pages-terminalizer-v2/terminalize.sh
+  TERMINALIZER_BLOB: 430f25b98c8a8b76272d7e1cb26b5166ccb9da29
+  TERMINALIZER: /tmp/star-trek-alice-pages-terminalizer-v2.sh
+
+jobs:
+  terminalize:
+    name: dispatch-pages-and-terminalize-alice-v2
+    if: ${{ github.event.head_commit.message == 'Terminalize Star Trek Alice Pages v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Stage the hash-bound terminalizer and detach at the canonical Alice product
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git hash-object "$TERMINALIZER_SOURCE")" = "$TERMINALIZER_BLOB"
+          cp "$TERMINALIZER_SOURCE" "$TERMINALIZER"
+          chmod +x "$TERMINALIZER"
+          bash -n "$TERMINALIZER"
+          git fetch --no-tags origin main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$PRODUCT_COMMIT"
+          git checkout --detach "$PRODUCT_COMMIT"
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify Alice, dispatch Pages, and build terminal evidence
+        id: terminal
+        shell: bash
+        run: "$TERMINALIZER prepare"
+
+      - name: Upload terminal Alice evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-alice-terminal-v2
+          path: /tmp/star-trek-alice-terminal-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish terminal Alice locator branch
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: "$TERMINALIZER publish"
+
+      - name: Preserve terminalizer failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-alice-pages-terminalizer-v2-failure-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-alice-terminal-v1/
+            /tmp/star-trek-alice-pages-terminalizer-v2.sh
+          if-no-files-found: warn
+          retention-days: 30
