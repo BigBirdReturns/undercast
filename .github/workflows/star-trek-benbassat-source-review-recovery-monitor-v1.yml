@@ -1,0 +1,73 @@
+name: star-trek-benbassat-source-review-recovery-monitor-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-source-review-recovery-monitor-v1
+
+permissions:
+  actions: read
+  contents: write
+
+env:
+  TARGET_BRANCH: agent/star-trek-benbassat-source-review-v1
+  TARGET_HEAD: 1ddfde3f7cfbc09662f0f956273cd7c070acf643
+  TARGET_WORKFLOW: star-trek-benbassat-source-review-v1
+  TARGET_RESULT_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  RESULT_BRANCH: agent/star-trek-benbassat-source-review-recovery-monitor-result-v1
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  OUT: /tmp/star-trek-benbassat-source-review-recovery-monitor-v1
+
+jobs:
+  monitor:
+    name: monitor-benbassat-source-review-recovery
+    if: ${{ github.event.head_commit.message == 'Monitor Star Trek Benbassat source review recovery v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Observe exact source-review run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT" && mkdir -p "$OUT"
+          run_id=''; status=''
+          for _ in $(seq 1 120); do
+            gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs" -f branch="$TARGET_BRANCH" -f per_page=100 > "$OUT/runs.json"
+            run_id="$(jq -r --arg name "$TARGET_WORKFLOW" --arg sha "$TARGET_HEAD" '[.workflow_runs[] | select(.name == $name and .head_sha == $sha)] | sort_by(.id) | last.id // empty' "$OUT/runs.json")"
+            if test -n "$run_id"; then
+              gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/run.json"
+              status="$(jq -r .status "$OUT/run.json")"
+              test "$status" = completed && break
+            fi
+            sleep 5
+          done
+          test -n "$run_id" && test "$status" = completed
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=latest&per_page=100" > "$OUT/jobs.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/artifacts.json"
+          gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log > "$OUT/run.log" 2>&1 || true
+          main="$(gh api "/repos/${GITHUB_REPOSITORY}/branches/main")"
+          test "$(jq -r .commit.sha <<<"$main")" = "$EXPECTED_MAIN"
+          printf '%s\n' "$main" | jq . > "$OUT/main.json"
+          git ls-remote --heads origin "refs/heads/${TARGET_RESULT_BRANCH}" > "$OUT/target-result-ref.txt"
+          jq -n --arg transaction STAR-TREK-BENBASSAT-SOURCE-REVIEW-RECOVERY-MONITOR-V1 --argjson run_id "$run_id" --arg status "$(jq -r .status "$OUT/run.json")" --arg conclusion "$(jq -r .conclusion "$OUT/run.json")" --arg head "$(jq -r .head_sha "$OUT/run.json")" --arg target_result_ref "$(cat "$OUT/target-result-ref.txt")" --arg canonical "$EXPECTED_MAIN" '{version:1,transaction:$transaction,run:{id:$run_id,status:$status,conclusion:$conclusion,head_sha:$head},target_result_ref:$target_result_ref,canonical:{commit:$canonical},canonical_mutation:false,lease_mutation:false}' > "$OUT/status.json"
+      - name: Publish monitor result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          git config user.name undercast-benbassat-source-review-monitor
+          git config user.email undercast-benbassat-source-review-monitor@users.noreply.github.com
+          git checkout --orphan benbassat-source-review-recovery-monitor-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-source-review-recovery-monitor-v1
+          cp -a "$OUT"/. transport/star-trek-benbassat-source-review-recovery-monitor-v1/
+          git add transport/star-trek-benbassat-source-review-recovery-monitor-v1
+          git commit -m 'Record Star Trek Benbassat source-review recovery monitor v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
