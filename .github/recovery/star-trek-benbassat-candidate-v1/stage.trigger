@@ -1,0 +1,12 @@
+transaction=STAR-TREK-BENBASSAT-CANDIDATE-V1
+canonical=ed79424013b92460d16c01cad4e590eca01e6bff
+claim=agent/star-trek-benbassat-claim-result-v1
+source_review=agent/star-trek-benbassat-source-review-result-v1
+media=agent/star-trek-benbassat-media-result-v1
+settlement=agent/star-trek-benbassat-preproduct-settlement-result-v1
+task=ap_dd7d1c73ed237230cd6e1d0b
+performer=Nolan North
+character=Benbassat
+wall_id=UC-1397
+canonical_mutation=false
+additional_lease=false
