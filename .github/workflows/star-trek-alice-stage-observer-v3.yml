@@ -1,0 +1,93 @@
+name: star-trek-alice-stage-observer-v3
+
+on:
+  push:
+    branches:
+      - agent/star-trek-alice-stage-observer-v3
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-alice-stage-observer-v3
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: agent/star-trek-alice-stage-v1
+  TARGET_WORKFLOW: star-trek-alice-stage-v1.yml
+  RESULT_BRANCH: agent/star-trek-alice-stage-observer-result-v3
+  OUT: /tmp/star-trek-alice-stage-observer-v3
+
+jobs:
+  observe:
+    name: observe-latest-patched-alice-stage-run
+    if: ${{ github.event.head_commit.message == 'Observe patched Star Trek Alice stage v3' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Locate and observe exact patched target run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          target_sha="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
+          test -n "$target_sha"
+          printf '%s\n' "$target_sha" > "$OUT/target-sha.txt"
+
+          run_id=''
+          for i in $(seq 1 120); do
+            gh run list --repo "$GITHUB_REPOSITORY" --workflow "$TARGET_WORKFLOW" --branch "$TARGET_BRANCH" --event push --limit 30 --json databaseId,status,conclusion,headSha,displayTitle,createdAt,updatedAt,url,attempt > "$OUT/run-list.json"
+            run_id="$(jq -r --arg sha "$target_sha" '[.[] | select(.headSha==$sha)][0].databaseId // empty' "$OUT/run-list.json")"
+            test -n "$run_id" && break
+            sleep 5
+          done
+          test -n "$run_id"
+          printf '%s\n' "$run_id" > "$OUT/run-id.txt"
+
+          status=''
+          for i in $(seq 1 180); do
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/run.json"
+            status="$(jq -r .status "$OUT/run.json")"
+            test "$status" = completed && break
+            sleep 5
+          done
+          test "$status" = completed
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=latest&per_page=100" > "$OUT/jobs.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/artifacts.json"
+          conclusion="$(jq -r .conclusion "$OUT/run.json")"
+          if test "$conclusion" != success; then
+            gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log-failed > "$OUT/failed.log" 2>&1 || true
+          fi
+          jq -n \
+            --argjson run_id "$run_id" \
+            --arg status "$status" \
+            --arg conclusion "$conclusion" \
+            --arg target_sha "$target_sha" \
+            --arg target_branch "$TARGET_BRANCH" \
+            --arg workflow "$TARGET_WORKFLOW" \
+            '{version:3,transaction:"STAR-TREK-ALICE-STAGE-OBSERVER-V3",run_id:$run_id,status:$status,conclusion:$conclusion,target_sha:$target_sha,target_branch:$target_branch,workflow:$workflow,canonical_mutation:false,lease_mutation:false}' > "$OUT/status.json"
+
+      - name: Publish observer result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          find "$OUT" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          git config user.name undercast-alice-stage-observer
+          git config user.email undercast-alice-stage-observer@users.noreply.github.com
+          git checkout --orphan alice-stage-observer-result-v3
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-alice-stage-observer-v3
+          cp -a "$OUT"/. transport/star-trek-alice-stage-observer-v3/
+          git add transport/star-trek-alice-stage-observer-v3
+          git commit -m 'Record Star Trek Alice stage observation v3'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
