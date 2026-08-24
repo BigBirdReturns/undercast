@@ -1,0 +1,166 @@
+name: star-trek-benbassat-claim-recovery-observer-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-claim-recovery-observer-v1
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-claim-recovery-observer-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  CLAIM_CARRIER_BRANCH: agent/star-trek-benbassat-claim-v1
+  CLAIM_CARRIER_HEAD: 85d2106fc504148bc585286fa2408823048f9f6c
+  CLAIM_RESULT_BRANCH: agent/star-trek-benbassat-claim-result-v1
+  RESULT_BRANCH: agent/star-trek-benbassat-claim-recovery-observer-result-v1
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  OUT: /tmp/star-trek-benbassat-claim-recovery-observer-v1
+
+jobs:
+  observe:
+    name: recover-original-benbassat-claim-custody
+    if: ${{ github.event.head_commit.message == 'Observe Star Trek Benbassat claim recovery v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Locate the original claim run and retained evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/artifact"
+
+          gh api \
+            --method GET \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs" \
+            -f branch="$CLAIM_CARRIER_BRANCH" \
+            -f per_page=100 > "$OUT/all-runs.json"
+
+          jq \
+            --arg name star-trek-benbassat-claim-v1 \
+            --arg branch "$CLAIM_CARRIER_BRANCH" \
+            --arg head "$CLAIM_CARRIER_HEAD" \
+            '[.workflow_runs[] | select(.name == $name and .head_branch == $branch and .head_sha == $head)] | sort_by(.created_at)' \
+            "$OUT/all-runs.json" > "$OUT/claim-runs.json"
+
+          run_id="$(jq -r 'last.id // empty' "$OUT/claim-runs.json")"
+          test -n "$run_id"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$OUT/run.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=latest&per_page=100" > "$OUT/jobs.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$OUT/artifacts.json"
+          gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log > "$OUT/run.log" 2>&1 || true
+
+          artifact_id="$(jq -r '[.artifacts[] | select(.name == "star-trek-benbassat-claim-v1" and .expired == false)] | sort_by(.id) | last.id // empty' "$OUT/artifacts.json")"
+          test -n "$artifact_id"
+          gh run download "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name star-trek-benbassat-claim-v1 \
+            --dir "$OUT/artifact"
+
+          find "$OUT/artifact" -type f -print | LC_ALL=C sort > "$OUT/artifact-paths.txt"
+          receipt="$(find "$OUT/artifact" -type f -name claim-receipt.json -print -quit)"
+          post="$(find "$OUT/artifact" -type f -name post-claim.json -print -quit)"
+          lease_file="$(find "$OUT/artifact" -type f -name lease-id.txt -print -quit)"
+          test -n "$receipt" && test -f "$receipt"
+          test -n "$post" && test -f "$post"
+          test -n "$lease_file" && test -f "$lease_file"
+
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg fp "$EXPECTED_FINGERPRINT" \
+            '.transaction == "STAR-TREK-BENBASSAT-CLAIM-V1"
+             and .task.id == $task
+             and .task.performer == $performer
+             and .task.character == $character
+             and .task.source_fingerprint == $fp
+             and .task.status == "leased"
+             and .lease.id != null
+             and .lease.readiness_token != null
+             and .queue.before.in_flight == 0
+             and .queue.after.in_flight == 1
+             and .boundary.additional_lease_issued == false
+             and .boundary.canonical_mutation == false
+             and .boundary.product_staged == false' \
+            "$receipt" >/dev/null
+
+          jq -e \
+            --arg task "$TASK_ID" \
+            '.task.id == $task
+             and .task.status == "leased"
+             and .counts.total == 2228
+             and .counts.queued == 1797
+             and .counts.resolved == 428
+             and .counts.blocked == 0
+             and .counts.rejected == 2
+             and .counts.in_flight == 1
+             and (.active | length) == 1
+             and .active[0].id == $task' \
+            "$post" >/dev/null
+
+          lease_id="$(jq -r .lease.id "$receipt")"
+          test "$(tr -d '\r\n' < "$lease_file")" = "$lease_id"
+          claim_commit="$(jq -r '.claim_commit // empty' "$receipt")"
+          claim_tree="$(jq -r '.claim_tree // empty' "$receipt")"
+          if test -z "$claim_commit"; then
+            claim_commit="$(grep -Eo '[0-9a-f]{40}' "$OUT/run.log" | tail -n 1 || true)"
+          fi
+          test -n "$claim_commit"
+          test "$(jq -r .head_sha "$OUT/run.json")" = "$CLAIM_CARRIER_HEAD"
+          test "$(jq -r .status "$OUT/run.json")" = completed
+
+          main="$(gh api "/repos/${GITHUB_REPOSITORY}/branches/main")"
+          test "$(jq -r .commit.sha <<<"$main")" = "$EXPECTED_MAIN"
+          printf '%s\n' "$main" | jq . > "$OUT/main.json"
+          git ls-remote --heads origin "refs/heads/${CLAIM_RESULT_BRANCH}" > "$OUT/claim-result-ref.txt"
+
+          jq -n \
+            --arg transaction STAR-TREK-BENBASSAT-CLAIM-RECOVERY-OBSERVER-V1 \
+            --argjson run_id "$run_id" \
+            --arg run_status "$(jq -r .status "$OUT/run.json")" \
+            --arg run_conclusion "$(jq -r .conclusion "$OUT/run.json")" \
+            --arg artifact_id "$artifact_id" \
+            --arg artifact_digest "$(jq -r --argjson id "$artifact_id" '.artifacts[] | select(.id == $id) | .digest' "$OUT/artifacts.json")" \
+            --arg claim_commit "$claim_commit" \
+            --arg claim_tree "$claim_tree" \
+            --arg lease_id "$lease_id" \
+            --arg task_id "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg canonical "$EXPECTED_MAIN" \
+            --arg result_ref "$(cat "$OUT/claim-result-ref.txt")" \
+            '{version:1,transaction:$transaction,status:"recovered",run:{id:$run_id,status:$run_status,conclusion:$run_conclusion},artifact:{id:($artifact_id|tonumber),digest:$artifact_digest},claim:{commit:$claim_commit,tree:$claim_tree,lease_id:$lease_id,task_id:$task_id,performer:$performer,character:$character},canonical:{commit:$canonical},claim_result_ref:$result_ref,canonical_mutation:false,lease_mutation:false,additional_lease_issued:false}' \
+            > "$OUT/status.json"
+
+      - name: Publish the read-only recovery result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          git config user.name undercast-benbassat-claim-observer
+          git config user.email undercast-benbassat-claim-observer@users.noreply.github.com
+          git checkout --orphan benbassat-claim-recovery-observer-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-claim-recovery-observer-v1
+          cp -a "$OUT"/. transport/star-trek-benbassat-claim-recovery-observer-v1/
+          git add transport/star-trek-benbassat-claim-recovery-observer-v1
+          git commit -m 'Record Star Trek Benbassat claim recovery observer v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
