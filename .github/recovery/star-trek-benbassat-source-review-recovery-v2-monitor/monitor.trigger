@@ -1,0 +1,6 @@
+transaction=STAR-TREK-BENBASSAT-SOURCE-REVIEW-RECOVERY-V2-MONITOR
+target_branch=agent/star-trek-benbassat-source-review-recovery-v2
+target_head=ff28f1d7712bef9a7431ceffcb55119b8522e6ea
+canonical=ed79424013b92460d16c01cad4e590eca01e6bff
+canonical_mutation=false
+lease_mutation=false
