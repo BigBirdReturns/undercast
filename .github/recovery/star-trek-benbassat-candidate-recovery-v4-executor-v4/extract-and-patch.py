@@ -87,6 +87,11 @@ def main() -> None:
                     "post-submit lease receipt",
                 ),
                 (
+                    "rows[0].production!=='Star Trek: Picard'",
+                    "rows[0].production!=='Võx'",
+                    "grown record episode production",
+                ),
+                (
                     "if(!task||task.status!=='merged'||JSON.stringify(task.wall_ids)!=='[\"UC-1397\"]'||task.lease?.id!==process.env.EXPECTED_LEASE) throw Error('Benbassat did not reconcile to merged under the original lease');",
                     "if(!task||task.status!=='merged'||JSON.stringify(task.wall_ids)!=='[\"UC-1397\"]'||task.outcome?.lease_id!==process.env.EXPECTED_LEASE||task.lease!=null) throw Error('Benbassat did not reconcile to merged under the originating lease receipt');",
                     "post-sync lease receipt",
@@ -116,7 +121,7 @@ def main() -> None:
         )
 
     receipt = {
-        "version": 1,
+        "version": 2,
         "transaction": "STAR-TREK-BENBASSAT-CANDIDATE-V4-LIFECYCLE-PATCH-V4",
         "sealed_workflow": str(SOURCE),
         "sealed_workflow_blob": os.environ["SEALED_WORKFLOW_BLOB"],
