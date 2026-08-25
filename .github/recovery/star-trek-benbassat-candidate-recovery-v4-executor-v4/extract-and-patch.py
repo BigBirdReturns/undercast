@@ -102,10 +102,21 @@ def main() -> None:
                 changes.append(receipt)
 
         if position == 3:
-            old = "if(!task||task.status!=='resolved'||JSON.stringify(task.wall_ids)!=='[\"UC-1397\"]'||task.outcome?.kind!=='audited-wall'||task.lease?.id!==process.env.EXPECTED_LEASE) throw Error('post-merge media review did not resolve Benbassat');"
-            new = "if(!task||task.status!=='resolved'||JSON.stringify(task.wall_ids)!=='[\"UC-1397\"]'||task.outcome?.kind!=='audited-wall'||task.outcome?.media_review?.lease_id!==process.env.EXPECTED_LEASE||task.lease!=null) throw Error('post-merge media review did not preserve the originating lease receipt');"
-            body, receipt = replace_once(body, old, new, "post-complete lease receipt")
-            changes.append(receipt)
+            replacements = [
+                (
+                    "node scripts/census.mjs | tee \"$OUT/census.log\"",
+                    "node scripts/census.mjs --project-only | tee \"$OUT/census-project-only.log\"",
+                    "network-free census projection rebuild",
+                ),
+                (
+                    "if(!task||task.status!=='resolved'||JSON.stringify(task.wall_ids)!=='[\"UC-1397\"]'||task.outcome?.kind!=='audited-wall'||task.lease?.id!==process.env.EXPECTED_LEASE) throw Error('post-merge media review did not resolve Benbassat');",
+                    "if(!task||task.status!=='resolved'||JSON.stringify(task.wall_ids)!=='[\"UC-1397\"]'||task.outcome?.kind!=='audited-wall'||task.outcome?.media_review?.lease_id!==process.env.EXPECTED_LEASE||task.lease!=null) throw Error('post-merge media review did not preserve the originating lease receipt');",
+                    "post-complete lease receipt",
+                ),
+            ]
+            for old, new, label in replacements:
+                body, receipt = replace_once(body, old, new, label)
+                changes.append(receipt)
 
         path = TARGET / f"{position:02d}.sh"
         path.write_text("#!/usr/bin/env bash\n" + body, encoding="utf-8")
@@ -121,13 +132,14 @@ def main() -> None:
         )
 
     receipt = {
-        "version": 2,
+        "version": 3,
         "transaction": "STAR-TREK-BENBASSAT-CANDIDATE-V4-LIFECYCLE-PATCH-V4",
         "sealed_workflow": str(SOURCE),
         "sealed_workflow_blob": os.environ["SEALED_WORKFLOW_BLOB"],
         "lifecycle_blob": os.environ["LIFECYCLE_BLOB"],
         "batch_sha256": os.environ["BATCH_SHA256"],
         "run_blocks": receipts,
+        "census_mode": "project-only",
         "canonical_mutation": False,
         "additional_lease_issued": False,
     }
