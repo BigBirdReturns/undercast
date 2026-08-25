@@ -1,0 +1,67 @@
+name: star-trek-benbassat-candidate-executor-v3-cardinality-patch-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-candidate-executor-v3-cardinality-patch-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-candidate-executor-v3-cardinality-patch-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  TARGET_BRANCH: agent/star-trek-benbassat-candidate-recovery-v4-executor-v3
+  TARGET_HEAD: 2569ccada1ce6624dc389713e4400ee388f12368
+  TARGET_PATH: .github/workflows/star-trek-benbassat-candidate-recovery-v4-executor-v3.yml
+  TARGET_BLOB: e64831eebfc6ebc299f1966fb37720ccbc97ed71
+  RESULT_BRANCH: agent/star-trek-benbassat-candidate-result-v4
+
+jobs:
+  patch:
+    name: make-already-correct-boundary-selector-a-noop
+    if: ${{ github.event.head_commit.message == 'Patch Benbassat candidate executor v3 selector cardinality' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-benbassat-candidate-recovery-v4-executor-v3
+          fetch-depth: 0
+
+      - name: Verify custody and remove only the stale optional replacement
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$TARGET_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
+          test "$(git rev-parse "HEAD:${TARGET_PATH}")" = "$TARGET_BLOB"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          path = Path(os.environ['TARGET_PATH'])
+          text = path.read_text(encoding='utf-8')
+          old = "                      ('.boundary.media_absence_honest', '.boundary.honest_media_absence'),\n"
+          if text.count(old) != 1:
+              raise SystemExit(f'optional selector tuple cardinality drifted: {text.count(old)}')
+          path.write_text(text.replace(old, '', 1), encoding='utf-8')
+          PY
+
+          git diff --check
+          test "$(git diff --name-only)" = "$TARGET_PATH"
+          grep -F ".boundary.honest_media_absence" .github/workflows/star-trek-benbassat-candidate-recovery-v4.yml >/dev/null
+
+          git config user.name undercast-benbassat-executor-patcher
+          git config user.email undercast-benbassat-executor-patcher@users.noreply.github.com
+          git add "$TARGET_PATH"
+          git commit -m 'Execute corrected Star Trek Benbassat candidate recovery v4 v3'
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
