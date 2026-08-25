@@ -1,0 +1,8 @@
+transaction=STAR-TREK-BENBASSAT-CANDIDATE-V3-RERUN-MEDIA-DERIVED
+patched_parent=4392573beb9690499aae5eb2606934e09006484d
+expected_main=ed79424013b92460d16c01cad4e590eca01e6bff
+lease=lease_151ba8f5efac7d922ea2f8c2
+batch_sha256=3609c0bd26a68a4fe3ec93f1fddc5ea230e64e329ac5d92fdb1205ec21c35519
+media_state_derivation=repository-native
+canonical_mutation=false
+additional_lease=false
