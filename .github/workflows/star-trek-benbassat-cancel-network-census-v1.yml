@@ -1,0 +1,60 @@
+name: star-trek-benbassat-cancel-network-census-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-cancel-network-census-v1
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: star-trek-benbassat-cancel-network-census-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  TARGET_RUN: '32808806075'
+
+jobs:
+  cancel:
+    name: cancel-only-the-superseded-network-census-run
+    if: ${{ github.event.head_commit.message == 'Cancel superseded Benbassat network census run' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Verify target identity and request cancellation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${TARGET_RUN}" > /tmp/target-before.json
+          test "$(jq -r .head_branch /tmp/target-before.json)" = 'agent/star-trek-benbassat-candidate-recovery-v4-executor-v4'
+          test "$(jq -r .name /tmp/target-before.json)" = 'star-trek-benbassat-candidate-recovery-v4-executor-v4'
+          status="$(jq -r .status /tmp/target-before.json)"
+          case "$status" in
+            queued|in_progress|pending|waiting|requested)
+              gh api --method POST "/repos/${GITHUB_REPOSITORY}/actions/runs/${TARGET_RUN}/cancel"
+              ;;
+            completed)
+              ;;
+            *)
+              echo "unexpected target status: $status" >&2
+              exit 1
+              ;;
+          esac
+          main="$(gh api "/repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          test "$main" = "$EXPECTED_MAIN"
+          jq -n --arg run "$TARGET_RUN" --arg before "$status" --arg main "$main" '{version:1,transaction:"STAR-TREK-BENBASSAT-CANCEL-NETWORK-CENSUS-V1",target_run:($run|tonumber),status_before:$before,canonical_commit:$main,canonical_mutation:false,lease_mutation:false}' > /tmp/cancel-receipt.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-cancel-network-census-v1
+          path: |
+            /tmp/target-before.json
+            /tmp/cancel-receipt.json
+          if-no-files-found: error
+          retention-days: 30
