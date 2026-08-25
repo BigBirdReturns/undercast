@@ -1,0 +1,64 @@
+name: star-trek-benbassat-candidate-v3-projection-patch-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-candidate-v3-projection-patch-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-candidate-v3-projection-patch-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  TARGET_BRANCH: agent/star-trek-benbassat-candidate-recovery-v3
+  TARGET_RESULT: agent/star-trek-benbassat-candidate-result-v3
+  TARGET_PATH: .github/workflows/star-trek-benbassat-candidate-recovery-v3.yml
+  EXPECTED_BLOB: c9c4726807c9420583340c285c2c429e0ab0d782
+
+jobs:
+  patch:
+    name: move-projection-rebuild-before-autopilot-complete
+    if: ${{ github.event.head_commit.message == 'Patch Star Trek Benbassat candidate precompletion projections v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-benbassat-candidate-recovery-v3
+          fetch-depth: 0
+
+      - name: Verify custody and patch the lifecycle order
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$TARGET_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})"
+          test -z "$(git ls-remote --heads origin "refs/heads/${TARGET_RESULT}")"
+          test "$(git rev-parse "HEAD:${TARGET_PATH}")" = "$EXPECTED_BLOB"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          path=Path(os.environ['TARGET_PATH'])
+          text=path.read_text()
+          old='''          npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate-before-complete.log"\n          command="node scripts/autopilot.mjs complete --input '$OUT/media-review.json'"\n'''
+          new='''          npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate-before-complete.log"\n          npm run credits | tee "$OUT/precomplete-credits.log"\n          node scripts/census.mjs | tee "$OUT/precomplete-census.log"\n          npm run build:ferengi | tee "$OUT/precomplete-build-ferengi.log"\n          npm run build:species | tee "$OUT/precomplete-build-species.log"\n          npm run build:changelings | tee "$OUT/precomplete-build-changelings.log"\n          node scripts/shard.mjs | tee "$OUT/precomplete-shard.log"\n          npm run build:contract | tee "$OUT/precomplete-build-contract.log"\n          npm run build:site | tee "$OUT/precomplete-build-site.log"\n          node scripts/validate.mjs | tee "$OUT/precomplete-validate.log"\n          command="node scripts/autopilot.mjs complete --input '$OUT/media-review.json'"\n'''
+          if text.count(old)!=1:
+              raise SystemExit(f'expected one precompletion insertion point, found {text.count(old)}')
+          path.write_text(text.replace(old,new,1))
+          PY
+          git diff --check
+          test "$(git diff --name-only | wc -l)" = 1
+          test "$(git diff --name-only)" = "$TARGET_PATH"
+          grep -F 'precomplete-validate.log' "$TARGET_PATH" >/dev/null
+          git config user.name undercast-benbassat-projection-order-patcher
+          git config user.email undercast-benbassat-projection-order-patcher@users.noreply.github.com
+          git add "$TARGET_PATH"
+          git commit -m 'Run native Star Trek Benbassat candidate v3'
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
