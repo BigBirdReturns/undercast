@@ -205,7 +205,7 @@ def postgrow() -> None:
             raise SystemExit(f"Benbassat record {key} drifted: {record.get(key)}")
     if "still" in record or "portrait" in record:
         raise SystemExit("honest media absence was not preserved in the record")
-    add_absent_media_facets()
+    # media:audit sync derives absent facets and their receipts from specimens and SOURCES.
     media_receipt = read_json(MEDIA_ROOT / "media-receipt.json")
     review = {
         "version": 1,
