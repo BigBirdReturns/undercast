@@ -1,0 +1,273 @@
+name: star-trek-benbassat-independent-review-recovery-v4
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-independent-review-recovery-v4
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-independent-review-recovery-v4
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  EXPECTED_LEASE: lease_151ba8f5efac7d922ea2f8c2
+  WALL_ID: UC-1397
+  CANDIDATE_BRANCH: agent/star-trek-benbassat-candidate-result-v4
+  CLAIM_BRANCH: agent/star-trek-benbassat-claim-result-v1
+  SOURCE_REVIEW_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  SOURCE_REVIEW_PATH: transport/star-trek-benbassat-source-review-v1/source-review.json
+  MEDIA_BRANCH: agent/star-trek-benbassat-media-result-v1
+  MEDIA_PATH: transport/star-trek-benbassat-media-v1/media-receipt.json
+  RESULT_BRANCH: agent/star-trek-benbassat-independent-review-result-v4
+  OUT: /tmp/star-trek-benbassat-independent-review-v4
+
+jobs:
+  review:
+    name: independently-review-native-benbassat-v4-product
+    if: ${{ github.event.head_commit.message == 'Review corrected Star Trek Benbassat candidate v4 v4' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify candidate lineage, immutable receipts, and exact product
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git fetch --no-tags origin main "$CANDIDATE_BRANCH" "$CLAIM_BRANCH" "$SOURCE_REVIEW_BRANCH" "$MEDIA_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+
+          candidate_ref="refs/remotes/origin/${CANDIDATE_BRANCH}"
+          claim_ref="refs/remotes/origin/${CLAIM_BRANCH}"
+          source_ref="refs/remotes/origin/${SOURCE_REVIEW_BRANCH}"
+          media_ref="refs/remotes/origin/${MEDIA_BRANCH}"
+          candidate_commit="$(git rev-parse "$candidate_ref")"
+          claim_commit="$(git rev-parse "$claim_ref")"
+          test "$(git show -s --format=%P "$candidate_ref")" = "$claim_commit"
+          test "$(git show -s --format=%P "$claim_ref")" = "$EXPECTED_MAIN"
+
+          git show "${source_ref}:${SOURCE_REVIEW_PATH}" > "$OUT/source-review.json"
+          git show "${media_ref}:${MEDIA_PATH}" > "$OUT/media-receipt.json"
+          git checkout --detach "$candidate_ref"
+          cp data/review/adapter-sdk/star-trek-benbassat-candidate.json "$OUT/candidate-receipt.json"
+          git diff-tree --no-commit-id --name-only -r HEAD | LC_ALL=C sort > "$OUT/candidate-paths.txt"
+          printf '%s\n' "$candidate_commit" > "$OUT/candidate-commit.txt"
+          printf '%s\n' "$(git show -s --format=%T HEAD)" > "$OUT/candidate-tree.txt"
+          printf '%s\n' "$claim_commit" > "$OUT/claim-commit.txt"
+
+          jq -e \
+            --arg task "$TASK_ID" --arg performer "$EXPECTED_PERFORMER" --arg character "$EXPECTED_CHARACTER" --arg fp "$EXPECTED_FINGERPRINT" --arg wall "$WALL_ID" --arg lease "$EXPECTED_LEASE" --arg parent "$EXPECTED_MAIN" --arg claim "$claim_commit" \
+            '.transaction == "STAR-TREK-BENBASSAT-CANDIDATE-V3"
+             and .status == "candidate-ready-for-independent-review"
+             and .canonical_parent == $parent
+             and .claim_commit == $claim
+             and .task.id == $task and .task.lease_id == $lease
+             and .task.performer == $performer and .task.character == $character and .task.source_fingerprint == $fp
+             and .task.status == "resolved" and .task.wall_ids == [$wall]
+             and .queue == {total:2228,queued:1797,resolved:429,blocked:0,rejected:2,in_flight:0}
+             and .source_review.verdict == "pass"
+             and .source_review.production == "Star Trek: Picard"
+             and .source_review.episode == "Võx"
+             and .source_review.performance_mode == "voice-only"
+             and .media.facets.still.status == "absent"
+             and .media.facets.portrait.status == "absent"
+             and .boundary.off_screen_voiceover == true
+             and .boundary.physical_prosthetic_hint_accepted == false
+             and .boundary.physical_performance_attributed == false
+             and .boundary.prosthetic_performance_attributed == false
+             and .boundary.animation_performance_attributed == false
+             and .boundary.maker_attribution == "unresolved"
+             and .boundary.honest_media_absence == true
+             and .boundary.waterline_cycle_recorded == false
+             and .boundary.canonical_mutation == false
+             and .boundary.additional_lease_issued == false' \
+            "$OUT/candidate-receipt.json" >/dev/null
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os
+          out=Path(os.environ['OUT'])
+
+          def stable(value):
+              if isinstance(value,dict): return {key:stable(value[key]) for key in sorted(value)}
+              if isinstance(value,list): return [stable(item) for item in value]
+              return value
+
+          checks=[
+              (out/'candidate-receipt.json','receipt_sha256',()),
+              (out/'source-review.json','review_sha256',('artifact',)),
+              (out/'media-receipt.json','receipt_sha256',('artifact',)),
+          ]
+          for path,field,omitted in checks:
+              payload=json.loads(path.read_text()); expected=payload[field]; body=dict(payload); body.pop(field,None)
+              for key in omitted: body.pop(key,None)
+              actual=hashlib.sha256((json.dumps(stable(body),indent=2,ensure_ascii=False)+'\n').encode()).hexdigest()
+              if actual!=expected: raise SystemExit(f'{path.name} identity mismatch: {actual} != {expected}')
+
+          state=json.loads(Path('data/AUTOPILOT.json').read_text())
+          trek=[row for row in state['jobs'] if row.get('scope')=='star-trek']
+          matches=[row for row in trek if row.get('id')==os.environ['TASK_ID']]
+          if len(matches)!=1: raise SystemExit('durable task cardinality mismatch')
+          task=matches[0]
+          outcome=task.get('outcome') or {}
+          lease_id=outcome.get('lease_id') or (outcome.get('media_review') or {}).get('lease_id')
+          if task.get('status')!='resolved' or task.get('wall_ids')!=[os.environ['WALL_ID']] or lease_id!=os.environ['EXPECTED_LEASE'] or task.get('lease') is not None:
+              raise SystemExit('durable task or originating lease receipt mismatch')
+          counts={'total':len(trek),'queued':sum(x.get('status')=='queued' for x in trek),'resolved':sum(x.get('status')=='resolved' for x in trek),'blocked':sum(x.get('status')=='blocked' for x in trek),'rejected':sum(x.get('status')=='rejected' for x in trek),'in_flight':sum(x.get('status') in {'leased','drafted','merged'} for x in trek)}
+          expected={'total':2228,'queued':1797,'resolved':429,'blocked':0,'rejected':2,'in_flight':0}
+          if counts!=expected: raise SystemExit(f'queue mismatch: {counts}')
+
+          specimens=json.loads(Path('data/specimens.json').read_text())
+          media=json.loads(Path('data/MEDIA-AUDIT.json').read_text())
+          def walk(node):
+              if isinstance(node,dict):
+                  yield node
+                  for value in node.values(): yield from walk(value)
+              elif isinstance(node,list):
+                  for value in node: yield from walk(value)
+
+          records=[obj for obj in walk(specimens) if obj.get('id')==os.environ['WALL_ID']]
+          if len(records)!=1: raise SystemExit(f'record cardinality mismatch: {len(records)}')
+          record=records[0]
+          required={'character':os.environ['EXPECTED_CHARACTER'],'actor':os.environ['EXPECTED_PERFORMER'],'production':'Võx','years':'2023','kind':'voice'}
+          for key,value in required.items():
+              if record.get(key)!=value: raise SystemExit(f'record {key} mismatch: {record.get(key)}')
+          if 'still' in record or 'portrait' in record: raise SystemExit('honest media absence was not preserved')
+          combined=' '.join(str(record.get(key,'')) for key in ('knownFor','reveal'))
+          for token in ('off-screen voiceover','physical-prosthetic hint is rejected','unresolved'):
+              if token not in combined: raise SystemExit(f'record boundary token missing: {token}')
+
+          facets=[obj for obj in walk(media) if obj.get('wall_id')==os.environ['WALL_ID'] and obj.get('side') in {'still','portrait'}]
+          if len(facets)!=2 or {obj.get('side') for obj in facets}!={'still','portrait'}: raise SystemExit('media facet cardinality mismatch')
+          for facet in facets:
+              if facet.get('status')!='absent' or facet.get('asset') is not None or facet.get('votes')!=[] or facet.get('claims')!={}: raise SystemExit(f'invalid absent facet: {facet}')
+          if list(Path('images').glob('uc-1397-*')): raise SystemExit('unexpected Benbassat image bytes were staged')
+
+          (out/'exact-product-evidence.json').write_text(json.dumps({'task':task,'originating_lease_id':lease_id,'counts':counts,'record':record,'facets':facets},indent=2,ensure_ascii=False)+'\n')
+          PY
+
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
+          test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$EXPECTED_MAIN"
+
+      - name: Run independent repository gates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm ci --ignore-scripts
+          node scripts/validate.mjs | tee "$OUT/repository-validate.log"
+          npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate.log"
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate.log"
+          npm run autopilot:fixtures | tee "$OUT/autopilot-fixtures.log"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after.json"
+          test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$EXPECTED_MAIN"
+
+      - name: Write independent review receipt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import hashlib, json, os
+          out=Path(os.environ['OUT'])
+          candidate=json.loads((out/'candidate-receipt.json').read_text())
+          evidence=json.loads((out/'exact-product-evidence.json').read_text())
+          review={
+              'version':4,
+              'transaction':'STAR-TREK-BENBASSAT-INDEPENDENT-REVIEW-V4',
+              'reviewed_at':datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z'),
+              'reviewer':'chatgpt-benbassat-independent-product-reviewer-v4',
+              'reviewed_role':'second-desk',
+              'verdict':'pass',
+              'canonical_parent':os.environ['EXPECTED_MAIN'],
+              'candidate':{'branch':os.environ['CANDIDATE_BRANCH'],'commit':(out/'candidate-commit.txt').read_text().strip(),'tree':(out/'candidate-tree.txt').read_text().strip(),'receipt_sha256':candidate['receipt_sha256']},
+              'claim':{'branch':os.environ['CLAIM_BRANCH'],'commit':(out/'claim-commit.txt').read_text().strip(),'lease_id':evidence['originating_lease_id']},
+              'task':{'id':os.environ['TASK_ID'],'lease_id':evidence['originating_lease_id'],'performer':os.environ['EXPECTED_PERFORMER'],'character':os.environ['EXPECTED_CHARACTER'],'source_fingerprint':os.environ['EXPECTED_FINGERPRINT'],'status':'resolved','wall_id':os.environ['WALL_ID']},
+              'queue':evidence['counts'],
+              'gates':{'repository_validate':0,'media_gate':0,'thesis_validate':0,'autopilot_fixtures':0},
+              'boundary':{'production':'Star Trek: Picard','episode':'Võx','year':'2023','performance_mode':'voice-only','off_screen_voiceover':True,'queued_physical_prosthetic_hint_rejected':True,'physical_performance_attributed':False,'prosthetic_performance_attributed':False,'animation_performance_attributed':False,'maker_attribution':'unresolved','transformation_measured':False,'honest_media_absence':True,'cross_facet_substitution':False,'waterline_cycle_recorded':False,'canonical_mutation':False,'lease_mutation':False,'additional_lease_issued':False},
+          }
+          def stable(value):
+              if isinstance(value,dict): return {key:stable(value[key]) for key in sorted(value)}
+              if isinstance(value,list): return [stable(item) for item in value]
+              return value
+          body=(json.dumps(stable(review),indent=2,ensure_ascii=False)+'\n').encode()
+          review['review_sha256']=hashlib.sha256(body).hexdigest()
+          (out/'independent-review.json').write_text(json.dumps(stable(review),indent=2,ensure_ascii=False)+'\n')
+          PY
+
+          jq -e --arg task "$TASK_ID" --arg lease "$EXPECTED_LEASE" --arg wall "$WALL_ID" \
+            '.transaction == "STAR-TREK-BENBASSAT-INDEPENDENT-REVIEW-V4"
+             and .verdict == "pass"
+             and .task.id == $task and .task.lease_id == $lease and .task.status == "resolved" and .task.wall_id == $wall
+             and .queue == {total:2228,queued:1797,resolved:429,blocked:0,rejected:2,in_flight:0}
+             and .boundary.production == "Star Trek: Picard"
+             and .boundary.episode == "Võx"
+             and .boundary.performance_mode == "voice-only"
+             and .boundary.off_screen_voiceover == true
+             and .boundary.queued_physical_prosthetic_hint_rejected == true
+             and .boundary.physical_performance_attributed == false
+             and .boundary.prosthetic_performance_attributed == false
+             and .boundary.animation_performance_attributed == false
+             and .boundary.maker_attribution == "unresolved"
+             and .boundary.honest_media_absence == true
+             and .boundary.waterline_cycle_recorded == false
+             and .boundary.canonical_mutation == false
+             and .boundary.lease_mutation == false
+             and .boundary.additional_lease_issued == false' \
+            "$OUT/independent-review.json" >/dev/null
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload independent review evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-independent-review-v4
+          path: /tmp/star-trek-benbassat-independent-review-v4/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable independent review result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq --argjson id "$ARTIFACT_ID" --arg digest "$ARTIFACT_DIGEST" '.artifact={id:$id,digest:$digest}' "$OUT/independent-review.json" > "$OUT/review.tmp"
+          mv "$OUT/review.tmp" "$OUT/independent-review.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-benbassat-independent-reviewer
+          git config user.email undercast-benbassat-independent-reviewer@users.noreply.github.com
+          git checkout --orphan benbassat-independent-review-result-v4
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-independent-review-v4
+          cp -a "$OUT"/. transport/star-trek-benbassat-independent-review-v4/
+          git add transport/star-trek-benbassat-independent-review-v4
+          git commit -m 'Record Star Trek Benbassat independent review v4'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
