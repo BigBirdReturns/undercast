@@ -25,6 +25,12 @@ new=old+'''        "projection_refresh": {"precomplete": precomplete_refresh, "t
 if text.count(old)!=1: raise SystemExit(f'lifecycle candidate anchor count {text.count(old)}')
 lifecycle.write_text(text.replace(old,new,1))
 
+step1=Path(os.environ['STEPS_ROOT'])/'01.sh'
+text=step1.read_text()
+old='cp "$LIFECYCLE_SOURCE" "$LIFECYCLE"\ncp "$BATCH_SOURCE" "$BATCH"\n'
+if text.count(old)!=1: raise SystemExit(f'step01 externalized-input anchor count {text.count(old)}')
+step1.write_text(text.replace(old,'',1))
+
 step3=Path(os.environ['STEPS_ROOT'])/'03.sh'
 text=step3.read_text(); old='node scripts/census.mjs | tee "$OUT/precomplete-census.log"\n'; new='"$CENSUS_HELPER" precomplete live-first\n'
 if text.count(old)!=1: raise SystemExit(f'step03 census anchor count {text.count(old)}')
