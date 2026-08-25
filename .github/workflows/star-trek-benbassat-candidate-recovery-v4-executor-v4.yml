@@ -1,0 +1,143 @@
+name: star-trek-benbassat-candidate-recovery-v4-executor-v4
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-candidate-recovery-v4-executor-v4
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-candidate-recovery-v4-executor-v4
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  WALL_ID: UC-1397
+  ALICE_WALL_ID: UC-1396
+  EXPECTED_LEASE: lease_151ba8f5efac7d922ea2f8c2
+  CLAIM_BRANCH: agent/star-trek-benbassat-claim-result-v1
+  SOURCE_REVIEW_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  SOURCE_REVIEW_PATH: transport/star-trek-benbassat-source-review-v1/source-review.json
+  MEDIA_BRANCH: agent/star-trek-benbassat-media-result-v1
+  MEDIA_PATH: transport/star-trek-benbassat-media-v1/media-receipt.json
+  SETTLEMENT_BRANCH: agent/star-trek-benbassat-preproduct-settlement-result-v2
+  SETTLEMENT_PATH: transport/star-trek-benbassat-preproduct-settlement-v2/settlement.json
+  RESULT_BRANCH: agent/star-trek-benbassat-candidate-result-v4
+  OUT: /tmp/star-trek-benbassat-candidate-v4
+  REVIEW_ROOT: /tmp/star-trek-benbassat-candidate-v4/source-review
+  MEDIA_ROOT: /tmp/star-trek-benbassat-candidate-v4/media-layer
+  SETTLEMENT_ROOT: /tmp/star-trek-benbassat-candidate-v4/preproduct-settlement
+  LIFECYCLE_SOURCE: .github/recovery/star-trek-benbassat-candidate-recovery-v3/candidate-lifecycle.py
+  BATCH_SOURCE: .github/recovery/star-trek-benbassat-candidate-recovery-v3/batch.json
+  PATCHER_SOURCE: .github/recovery/star-trek-benbassat-candidate-recovery-v4-executor-v4/extract-and-patch.py
+  LIFECYCLE: /tmp/star-trek-benbassat-candidate-lifecycle-v4.py
+  BATCH: /tmp/star-trek-benbassat-batch-v4.json
+  PATCHER: /tmp/star-trek-benbassat-candidate-extractor-v4.py
+  SEALED_WORKFLOW: .github/workflows/star-trek-benbassat-candidate-recovery-v4.yml
+  SEALED_WORKFLOW_BLOB: dbd2745457124bcd741de002017690eccd68df9b
+  LIFECYCLE_BLOB: c17d1f0d78992049257ae115bcd49736ae6ae344
+  BATCH_SHA256: 3609c0bd26a68a4fe3ec93f1fddc5ea230e64e329ac5d92fdb1205ec21c35519
+  RUN_ROOT: /tmp/star-trek-benbassat-v4-patched-runs-v4
+
+jobs:
+  execute:
+    name: execute-v4-with-position-correct-native-lease-receipts
+    if: ${{ github.event.head_commit.message == 'Execute corrected Star Trek Benbassat candidate recovery v4 v4' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify sealed sources and build position-correct lifecycle scripts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f "$SEALED_WORKFLOW"
+          test -f "$LIFECYCLE_SOURCE"
+          test -f "$BATCH_SOURCE"
+          test -f "$PATCHER_SOURCE"
+          test "$(git hash-object "$SEALED_WORKFLOW")" = "$SEALED_WORKFLOW_BLOB"
+          test "$(git hash-object "$LIFECYCLE_SOURCE")" = "$LIFECYCLE_BLOB"
+          test "$(sha256sum "$BATCH_SOURCE" | awk '{print $1}')" = "$BATCH_SHA256"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          cp "$PATCHER_SOURCE" "$PATCHER"
+          chmod +x "$PATCHER"
+          python3 -m py_compile "$PATCHER"
+          rm -rf "$RUN_ROOT"
+          mkdir -p "$RUN_ROOT"
+          python3 "$PATCHER"
+          for script in "$RUN_ROOT"/[0-9][0-9].sh; do
+            bash -n "$script"
+          done
+          find "$RUN_ROOT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$RUN_ROOT/manifest.sha256"
+
+      - name: Execute the patched lifecycle and preserve the originating lease receipt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : > "$GITHUB_ENV"
+          for script in "$RUN_ROOT"/[0-9][0-9].sh; do
+            printf 'executor-v4: running %s\n' "$script"
+            bash "$script"
+            if test "$(basename "$script")" = '01.sh'; then
+              python3 - <<'PY'
+              from pathlib import Path
+              import os
+
+              path = Path(os.environ['LIFECYCLE'])
+              text = path.read_text(encoding='utf-8')
+              old = '    lease_id = current.get("outcome", {}).get("lease_id")\n'
+              new = (
+                  '    outcome = current.get("outcome", {})\n'
+                  '    lease_id = outcome.get("lease_id") or (outcome.get("media_review") or {}).get("lease_id")\n'
+                  '    if not lease_id:\n'
+                  '        raise SystemExit("resolved task lacks its originating lease receipt")\n'
+              )
+              if text.count(old) != 1:
+                  raise SystemExit(f'lifecycle receipt patch cardinality drifted: {text.count(old)}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+              PY
+              python3 -m py_compile "$LIFECYCLE"
+              sha256sum "$LIFECYCLE" > "$RUN_ROOT/lifecycle-patched.sha256"
+            fi
+            if test -s "$GITHUB_ENV"; then
+              while IFS='=' read -r name value; do
+                case "$name" in
+                  ''|'#'*) continue ;;
+                esac
+                export "$name=$value"
+              done < "$GITHUB_ENV"
+            fi
+          done
+
+      - name: Upload corrected candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-candidate-recovery-v4-executor-v4-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-benbassat-candidate-v4/
+            /tmp/star-trek-benbassat-v4-patched-runs-v4/
+            /tmp/star-trek-benbassat-candidate-lifecycle-v4.py
+            /tmp/star-trek-benbassat-batch-v4.json
+            /tmp/star-trek-benbassat-candidate-extractor-v4.py
+          if-no-files-found: warn
+          retention-days: 30
