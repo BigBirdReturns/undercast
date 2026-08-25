@@ -1,0 +1,65 @@
+name: star-trek-benbassat-candidate-v3-media-patch-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-candidate-v3-media-patch-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-candidate-v3-media-patch-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  TARGET_BRANCH: agent/star-trek-benbassat-candidate-recovery-v3
+  TARGET_RESULT: agent/star-trek-benbassat-candidate-result-v3
+  TARGET_PATH: .github/recovery/star-trek-benbassat-candidate-recovery-v3/candidate-lifecycle.py
+  EXPECTED_BLOB: 7e02ce97a8d57519da9b2bea6df472c793171a86
+
+jobs:
+  patch:
+    name: remove-premature-media-state-insertion
+    if: ${{ github.event.head_commit.message == 'Patch Star Trek Benbassat candidate media derivation v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/star-trek-benbassat-candidate-recovery-v3
+          fetch-depth: 0
+
+      - name: Verify custody and apply the one-line lifecycle repair
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$TARGET_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/${TARGET_BRANCH})"
+          test -z "$(git ls-remote --heads origin "refs/heads/${TARGET_RESULT}")"
+          test "$(git rev-parse "HEAD:${TARGET_PATH}")" = "$EXPECTED_BLOB"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          path=Path(os.environ['TARGET_PATH'])
+          text=path.read_text()
+          old='    add_absent_media_facets()\n'
+          new='    # media:audit sync derives absent facets and their receipts from specimens and SOURCES.\n'
+          if text.count(old)!=1:
+              raise SystemExit(f'expected exactly one premature insertion call, found {text.count(old)}')
+          path.write_text(text.replace(old,new,1))
+          PY
+          git diff --check
+          test "$(git diff --name-only | wc -l)" = 1
+          test "$(git diff --name-only)" = "$TARGET_PATH"
+          grep -F 'media:audit sync derives absent facets' "$TARGET_PATH" >/dev/null
+          grep -F 'def add_absent_media_facets()' "$TARGET_PATH" >/dev/null
+          git config user.name undercast-benbassat-media-state-patcher
+          git config user.email undercast-benbassat-media-state-patcher@users.noreply.github.com
+          git add "$TARGET_PATH"
+          git commit -m 'Run native Star Trek Benbassat candidate v3'
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
