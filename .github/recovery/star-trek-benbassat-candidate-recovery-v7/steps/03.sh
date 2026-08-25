@@ -6,7 +6,16 @@ npm run media:audit -- sync --scope star-trek | tee "$OUT/media-sync.log"
 npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate-before-complete.log"
 
 npm run credits | tee "$OUT/precomplete-credits.log"
-node scripts/census.mjs | tee "$OUT/precomplete-census.log"
+coverage_sha="$(sha256sum data/CENSUS-COVERAGE.json | awk '{print $1}')"
+manifest_sha="$(sha256sum data/CENSUS-MANIFEST.json | awk '{print $1}')"
+test "$coverage_sha" = "$EXPECTED_COVERAGE_SHA"
+test "$manifest_sha" = "$EXPECTED_MANIFEST_SHA"
+jq -n \
+  --arg coverage "$coverage_sha" \
+  --arg manifest "$manifest_sha" \
+  '{version:1,transaction:"STAR-TREK-BENBASSAT-CENSUS-DEFERRED-V1",status:"certified-snapshot-preserved",coverage_sha256:$coverage,manifest_sha256:$manifest,failed_category:"Ankari",failed_runs:[32887194179],failed_attempts:[1,2],reason:"The live source returned no pages twice; preserving the last certified snapshot avoids publishing a false zero.",canonical_mutation:false,lease_mutation:false}' \
+  > "$OUT/precomplete-census-deferred.json"
+printf 'census refresh deferred; certified coverage=%s manifest=%s\n' "$coverage_sha" "$manifest_sha" | tee "$OUT/precomplete-census.log"
 npm run build:ferengi | tee "$OUT/precomplete-build-ferengi.log"
 npm run build:species | tee "$OUT/precomplete-build-species.log"
 npm run build:changelings | tee "$OUT/precomplete-build-changelings.log"
