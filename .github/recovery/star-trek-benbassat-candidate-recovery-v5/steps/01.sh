@@ -60,7 +60,7 @@ jq -e \
   --arg task "$TASK_ID" --arg lease "$EXPECTED_LEASE" --arg wall "$WALL_ID" \
   '.transaction == "STAR-TREK-BENBASSAT-PREPRODUCT-SETTLEMENT-V2"
    and .status == "preproduct-ready"
-   and .settlement_sha256 == env.EXPECTED_SETTLEMENT_SHA
+   and .receipt_sha256 == env.EXPECTED_SETTLEMENT_SHA
    and .canonical.commit == env.EXPECTED_MAIN
    and .canonical.tree == env.EXPECTED_TREE
    and .task.id == $task and .task.lease_id == $lease and .task.wall_id_reserved == $wall
