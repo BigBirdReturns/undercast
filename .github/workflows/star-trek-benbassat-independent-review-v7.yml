@@ -1,0 +1,221 @@
+name: star-trek-benbassat-independent-review-v7
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-independent-review-recovery-v7
+permissions:
+  contents: write
+concurrency:
+  group: star-trek-benbassat-independent-review-v7
+  cancel-in-progress: false
+env:
+  LIVE_MAIN: 29b9ab279dac90fad82aac48633ef83d5ac81b39
+  LIVE_TREE: 7c2ad054ceb3b3cbd1f0c00c838cfc3d014ff169
+  ALICE_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  ALICE_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  CLAIM_COMMIT: 0a7e2ed0c1fa7d97b1feb9c0b7e3ef78fd4e5ca2
+  CLAIM_TREE: 63802f7e11f19f7f5ffc5e8093c9866e0429813c
+  CANDIDATE_COMMIT: 637d0b9d0cef669f354b9c4f5961a8e8bd0b1c19
+  CANDIDATE_TREE: 0c09b5da9d37157f954725578a9b17bcd7d08109
+  CANDIDATE_RECEIPT_SHA: 5d4f02fab0a0e77f9b8ab19d155be3b9f09437332403bb3e9a0681c0ab2512e3
+  SOURCE_REVIEW_SHA: 4568d3e5a64d671e83b6f4f37049131b7000943ce3521986495b88916857cfc5
+  MEDIA_RECEIPT_SHA: cb2db2f214ac4ecbd10cca1e26a71b80c9fe09ba08127617ceaadf586d9a4af0
+  PREPRODUCT_RECEIPT_SHA: 1ce1896b186cd3c7a6ec5540cfb79367aa7b8e95525a30a4a40dca0a925122f8
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  PERFORMER: Nolan North
+  CHARACTER: Benbassat
+  FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  LEASE_ID: lease_151ba8f5efac7d922ea2f8c2
+  WALL_ID: UC-1397
+  CANDIDATE_BRANCH: agent/star-trek-benbassat-candidate-result-v4
+  CLAIM_BRANCH: agent/star-trek-benbassat-claim-result-v1
+  SOURCE_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  MEDIA_BRANCH: agent/star-trek-benbassat-media-result-v1
+  PREPRODUCT_BRANCH: agent/star-trek-benbassat-preproduct-settlement-result-v2
+  RESULT_BRANCH: agent/star-trek-benbassat-independent-review-result-v7
+  OUT: /tmp/star-trek-benbassat-independent-review-v7
+jobs:
+  review:
+    name: independently-review-benbassat-v4-product
+    if: ${{ github.event.head_commit.message == 'Review Star Trek Benbassat candidate v4 with census fallback custody v7' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Freeze candidate and independently inspect the exact product
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git fetch --no-tags origin main "$CANDIDATE_BRANCH" "$CLAIM_BRANCH" "$SOURCE_BRANCH" "$MEDIA_BRANCH" "$PREPRODUCT_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$LIVE_MAIN"
+          test "$(git show -s --format=%T "$LIVE_MAIN")" = "$LIVE_TREE"
+          test "$(git show -s --format=%P "$LIVE_MAIN")" = "$ALICE_MAIN"
+          git diff --name-only "$ALICE_MAIN..$LIVE_MAIN" | LC_ALL=C sort > "$OUT/live-maintenance-paths.txt"
+          printf '%s\n' data/MEDIA-SEARCH-LATEST.json data/journal/media-search.jsonl > "$OUT/expected-maintenance-paths.txt"
+          diff -u "$OUT/expected-maintenance-paths.txt" "$OUT/live-maintenance-paths.txt"
+          candidate_ref="refs/remotes/origin/${CANDIDATE_BRANCH}"
+          claim_ref="refs/remotes/origin/${CLAIM_BRANCH}"
+          test "$(git rev-parse "$candidate_ref")" = "$CANDIDATE_COMMIT"
+          test "$(git show -s --format=%T "$candidate_ref")" = "$CANDIDATE_TREE"
+          test "$(git show -s --format=%P "$candidate_ref")" = "$CLAIM_COMMIT"
+          test "$(git rev-parse "$claim_ref")" = "$CLAIM_COMMIT"
+          test "$(git show -s --format=%T "$claim_ref")" = "$CLAIM_TREE"
+          test "$(git show -s --format=%P "$claim_ref")" = "$ALICE_MAIN"
+          git show "refs/remotes/origin/${SOURCE_BRANCH}:transport/star-trek-benbassat-source-review-v1/source-review.json" > "$OUT/source-review.json"
+          git show "refs/remotes/origin/${MEDIA_BRANCH}:transport/star-trek-benbassat-media-v1/media-receipt.json" > "$OUT/media-receipt.json"
+          git show "refs/remotes/origin/${PREPRODUCT_BRANCH}:transport/star-trek-benbassat-preproduct-settlement-v2/settlement.json" > "$OUT/preproduct-settlement.json"
+          git checkout --detach "$candidate_ref"
+          git clean -fdx
+          cp data/review/adapter-sdk/star-trek-benbassat-candidate.json "$OUT/candidate-receipt.json"
+          git diff-tree --no-commit-id --name-only -r HEAD | LC_ALL=C sort > "$OUT/candidate-paths.txt"
+          npm ci --ignore-scripts
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os
+          out=Path(os.environ['OUT'])
+          def stable(v):
+              if isinstance(v,dict): return {k:stable(v[k]) for k in sorted(v)}
+              if isinstance(v,list): return [stable(x) for x in v]
+              return v
+          def load(name): return json.loads((out/name).read_text())
+          def verify(name,field,omit=()):
+              p=load(name); expected=p[field]; body=dict(p); body.pop(field,None)
+              for key in omit: body.pop(key,None)
+              actual=hashlib.sha256((json.dumps(stable(body),indent=2,ensure_ascii=False)+'\n').encode()).hexdigest()
+              if actual!=expected: raise SystemExit(f'{name} identity mismatch: {actual} != {expected}')
+              return p
+          candidate=verify('candidate-receipt.json','receipt_sha256')
+          source=verify('source-review.json','review_sha256',('artifact',))
+          media_receipt=verify('media-receipt.json','receipt_sha256',('artifact',))
+          preproduct=verify('preproduct-settlement.json','receipt_sha256',('artifact',))
+          expected_ids={
+            'candidate':os.environ['CANDIDATE_RECEIPT_SHA'],
+            'source':os.environ['SOURCE_REVIEW_SHA'],
+            'media':os.environ['MEDIA_RECEIPT_SHA'],
+            'preproduct':os.environ['PREPRODUCT_RECEIPT_SHA'],
+          }
+          actual_ids={'candidate':candidate['receipt_sha256'],'source':source['review_sha256'],'media':media_receipt['receipt_sha256'],'preproduct':preproduct['receipt_sha256']}
+          if actual_ids!=expected_ids: raise SystemExit(f'layer identity drift: {actual_ids}')
+          if candidate.get('transaction')!='STAR-TREK-BENBASSAT-CANDIDATE-V3' or candidate.get('status')!='candidate-ready-for-independent-review': raise SystemExit('candidate transaction or status drifted')
+          if candidate.get('canonical_parent')!=os.environ['ALICE_MAIN'] or candidate.get('canonical_tree')!=os.environ['ALICE_TREE'] or candidate.get('claim_commit')!=os.environ['CLAIM_COMMIT']: raise SystemExit('candidate historical lineage drifted')
+          if candidate.get('publication_base')!={'commit':os.environ['LIVE_MAIN'],'tree':os.environ['LIVE_TREE'],'kind':'product-neutral-media-search-maintenance'}: raise SystemExit('publication base drifted')
+          task=candidate.get('task') or {}
+          required={'id':os.environ['TASK_ID'],'lease_id':os.environ['LEASE_ID'],'performer':os.environ['PERFORMER'],'character':os.environ['CHARACTER'],'source_fingerprint':os.environ['FINGERPRINT'],'status':'resolved','attempts':1,'wall_ids':[os.environ['WALL_ID']]}
+          for key,value in required.items():
+              if task.get(key)!=value: raise SystemExit(f'candidate task {key} drifted: {task.get(key)}')
+          counts={'total':2228,'queued':1797,'resolved':429,'blocked':0,'rejected':2,'in_flight':0}
+          if candidate.get('queue')!=counts: raise SystemExit(f'candidate queue drifted: {candidate.get("queue")}')
+          record=(candidate.get('canonical_record') or {}).get('record') or {}
+          exact={'id':os.environ['WALL_ID'],'actor':os.environ['PERFORMER'],'character':os.environ['CHARACTER'],'production':'Võx','years':'2023','kind':'voice','universe':'Star Trek','designer':'—','transform':2}
+          for key,value in exact.items():
+              if record.get(key)!=value: raise SystemExit(f'record {key} drifted: {record.get(key)}')
+          if 'still' in record or 'portrait' in record: raise SystemExit('record violates honest media absence')
+          boundary=candidate.get('boundary') or {}
+          for key,value in {'off_screen_voiceover':True,'physical_prosthetic_hint_accepted':False,'physical_performance_attributed':False,'prosthetic_performance_attributed':False,'animation_performance_attributed':False,'maker_attribution':'unresolved','transformation_measured':False,'honest_media_absence':True,'cross_facet_substitution':False,'independent_product_review_complete':False,'waterline_cycle_recorded':False,'canonical_mutation':False,'additional_lease_issued':False}.items():
+              if boundary.get(key)!=value: raise SystemExit(f'boundary {key} drifted: {boundary.get(key)}')
+          projection=candidate.get('projection_refresh') or {}; pre=projection.get('precomplete') or {}; terminal=projection.get('terminal') or {}
+          if pre.get('success') is not True or pre.get('mode')!='frozen-project-only' or pre.get('fallback_reason')!='recognized-source-unavailability' or pre.get('source_snapshot_unchanged') is not True: raise SystemExit('precomplete census fallback is not admissible')
+          attempts=pre.get('attempts') or []
+          if len(attempts)!=3 or any(row.get('classification')!='recognized-source-unavailability' or row.get('exit_code')==0 for row in attempts): raise SystemExit('precomplete census attempt ledger drifted')
+          if terminal.get('success') is not True or terminal.get('mode')!='project-only' or terminal.get('source_snapshot_unchanged') is not True: raise SystemExit('terminal census projection is not admissible')
+          for receipt in (pre,terminal):
+              expected=receipt.get('receipt_sha256'); body=dict(receipt); body.pop('receipt_sha256',None)
+              actual=hashlib.sha256((json.dumps(stable(body),indent=2,ensure_ascii=False)+'\n').encode()).hexdigest()
+              if actual!=expected: raise SystemExit('census receipt identity drifted')
+          state=json.loads(Path('data/AUTOPILOT.json').read_text()); trek=[row for row in state['jobs'] if row.get('scope')=='star-trek']; matches=[row for row in trek if row.get('id')==os.environ['TASK_ID']]
+          if len(matches)!=1: raise SystemExit('durable task cardinality drifted')
+          durable=matches[0]
+          if durable.get('status')!='resolved' or durable.get('attempts')!=1 or durable.get('wall_ids')!=[os.environ['WALL_ID']] or durable.get('lease') is not None or durable.get('outcome',{}).get('media_review',{}).get('lease_id')!=os.environ['LEASE_ID']: raise SystemExit('durable task lease custody drifted')
+          durable_counts={'total':len(trek),'queued':sum(x.get('status')=='queued' for x in trek),'resolved':sum(x.get('status')=='resolved' for x in trek),'blocked':sum(x.get('status')=='blocked' for x in trek),'rejected':sum(x.get('status')=='rejected' for x in trek),'in_flight':sum(x.get('status') in {'leased','drafted','merged'} for x in trek)}
+          if durable_counts!=counts: raise SystemExit(f'durable queue drifted: {durable_counts}')
+          specimens=json.loads(Path('data/specimens.json').read_text()); rows=[x for x in specimens if x.get('id')==os.environ['WALL_ID']]
+          if len(rows)!=1 or any(rows[0].get(k)!=v for k,v in exact.items()) or 'still' in rows[0] or 'portrait' in rows[0]: raise SystemExit('primary record drifted')
+          def walk(node):
+              if isinstance(node,dict):
+                  yield node
+                  for value in node.values(): yield from walk(value)
+              elif isinstance(node,list):
+                  for value in node: yield from walk(value)
+          audit=json.loads(Path('data/MEDIA-AUDIT.json').read_text()); facets=[x for x in walk(audit) if x.get('wall_id')==os.environ['WALL_ID'] and x.get('side') in {'still','portrait'}]
+          if len(facets)!=2 or {x.get('side') for x in facets}!={'still','portrait'}: raise SystemExit('media facet cardinality drifted')
+          for facet in facets:
+              if facet.get('status')!='absent' or facet.get('asset') is not None or facet.get('votes')!=[] or facet.get('claims')!={}: raise SystemExit('invalid absent media facet')
+          sources=json.loads(Path('data/SOURCES.json').read_text()); source_rows=[x for x in sources if x.get('id')==os.environ['WALL_ID']]
+          if len(source_rows)!=1 or source_rows[0].get('actor')!=os.environ['PERFORMER'] or source_rows[0].get('character')!=os.environ['CHARACTER'] or source_rows[0].get('still') is not None or source_rows[0].get('portrait') is not None: raise SystemExit('SOURCES boundary drifted')
+          if list(Path('images').glob('uc-1397-*')): raise SystemExit('unexpected Benbassat image bytes')
+          paths=(out/'candidate-paths.txt').read_text().splitlines(); forbidden=[p for p in paths if p.startswith('.github/') or p.startswith('transport/') or '__pycache__' in p or p.endswith('.pyc') or p.startswith('images/uc-1397-')]
+          if forbidden: raise SystemExit(f'candidate contains forbidden paths: {forbidden}')
+          evidence={'task':durable,'queue':durable_counts,'record':rows[0],'facets':facets,'source_row':source_rows[0],'candidate_paths':paths,'projection_refresh':projection,'identities':actual_ids}
+          (out/'exact-product-evidence.json').write_text(json.dumps(stable(evidence),indent=2,ensure_ascii=False)+'\n')
+          PY
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
+          test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$LIVE_MAIN"
+      - name: Run independent repository gates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node scripts/validate.mjs | tee "$OUT/repository-validate.log"
+          npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate.log"
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate.log"
+          npm run autopilot:fixtures | tee "$OUT/autopilot-fixtures.log"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after.json"
+          test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$LIVE_MAIN"
+      - name: Write independent review receipt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from datetime import datetime,timezone
+          from pathlib import Path
+          import hashlib,json,os
+          out=Path(os.environ['OUT'])
+          def stable(v):
+              if isinstance(v,dict): return {k:stable(v[k]) for k in sorted(v)}
+              if isinstance(v,list): return [stable(x) for x in v]
+              return v
+          candidate=json.loads((out/'candidate-receipt.json').read_text()); evidence=json.loads((out/'exact-product-evidence.json').read_text())
+          review={'version':7,'transaction':'STAR-TREK-BENBASSAT-INDEPENDENT-REVIEW-V7','reviewed_at':datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z'),'reviewer':'chatgpt-benbassat-independent-second-desk-v7','reviewed_role':'second-desk','verdict':'pass','canonical_parent':os.environ['ALICE_MAIN'],'publication_base':{'commit':os.environ['LIVE_MAIN'],'tree':os.environ['LIVE_TREE'],'kind':'product-neutral-media-search-maintenance'},'candidate':{'branch':os.environ['CANDIDATE_BRANCH'],'commit':os.environ['CANDIDATE_COMMIT'],'tree':os.environ['CANDIDATE_TREE'],'receipt_sha256':candidate['receipt_sha256']},'claim':{'branch':os.environ['CLAIM_BRANCH'],'commit':os.environ['CLAIM_COMMIT'],'tree':os.environ['CLAIM_TREE'],'lease_id':os.environ['LEASE_ID']},'task':{'id':os.environ['TASK_ID'],'lease_id':os.environ['LEASE_ID'],'performer':os.environ['PERFORMER'],'character':os.environ['CHARACTER'],'source_fingerprint':os.environ['FINGERPRINT'],'status':'resolved','wall_id':os.environ['WALL_ID']},'queue':evidence['queue'],'projection_refresh':evidence['projection_refresh'],'gates':{'repository_validate':0,'media_gate':0,'thesis_validate':0,'autopilot_fixtures':0},'evidence_sha256':hashlib.sha256((out/'exact-product-evidence.json').read_bytes()).hexdigest(),'boundary':{'production':'Star Trek: Picard','episode':'Võx','year':'2023','performance_mode':'voice-only','off_screen_voiceover':True,'queued_physical_prosthetic_hint_rejected':True,'physical_performance_attributed':False,'prosthetic_performance_attributed':False,'animation_performance_attributed':False,'maker_attribution':'unresolved','transformation_measured':False,'honest_media_absence':True,'cross_facet_substitution':False,'originating_lease_verified_in':'task.outcome.media_review.lease_id','census_refresh_verified':True,'waterline_cycle_recorded':False,'canonical_mutation':False,'lease_mutation':False,'additional_lease_issued':False}}
+          body=json.dumps(stable(review),indent=2,ensure_ascii=False)+'\n'; review['review_sha256']=hashlib.sha256(body.encode()).hexdigest(); (out/'independent-review.json').write_text(json.dumps(stable(review),indent=2,ensure_ascii=False)+'\n')
+          PY
+          jq -e --arg task "$TASK_ID" --arg lease "$LEASE_ID" --arg wall "$WALL_ID" '.transaction=="STAR-TREK-BENBASSAT-INDEPENDENT-REVIEW-V7" and .verdict=="pass" and .task.id==$task and .task.lease_id==$lease and .task.status=="resolved" and .task.wall_id==$wall and .queue=={total:2228,queued:1797,resolved:429,blocked:0,rejected:2,in_flight:0} and .publication_base.commit==env.LIVE_MAIN and .projection_refresh.precomplete.success==true and .projection_refresh.precomplete.source_snapshot_unchanged==true and .projection_refresh.terminal.success==true and .projection_refresh.terminal.mode=="project-only" and .boundary.originating_lease_verified_in=="task.outcome.media_review.lease_id" and .boundary.census_refresh_verified==true and .boundary.canonical_mutation==false and .boundary.lease_mutation==false and .boundary.additional_lease_issued==false' "$OUT/independent-review.json" >/dev/null
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+      - name: Upload independent review evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-independent-review-v7
+          path: /tmp/star-trek-benbassat-independent-review-v7/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish immutable independent review result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq --argjson id "$ARTIFACT_ID" --arg digest "$ARTIFACT_DIGEST" '.artifact={id:$id,digest:$digest}' "$OUT/independent-review.json" > "$OUT/review.tmp"
+          mv "$OUT/review.tmp" "$OUT/independent-review.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-benbassat-independent-review-v7
+          git config user.email undercast-benbassat-independent-review-v7@users.noreply.github.com
+          git checkout --orphan benbassat-independent-review-result-v7
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-independent-review-v7
+          cp -a "$OUT"/. transport/star-trek-benbassat-independent-review-v7/
+          git add transport/star-trek-benbassat-independent-review-v7
+          git commit -m 'Record Star Trek Benbassat independent review v7'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
