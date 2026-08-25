@@ -1,0 +1,209 @@
+name: star-trek-benbassat-candidate-recovery-v4-executor-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-candidate-recovery-v4-executor-v2
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-candidate-recovery-v4-executor-v2
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  WALL_ID: UC-1397
+  EXPECTED_LEASE: lease_151ba8f5efac7d922ea2f8c2
+  CLAIM_BRANCH: agent/star-trek-benbassat-claim-result-v1
+  SOURCE_REVIEW_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  SOURCE_REVIEW_PATH: transport/star-trek-benbassat-source-review-v1/source-review.json
+  MEDIA_BRANCH: agent/star-trek-benbassat-media-result-v1
+  MEDIA_PATH: transport/star-trek-benbassat-media-v1/media-receipt.json
+  SETTLEMENT_BRANCH: agent/star-trek-benbassat-preproduct-settlement-result-v2
+  SETTLEMENT_PATH: transport/star-trek-benbassat-preproduct-settlement-v2/settlement.json
+  RESULT_BRANCH: agent/star-trek-benbassat-candidate-result-v4
+  OUT: /tmp/star-trek-benbassat-candidate-v4
+  REVIEW_ROOT: /tmp/star-trek-benbassat-candidate-v4/source-review
+  MEDIA_ROOT: /tmp/star-trek-benbassat-candidate-v4/media-layer
+  SETTLEMENT_ROOT: /tmp/star-trek-benbassat-candidate-v4/preproduct-settlement
+  LIFECYCLE_SOURCE: .github/recovery/star-trek-benbassat-candidate-recovery-v3/candidate-lifecycle.py
+  BATCH_SOURCE: .github/recovery/star-trek-benbassat-candidate-recovery-v3/batch.json
+  LIFECYCLE: /tmp/star-trek-benbassat-candidate-lifecycle-v4.py
+  BATCH: /tmp/star-trek-benbassat-batch-v4.json
+  SEALED_WORKFLOW: .github/workflows/star-trek-benbassat-candidate-recovery-v4.yml
+  SEALED_WORKFLOW_BLOB: dbd2745457124bcd741de002017690eccd68df9b
+  RUN_ROOT: /tmp/star-trek-benbassat-v4-patched-runs
+
+jobs:
+  execute:
+    name: execute-pinned-v4-with-settlement-selector-patch
+    if: ${{ github.event.head_commit.message == 'Execute patched Star Trek Benbassat candidate recovery v4' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Extract the five sealed run blocks and patch only settlement selectors
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f "$SEALED_WORKFLOW"
+          test "$(git hash-object "$SEALED_WORKFLOW")" = "$SEALED_WORKFLOW_BLOB"
+          rm -rf "$RUN_ROOT"
+          mkdir -p "$RUN_ROOT"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+
+          source = Path(os.environ['SEALED_WORKFLOW'])
+          target = Path(os.environ['RUN_ROOT'])
+          lines = source.read_text(encoding='utf-8').splitlines()
+          blocks = []
+          index = 0
+          while index < len(lines):
+              line = lines[index]
+              if line.startswith('      - name: '):
+                  name = line[len('      - name: '):]
+                  cursor = index + 1
+                  run_start = None
+                  while cursor < len(lines) and not lines[cursor].startswith('      - '):
+                      if lines[cursor] == '        run: |':
+                          run_start = cursor + 1
+                          break
+                      cursor += 1
+                  if run_start is not None:
+                      cursor = run_start
+                      body = []
+                      while cursor < len(lines) and not lines[cursor].startswith('      - '):
+                          current = lines[cursor]
+                          if current.startswith('          '):
+                              body.append(current[10:])
+                          elif current == '':
+                              body.append('')
+                          else:
+                              break
+                          cursor += 1
+                      blocks.append((name, '\n'.join(body) + '\n'))
+                      index = cursor
+                      continue
+              index += 1
+
+          expected_names = [
+              'Freeze lifecycle and verify immutable corrected layers',
+              'Submit, grow, and reconcile the exact leased object',
+              'Rebuild projections before the completion invariant and resolve the media review',
+              'Rebuild terminal projections and qualify the candidate',
+              'Squash and publish the corrected candidate result',
+          ]
+          actual_names = [name for name, _ in blocks]
+          if actual_names != expected_names:
+              raise SystemExit(f'run-block sequence drifted: {actual_names}')
+
+          patched = []
+          for position, (name, body) in enumerate(blocks, 1):
+              if position == 1:
+                  original = body
+                  body = body.replace('.media.still.status', '.layers.media.still.status')
+                  body = body.replace('.media.portrait.status', '.layers.media.portrait.status')
+                  body = body.replace('and .media.honest_absence == true\n', '')
+                  body = body.replace('.boundary.media_absence_honest', '.boundary.honest_media_absence')
+                  if body == original:
+                      raise SystemExit('settlement selector patch made no change')
+                  required = (
+                      '.layers.media.still.status',
+                      '.layers.media.portrait.status',
+                      '.boundary.honest_media_absence',
+                  )
+                  if any(token not in body for token in required):
+                      raise SystemExit('patched settlement selector is incomplete')
+                  forbidden = (
+                      '.media.still.status',
+                      '.media.portrait.status',
+                      '.media.honest_absence',
+                      '.boundary.media_absence_honest',
+                  )
+                  if any(token in body for token in forbidden):
+                      raise SystemExit('stale settlement selector remains')
+              path = target / f'{position:02d}.sh'
+              path.write_text('#!/usr/bin/env bash\n' + body, encoding='utf-8')
+              path.chmod(0o755)
+              patched.append({
+                  'position': position,
+                  'name': name,
+                  'path': str(path),
+                  'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+              })
+
+          receipt = {
+              'version': 2,
+              'transaction': 'STAR-TREK-BENBASSAT-CANDIDATE-V4-SELECTOR-PATCH',
+              'sealed_workflow': str(source),
+              'sealed_git_blob': os.environ['SEALED_WORKFLOW_BLOB'],
+              'patches': [
+                  {'from': '.media.still.status', 'to': '.layers.media.still.status'},
+                  {'from': '.media.portrait.status', 'to': '.layers.media.portrait.status'},
+                  {'from': '.media.honest_absence', 'to': 'removed; boundary.honest_media_absence is authoritative'},
+                  {'from': '.boundary.media_absence_honest', 'to': '.boundary.honest_media_absence'},
+              ],
+              'run_blocks': patched,
+              'canonical_mutation': False,
+              'lease_mutation': False,
+          }
+          (target / 'patch-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
+          PY
+
+          for script in "$RUN_ROOT"/[0-9][0-9].sh; do
+            bash -n "$script"
+          done
+          find "$RUN_ROOT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$RUN_ROOT/manifest.sha256"
+
+      - name: Execute the corrected lifecycle without changing its product contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : > "$GITHUB_ENV"
+          for script in "$RUN_ROOT"/[0-9][0-9].sh; do
+            printf 'executor: running %s\n' "$script"
+            bash "$script"
+            if test -s "$GITHUB_ENV"; then
+              while IFS='=' read -r name value; do
+                case "$name" in
+                  ''|'#'*) continue ;;
+                esac
+                export "$name=$value"
+              done < "$GITHUB_ENV"
+            fi
+          done
+
+      - name: Upload patched candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-candidate-recovery-v4-executor-v2-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-benbassat-candidate-v4/
+            /tmp/star-trek-benbassat-v4-patched-runs/
+            /tmp/star-trek-benbassat-candidate-lifecycle-v4.py
+            /tmp/star-trek-benbassat-batch-v4.json
+          if-no-files-found: warn
+          retention-days: 30
