@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+RUN_STEPS_CACHE="/tmp/star-trek-benbassat-candidate-v7-sealed-steps"
+rm -rf "$RUN_STEPS_CACHE"
+mkdir -p "$RUN_STEPS_CACHE"
+cp "$STEPS_ROOT"/[0-9][0-9].sh "$RUN_STEPS_CACHE"/
 rm -rf "$OUT"
 mkdir -p "$REVIEW_ROOT" "$MEDIA_ROOT" "$SETTLEMENT_ROOT"
 cp "$LIFECYCLE_SOURCE" "$LIFECYCLE"
@@ -126,7 +130,9 @@ test "$(git show -s --format=%P "$claim_ref")" = "$EXPECTED_MAIN"
 echo "CLAIM_COMMIT=$claim_commit" >> "$GITHUB_ENV"
 git checkout --detach "$claim_ref"
 git clean -fdx
-test -z "$(git status --porcelain)"
+mkdir -p "$STEPS_ROOT"
+cp "$RUN_STEPS_CACHE"/[0-9][0-9].sh "$STEPS_ROOT"/
+test -z "$(git status --porcelain --untracked-files=no)"
 cp data/review/adapter-sdk/star-trek-benbassat-claim.json "$OUT/claim-receipt.json"
 jq -e \
   --arg task "$TASK_ID" \
