@@ -172,3 +172,4 @@ npm ci --ignore-scripts
 cp "$BATCH" "$OUT/batch.json"
 gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
 test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$LIVE_MAIN"
+

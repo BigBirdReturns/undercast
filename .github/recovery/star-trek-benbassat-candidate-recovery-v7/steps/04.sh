@@ -47,3 +47,4 @@ jq -e --arg task "$TASK_ID" --arg wall "$WALL_ID" --arg lease "$EXPECTED_LEASE" 
 gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after.json"
 test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$LIVE_MAIN"
 git diff --check
+

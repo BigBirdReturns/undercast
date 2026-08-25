@@ -21,3 +21,4 @@ jq -n --arg commit "$candidate_commit" --arg tree "$candidate_tree" --arg parent
   > "$OUT/candidate-commit.json"
 find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
 git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
+

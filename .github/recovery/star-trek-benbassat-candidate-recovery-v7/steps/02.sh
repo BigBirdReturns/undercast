@@ -22,3 +22,4 @@ node - <<'NODE'
 const fs=require('fs'); const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json')); const task=state.jobs.find(x=>x.id===process.env.TASK_ID); fs.writeFileSync(process.env.OUT+'/post-sync-state.json',JSON.stringify({task},null,2)+'\n'); if(!task||task.status!=='merged'||JSON.stringify(task.wall_ids)!=='["UC-1397"]'||task.lease!=null||task.outcome?.lease_id!==process.env.EXPECTED_LEASE) throw Error('Benbassat did not reconcile to merged under the original outcome lease');
 NODE
 python3 "$LIFECYCLE" postgrow
+
