@@ -1,0 +1,7 @@
+transaction=STAR-TREK-BENBASSAT-CANDIDATE-V3-MEDIA-DERIVATION-PATCH-V1
+expected_main=ed79424013b92460d16c01cad4e590eca01e6bff
+target_branch=agent/star-trek-benbassat-candidate-recovery-v3
+target_blob=7e02ce97a8d57519da9b2bea6df472c793171a86
+result_branch_absent=agent/star-trek-benbassat-candidate-result-v3
+canonical_mutation=false
+lease_mutation=false
