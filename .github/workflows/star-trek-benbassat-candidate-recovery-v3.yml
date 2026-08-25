@@ -1,0 +1,202 @@
+name: star-trek-benbassat-candidate-recovery-v3
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-candidate-recovery-v3
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-candidate-recovery-v3
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  ALICE_WALL_ID: UC-1396
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  WALL_ID: UC-1397
+  CLAIM_BRANCH: agent/star-trek-benbassat-claim-result-v1
+  SOURCE_REVIEW_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  SOURCE_REVIEW_PATH: transport/star-trek-benbassat-source-review-v1/source-review.json
+  MEDIA_BRANCH: agent/star-trek-benbassat-media-result-v1
+  MEDIA_PATH: transport/star-trek-benbassat-media-v1/media-receipt.json
+  SETTLEMENT_BRANCH: agent/star-trek-benbassat-preproduct-settlement-result-v2
+  SETTLEMENT_PATH: transport/star-trek-benbassat-preproduct-settlement-v2/settlement.json
+  RESULT_BRANCH: agent/star-trek-benbassat-candidate-result-v3
+  OUT: /tmp/star-trek-benbassat-candidate-v3
+  REVIEW_ROOT: /tmp/star-trek-benbassat-candidate-v3/source-review
+  MEDIA_ROOT: /tmp/star-trek-benbassat-candidate-v3/media-layer
+  SETTLEMENT_ROOT: /tmp/star-trek-benbassat-candidate-v3/preproduct-settlement
+  LIFECYCLE_SOURCE: .github/recovery/star-trek-benbassat-candidate-recovery-v3/candidate-lifecycle.py
+  BATCH_SOURCE: .github/recovery/star-trek-benbassat-candidate-recovery-v3/batch.json
+  LIFECYCLE: /tmp/star-trek-benbassat-candidate-lifecycle-v3.py
+  BATCH: /tmp/star-trek-benbassat-batch-v3.json
+
+jobs:
+  stage:
+    name: stage-native-benbassat-candidate
+    if: ${{ github.event.head_commit.message == 'Run native Star Trek Benbassat candidate v3' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Freeze lifecycle and exact lease batch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cp "$LIFECYCLE_SOURCE" "$LIFECYCLE"
+          cp "$BATCH_SOURCE" "$BATCH"
+          chmod +x "$LIFECYCLE"
+          python3 -m py_compile "$LIFECYCLE"
+          test "$(sha256sum "$BATCH" | awk '{print $1}')" = 3609c0bd26a68a4fe3ec93f1fddc5ea230e64e329ac5d92fdb1205ec21c35519
+          sha256sum "$LIFECYCLE" "$BATCH" > /tmp/star-trek-benbassat-lifecycle-v3.sha256
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify corrected layers and checkout the durable claim
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$REVIEW_ROOT" "$MEDIA_ROOT" "$SETTLEMENT_ROOT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git fetch --no-tags origin main "$CLAIM_BRANCH" "$SOURCE_REVIEW_BRANCH" "$MEDIA_BRANCH" "$SETTLEMENT_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          source_ref="refs/remotes/origin/${SOURCE_REVIEW_BRANCH}"
+          media_ref="refs/remotes/origin/${MEDIA_BRANCH}"
+          settlement_ref="refs/remotes/origin/${SETTLEMENT_BRANCH}"
+          claim_ref="refs/remotes/origin/${CLAIM_BRANCH}"
+          git show "${source_ref}:${SOURCE_REVIEW_PATH}" > "$REVIEW_ROOT/source-review.json"
+          git show "${media_ref}:${MEDIA_PATH}" > "$MEDIA_ROOT/media-receipt.json"
+          git show "${settlement_ref}:${SETTLEMENT_PATH}" > "$SETTLEMENT_ROOT/settlement.json"
+          jq -e '.verdict == "pass" and .production_source.series == "Star Trek: Picard" and .production_source.title == "Võx" and .adjudication.performance_mode == "voice-only"' "$REVIEW_ROOT/source-review.json" >/dev/null
+          jq -e '.status == "complete" and .task.performance_mode == "voice-only" and .facets.still.status == "absent" and .facets.portrait.status == "absent"' "$MEDIA_ROOT/media-receipt.json" >/dev/null
+          jq -e '.status == "preproduct-ready" and .adjudication.production == "Star Trek: Picard" and .adjudication.episode == "Võx" and .adjudication.performance_mode == "voice-only" and .boundary.single_lease_durable == true and .boundary.honest_media_absence == true' "$SETTLEMENT_ROOT/settlement.json" >/dev/null
+          claim_commit="$(git rev-parse "$claim_ref")"
+          test "$(git show -s --format=%P "$claim_ref")" = "$EXPECTED_MAIN"
+          echo "CLAIM_COMMIT=$claim_commit" >> "$GITHUB_ENV"
+          git checkout --detach "$claim_ref"
+          test "$(jq -r .lease.id data/review/adapter-sdk/star-trek-benbassat-claim.json)" = "$(jq -r .task.lease_id "$SETTLEMENT_ROOT/settlement.json")"
+          npm ci --ignore-scripts
+          cp /tmp/star-trek-benbassat-lifecycle-v3.sha256 "$OUT/lifecycle.sha256"
+          cp "$BATCH" "$OUT/batch.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
+          test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$EXPECTED_MAIN"
+
+      - name: Submit the native draft through the exact lease batch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 "$LIFECYCLE" prepare
+          command="node scripts/autopilot.mjs submit --batch '$BATCH' --input '$OUT/results.json'"
+          printf '%s\n' "$command" > "$OUT/submit-command.txt"
+          bash -lc "$command" | tee "$OUT/submit.log"
+          node - <<'NODE'
+          const fs=require('fs'); const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json')); const task=state.jobs.find(x=>x.id===process.env.TASK_ID); const drafts=JSON.parse(fs.readFileSync('data/drafts.json')); if(!task||task.status!=='drafted'||task.outcome?.lease_id!=='lease_151ba8f5efac7d922ea2f8c2') throw Error('native submit did not draft Benbassat'); if(drafts.length!==1||drafts[0]?._autopilot?.task_id!==process.env.TASK_ID) throw Error('bounded draft ledger mismatch');
+          NODE
+
+      - name: Grow the exact draft and reconcile it to merged
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          command="node scripts/grow.mjs --drafts"
+          printf '%s\n' "$command" > "$OUT/grow-command.txt"
+          bash -lc "$command" | tee "$OUT/grow.log"
+          node - <<'NODE'
+          const fs=require('fs'); const specimens=JSON.parse(fs.readFileSync('data/specimens.json')); const drafts=JSON.parse(fs.readFileSync('data/drafts.json')); const rows=specimens.filter(x=>x.id===process.env.WALL_ID); if(rows.length!==1||rows[0].actor!==process.env.EXPECTED_PERFORMER||rows[0].character!==process.env.EXPECTED_CHARACTER) throw Error('grow did not create exact Benbassat wall record'); if(drafts.length!==0) throw Error('grow did not consume the draft');
+          NODE
+          command="node scripts/autopilot.mjs sync --scope star-trek"
+          printf '%s\n' "$command" > "$OUT/sync-command.txt"
+          bash -lc "$command" | tee "$OUT/autopilot-sync.log"
+          node - <<'NODE'
+          const fs=require('fs'); const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json')); const task=state.jobs.find(x=>x.id===process.env.TASK_ID); if(!task||task.status!=='merged'||JSON.stringify(task.wall_ids)!=='["UC-1397"]') throw Error('Benbassat did not reconcile to merged');
+          NODE
+          python3 "$LIFECYCLE" postgrow
+
+      - name: Synchronize source custody and complete post-merge media review
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm run sync:sources | tee "$OUT/sources-sync.log"
+          python3 "$LIFECYCLE" stamp-sources
+          npm run media:audit -- sync --scope star-trek | tee "$OUT/media-sync.log"
+          npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate-before-complete.log"
+          command="node scripts/autopilot.mjs complete --input '$OUT/media-review.json'"
+          printf '%s\n' "$command" > "$OUT/complete-command.txt"
+          bash -lc "$command" | tee "$OUT/complete.log"
+          node - <<'NODE'
+          const fs=require('fs'); const state=JSON.parse(fs.readFileSync('data/AUTOPILOT.json')); const trek=state.jobs.filter(x=>x.scope==='star-trek'); const task=trek.find(x=>x.id===process.env.TASK_ID); const counts={total:trek.length,queued:trek.filter(x=>x.status==='queued').length,resolved:trek.filter(x=>x.status==='resolved').length,blocked:trek.filter(x=>x.status==='blocked').length,rejected:trek.filter(x=>x.status==='rejected').length,in_flight:trek.filter(x=>['leased','drafted','merged'].includes(x.status)).length}; if(!task||task.status!=='resolved'||JSON.stringify(task.wall_ids)!=='["UC-1397"]'||task.outcome?.kind!=='audited-wall') throw Error('post-merge media review did not resolve Benbassat'); if(JSON.stringify(counts)!==JSON.stringify({total:2228,queued:1797,resolved:429,blocked:0,rejected:2,in_flight:0})) throw Error('resolved queue drifted: '+JSON.stringify(counts)); fs.writeFileSync(process.env.OUT+'/resolved-state.json',JSON.stringify({task,counts},null,2)+'\n');
+          NODE
+
+      - name: Rebuild permanent projections and qualify the candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm run credits | tee "$OUT/credits.log"
+          npm run sync:sources | tee "$OUT/sources-sync-after.log"
+          python3 "$LIFECYCLE" stamp-sources
+          npm run media:audit -- sync --scope star-trek | tee "$OUT/media-sync-after.log"
+          npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate-after.log"
+          node scripts/census.mjs | tee "$OUT/census.log"
+          npm run build:ferengi | tee "$OUT/build-ferengi.log"
+          npm run build:species | tee "$OUT/build-species.log"
+          npm run build:changelings | tee "$OUT/build-changelings.log"
+          node scripts/shard.mjs | tee "$OUT/shard.log"
+          npm run build:contract | tee "$OUT/build-contract.log"
+          npm run build:site | tee "$OUT/build-site.log"
+          python3 "$LIFECYCLE" receipt
+          npm run adapter:write | tee "$OUT/adapter-write.log"
+          node scripts/validate.mjs | tee "$OUT/repository-validate.log"
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate.log"
+          node scripts/thesis-rails.mjs next --json > "$OUT/thesis-next.json"
+          npm run autopilot:fixtures | tee "$OUT/autopilot-fixtures.log"
+          jq -e --arg task "$TASK_ID" --arg wall "$WALL_ID" '.transaction == "STAR-TREK-BENBASSAT-CANDIDATE-V3" and .status == "candidate-ready-for-independent-review" and .task.id == $task and .task.status == "resolved" and .task.wall_ids == [$wall] and .queue.resolved == 429 and .queue.in_flight == 0 and .source_review.production == "Star Trek: Picard" and .source_review.episode == "Võx" and .source_review.performance_mode == "voice-only" and .boundary.honest_media_absence == true and .boundary.canonical_mutation == false and .boundary.additional_lease_issued == false' "$OUT/candidate-receipt.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after.json"
+          test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$EXPECTED_MAIN"
+          git diff --check
+
+      - name: Squash and publish the corrected candidate branch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git reset --soft "$CLAIM_COMMIT"
+          git add -A
+          git diff --cached --name-only | LC_ALL=C sort > "$OUT/candidate-paths.txt"
+          test -s "$OUT/candidate-paths.txt"
+          test "$(grep -c '^data/review/adapter-sdk/star-trek-benbassat-candidate.json$' "$OUT/candidate-paths.txt")" = 1
+          test "$(grep -c '^images/uc-1397-' "$OUT/candidate-paths.txt" || true)" = 0
+          git config user.name undercast-benbassat-candidate-v3
+          git config user.email undercast-benbassat-candidate-v3@users.noreply.github.com
+          git commit -m 'Star Trek: stage corrected Benbassat candidate v3'
+          candidate_commit="$(git rev-parse HEAD)"; candidate_tree="$(git show -s --format=%T HEAD)"
+          test "$(git show -s --format=%P HEAD)" = "$CLAIM_COMMIT"
+          jq -n --arg commit "$candidate_commit" --arg tree "$candidate_tree" --arg parent "$CLAIM_COMMIT" --arg task "$TASK_ID" --arg wall "$WALL_ID" '{version:3,transaction:"STAR-TREK-BENBASSAT-CANDIDATE-PUBLICATION-V3",commit:$commit,tree:$tree,parent:$parent,task_id:$task,wall_id:$wall,canonical_mutation:false,independent_review_pending:true,waterline_pending:true}' > "$OUT/candidate-commit.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+      - name: Upload native Benbassat candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-candidate-recovery-v3-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-benbassat-candidate-v3/
+            /tmp/star-trek-benbassat-candidate-lifecycle-v3.py
+            /tmp/star-trek-benbassat-batch-v3.json
+          if-no-files-found: warn
+          retention-days: 30
