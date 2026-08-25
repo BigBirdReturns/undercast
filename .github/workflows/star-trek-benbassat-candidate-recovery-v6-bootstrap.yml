@@ -1,0 +1,121 @@
+name: star-trek-benbassat-candidate-recovery-v6-bootstrap
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-candidate-recovery-v6
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-candidate-recovery-v6
+  cancel-in-progress: false
+
+env:
+  PACKAGE_SHA256: 887808b16e16ea2d3d634baf3d4d8f4718ec3c71dab1971285383d9d7e5eb881
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  EXPECTED_CLAIM_COMMIT: 0a7e2ed0c1fa7d97b1feb9c0b7e3ef78fd4e5ca2
+  EXPECTED_CLAIM_TREE: 63802f7e11f19f7f5ffc5e8093c9866e0429813c
+  EXPECTED_SETTLEMENT_SHA: 1ce1896b186cd3c7a6ec5540cfb79367aa7b8e95525a30a4a40dca0a925122f8
+  EXPECTED_SOURCE_REVIEW_SHA: 4568d3e5a64d671e83b6f4f37049131b7000943ce3521986495b88916857cfc5
+  EXPECTED_MEDIA_RECEIPT_SHA: cb2db2f214ac4ecbd10cca1e26a71b80c9fe09ba08127617ceaadf586d9a4af0
+  EXPECTED_CLAIM_RECEIPT_SHA: 25def3142f4c196f45c1a1d2e99e7d4852ba05d859f11d15ba22aace3cdc883b
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  EXPECTED_LEASE: lease_151ba8f5efac7d922ea2f8c2
+  WALL_ID: UC-1397
+  ALICE_WALL_ID: UC-1396
+  CLAIM_BRANCH: agent/star-trek-benbassat-claim-result-v1
+  SOURCE_REVIEW_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  SOURCE_REVIEW_PATH: transport/star-trek-benbassat-source-review-v1/source-review.json
+  MEDIA_BRANCH: agent/star-trek-benbassat-media-result-v1
+  MEDIA_PATH: transport/star-trek-benbassat-media-v1/media-receipt.json
+  SETTLEMENT_BRANCH: agent/star-trek-benbassat-preproduct-settlement-result-v2
+  SETTLEMENT_PATH: transport/star-trek-benbassat-preproduct-settlement-v2/settlement.json
+  RESULT_BRANCH: agent/star-trek-benbassat-candidate-result-v4
+  OUT: /tmp/star-trek-benbassat-candidate-v6
+  REVIEW_ROOT: /tmp/star-trek-benbassat-candidate-v6/source-review
+  MEDIA_ROOT: /tmp/star-trek-benbassat-candidate-v6/media-layer
+  SETTLEMENT_ROOT: /tmp/star-trek-benbassat-candidate-v6/preproduct-settlement
+  LIFECYCLE: /tmp/star-trek-benbassat-candidate-lifecycle-v6.py
+  BATCH: /tmp/star-trek-benbassat-batch-v6.json
+
+jobs:
+  stage:
+    name: stage-one-corrected-benbassat-candidate
+    if: ${{ github.event.head_commit.message == 'Run Star Trek Benbassat candidate recovery v6' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Reconstruct and execute the sealed v6 carrier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          PARTS=.github/recovery/star-trek-benbassat-candidate-recovery-v6-bootstrap
+          rm -rf /tmp/benbassat-v6-package /tmp/benbassat-v6-package.zip /tmp/benbassat-v6-package.b64
+          mkdir -p /tmp/benbassat-v6-package
+          cat "$PARTS"/archive.b64.part.* > /tmp/benbassat-v6-package.b64
+          base64 -d /tmp/benbassat-v6-package.b64 > /tmp/benbassat-v6-package.zip
+          test "$(sha256sum /tmp/benbassat-v6-package.zip | awk '{print $1}')" = "$PACKAGE_SHA256"
+          unzip -q /tmp/benbassat-v6-package.zip -d /tmp/benbassat-v6-package
+          PKG=/tmp/benbassat-v6-package/star-trek-benbassat-candidate-recovery-v6
+          test -d "$PKG"
+          (
+            cd "$PKG"
+            sha256sum -c manifest.sha256
+          )
+          LIFECYCLE_SOURCE="$PKG/.github/recovery/star-trek-benbassat-candidate-recovery-v6/candidate-lifecycle.py"
+          BATCH_SOURCE="$PKG/.github/recovery/star-trek-benbassat-candidate-recovery-v6/batch.json"
+          STEPS_ROOT="$PKG/.github/recovery/star-trek-benbassat-candidate-recovery-v6/steps"
+          export LIFECYCLE_SOURCE BATCH_SOURCE STEPS_ROOT
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          path = Path(os.environ['LIFECYCLE_SOURCE'])
+          compile(path.read_text(encoding='utf-8'), str(path), 'exec')
+          PY
+          for script in "$STEPS_ROOT"/[0-9][0-9].sh; do
+            bash -n "$script"
+          done
+          : > "$GITHUB_ENV"
+          for script in "$STEPS_ROOT"/[0-9][0-9].sh; do
+            printf 'bootstrap: running %s\n' "$script"
+            bash "$script"
+            if test -s "$GITHUB_ENV"; then
+              while IFS='=' read -r name value; do
+                case "$name" in
+                  ''|'#'*) continue ;;
+                esac
+                export "$name=$value"
+              done < "$GITHUB_ENV"
+            fi
+          done
+
+      - name: Upload candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-candidate-recovery-v6-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-benbassat-candidate-v6/
+            /tmp/star-trek-benbassat-candidate-lifecycle-v6.py
+            /tmp/star-trek-benbassat-batch-v6.json
+            /tmp/benbassat-v6-package.zip
+          if-no-files-found: warn
+          retention-days: 30
