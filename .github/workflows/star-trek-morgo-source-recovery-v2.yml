@@ -1,0 +1,402 @@
+name: star-trek-morgo-source-recovery-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-morgo-source-recovery-v2
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-morgo-source-recovery-v2
+  cancel-in-progress: false
+
+env:
+  LIVE_MAIN: 5e89a0ba59f36feae7986a9260b8fa17a824a8b7
+  LIVE_TREE: 0819bd9ace59e2d8cf8721a5acd1f5de5498cd87
+  BENBASSAT_PRODUCT: 5afac948405d67c94090f2da55a510689e5eb583
+  BENBASSAT_TREE: 639b57c87ca23e895ec730099c0ce937eb1b88da
+  CLAIM_BRANCH: agent/star-trek-morgo-claim-result-v1
+  CLAIM_COMMIT: 645b066b25309e1e8bdc2f13f64b8a04f95bfa96
+  CLAIM_TREE: 408a69a0af29dea5052db22b564f63939c43f7a8
+  CLAIM_RECEIPT_SHA: 94d8428b9293ce4902064843cc33e794a59a8003beda3ebfeef9c1ab5b56390b
+  TASK_ID: ap_a7fb29c5cce85c86708ea0e6
+  EXPECTED_PERFORMER: Fred Tatasciore
+  EXPECTED_CHARACTER: Morgo
+  EXPECTED_FINGERPRINT: 279c816ebd1b83899f5b257f7880df5734bb855f4206c2fc92c5278c9370ff46
+  EXPECTED_LEASE: lease_f2b94e85b2cb40d4ac8a52e9
+  RESULT_BRANCH: agent/star-trek-morgo-source-result-v2
+  OUT: /tmp/star-trek-morgo-source-v2
+
+jobs:
+  freeze:
+    name: freeze-claimed-morgo-source-without-product-mutation
+    if: ${{ github.event.head_commit.message == 'Freeze claimed Star Trek Morgo source v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Verify live maintenance head and exact Morgo claim
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          git fetch --no-tags origin main "$CLAIM_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$LIVE_MAIN"
+          test "$(git show -s --format=%T "$LIVE_MAIN")" = "$LIVE_TREE"
+          test "$(git show -s --format=%P "$LIVE_MAIN")" = "$BENBASSAT_PRODUCT"
+          test "$(git show -s --format=%s "$LIVE_MAIN")" = "Media search: record rolling candidate attempt (2026-08-26)"
+          test "$(git show -s --format=%T "$BENBASSAT_PRODUCT")" = "$BENBASSAT_TREE"
+
+          git diff --name-only "$BENBASSAT_PRODUCT..$LIVE_MAIN" | LC_ALL=C sort > "$OUT/live-maintenance-paths.txt"
+          printf '%s\n' data/MEDIA-SEARCH-LATEST.json data/journal/media-search.jsonl | LC_ALL=C sort > "$OUT/expected-maintenance-paths.txt"
+          diff -u "$OUT/expected-maintenance-paths.txt" "$OUT/live-maintenance-paths.txt"
+
+          claim_ref="refs/remotes/origin/${CLAIM_BRANCH}"
+          test "$(git rev-parse "$claim_ref")" = "$CLAIM_COMMIT"
+          test "$(git show -s --format=%T "$claim_ref")" = "$CLAIM_TREE"
+          test "$(git show -s --format=%P "$claim_ref")" = "$BENBASSAT_PRODUCT"
+          git show "${claim_ref}:data/review/adapter-sdk/star-trek-morgo-claim.json" > "$OUT/claim-receipt.json"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          path = Path(os.environ["OUT"]) / "claim-receipt.json"
+          receipt = json.loads(path.read_text())
+          expected = receipt["receipt_sha256"]
+          body = dict(receipt)
+          body.pop("receipt_sha256", None)
+          actual = hashlib.sha256(
+              (json.dumps(stable(body), indent=2, ensure_ascii=False) + "\n").encode()
+          ).hexdigest()
+          if actual != expected or expected != os.environ["CLAIM_RECEIPT_SHA"]:
+              raise SystemExit(f"claim receipt identity mismatch: {actual} / {expected}")
+          task = receipt["task"]
+          lease = receipt["lease"]
+          if receipt["transaction"] != "STAR-TREK-MORGO-CLAIM-V1":
+              raise SystemExit("unexpected Morgo claim transaction")
+          if receipt["canonical_parent"] != os.environ["BENBASSAT_PRODUCT"]:
+              raise SystemExit("claim parent drifted")
+          required = {
+              "id": os.environ["TASK_ID"],
+              "performer": os.environ["EXPECTED_PERFORMER"],
+              "character": os.environ["EXPECTED_CHARACTER"],
+              "source_fingerprint": os.environ["EXPECTED_FINGERPRINT"],
+              "status": "leased",
+              "attempts": 1,
+          }
+          if any(task.get(key) != value for key, value in required.items()):
+              raise SystemExit(f"claimed task drifted: {task}")
+          if task.get("performance_modes") != ["voice-animation"]:
+              raise SystemExit(f"queued mode hint drifted: {task.get('performance_modes')}")
+          if lease.get("id") != os.environ["EXPECTED_LEASE"]:
+              raise SystemExit("Morgo lease identity drifted")
+          if receipt["queue"]["after"] != {
+              "total": 2228,
+              "queued": 1796,
+              "resolved": 429,
+              "blocked": 0,
+              "rejected": 2,
+              "in_flight": 1,
+          }:
+              raise SystemExit(f"claim queue drifted: {receipt['queue']['after']}")
+          if receipt["boundary"].get("additional_lease_issued") is not False:
+              raise SystemExit("claim admits an additional lease")
+          if receipt["boundary"].get("canonical_mutation") is not False:
+              raise SystemExit("claim admits canonical mutation")
+          PY
+
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
+          test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$LIVE_MAIN"
+
+      - name: Freeze exact Morgo and episode revisions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+          import hashlib
+          import json
+          import os
+          import re
+
+          root = Path(os.environ["OUT"])
+          claim = json.loads((root / "claim-receipt.json").read_text())
+
+          def fetch_page(title):
+              query = {
+                  "action": "query",
+                  "prop": "revisions|pageimages",
+                  "titles": title,
+                  "rvprop": "ids|timestamp|content",
+                  "rvslots": "main",
+                  "piprop": "original|name",
+                  "format": "json",
+                  "formatversion": "2",
+              }
+              url = "https://memory-alpha.fandom.com/api.php?" + urlencode(query)
+              request = Request(
+                  url,
+                  headers={
+                      "User-Agent": "UNDERCAST-Morgo-Source-Probe/2.0",
+                      "Accept": "application/json",
+                  },
+              )
+              with urlopen(request, timeout=90) as response:
+                  api = json.load(response)
+              pages = api.get("query", {}).get("pages", [])
+              if len(pages) != 1 or pages[0].get("missing"):
+                  raise SystemExit(f"source page missing for {title}: {pages!r}")
+              page = pages[0]
+              revisions = page.get("revisions") or []
+              if len(revisions) != 1:
+                  raise SystemExit(f"revision cardinality drifted for {title}")
+              revision = revisions[0]
+              text = revision["slots"]["main"]["content"]
+              return api, page, revision, text
+
+          role_api, role_page, role_revision, role_text = fetch_page("Morgo")
+          episode_api, episode_page, episode_revision, episode_text = fetch_page(
+              "The Least Dangerous Game (episode)"
+          )
+
+          role_lower = role_text.lower()
+          episode_lower = episode_text.lower()
+          performer = os.environ["EXPECTED_PERFORMER"].lower()
+          if performer not in role_lower:
+              raise SystemExit("Fred Tatasciore attribution absent from frozen Morgo source")
+          if not re.search(r"\bvoiced\b|\bvoice of\b|\bvoice actor\b", role_lower):
+              raise SystemExit("voice attribution marker absent from frozen Morgo source")
+          if "the least dangerous game" not in role_lower:
+              raise SystemExit("Morgo role source does not bind the episode")
+          if "morgo" not in episode_lower:
+              raise SystemExit("episode source does not bind Morgo")
+          if "1 september 2022" not in episode_lower and "september 1, 2022" not in episode_lower:
+              raise SystemExit("episode first-air date marker absent")
+          if "{{ld}}" not in episode_lower and "lower decks" not in episode_lower:
+              raise SystemExit("Lower Decks production marker absent")
+
+          patterns = {
+              "voice": [r"\bvoiced\b", r"\bvoice actor\b", r"\bvoice of\b"],
+              "physical": [r"\bportrayed by\b", r"\bsuit performer\b", r"\bphysical performer\b"],
+              "animation": [r"\{\{ld\}\}", r"\blower decks\b"],
+              "prosthetic": [r"\bprosthetic\b", r"\bmakeup\b", r"\bmake-up\b"],
+          }
+          combined = role_text + "\n" + episode_text
+          markers = {
+              key: [pattern for pattern in values if re.search(pattern, combined, flags=re.I)]
+              for key, values in patterns.items()
+          }
+
+          def revision_receipt(page, revision, text):
+              return {
+                  "title": page["title"],
+                  "pageid": page["pageid"],
+                  "revision": revision["revid"],
+                  "parentid": revision.get("parentid"),
+                  "timestamp": revision["timestamp"],
+                  "content_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                  "page_image": page.get("original"),
+              }
+
+          evidence_lines = {}
+          for label, text, needles in (
+              ("role", role_text, ("fred tatasciore", "voiced", "voice", "least dangerous game", "morgo")),
+              ("episode", episode_text, ("morgo", "fred tatasciore", "first aired", "lower decks", "ld")),
+          ):
+              rows = []
+              for number, line in enumerate(text.splitlines(), 1):
+                  lowered = line.lower()
+                  if any(needle in lowered for needle in needles):
+                      rows.append(f"{number}: {line}")
+              evidence_lines[label] = rows
+
+          probe = {
+              "version": 2,
+              "transaction": "STAR-TREK-MORGO-SOURCE-PROBE-V2",
+              "status": "source-frozen-pending-independent-review",
+              "generated_at": datetime.now(timezone.utc)
+                  .replace(microsecond=0)
+                  .isoformat()
+                  .replace("+00:00", "Z"),
+              "live_publication_base": {
+                  "commit": os.environ["LIVE_MAIN"],
+                  "tree": os.environ["LIVE_TREE"],
+                  "parent": os.environ["BENBASSAT_PRODUCT"],
+                  "kind": "product-neutral-media-search-maintenance",
+              },
+              "claim": {
+                  "branch": os.environ["CLAIM_BRANCH"],
+                  "commit": os.environ["CLAIM_COMMIT"],
+                  "tree": os.environ["CLAIM_TREE"],
+                  "receipt_sha256": os.environ["CLAIM_RECEIPT_SHA"],
+                  "lease_id": os.environ["EXPECTED_LEASE"],
+              },
+              "task": {
+                  "id": os.environ["TASK_ID"],
+                  "performer": os.environ["EXPECTED_PERFORMER"],
+                  "character": os.environ["EXPECTED_CHARACTER"],
+                  "source_fingerprint": os.environ["EXPECTED_FINGERPRINT"],
+                  "performance_modes": ["voice-animation"],
+                  "status": "leased",
+                  "attempts": 1,
+                  "source": "https://memory-alpha.fandom.com/wiki/Morgo",
+              },
+              "sources": {
+                  "role": revision_receipt(role_page, role_revision, role_text),
+                  "production": revision_receipt(
+                      episode_page, episode_revision, episode_text
+                  ),
+              },
+              "attribution_markers": markers,
+              "provisional_adjudication": {
+                  "adjudicated_kind": "voice",
+                  "performance_mode": "voice-animation",
+                  "performance_scope": (
+                      "Fred Tatasciore's animated voice performance as Volcanic Lord "
+                      "Morgo in the Star Trek: Lower Decks episode "
+                      "The Least Dangerous Game (2022)."
+                  ),
+                  "series": "Star Trek: Lower Decks",
+                  "episode": "The Least Dangerous Game",
+                  "year": "2022",
+                  "first_aired": "1 September 2022",
+                  "physical_performance_attributed": False,
+                  "prosthetic_performance_attributed": False,
+                  "animation_labor_attributed": False,
+                  "maker_attribution": "unresolved",
+                  "transformation_measured": False,
+              },
+              "media_boundary": {
+                  "character_page_image": role_page.get("original"),
+                  "still_status": "pending-source-bound-media-review",
+                  "portrait_status": "pending-independent-performer-media-review",
+                  "cross_facet_substitution": False,
+              },
+              "boundary": {
+                  "source_revision_frozen": True,
+                  "independent_source_review_complete": False,
+                  "canonical_mutation": False,
+                  "lease_mutation": False,
+                  "additional_lease_issued": False,
+                  "product_staged": False,
+                  "waterline_cycle_recorded": False,
+              },
+          }
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          body = json.dumps(stable(probe), indent=2, ensure_ascii=False) + "\n"
+          probe["receipt_sha256"] = hashlib.sha256(body.encode()).hexdigest()
+          (root / "source-probe.json").write_text(
+              json.dumps(stable(probe), indent=2, ensure_ascii=False) + "\n"
+          )
+          (root / "morgo-source.wikitext").write_text(role_text)
+          (root / "morgo-source-api.json").write_text(
+              json.dumps(role_api, indent=2, ensure_ascii=False) + "\n"
+          )
+          (root / "episode-source.wikitext").write_text(episode_text)
+          (root / "episode-source-api.json").write_text(
+              json.dumps(episode_api, indent=2, ensure_ascii=False) + "\n"
+          )
+          (root / "role-evidence-lines.txt").write_text(
+              "\n".join(evidence_lines["role"]) + "\n"
+          )
+          (root / "episode-evidence-lines.txt").write_text(
+              "\n".join(evidence_lines["episode"]) + "\n"
+          )
+          PY
+
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg lease "$EXPECTED_LEASE" \
+            --arg live "$LIVE_MAIN" \
+            '.transaction == "STAR-TREK-MORGO-SOURCE-PROBE-V2"
+             and .status == "source-frozen-pending-independent-review"
+             and .live_publication_base.commit == $live
+             and .claim.lease_id == $lease
+             and .task.id == $task
+             and .task.status == "leased"
+             and .task.attempts == 1
+             and .provisional_adjudication.adjudicated_kind == "voice"
+             and .provisional_adjudication.performance_mode == "voice-animation"
+             and .provisional_adjudication.series == "Star Trek: Lower Decks"
+             and .provisional_adjudication.episode == "The Least Dangerous Game"
+             and .provisional_adjudication.year == "2022"
+             and .provisional_adjudication.physical_performance_attributed == false
+             and .provisional_adjudication.prosthetic_performance_attributed == false
+             and .provisional_adjudication.animation_labor_attributed == false
+             and .provisional_adjudication.maker_attribution == "unresolved"
+             and .boundary.source_revision_frozen == true
+             and .boundary.independent_source_review_complete == false
+             and .boundary.canonical_mutation == false
+             and .boundary.lease_mutation == false
+             and .boundary.additional_lease_issued == false
+             and .boundary.product_staged == false' \
+            "$OUT/source-probe.json" >/dev/null
+
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after.json"
+          test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$LIVE_MAIN"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload Morgo source evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-morgo-source-v2
+          path: /tmp/star-trek-morgo-source-v2/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable Morgo source result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq \
+            --argjson id "$ARTIFACT_ID" \
+            --arg digest "$ARTIFACT_DIGEST" \
+            '.artifact={id:$id,digest:$digest}' \
+            "$OUT/source-probe.json" > "$OUT/source-probe.tmp"
+          mv "$OUT/source-probe.tmp" "$OUT/source-probe.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-morgo-source-v2
+          git config user.email undercast-morgo-source-v2@users.noreply.github.com
+          git checkout --orphan morgo-source-result-v2
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-morgo-source-v2
+          cp -a "$OUT"/. transport/star-trek-morgo-source-v2/
+          git add transport/star-trek-morgo-source-v2
+          git commit -m 'Record frozen Star Trek Morgo source v2'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
