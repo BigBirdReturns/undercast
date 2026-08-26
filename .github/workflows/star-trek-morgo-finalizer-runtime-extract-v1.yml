@@ -1,0 +1,67 @@
+name: star-trek-morgo-finalizer-runtime-extract-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-morgo-finalizer-runtime-extract-v1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: star-trek-morgo-finalizer-runtime-extract-v1
+  cancel-in-progress: false
+
+env:
+  SOURCE_COMMIT: 7270d6d24f5a527e99e15514a6bda7ae466feed3
+  SOURCE_PAYLOAD: .github/recovery/star-trek-morgo-finalizer-recovery-v2/finalizer.py.gz
+  SOURCE_WORKFLOW: .github/workflows/star-trek-morgo-finalizer-recovery-v2.yml
+  SOURCE_MANIFEST: .github/recovery/star-trek-morgo-finalizer-recovery-v2/sealed-manifest.sha256
+  SOURCE_TRIGGER: .github/recovery/star-trek-morgo-finalizer-recovery-v2/run.trigger
+  EXPECTED_FINALIZER_SHA256: 80a4e1fd81658d845a660159c05bd2762c0fdfbb3a818473c72d531bf194109d
+  OUT: /tmp/star-trek-morgo-finalizer-runtime-extract-v1
+
+jobs:
+  extract:
+    name: extract-failed-morgo-finalizer-v2-runtime
+    if: ${{ github.event.head_commit.message == 'Extract failed Morgo finalizer v2 runtime' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Reconstruct and verify the failed v2 runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+
+          git fetch --no-tags origin "$SOURCE_COMMIT"
+          git show "${SOURCE_COMMIT}:${SOURCE_PAYLOAD}" > "$OUT/finalizer.py.gz"
+          gzip -dc "$OUT/finalizer.py.gz" > "$OUT/finalizer.py"
+          test "$(sha256sum "$OUT/finalizer.py" | awk '{print $1}')" = "$EXPECTED_FINALIZER_SHA256"
+
+          git show "${SOURCE_COMMIT}:${SOURCE_WORKFLOW}" > "$OUT/source-workflow.yml"
+          git show "${SOURCE_COMMIT}:${SOURCE_MANIFEST}" > "$OUT/sealed-manifest.sha256"
+          git show "${SOURCE_COMMIT}:${SOURCE_TRIGGER}" > "$OUT/run.trigger"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          path = Path(os.environ['OUT']) / 'finalizer.py'
+          compile(path.read_text(encoding='utf-8'), str(path), 'exec')
+          PY
+
+          find "$OUT" -type f ! -name extraction-manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/extraction-manifest.sha256"
+
+      - name: Upload exact v2 runtime snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-morgo-finalizer-runtime-extract-v1
+          path: /tmp/star-trek-morgo-finalizer-runtime-extract-v1/
+          if-no-files-found: error
+          retention-days: 30
