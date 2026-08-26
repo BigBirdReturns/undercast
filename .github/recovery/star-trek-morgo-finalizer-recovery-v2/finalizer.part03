@@ -1,0 +1,122 @@
+        "production": "The Least Dangerous Game",
+        "universe": "Star Trek",
+        "years": "2022",
+        "kind": "voice",
+        "designer": "—",
+        "transform": 2,
+    }
+    for key, expected_value in exact.items():
+        if record.get(key) != expected_value:
+            raise SystemExit(f"Morgo record {key} drifted: {record.get(key)}")
+
+    if asset_src(record.get("still")) != "images/uc-1398-still.webp":
+        raise SystemExit("Morgo still path drifted")
+    if asset_src(record.get("portrait")) != "images/uc-1398-portrait.jpg":
+        raise SystemExit("Morgo portrait path drifted")
+    if file_hash(Path("images/uc-1398-still.webp")) != STILL_SHA:
+        raise SystemExit("Morgo still bytes drifted")
+    if file_hash(Path("images/uc-1398-portrait.jpg")) != PORTRAIT_SHA:
+        raise SystemExit("Morgo portrait bytes drifted")
+
+    audit = read_json(Path("data/MEDIA-AUDIT.json"))
+    facets = [
+        row
+        for row in audit.get("items", [])
+        if row.get("wall_id") == WALL_ID and row.get("side") in {"still", "portrait"}
+    ]
+    if len(facets) != 2:
+        raise SystemExit(f"Morgo media facet cardinality drifted: {len(facets)}")
+
+    expected_facets = {
+        "still": (STILL_ITEM, STILL_SHA, "expected", "character-depiction"),
+        "portrait": (PORTRAIT_ITEM, PORTRAIT_SHA, "expected", "neutral-human"),
+    }
+    for facet in facets:
+        item_id, digest, identity_value, presentation_value = expected_facets[
+            facet["side"]
+        ]
+        claims = facet.get("claims") or {}
+        identity = claims.get("identity") or {}
+        presentation = claims.get("presentation") or {}
+        if (
+            facet.get("id") != item_id
+            or facet.get("status") != "verified"
+            or (facet.get("asset") or {}).get("sha256") != digest
+            or identity.get("state") != "enforced"
+            or identity.get("value") != identity_value
+            or presentation.get("state") != "enforced"
+            or presentation.get("value") != presentation_value
+        ):
+            raise SystemExit(f"Morgo {facet['side']} facet drifted")
+        if len(facet.get("votes") or []) != 2:
+            raise SystemExit(f"Morgo {facet['side']} vote cardinality drifted")
+        if any(vote.get("asset_sha256") != digest for vote in facet["votes"]):
+            raise SystemExit(f"Morgo {facet['side']} vote hash drifted")
+
+    source_rows = [
+        row for row in read_json(Path("data/SOURCES.json")) if row.get("id") == WALL_ID
+    ]
+    if len(source_rows) != 1:
+        raise SystemExit("Morgo SOURCES cardinality drifted")
+    source_row = source_rows[0]
+    if (
+        source_row.get("actor") != PERFORMER
+        or source_row.get("character") != CHARACTER
+        or asset_src(source_row.get("still")) != "images/uc-1398-still.webp"
+        or asset_src(source_row.get("portrait"))
+        != "images/uc-1398-portrait.jpg"
+    ):
+        raise SystemExit("Morgo SOURCES custody drifted")
+
+    return counts, record, facets
+
+
+def checker_source() -> str:
+    constants = {
+        "TASK_ID": TASK_ID,
+        "PERFORMER": PERFORMER,
+        "CHARACTER": CHARACTER,
+        "FINGERPRINT": FINGERPRINT,
+        "LEASE_ID": LEASE_ID,
+        "WALL_ID": WALL_ID,
+        "LIVE_MAIN": LIVE_MAIN,
+        "LIVE_TREE": LIVE_TREE,
+        "CANDIDATE_COMMIT": CANDIDATE_COMMIT,
+        "CANDIDATE_TREE": CANDIDATE_TREE,
+        "CANDIDATE_RECEIPT_SHA": CANDIDATE_RECEIPT_SHA,
+        "REVIEW_SHA": REVIEW_SHA,
+        "PREDECESSOR_RECEIPT_SHA": PREDECESSOR_RECEIPT_SHA,
+        "PREDECESSOR_CHECKER_SHA": PREDECESSOR_CHECKER_SHA,
+        "PREDECESSOR_CYCLE_ID": PREDECESSOR_CYCLE_ID,
+        "STILL_SHA": STILL_SHA,
+        "PORTRAIT_SHA": PORTRAIT_SHA,
+        "STILL_ITEM": STILL_ITEM,
+        "PORTRAIT_ITEM": PORTRAIT_ITEM,
+    }
+    encoded = json.dumps(constants, ensure_ascii=False)
+    return f"""#!/usr/bin/env node
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+
+const C = {encoded};
+const read = (path) => JSON.parse(fs.readFileSync(path, 'utf8'));
+const stable = (value) => Array.isArray(value)
+  ? value.map(stable)
+  : value && typeof value === 'object'
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])]))
+    : value;
+const digestObject = (value) => crypto.createHash('sha256').update(JSON.stringify(stable(value), null, 2) + '\\n').digest('hex');
+const digestCompact = (value) => crypto.createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
+const digestFile = (path) => crypto.createHash('sha256').update(fs.readFileSync(path)).digest('hex');
+const fail = (message) => {{ throw new Error(`star-trek-morgo-cycle: ${{message}}`); }};
+const assetSrc = (value) => typeof value === 'string' ? value : value?.src;
+
+const receiptPath = 'data/review/adapter-sdk/star-trek-morgo-cycle.json';
+const checkerPath = 'scripts/star-trek-morgo-cycle.mjs';
+const receipt = read(receiptPath);
+const receiptBody = {{...receipt}};
+delete receiptBody.receipt_sha256;
+if (digestObject(receiptBody) !== receipt.receipt_sha256) fail('receipt identity drifted');
+if (digestFile(checkerPath) !== receipt.qualification?.checker_sha256) fail('checker identity drifted');
+if (receipt.transaction !== 'STAR-TREK-CYCLE-MORGO' || receipt.version !== 1) fail('receipt transaction drifted');
+if (receipt.canonical_parent !== C.LIVE_MAIN || receipt.maintenance_parent?.tree !== C.LIVE_TREE) fail('publication base drifted');
