@@ -1,0 +1,224 @@
+name: star-trek-risik-source-recovery-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-source-recovery-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-risik-source-recovery-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 129e6f9c389fe61bb8027f4e046bea7de510cb84
+  EXPECTED_TREE: 6d32c386636296e76bcab61baa387cb629967ac3
+  CLAIM_BRANCH: agent/star-trek-risik-claim-result-v2
+  CLAIM_COMMIT: eff3da84c7718d0894afda1fbc4e790bc88265da
+  CLAIM_TREE: 289b2393496d1146e69e0219784564623b844863
+  CLAIM_RECEIPT_SHA: c83b365b93019b0fe0dfd579cabec2cbd7c8dd4b679fcce547a6e59b5980089d
+  EXPECTED_LEASE: lease_5d07d02fd67ea40a4950b1dd
+  TASK_ID: ap_096624f177ae0c9f2e91836c
+  EXPECTED_PERFORMER: Fred Tatasciore
+  EXPECTED_CHARACTER: Risik
+  EXPECTED_FINGERPRINT: 6a66df1f109bbe6f0cd679ab95e29d0090dc3f3139219a99daae82b3001f2cc6
+  EXPECTED_PAGEID: 293745
+  EXPECTED_REVISION: 3470758
+  EXPECTED_TIMESTAMP: "2026-05-12T05:44:43Z"
+  EXPECTED_CONTENT_SHA: 96989fa630ee4ea5dbcbb6292b9b068c5ce531806f017f082e2e754fb4e015dc
+  RESULT_BRANCH: agent/star-trek-risik-source-result-v1
+  FREEZER_SOURCE: .github/recovery/star-trek-risik-source-recovery-v1/freeze.py
+  FREEZER: /tmp/star-trek-risik-source-freeze-v1.py
+  WORK: /tmp/star-trek-risik-claim-worktree-v1
+  OUT: /tmp/star-trek-risik-source-v1
+
+jobs:
+  freeze:
+    name: freeze-exact-risik-source-revision
+    if: ${{ github.event.head_commit.message == 'Freeze claimed Star Trek Risik source v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Verify claim custody and freeze exact source revision
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(sha256sum "$FREEZER_SOURCE" | awk '{print $1}')" = "06b3ed2b855b719bf3018176a7fb869795c1646de0b853e78d9ed51386bc8824"
+          cp "$FREEZER_SOURCE" "$FREEZER"
+          chmod +x "$FREEZER"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          path = Path(os.environ["FREEZER"])
+          compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          PY
+
+          rm -rf "$OUT" "$WORK"
+          mkdir -p "$OUT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          git fetch --no-tags --depth=2 origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${CLAIM_BRANCH}:refs/remotes/origin/${CLAIM_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          test "$(git show -s --format=%s "$EXPECTED_MAIN")" = "Star Trek: publish Morgo cycle"
+          test "$(git rev-parse "refs/remotes/origin/${CLAIM_BRANCH}")" = "$CLAIM_COMMIT"
+          test "$(git show -s --format=%T "$CLAIM_COMMIT")" = "$CLAIM_TREE"
+          test "$(git show -s --format=%P "$CLAIM_COMMIT")" = "$EXPECTED_MAIN"
+
+          git show "refs/remotes/origin/${CLAIM_BRANCH}:data/review/adapter-sdk/star-trek-risik-claim.json" > "$OUT/claim-receipt.json"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          path = Path(os.environ["OUT"]) / "claim-receipt.json"
+          receipt = json.loads(path.read_text())
+          identity = receipt.get("receipt_sha256")
+          body = dict(receipt)
+          body.pop("receipt_sha256", None)
+          actual = hashlib.sha256(
+              (json.dumps(stable(body), indent=2, ensure_ascii=False) + "\n").encode()
+          ).hexdigest()
+          if identity != os.environ["CLAIM_RECEIPT_SHA"] or actual != identity:
+              raise SystemExit(f"Risik claim identity drifted: {identity} / {actual}")
+          if (
+              receipt.get("transaction") != "STAR-TREK-RISIK-CLAIM-V2"
+              or receipt.get("canonical_parent") != os.environ["EXPECTED_MAIN"]
+              or receipt.get("task", {}).get("id") != os.environ["TASK_ID"]
+              or receipt.get("task", {}).get("status") != "leased"
+              or receipt.get("task", {}).get("attempts") != 1
+              or receipt.get("lease", {}).get("id") != os.environ["EXPECTED_LEASE"]
+              or receipt.get("queue", {}).get("after") != {
+                  "total": 2228, "queued": 1795, "resolved": 430,
+                  "blocked": 0, "rejected": 2, "in_flight": 1
+              }
+          ):
+              raise SystemExit("Risik claim custody drifted")
+          PY
+
+          git worktree add --detach "$WORK" "$CLAIM_COMMIT"
+          ROOT="$WORK" python3 - <<'PY'
+          from pathlib import Path
+          import json, os
+
+          root = Path(os.environ["ROOT"])
+          out = Path(os.environ["OUT"])
+          state = json.loads((root / "data/AUTOPILOT.json").read_text())
+          trek = [row for row in state["jobs"] if row.get("scope") == "star-trek"]
+          task = next((row for row in trek if row.get("id") == os.environ["TASK_ID"]), None)
+          active = [row for row in trek if row.get("status") in {"leased", "drafted", "merged"}]
+          counts = {
+              "total": len(trek),
+              "queued": sum(row.get("status") == "queued" for row in trek),
+              "resolved": sum(row.get("status") == "resolved" for row in trek),
+              "blocked": sum(row.get("status") == "blocked" for row in trek),
+              "rejected": sum(row.get("status") == "rejected" for row in trek),
+              "in_flight": len(active),
+          }
+          expected = {
+              "total": 2228, "queued": 1795, "resolved": 430,
+              "blocked": 0, "rejected": 2, "in_flight": 1
+          }
+          if counts != expected:
+              raise SystemExit(f"Risik claim queue drifted: {counts}")
+          if (
+              len(active) != 1
+              or not task
+              or task.get("status") != "leased"
+              or task.get("attempts") != 1
+              or task.get("lease", {}).get("id") != os.environ["EXPECTED_LEASE"]
+              or task.get("performer") != os.environ["EXPECTED_PERFORMER"]
+              or task.get("character") != os.environ["EXPECTED_CHARACTER"]
+              or task.get("source_fingerprint") != os.environ["EXPECTED_FINGERPRINT"]
+              or task.get("performance_modes") != ["voice-animation"]
+          ):
+              raise SystemExit(f"Risik durable lease custody drifted: {task}")
+          (out / "claim-task-state.json").write_text(
+              json.dumps({"task": task, "counts": counts, "active": active}, indent=2) + "\n"
+          )
+          PY
+
+          python3 "$FREEZER"
+
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg lease "$EXPECTED_LEASE" \
+            '.transaction == "STAR-TREK-RISIK-SOURCE-PROBE-V1"
+             and .status == "source-frozen-pending-independent-review"
+             and .canonical_parent == env.EXPECTED_MAIN
+             and .canonical_tree == env.EXPECTED_TREE
+             and .claim.commit == env.CLAIM_COMMIT
+             and .claim.receipt_sha256 == env.CLAIM_RECEIPT_SHA
+             and .claim.lease_id == $lease
+             and .task.id == $task
+             and .task.status == "leased"
+             and .task.attempts == 1
+             and .source_revision.pageid == 293745
+             and .source_revision.revision == 3470758
+             and .source_revision.content_sha256 == env.EXPECTED_CONTENT_SHA
+             and (.attribution_markers.performer | length) > 0
+             and .provisional_adjudication.performance_mode == "pending-independent-review"
+             and .boundary.source_revision_frozen == true
+             and .boundary.independent_source_review_complete == false
+             and .boundary.canonical_mutation == false
+             and .boundary.lease_mutation == false
+             and .boundary.additional_lease_issued == false
+             and .boundary.product_staged == false
+             and .boundary.waterline_cycle_recorded == false' \
+            "$OUT/source-probe.json" >/dev/null
+
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)" = "$EXPECTED_MAIN"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload source evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-risik-source-v1
+          path: /tmp/star-trek-risik-source-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable source result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq \
+            --argjson id "$ARTIFACT_ID" \
+            --arg digest "$ARTIFACT_DIGEST" \
+            '.artifact={id:$id,digest:$digest}' \
+            "$OUT/source-probe.json" > "$OUT/source.tmp"
+          mv "$OUT/source.tmp" "$OUT/source-probe.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-risik-source-v1
+          git config user.email undercast-risik-source-v1@users.noreply.github.com
+          git checkout --orphan risik-source-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-risik-source-v1
+          cp -a "$OUT"/. transport/star-trek-risik-source-v1/
+          git add transport/star-trek-risik-source-v1
+          git commit -m "Record Star Trek Risik source v1"
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
