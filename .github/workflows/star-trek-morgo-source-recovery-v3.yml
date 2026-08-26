@@ -1,0 +1,128 @@
+name: star-trek-morgo-source-recovery-v3
+
+on:
+  push:
+    branches:
+      - agent/star-trek-morgo-source-recovery-v3
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-morgo-source-recovery-v3
+  cancel-in-progress: false
+
+env:
+  LIVE_MAIN: 5e89a0ba59f36feae7986a9260b8fa17a824a8b7
+  LIVE_TREE: 0819bd9ace59e2d8cf8721a5acd1f5de5498cd87
+  BENBASSAT_PRODUCT: 5afac948405d67c94090f2da55a510689e5eb583
+  BENBASSAT_TREE: 639b57c87ca23e895ec730099c0ce937eb1b88da
+  CLAIM_BRANCH: agent/star-trek-morgo-claim-result-v1
+  CLAIM_COMMIT: 645b066b25309e1e8bdc2f13f64b8a04f95bfa96
+  CLAIM_TREE: 408a69a0af29dea5052db22b564f63939c43f7a8
+  CLAIM_RECEIPT_SHA: dd0f6787c555c110185bc8b5cc2b234e299791401b9bdec6a0088ba6a5217fb4
+  TASK_ID: ap_a7fb29c5cce85c86708ea0e6
+  EXPECTED_PERFORMER: Fred Tatasciore
+  EXPECTED_CHARACTER: Morgo
+  EXPECTED_FINGERPRINT: 279c816ebd1b83899f5b257f7880df5734bb855f4206c2fc92c5278c9370ff46
+  EXPECTED_LEASE: lease_f2b94e85b2cb40d4ac8a52e9
+  RESULT_BRANCH: agent/star-trek-morgo-source-result-v2
+  OUT: /tmp/star-trek-morgo-source-v2
+  OLD_WORKFLOW: .github/workflows/star-trek-morgo-source-recovery-v2.yml
+  OLD_WORKFLOW_BLOB: d20d2cdb43482d2a7225509d0ffd424fc2c9030f
+  EXEC_ROOT: /tmp/star-trek-morgo-source-v3-exec
+
+jobs:
+  freeze:
+    name: execute-sealed-morgo-source-v2-with-corrected-claim-identity
+    if: ${{ github.event.head_commit.message == 'Execute claimed Star Trek Morgo source v3' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Extract and verify the sealed v2 source steps
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f "$OLD_WORKFLOW"
+          test "$(git hash-object "$OLD_WORKFLOW")" = "$OLD_WORKFLOW_BLOB"
+          rm -rf "$EXEC_ROOT"
+          mkdir -p "$EXEC_ROOT"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          source = Path(os.environ["OLD_WORKFLOW"])
+          destination = Path(os.environ["EXEC_ROOT"])
+          lines = source.read_text(encoding="utf-8").splitlines()
+          names = [
+              "Verify live maintenance head and exact Morgo claim",
+              "Freeze exact Morgo and episode revisions",
+              "Publish immutable Morgo source result",
+          ]
+
+          for index, name in enumerate(names, 1):
+              marker = f"- name: {name}"
+              try:
+                  start = next(i for i, line in enumerate(lines) if line.strip() == marker)
+              except StopIteration as exc:
+                  raise SystemExit(f"sealed step missing: {name}") from exc
+
+              run_index = None
+              for cursor in range(start + 1, len(lines)):
+                  stripped = lines[cursor].strip()
+                  if stripped.startswith("- name:"):
+                      break
+                  if stripped == "run: |":
+                      run_index = cursor
+                      break
+              if run_index is None:
+                  raise SystemExit(f"run block missing for: {name}")
+
+              block = []
+              for cursor in range(run_index + 1, len(lines)):
+                  line = lines[cursor]
+                  if line and len(line) - len(line.lstrip(" ")) <= 8:
+                      break
+                  block.append(line[10:] if line.startswith("          ") else "")
+
+              script = destination / f"{index:02d}.sh"
+              script.write_text("#!/usr/bin/env bash\n" + "\n".join(block) + "\n", encoding="utf-8")
+              script.chmod(0o755)
+          PY
+
+          for script in "$EXEC_ROOT"/[0-9][0-9].sh; do
+            bash -n "$script"
+            sha256sum "$script"
+          done > "$EXEC_ROOT/extracted-step-sha256.txt"
+
+      - name: Verify live and claim custody with corrected identity
+        shell: bash
+        run: bash "$EXEC_ROOT/01.sh"
+
+      - name: Freeze exact Morgo source revisions
+        shell: bash
+        run: bash "$EXEC_ROOT/02.sh"
+
+      - name: Upload Morgo source evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-morgo-source-v2
+          path: /tmp/star-trek-morgo-source-v2/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable Morgo source result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: bash "$EXEC_ROOT/03.sh"
