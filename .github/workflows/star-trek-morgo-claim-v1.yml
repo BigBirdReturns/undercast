@@ -1,0 +1,286 @@
+name: star-trek-morgo-claim-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-morgo-claim-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-morgo-claim-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 5afac948405d67c94090f2da55a510689e5eb583
+  EXPECTED_TREE: 639b57c87ca23e895ec730099c0ce937eb1b88da
+  TASK_ID: ap_a7fb29c5cce85c86708ea0e6
+  EXPECTED_PERFORMER: Fred Tatasciore
+  EXPECTED_CHARACTER: Morgo
+  EXPECTED_FINGERPRINT: 279c816ebd1b83899f5b257f7880df5734bb855f4206c2fc92c5278c9370ff46
+  RESULT_BRANCH: agent/star-trek-morgo-claim-result-v1
+  RECEIPT_PATH: data/review/adapter-sdk/star-trek-morgo-claim.json
+  OUT: /tmp/star-trek-morgo-claim-v1
+
+jobs:
+  claim:
+    name: claim-one-repository-selected-morgo-cycle
+    if: ${{ github.event.head_commit.message == 'Claim repository-selected Star Trek Morgo cycle v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify terminal Benbassat boundary and pristine Morgo task
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git fetch --no-tags origin main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          test "$(git show -s --format=%s "$EXPECTED_MAIN")" = "Star Trek: publish Benbassat cycle"
+          git checkout --detach refs/remotes/origin/main
+          git clean -fdx
+          npm ci --ignore-scripts
+
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate-before.log"
+          node scripts/thesis-rails.mjs next --json > "$OUT/rail-before.json"
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg fingerprint "$EXPECTED_FINGERPRINT" \
+            '.phase == "ready-for-one-cycle"
+             and .scope_id == "star-trek"
+             and .candidate.task_id == $task
+             and .candidate.performer == $performer
+             and .candidate.character == $character
+             and .candidate.source_fingerprint == $fingerprint
+             and .candidate.performance_modes == ["voice-animation"]' \
+            "$OUT/rail-before.json" >/dev/null
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, os
+
+          task_id = os.environ["TASK_ID"]
+          state = json.loads(Path("data/AUTOPILOT.json").read_text())
+          trek = [row for row in state["jobs"] if row.get("scope") == "star-trek"]
+          task = next((row for row in trek if row.get("id") == task_id), None)
+          active = [row for row in trek if row.get("status") in {"leased", "drafted", "merged"}]
+          counts = {
+              "total": len(trek),
+              "queued": sum(row.get("status") == "queued" for row in trek),
+              "resolved": sum(row.get("status") == "resolved" for row in trek),
+              "blocked": sum(row.get("status") == "blocked" for row in trek),
+              "rejected": sum(row.get("status") == "rejected" for row in trek),
+              "in_flight": len(active),
+          }
+          expected = {"total": 2228, "queued": 1797, "resolved": 429, "blocked": 0, "rejected": 2, "in_flight": 0}
+          if counts != expected:
+              raise SystemExit(f"pre-claim queue drifted: {counts}")
+          if not task or task.get("status") != "queued" or task.get("attempts") != 0 or task.get("lease") is not None:
+              raise SystemExit(f"Morgo task is not pristine: {task}")
+          if task.get("performer") != os.environ["EXPECTED_PERFORMER"] or task.get("character") != os.environ["EXPECTED_CHARACTER"] or task.get("source_fingerprint") != os.environ["EXPECTED_FINGERPRINT"]:
+              raise SystemExit("Morgo identity drifted")
+          if task.get("performance_modes") != ["voice-animation"]:
+              raise SystemExit(f"Morgo queued mode hint drifted: {task.get('performance_modes')}")
+          Path(os.environ["OUT"], "pre-claim-state.json").write_text(json.dumps({"task": task, "counts": counts, "active": active}, indent=2) + "\n")
+          PY
+
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
+          test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$EXPECTED_MAIN"
+
+      - name: Issue exactly one repository-native lease
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm run autopilot -- next \
+            --agent luna \
+            --scope star-trek \
+            --capability-profile text-vision \
+            --limit 1 \
+            --out "$OUT/batch.json" \
+            --prompt "$OUT/AUTOPILOT-PROMPT.md" \
+            | tee "$OUT/autopilot-next.log"
+
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg fingerprint "$EXPECTED_FINGERPRINT" \
+            '.tasks | length == 1
+             and .[0].id == $task
+             and .[0].performer == $performer
+             and .[0].character == $character
+             and .[0].source_fingerprint == $fingerprint
+             and .[0].performance_modes == ["voice-animation"]' \
+            "$OUT/batch.json" >/dev/null
+
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import hashlib, json, os
+
+          out = Path(os.environ["OUT"])
+          state = json.loads(Path("data/AUTOPILOT.json").read_text())
+          batch = json.loads((out / "batch.json").read_text())
+          rail = json.loads((out / "rail-before.json").read_text())
+          before = json.loads((out / "pre-claim-state.json").read_text())
+          trek = [row for row in state["jobs"] if row.get("scope") == "star-trek"]
+          task = next((row for row in trek if row.get("id") == os.environ["TASK_ID"]), None)
+          active = [row for row in trek if row.get("status") in {"leased", "drafted", "merged"}]
+          counts = {
+              "total": len(trek),
+              "queued": sum(row.get("status") == "queued" for row in trek),
+              "resolved": sum(row.get("status") == "resolved" for row in trek),
+              "blocked": sum(row.get("status") == "blocked" for row in trek),
+              "rejected": sum(row.get("status") == "rejected" for row in trek),
+              "in_flight": len(active),
+          }
+          expected = {"total": 2228, "queued": 1796, "resolved": 429, "blocked": 0, "rejected": 2, "in_flight": 1}
+          if counts != expected:
+              raise SystemExit(f"post-claim queue drifted: {counts}")
+          if len(active) != 1 or active[0].get("id") != os.environ["TASK_ID"]:
+              raise SystemExit(f"claim was not singular: {[row.get('id') for row in active]}")
+          lease = task.get("lease") if task else None
+          if not task or task.get("status") != "leased" or task.get("attempts") != 1 or not lease:
+              raise SystemExit(f"Morgo claim state drifted: {task}")
+          if lease.get("id") != batch.get("lease_id"):
+              raise SystemExit("Morgo lease identity differs from the native batch")
+          if task.get("performer") != os.environ["EXPECTED_PERFORMER"] or task.get("character") != os.environ["EXPECTED_CHARACTER"] or task.get("source_fingerprint") != os.environ["EXPECTED_FINGERPRINT"]:
+              raise SystemExit("claimed Morgo identity drifted")
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          receipt = {
+              "version": 1,
+              "transaction": "STAR-TREK-MORGO-CLAIM-V1",
+              "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+              "canonical_parent": os.environ["EXPECTED_MAIN"],
+              "canonical_tree": os.environ["EXPECTED_TREE"],
+              "rail": rail,
+              "task": {
+                  "id": task["id"],
+                  "performer": task["performer"],
+                  "character": task["character"],
+                  "source_fingerprint": task["source_fingerprint"],
+                  "performance_modes": task.get("performance_modes") or [],
+                  "status": task["status"],
+                  "attempts": task["attempts"],
+              },
+              "lease": lease,
+              "queue": {
+                  "before": before["counts"],
+                  "after": counts,
+              },
+              "changed_paths": [
+                  "data/AUTOPILOT.json",
+                  "data/journal/autopilot.jsonl",
+              ],
+              "source_boundary": {
+                  "sources": (batch.get("tasks") or [{}])[0].get("sources") or [],
+                  "source_revision_frozen": False,
+                  "independent_source_review_complete": False,
+                  "performance_mode_adjudicated": False,
+                  "queued_mode_hint": task.get("performance_modes") or [],
+                  "maker_attribution": "unresolved",
+                  "transformation_measured": False,
+              },
+              "boundary": {
+                  "canonical_mutation": False,
+                  "product_staged": False,
+                  "additional_lease_issued": False,
+                  "only_active_star_trek_task": task["id"],
+                  "source_review_pending": True,
+                  "media_review_pending": True,
+                  "waterline_cycle_recorded": False,
+              },
+          }
+          body = json.dumps(stable(receipt), indent=2, ensure_ascii=False) + "\n"
+          receipt["receipt_sha256"] = hashlib.sha256(body.encode()).hexdigest()
+          path = Path(os.environ["RECEIPT_PATH"])
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(json.dumps(stable(receipt), indent=2, ensure_ascii=False) + "\n")
+          (out / "claim-receipt.json").write_text(path.read_text())
+          (out / "post-claim-state.json").write_text(json.dumps({"task": task, "counts": counts, "active": active}, indent=2) + "\n")
+          PY
+
+          git diff --name-only "$EXPECTED_MAIN" | LC_ALL=C sort > "$OUT/changed-paths-before-receipt.txt"
+          printf '%s\n' data/AUTOPILOT.json data/journal/autopilot.jsonl | LC_ALL=C sort > "$OUT/expected-native-paths.txt"
+          diff -u "$OUT/expected-native-paths.txt" "$OUT/changed-paths-before-receipt.txt"
+          node scripts/validate.mjs | tee "$OUT/repository-validate.log"
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate-after.log"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after-claim.json"
+          test "$(jq -r .commit.sha "$OUT/main-after-claim.json")" = "$EXPECTED_MAIN"
+
+      - name: Upload claim evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-morgo-claim-v1
+          path: /tmp/star-trek-morgo-claim-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable Morgo claim result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          path = Path(os.environ["RECEIPT_PATH"])
+          receipt = json.loads(path.read_text())
+          receipt.pop("receipt_sha256", None)
+          receipt["artifact"] = {
+              "id": int(os.environ["ARTIFACT_ID"]),
+              "digest": os.environ["ARTIFACT_DIGEST"],
+          }
+          body = json.dumps(stable(receipt), indent=2, ensure_ascii=False) + "\n"
+          receipt["receipt_sha256"] = hashlib.sha256(body.encode()).hexdigest()
+          path.write_text(json.dumps(stable(receipt), indent=2, ensure_ascii=False) + "\n")
+          Path(os.environ["OUT"], "published-claim-receipt.json").write_text(path.read_text())
+          PY
+
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git add data/AUTOPILOT.json data/journal/autopilot.jsonl "$RECEIPT_PATH"
+          git diff --cached --check
+          git diff --cached --name-only | LC_ALL=C sort > "$OUT/published-paths.txt"
+          printf '%s\n' data/AUTOPILOT.json data/journal/autopilot.jsonl "$RECEIPT_PATH" | LC_ALL=C sort > "$OUT/expected-published-paths.txt"
+          diff -u "$OUT/expected-published-paths.txt" "$OUT/published-paths.txt"
+          git config user.name undercast-morgo-claim-v1
+          git config user.email undercast-morgo-claim-v1@users.noreply.github.com
+          git commit -m 'Star Trek: claim Morgo cycle v1'
+          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_MAIN"
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
