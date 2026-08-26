@@ -1,0 +1,142 @@
+name: star-trek-benbassat-candidate-recovery-v12
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-candidate-recovery-v12
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-candidate-recovery-v12
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  LIVE_MAIN: 29b9ab279dac90fad82aac48633ef83d5ac81b39
+  LIVE_TREE: 7c2ad054ceb3b3cbd1f0c00c838cfc3d014ff169
+  LIVE_MESSAGE: "Media search: record rolling candidate attempt (2026-08-25)"
+  EXPECTED_CLAIM_COMMIT: 0a7e2ed0c1fa7d97b1feb9c0b7e3ef78fd4e5ca2
+  EXPECTED_CLAIM_TREE: 63802f7e11f19f7f5ffc5e8093c9866e0429813c
+  EXPECTED_SETTLEMENT_SHA: 1ce1896b186cd3c7a6ec5540cfb79367aa7b8e95525a30a4a40dca0a925122f8
+  EXPECTED_SOURCE_REVIEW_SHA: 4568d3e5a64d671e83b6f4f37049131b7000943ce3521986495b88916857cfc5
+  EXPECTED_MEDIA_RECEIPT_SHA: cb2db2f214ac4ecbd10cca1e26a71b80c9fe09ba08127617ceaadf586d9a4af0
+  EXPECTED_CLAIM_RECEIPT_SHA: 25def3142f4c196f45c1a1d2e99e7d4852ba05d859f11d15ba22aace3cdc883b
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  EXPECTED_LEASE: lease_151ba8f5efac7d922ea2f8c2
+  WALL_ID: UC-1397
+  ALICE_WALL_ID: UC-1396
+  CLAIM_BRANCH: agent/star-trek-benbassat-claim-result-v1
+  SOURCE_REVIEW_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  SOURCE_REVIEW_PATH: transport/star-trek-benbassat-source-review-v1/source-review.json
+  MEDIA_BRANCH: agent/star-trek-benbassat-media-result-v1
+  MEDIA_PATH: transport/star-trek-benbassat-media-v1/media-receipt.json
+  SETTLEMENT_BRANCH: agent/star-trek-benbassat-preproduct-settlement-result-v2
+  SETTLEMENT_PATH: transport/star-trek-benbassat-preproduct-settlement-v2/settlement.json
+  RESULT_BRANCH: agent/star-trek-benbassat-candidate-result-v4
+  TRACKED_RUNTIME: .github/recovery/star-trek-benbassat-candidate-recovery-v12
+  SOURCE_ROOT: /tmp/star-trek-benbassat-candidate-v12-source
+  LIFECYCLE_SOURCE: /tmp/star-trek-benbassat-candidate-v12-source/candidate-lifecycle.py
+  BATCH_SOURCE: /tmp/star-trek-benbassat-candidate-v12-source/batch.json
+  CENSUS_HELPER_SOURCE: /tmp/star-trek-benbassat-candidate-v12-source/census-refresh.sh
+  STEPS_SOURCE: /tmp/star-trek-benbassat-candidate-v12-source/steps
+  OUT: /tmp/star-trek-benbassat-candidate-v12
+  REVIEW_ROOT: /tmp/star-trek-benbassat-candidate-v12/source-review
+  MEDIA_ROOT: /tmp/star-trek-benbassat-candidate-v12/media-layer
+  SETTLEMENT_ROOT: /tmp/star-trek-benbassat-candidate-v12/preproduct-settlement
+  LIFECYCLE: /tmp/star-trek-benbassat-candidate-v12-runtime.py
+  BATCH: /tmp/star-trek-benbassat-candidate-v12-runtime.json
+  CENSUS_HELPER: /tmp/star-trek-benbassat-census-refresh-v12.sh
+  STEPS_ROOT: /tmp/star-trek-benbassat-candidate-v12-steps
+  CENSUS_MAX_ATTEMPTS: 3
+  CENSUS_RETRY_DELAY_SECONDS: 12
+
+jobs:
+  stage:
+    name: stage-one-corrected-benbassat-candidate-v12
+    if: ${{ github.event.head_commit.message == 'Run Star Trek Benbassat candidate recovery v12' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify and externalize the single sealed runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          while read -r digest relative; do
+            test -f "$relative"
+            test "$(sha256sum "$relative" | awk '{print $1}')" = "$digest"
+          done < "$TRACKED_RUNTIME/sealed-manifest.sha256"
+
+          rm -rf "$SOURCE_ROOT" "$STEPS_ROOT"
+          mkdir -p "$SOURCE_ROOT/steps" "$STEPS_ROOT"
+          cp "$TRACKED_RUNTIME/candidate-lifecycle.py" "$LIFECYCLE_SOURCE"
+          cp "$TRACKED_RUNTIME/batch.json" "$BATCH_SOURCE"
+          cp "$TRACKED_RUNTIME/census-refresh.sh" "$CENSUS_HELPER_SOURCE"
+          cp "$TRACKED_RUNTIME/steps"/[0-9][0-9].sh "$STEPS_SOURCE"/
+          cp "$STEPS_SOURCE"/[0-9][0-9].sh "$STEPS_ROOT"/
+          cp "$CENSUS_HELPER_SOURCE" "$CENSUS_HELPER"
+          chmod +x "$LIFECYCLE_SOURCE" "$CENSUS_HELPER_SOURCE" "$CENSUS_HELPER" "$STEPS_SOURCE"/[0-9][0-9].sh "$STEPS_ROOT"/[0-9][0-9].sh
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          path = Path(os.environ["LIFECYCLE_SOURCE"])
+          compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          PY
+          for script in "$CENSUS_HELPER_SOURCE" "$CENSUS_HELPER" "$STEPS_SOURCE"/[0-9][0-9].sh "$STEPS_ROOT"/[0-9][0-9].sh; do
+            bash -n "$script"
+          done
+          sha256sum "$LIFECYCLE_SOURCE" "$BATCH_SOURCE" "$CENSUS_HELPER_SOURCE" "$STEPS_SOURCE"/[0-9][0-9].sh > /tmp/star-trek-benbassat-candidate-v12-source.sha256
+
+      - name: Verify immutable corrected layers
+        shell: bash
+        run: bash "$STEPS_ROOT/01.sh"
+
+      - name: Submit, grow, and reconcile the exact leased object
+        shell: bash
+        run: bash "$STEPS_ROOT/02.sh"
+
+      - name: Rebuild projections and resolve the media review
+        shell: bash
+        run: bash "$STEPS_ROOT/03.sh"
+
+      - name: Rebuild terminal projections and qualify the candidate
+        shell: bash
+        run: bash "$STEPS_ROOT/04.sh"
+
+      - name: Squash and publish the corrected candidate result
+        shell: bash
+        run: bash "$STEPS_ROOT/05.sh"
+
+      - name: Upload candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-candidate-recovery-v12-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-benbassat-candidate-v12/
+            /tmp/star-trek-benbassat-candidate-v12-source/
+            /tmp/star-trek-benbassat-candidate-v12-source.sha256
+            /tmp/star-trek-benbassat-candidate-v12-steps/
+            /tmp/star-trek-benbassat-candidate-v12-runtime.py
+            /tmp/star-trek-benbassat-candidate-v12-runtime.json
+            /tmp/star-trek-benbassat-census-refresh-v12.sh
+          if-no-files-found: warn
+          retention-days: 30
