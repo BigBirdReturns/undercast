@@ -1,0 +1,198 @@
+name: star-trek-risik-media-recovery-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-media-recovery-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-risik-media-recovery-v2
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 129e6f9c389fe61bb8027f4e046bea7de510cb84
+  EXPECTED_TREE: 6d32c386636296e76bcab61baa387cb629967ac3
+  CLAIM_BRANCH: agent/star-trek-risik-claim-result-v2
+  CLAIM_COMMIT: eff3da84c7718d0894afda1fbc4e790bc88265da
+  CLAIM_TREE: 289b2393496d1146e69e0219784564623b844863
+  CLAIM_RECEIPT_SHA: c83b365b93019b0fe0dfd579cabec2cbd7c8dd4b679fcce547a6e59b5980089d
+  SOURCE_BRANCH: agent/star-trek-risik-source-result-v1
+  SOURCE_COMMIT: 5a9b3750d85642bc001629353927132ea2762435
+  SOURCE_TREE: 77002b5ac1fb78db05da165457705fa9deff550e
+  SOURCE_RECEIPT_SHA: 44fc495411c23202e924232d665dc5d97110877dbd55f47bcdfbf080627bdf1e
+  SOURCE_PREFIX: transport/star-trek-risik-source-v1
+  SOURCE_REVIEW_BRANCH: agent/star-trek-risik-source-review-result-v1
+  SOURCE_REVIEW_COMMIT: d769b3eb261d86db3da41d2033ba7c9d6f402db8
+  SOURCE_REVIEW_TREE: 6ab590d19b81c1dd659f5bb670087c5c38f8c004
+  SOURCE_REVIEW_SHA: cb61b9be745d629a35a57d827711bd29105d3c2d53dac48ce5d26c74a6c82b6a
+  SOURCE_REVIEW_PATH: transport/star-trek-risik-source-review-v1/source-review.json
+  EXPECTED_LEASE: lease_5d07d02fd67ea40a4950b1dd
+  TASK_ID: ap_096624f177ae0c9f2e91836c
+  EXPECTED_PERFORMER: Fred Tatasciore
+  EXPECTED_CHARACTER: Risik
+  EXPECTED_FINGERPRINT: 6a66df1f109bbe6f0cd679ab95e29d0090dc3f3139219a99daae82b3001f2cc6
+  WALL_ID: UC-1399
+  PRIOR_PORTRAIT_WALL: UC-1398
+  PRIOR_PORTRAIT_ITEM: ma_8254f59b1cc6004f0fa5f1a2
+  PRIOR_PORTRAIT_SHA: ae19bcd09869d848fd74202fcc3c59ac41dbef153f7a33844c278b91b8d4ea5f
+  RESULT_BRANCH: agent/star-trek-risik-media-result-v1
+  PROGRAM_SOURCE: .github/recovery/star-trek-risik-media-recovery-v1/media.py
+  PROGRAM: /tmp/star-trek-risik-media-v1.py
+  WORK: /tmp/star-trek-risik-claim-worktree-v1
+  OUT: /tmp/star-trek-risik-media-v1
+
+jobs:
+  prepare:
+    name: prepare-source-bound-risik-media-v2
+    if: ${{ github.event.head_commit.message == 'Prepare source-bound Star Trek Risik media v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Freeze immutable inputs and prepare exact media
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git hash-object "$PROGRAM_SOURCE")" = "3d278b1af89789ea6c013a5722fcb1f25b57cc6c"
+          cp "$PROGRAM_SOURCE" "$PROGRAM"
+          chmod +x "$PROGRAM"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          path = Path(os.environ["PROGRAM"])
+          compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          PY
+
+          rm -rf "$OUT" "$WORK"
+          mkdir -p "$OUT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git fetch --no-tags --depth=2 origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${CLAIM_BRANCH}:refs/remotes/origin/${CLAIM_BRANCH}" \
+            "+refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}" \
+            "+refs/heads/${SOURCE_REVIEW_BRANCH}:refs/remotes/origin/${SOURCE_REVIEW_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          test "$(git show -s --format=%s "$EXPECTED_MAIN")" = "Star Trek: publish Morgo cycle"
+          test "$(git rev-parse "refs/remotes/origin/${CLAIM_BRANCH}")" = "$CLAIM_COMMIT"
+          test "$(git show -s --format=%T "$CLAIM_COMMIT")" = "$CLAIM_TREE"
+          test "$(git show -s --format=%P "$CLAIM_COMMIT")" = "$EXPECTED_MAIN"
+          test "$(git rev-parse "refs/remotes/origin/${SOURCE_BRANCH}")" = "$SOURCE_COMMIT"
+          test "$(git show -s --format=%T "$SOURCE_COMMIT")" = "$SOURCE_TREE"
+          test "$(git rev-parse "refs/remotes/origin/${SOURCE_REVIEW_BRANCH}")" = "$SOURCE_REVIEW_COMMIT"
+          test "$(git show -s --format=%T "$SOURCE_REVIEW_COMMIT")" = "$SOURCE_REVIEW_TREE"
+
+          git show "refs/remotes/origin/${CLAIM_BRANCH}:data/review/adapter-sdk/star-trek-risik-claim.json" > "$OUT/claim-receipt.json"
+          git show "refs/remotes/origin/${SOURCE_BRANCH}:${SOURCE_PREFIX}/source-probe.json" > "$OUT/source-probe.json"
+          git show "refs/remotes/origin/${SOURCE_REVIEW_BRANCH}:${SOURCE_REVIEW_PATH}" > "$OUT/source-review.json"
+          git worktree add --detach "$WORK" "$CLAIM_COMMIT"
+          python3 -m pip install --disable-pip-version-check --no-input Pillow==11.3.0
+          ROOT="$WORK" python3 "$PROGRAM"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, os
+
+          receipt = json.loads((Path(os.environ["OUT"]) / "media-receipt.json").read_text())
+          episodes = {
+              "Something Borrowed, Something Green",
+              "The Inner Fight",
+              "Old Friends, New Planets",
+          }
+          production = receipt.get("adjudication", {}).get("selected_card_production")
+          checks = [
+              receipt.get("transaction") == "STAR-TREK-RISIK-MEDIA-V1",
+              receipt.get("status") == "media-prepared-pending-independent-review",
+              receipt.get("canonical_parent") == os.environ["EXPECTED_MAIN"],
+              receipt.get("canonical_tree") == os.environ["EXPECTED_TREE"],
+              receipt.get("claim", {}).get("commit") == os.environ["CLAIM_COMMIT"],
+              receipt.get("claim", {}).get("receipt_sha256") == os.environ["CLAIM_RECEIPT_SHA"],
+              receipt.get("source", {}).get("commit") == os.environ["SOURCE_COMMIT"],
+              receipt.get("source", {}).get("receipt_sha256") == os.environ["SOURCE_RECEIPT_SHA"],
+              receipt.get("source_review", {}).get("commit") == os.environ["SOURCE_REVIEW_COMMIT"],
+              receipt.get("source_review", {}).get("review_sha256") == os.environ["SOURCE_REVIEW_SHA"],
+              receipt.get("task", {}).get("id") == os.environ["TASK_ID"],
+              receipt.get("task", {}).get("lease_id") == os.environ["EXPECTED_LEASE"],
+              receipt.get("task", {}).get("wall_id_reserved") == os.environ["WALL_ID"],
+              receipt.get("task", {}).get("status") == "leased",
+              receipt.get("adjudication", {}).get("adjudicated_kind") == "voice",
+              receipt.get("adjudication", {}).get("performance_mode") == "voice-animation",
+              receipt.get("adjudication", {}).get("series") == "Star Trek: Lower Decks",
+              receipt.get("adjudication", {}).get("year") == "2023",
+              production in episodes,
+              receipt.get("still", {}).get("title") == "File:Risik.jpg",
+              receipt.get("still", {}).get("selected_card_production") == production,
+              receipt.get("portrait", {}).get("title") == "File:Fred Tatasciore (52261767885).jpg",
+              receipt.get("portrait", {}).get("reuse", {}).get("wall_id") == os.environ["PRIOR_PORTRAIT_WALL"],
+              receipt.get("portrait", {}).get("reuse", {}).get("item_id") == os.environ["PRIOR_PORTRAIT_ITEM"],
+              receipt.get("portrait", {}).get("reuse", {}).get("prior_asset_sha256") == os.environ["PRIOR_PORTRAIT_SHA"],
+              receipt.get("still", {}).get("sha256") != receipt.get("portrait", {}).get("sha256"),
+              receipt.get("queue") == {"total":2228,"queued":1795,"resolved":430,"blocked":0,"rejected":2,"in_flight":1},
+          ]
+          boundary = receipt.get("boundary") or {}
+          checks.extend([
+              boundary.get("single_card_production_selected_by_character_file_page") is True,
+              boundary.get("source_distinct") is True,
+              boundary.get("byte_distinct") is True,
+              boundary.get("performer_source_reused") is True,
+              boundary.get("performer_source_prior_identity_enforced") is True,
+              boundary.get("performer_source_prior_presentation_enforced") is True,
+              boundary.get("new_derivative_byte_distinct_from_all_current_assets") is True,
+              boundary.get("new_facet_votes_pending") is True,
+              boundary.get("canonical_mutation") is False,
+              boundary.get("lease_mutation") is False,
+              boundary.get("additional_lease_issued") is False,
+              boundary.get("product_staged") is False,
+              boundary.get("waterline_cycle_recorded") is False,
+          ])
+          if not all(checks):
+              raise SystemExit(f"Risik media receipt validation failed: {receipt}")
+          PY
+
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)" = "$EXPECTED_MAIN"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload Risik media evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-risik-media-v1
+          path: /tmp/star-trek-risik-media-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable Risik media result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq \
+            --argjson id "$ARTIFACT_ID" \
+            --arg digest "$ARTIFACT_DIGEST" \
+            '.artifact={id:$id,digest:$digest}' \
+            "$OUT/media-receipt.json" > "$OUT/media.tmp"
+          mv "$OUT/media.tmp" "$OUT/media-receipt.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-risik-media-v1
+          git config user.email undercast-risik-media-v1@users.noreply.github.com
+          git checkout --orphan risik-media-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-risik-media-v1
+          cp -a "$OUT"/. transport/star-trek-risik-media-v1/
+          git add transport/star-trek-risik-media-v1
+          git commit -m "Record Star Trek Risik media v1"
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
