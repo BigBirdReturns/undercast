@@ -1,0 +1,97 @@
+name: star-trek-morgo-finalizer-diagnosis-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-morgo-finalizer-diagnosis-v1
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-morgo-finalizer-diagnosis-v1
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    name: extract-morgo-finalizer-v2-failure
+    if: ${{ github.event.head_commit.message == 'Extract Morgo finalizer v2 failure log' }}
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FAILED_JOB_ID: '98322751125'
+      RESULT_BRANCH: agent/star-trek-morgo-finalizer-diagnosis-result-v1
+      OUT: /tmp/star-trek-morgo-finalizer-diagnosis-v1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Extract and classify the failed job log
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/jobs/${FAILED_JOB_ID}/logs" > "$OUT/download.bin"
+          if file "$OUT/download.bin" | grep -qi 'zip archive'; then
+            unzip -p "$OUT/download.bin" > "$OUT/full.log"
+          else
+            mv "$OUT/download.bin" "$OUT/full.log"
+          fi
+
+          tail -n 1200 "$OUT/full.log" > "$OUT/failure-tail.log"
+          grep -E -i '##\[error\]|Traceback|SystemExit|failed:|drifted|mismatch|missing|Process completed|star-trek-morgo|waterline|receipt|checker|candidate|registry|baseline' "$OUT/full.log" > "$OUT/failure-signals.log" || true
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+
+          out = Path(os.environ['OUT'])
+          full = out.joinpath('full.log').read_text(encoding='utf-8', errors='replace')
+          lines = full.splitlines()
+          error_lines = [
+              line for line in lines
+              if any(token in line.lower() for token in (
+                  '##[error]', 'traceback', 'systemexit', 'failed:', 'drifted',
+                  'mismatch', 'process completed with exit code'
+              ))
+          ]
+          receipt = {
+              'version': 1,
+              'transaction': 'STAR-TREK-MORGO-FINALIZER-V2-FAILURE-DIAGNOSIS',
+              'failed_job_id': int(os.environ['FAILED_JOB_ID']),
+              'log_sha256': hashlib.sha256(out.joinpath('full.log').read_bytes()).hexdigest(),
+              'line_count': len(lines),
+              'error_lines': error_lines[-100:],
+              'canonical_mutation': False,
+              'additional_lease_issued': False,
+          }
+          out.joinpath('diagnosis.json').write_text(
+              json.dumps(receipt, indent=2, ensure_ascii=False) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Publish immutable diagnostic result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-morgo-finalizer-diagnosis-v1
+          git config user.email undercast-morgo-finalizer-diagnosis-v1@users.noreply.github.com
+          git checkout --orphan morgo-finalizer-diagnosis-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-morgo-finalizer-diagnosis-v1
+          cp -a "$OUT"/. transport/star-trek-morgo-finalizer-diagnosis-v1/
+          git add transport/star-trek-morgo-finalizer-diagnosis-v1
+          git commit -m 'Record Star Trek Morgo finalizer v2 failure diagnosis'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
