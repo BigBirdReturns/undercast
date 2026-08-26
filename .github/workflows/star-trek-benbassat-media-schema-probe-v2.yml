@@ -1,0 +1,122 @@
+name: star-trek-benbassat-media-schema-probe-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-media-schema-probe-v2
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-media-schema-probe-v2
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_BRANCH: agent/star-trek-benbassat-candidate-result-v4
+  CLAIM_COMMIT: 0a7e2ed0c1fa7d97b1feb9c0b7e3ef78fd4e5ca2
+  WALL_ID: UC-1397
+  RESULT_BRANCH: agent/star-trek-benbassat-media-schema-probe-result-v2
+  OUT: /tmp/star-trek-benbassat-media-schema-probe-v2
+
+jobs:
+  probe:
+    if: ${{ github.event.head_commit.message == 'Run Star Trek Benbassat media schema probe v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Inspect current immutable candidate media schema
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git fetch --no-tags --depth=1 origin "$CANDIDATE_BRANCH"
+          candidate_commit="$(git rev-parse FETCH_HEAD)"
+          test "$(git show -s --format=%P FETCH_HEAD)" = "$CLAIM_COMMIT"
+          test "$(git show -s --format=%s FETCH_HEAD)" = "Star Trek: stage corrected Benbassat candidate v4"
+          git checkout --detach FETCH_HEAD
+          export CANDIDATE_COMMIT="$candidate_commit"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+
+          wall = os.environ['WALL_ID']
+          out = Path(os.environ['OUT'])
+          media_path = Path('data/MEDIA-AUDIT.json')
+          media = json.loads(media_path.read_text(encoding='utf-8'))
+          sources = json.loads(Path('data/SOURCES.json').read_text(encoding='utf-8'))
+          specimens = json.loads(Path('data/specimens.json').read_text(encoding='utf-8'))
+          candidate = json.loads(Path('data/review/adapter-sdk/star-trek-benbassat-candidate.json').read_text(encoding='utf-8'))
+
+          matches = []
+          def scalar_contains(value):
+              return value == wall or (isinstance(value, str) and wall in value)
+          def visit(node, path='$'):
+              if isinstance(node, dict):
+                  hit_keys = [key for key, value in node.items() if scalar_contains(value)]
+                  if hit_keys:
+                      matches.append({'path': path, 'hit_keys': hit_keys, 'object': node})
+                  for key, value in node.items():
+                      visit(value, f'{path}.{key}')
+              elif isinstance(node, list):
+                  for index, value in enumerate(node):
+                      visit(value, f'{path}[{index}]')
+          visit(media)
+
+          report = {
+              'version': 2,
+              'transaction': 'STAR-TREK-BENBASSAT-MEDIA-SCHEMA-PROBE-V2',
+              'candidate_commit': os.environ['CANDIDATE_COMMIT'],
+              'wall_id': wall,
+              'media_audit': {
+                  'sha256': hashlib.sha256(media_path.read_bytes()).hexdigest(),
+                  'root_type': type(media).__name__,
+                  'root_keys': sorted(media.keys()) if isinstance(media, dict) else None,
+                  'raw_occurrences': media_path.read_text(encoding='utf-8').count(wall),
+                  'matching_object_count': len(matches),
+                  'exact_wall_id_object_count': sum(item['object'].get('wall_id') == wall for item in matches),
+                  'exact_id_object_count': sum(item['object'].get('id') == wall for item in matches),
+                  'matching_objects': matches,
+              },
+              'sources_rows': [row for row in sources if isinstance(row, dict) and row.get('id') == wall],
+              'specimen_rows': [row for row in specimens if isinstance(row, dict) and row.get('id') == wall],
+              'candidate_media': candidate.get('media'),
+              'candidate_boundary': candidate.get('boundary'),
+              'candidate_receipt_sha256': candidate.get('receipt_sha256'),
+          }
+          (out / 'schema-probe.json').write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+          PY
+          jq -e \
+            --arg wall "$WALL_ID" \
+            '.transaction == "STAR-TREK-BENBASSAT-MEDIA-SCHEMA-PROBE-V2"
+             and .wall_id == $wall
+             and (.sources_rows | length) == 1
+             and (.specimen_rows | length) == 1
+             and .candidate_media.facets.still.status == "absent"
+             and .candidate_media.facets.portrait.status == "absent"' \
+            "$OUT/schema-probe.json" >/dev/null
+
+      - name: Publish immutable schema probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name undercast-benbassat-media-schema-probe-v2
+          git config user.email undercast-benbassat-media-schema-probe-v2@users.noreply.github.com
+          git checkout --orphan benbassat-media-schema-probe-result-v2
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-media-schema-probe-v2
+          cp "$OUT/schema-probe.json" transport/star-trek-benbassat-media-schema-probe-v2/schema-probe.json
+          git add transport/star-trek-benbassat-media-schema-probe-v2/schema-probe.json
+          git commit -m 'Record Star Trek Benbassat media schema probe v2'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
