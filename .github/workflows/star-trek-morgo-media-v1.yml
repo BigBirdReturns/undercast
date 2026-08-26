@@ -1,0 +1,504 @@
+name: star-trek-morgo-media-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-morgo-media-recovery-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-morgo-media-v1
+  cancel-in-progress: false
+
+env:
+  LIVE_MAIN: 5e89a0ba59f36feae7986a9260b8fa17a824a8b7
+  LIVE_TREE: 0819bd9ace59e2d8cf8721a5acd1f5de5498cd87
+  BENBASSAT_PRODUCT: 5afac948405d67c94090f2da55a510689e5eb583
+  CLAIM_BRANCH: agent/star-trek-morgo-claim-result-v1
+  CLAIM_COMMIT: 645b066b25309e1e8bdc2f13f64b8a04f95bfa96
+  CLAIM_TREE: 408a69a0af29dea5052db22b564f63939c43f7a8
+  CLAIM_RECEIPT_SHA: dd0f6787c555c110185bc8b5cc2b234e299791401b9bdec6a0088ba6a5217fb4
+  SOURCE_BRANCH: agent/star-trek-morgo-source-result-v2
+  SOURCE_COMMIT: 5ed276475be6f3a12629866d77e3811d15aed2f7
+  SOURCE_RECEIPT_SHA: 25046adf915ee4425e152d2b5ec9e79af69bfcdaa2b7a924f55245778dcdd103
+  SOURCE_REVIEW_BRANCH: agent/star-trek-morgo-source-review-result-v1
+  SOURCE_REVIEW_COMMIT: 7198f9c272dbb1806fb6d2b6b09e889d4e57e7b0
+  SOURCE_REVIEW_TREE: 4ed47ea6dcb5568173e10775fc37ae5282d5af3d
+  SOURCE_REVIEW_SHA: 603a4bdab4b58086d94c1d99751a749802d054659f1c16d04b15c7b111a83c5d
+  TASK_ID: ap_a7fb29c5cce85c86708ea0e6
+  EXPECTED_PERFORMER: Fred Tatasciore
+  EXPECTED_CHARACTER: Morgo
+  EXPECTED_FINGERPRINT: 279c816ebd1b83899f5b257f7880df5734bb855f4206c2fc92c5278c9370ff46
+  EXPECTED_LEASE: lease_578930730585295673ca706d
+  STILL_TITLE: File:Morgo.jpg
+  PORTRAIT_TITLE: File:Fred Tatasciore (52261767885).jpg
+  RESULT_BRANCH: agent/star-trek-morgo-media-result-v1
+  WORK: /tmp/star-trek-morgo-media-worktree-v1
+  OUT: /tmp/star-trek-morgo-media-v1
+
+jobs:
+  scout:
+    name: prepare-source-distinct-morgo-and-tatasciore-media
+    if: ${{ github.event.head_commit.message == 'Prepare Star Trek Morgo media v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Verify source review, claim custody, and live publication base
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$WORK" "$OUT"
+          mkdir -p "$OUT/source" "$OUT/review"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          git fetch --no-tags origin main "$CLAIM_BRANCH" "$SOURCE_BRANCH" "$SOURCE_REVIEW_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$LIVE_MAIN"
+          test "$(git show -s --format=%T "$LIVE_MAIN")" = "$LIVE_TREE"
+          test "$(git show -s --format=%P "$LIVE_MAIN")" = "$BENBASSAT_PRODUCT"
+
+          claim_ref="refs/remotes/origin/${CLAIM_BRANCH}"
+          source_ref="refs/remotes/origin/${SOURCE_BRANCH}"
+          review_ref="refs/remotes/origin/${SOURCE_REVIEW_BRANCH}"
+          test "$(git rev-parse "$claim_ref")" = "$CLAIM_COMMIT"
+          test "$(git show -s --format=%T "$claim_ref")" = "$CLAIM_TREE"
+          test "$(git show -s --format=%P "$claim_ref")" = "$BENBASSAT_PRODUCT"
+          test "$(git rev-parse "$source_ref")" = "$SOURCE_COMMIT"
+          test "$(git rev-parse "$review_ref")" = "$SOURCE_REVIEW_COMMIT"
+          test "$(git show -s --format=%T "$review_ref")" = "$SOURCE_REVIEW_TREE"
+
+          git show "${claim_ref}:data/review/adapter-sdk/star-trek-morgo-claim.json" > "$OUT/claim-receipt.json"
+          for name in source-probe.json morgo-source.wikitext; do
+            git show "${source_ref}:transport/star-trek-morgo-source-v2/${name}" > "$OUT/source/${name}"
+          done
+          git show "${review_ref}:transport/star-trek-morgo-source-review-v1/source-review.json" > "$OUT/review/source-review.json"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os, re
+
+          out = Path(os.environ["OUT"])
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          def verify(path, field, omitted=()):
+              payload = json.loads(path.read_text())
+              expected = payload[field]
+              body = dict(payload)
+              body.pop(field, None)
+              for key in omitted:
+                  body.pop(key, None)
+              actual = hashlib.sha256(
+                  (json.dumps(stable(body), indent=2, ensure_ascii=False) + "\n").encode()
+              ).hexdigest()
+              if actual != expected:
+                  raise SystemExit(f"{path.name} identity mismatch: {actual} != {expected}")
+              return payload
+
+          claim = verify(out / "claim-receipt.json", "receipt_sha256")
+          source = verify(out / "source/source-probe.json", "receipt_sha256", ("artifact",))
+          review = verify(out / "review/source-review.json", "review_sha256", ("artifact",))
+
+          if claim["receipt_sha256"] != os.environ["CLAIM_RECEIPT_SHA"]:
+              raise SystemExit("claim receipt drifted")
+          if source["receipt_sha256"] != os.environ["SOURCE_RECEIPT_SHA"]:
+              raise SystemExit("source receipt drifted")
+          if review["review_sha256"] != os.environ["SOURCE_REVIEW_SHA"]:
+              raise SystemExit("source-review receipt drifted")
+          if review["verdict"] != "pass":
+              raise SystemExit("source review did not pass")
+          if review["task"]["lease_id"] != os.environ["EXPECTED_LEASE"]:
+              raise SystemExit("source-review lease drifted")
+          if review["adjudication"] != {
+              "adjudicated_kind": "voice",
+              "animation_labor_attributed": False,
+              "character_design_attributed": False,
+              "episode": "The Least Dangerous Game",
+              "first_aired": "1 September 2022",
+              "maker_attribution": "unresolved",
+              "performance_mode": "voice-animation",
+              "performance_scope": "Fred Tatasciore's animated voice performance as Volcanic Lord Morgo in the Star Trek: Lower Decks episode The Least Dangerous Game (2022).",
+              "physical_performance_attributed": False,
+              "prosthetic_performance_attributed": False,
+              "series": "Star Trek: Lower Decks",
+              "sound_attributed": False,
+              "transformation_measured": False,
+              "vocal_processing_attributed": False,
+              "voice_direction_attributed": False,
+              "year": "2022",
+          }:
+              raise SystemExit(f"source adjudication drifted: {review['adjudication']}")
+
+          frozen = (out / "source/morgo-source.wikitext").read_text()
+          if not re.search(r"^\|image\s*=\s*Morgo\.jpg\s*$", frozen, flags=re.M):
+              raise SystemExit("frozen Morgo source does not name the exact primary still")
+          if not re.search(r"^\|caption\s*=\s*Morgo in 2381\s*$", frozen, flags=re.M):
+              raise SystemExit("frozen Morgo source does not bind the primary still caption")
+          if "|image2        = Morgo's crater.jpg" not in frozen:
+              raise SystemExit("frozen Morgo source no longer distinguishes the crater image")
+          PY
+
+          git worktree add --detach "$WORK" "$CLAIM_COMMIT"
+          printf '%s\n' "$(sha256sum "$WORK/data/AUTOPILOT.json" | awk '{print $1}')" > "$OUT/autopilot-before.sha256"
+
+      - name: Download, normalize, and audit exact media facets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --disable-pip-version-check --no-input Pillow==11.3.0
+          ROOT="$WORK" OUT="$OUT" python3 - <<'PY'
+          from __future__ import annotations
+          from datetime import datetime, timezone
+          from io import BytesIO
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+          from PIL import Image
+          import hashlib, html, json, os, re
+
+          repo = Path(os.environ["ROOT"])
+          out = Path(os.environ["OUT"])
+          generated = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+          ua = "UNDERCAST-Morgo-Media/1.0 (source and attribution audit)"
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          def pretty(value):
+              return json.dumps(stable(value), indent=2, ensure_ascii=False) + "\n"
+
+          def digest(data):
+              return hashlib.sha256(data).hexdigest()
+
+          def request_bytes(url, referer=None):
+              headers = {"User-Agent": ua, "Accept": "*/*"}
+              if referer:
+                  headers["Referer"] = referer
+              with urlopen(Request(url, headers=headers), timeout=120) as response:
+                  return response.read()
+
+          def api(base, params):
+              return json.loads(request_bytes(base + "?" + urlencode(params)))
+
+          def clean(value):
+              return html.unescape(re.sub(r"<[^>]+>", "", value or "")).strip()
+
+          def decode(data):
+              with Image.open(BytesIO(data)) as image:
+                  image.load()
+                  return image.convert("RGB"), image.size, image.format or "unknown"
+
+          def normalize(data, facet):
+              image, original_size, source_format = decode(data)
+              image.thumbnail((1600, 1600) if facet == "still" else (1200, 1500), Image.Resampling.LANCZOS)
+              buffer = BytesIO()
+              if facet == "still":
+                  image.save(buffer, format="WEBP", quality=94, method=6)
+              else:
+                  image.save(buffer, format="JPEG", quality=94, optimize=True, progressive=False)
+              return buffer.getvalue(), original_size, source_format, image.size
+
+          def download_image(info, referer):
+              errors = []
+              for url in (info.get("thumburl"), info.get("url")):
+                  if not url:
+                      continue
+                  try:
+                      data = request_bytes(url, referer)
+                      decode(data)
+                      return data, url
+                  except Exception as exc:
+                      errors.append(f"{url}:{type(exc).__name__}:{exc}")
+              raise RuntimeError("image download failed: " + " | ".join(errors))
+
+          autopilot = json.loads((repo / "data/AUTOPILOT.json").read_text())
+          task = next((row for row in autopilot["jobs"] if row.get("id") == os.environ["TASK_ID"]), None)
+          if not task:
+              raise SystemExit("Morgo task missing from claim tree")
+          if task.get("performer") != os.environ["EXPECTED_PERFORMER"] or task.get("character") != os.environ["EXPECTED_CHARACTER"]:
+              raise SystemExit("Morgo identity drifted")
+          if task.get("source_fingerprint") != os.environ["EXPECTED_FINGERPRINT"]:
+              raise SystemExit("Morgo source fingerprint drifted")
+          if task.get("status") != "leased" or task.get("attempts") != 1 or task.get("lease", {}).get("id") != os.environ["EXPECTED_LEASE"]:
+              raise SystemExit("Morgo lease drifted")
+
+          memory_api = "https://memory-alpha.fandom.com/api.php"
+          still_api = api(memory_api, {
+              "action": "query",
+              "prop": "imageinfo",
+              "titles": os.environ["STILL_TITLE"],
+              "iiprop": "url|size|sha1|mime|timestamp|extmetadata",
+              "iiurlwidth": "1600",
+              "format": "json",
+              "formatversion": "2",
+          })
+          still_page = (still_api.get("query", {}).get("pages") or [None])[0]
+          infos = still_page.get("imageinfo") if still_page else None
+          if not still_page or still_page.get("title") != os.environ["STILL_TITLE"] or not infos or len(infos) != 1:
+              raise SystemExit("exact Morgo still identity drifted")
+          still_info = infos[0]
+          still_raw, still_download = download_image(still_info, "https://memory-alpha.fandom.com/wiki/Morgo")
+          still_bytes, still_source_size, still_source_format, still_output_size = normalize(still_raw, "still")
+          still_sha = digest(still_bytes)
+          (out / "morgo-still.webp").write_bytes(still_bytes)
+          (out / "still-imageinfo.json").write_text(pretty(still_api))
+
+          commons_api = "https://commons.wikimedia.org/w/api.php"
+          portrait_api = api(commons_api, {
+              "action": "query",
+              "prop": "imageinfo",
+              "titles": os.environ["PORTRAIT_TITLE"],
+              "iiprop": "url|size|sha1|mime|timestamp|extmetadata",
+              "iiurlwidth": "1200",
+              "format": "json",
+              "formatversion": "2",
+          })
+          portrait_page = (portrait_api.get("query", {}).get("pages") or [None])[0]
+          portrait_infos = portrait_page.get("imageinfo") if portrait_page else None
+          if not portrait_page or portrait_page.get("title") != os.environ["PORTRAIT_TITLE"] or not portrait_infos or len(portrait_infos) != 1:
+              raise SystemExit("Fred Tatasciore portrait identity drifted")
+          portrait_info = portrait_infos[0]
+          ext = portrait_info.get("extmetadata") or {}
+          description = clean((ext.get("ImageDescription") or ext.get("ObjectName") or {}).get("value"))
+          author = clean((ext.get("Artist") or {}).get("value"))
+          license_name = clean((ext.get("LicenseShortName") or {}).get("value"))
+          identity = (portrait_page["title"] + " " + description).lower()
+          if "fred" not in identity or "tatasciore" not in identity:
+              raise SystemExit("portrait metadata does not identify Fred Tatasciore")
+          if not any(token in license_name.lower() for token in ("cc by", "cc0", "public domain")):
+              raise SystemExit(f"portrait license is not accepted: {license_name}")
+          portrait_raw, portrait_download = download_image(portrait_info, "https://commons.wikimedia.org/")
+          portrait_bytes, portrait_source_size, portrait_source_format, portrait_output_size = normalize(portrait_raw, "portrait")
+          portrait_sha = digest(portrait_bytes)
+          (out / "fred-tatasciore-portrait.jpg").write_bytes(portrait_bytes)
+          (out / "portrait-imageinfo.json").write_text(pretty(portrait_api))
+
+          if still_sha == portrait_sha:
+              raise SystemExit("Morgo still and performer portrait collide")
+
+          existing = {}
+          for file in (repo / "images").iterdir():
+              if file.is_file():
+                  existing.setdefault(digest(file.read_bytes()), []).append(str(file.relative_to(repo)))
+          if still_sha in existing:
+              raise SystemExit(f"Morgo still duplicates canonical bytes: {existing[still_sha]}")
+          if portrait_sha in existing:
+              raise SystemExit(f"Fred Tatasciore portrait duplicates canonical bytes: {existing[portrait_sha]}")
+
+          canonical_files = [
+              repo / "data/specimens.json",
+              repo / "data/SOURCES.json",
+              repo / "data/MEDIA-AUDIT.json",
+              repo / "data/media-manifest.json",
+          ]
+          canonical_text = "\n".join(path.read_text(errors="replace") for path in canonical_files if path.exists())
+          still_source = still_info.get("descriptionurl") or "https://memory-alpha.fandom.com/wiki/File:Morgo.jpg"
+          portrait_source = portrait_info.get("descriptionurl") or "https://commons.wikimedia.org/wiki/File:Fred_Tatasciore_(52261767885).jpg"
+          if "Morgo's_crater" in still_source or "Morgo%27s_crater" in still_source:
+              raise SystemExit("automatic crater page image was substituted for the primary Morgo still")
+          if still_source in canonical_text or os.environ["STILL_TITLE"] in canonical_text:
+              raise SystemExit("Morgo still source is already canonical")
+          if portrait_source in canonical_text or os.environ["PORTRAIT_TITLE"] in canonical_text:
+              raise SystemExit("Fred Tatasciore portrait source is already canonical")
+
+          specimens = json.loads((repo / "data/specimens.json").read_text())
+          existing_actor_records = [
+              {
+                  "id": row.get("id"),
+                  "character": row.get("character"),
+                  "production": row.get("production"),
+                  "portrait": row.get("portrait"),
+              }
+              for row in specimens
+              if row.get("actor") == os.environ["EXPECTED_PERFORMER"]
+          ]
+
+          body = {
+              "version": 1,
+              "transaction": "STAR-TREK-MORGO-MEDIA-SCOUT-V1",
+              "status": "success",
+              "generated_at": generated,
+              "live_publication_base": {
+                  "commit": os.environ["LIVE_MAIN"],
+                  "tree": os.environ["LIVE_TREE"],
+                  "parent": os.environ["BENBASSAT_PRODUCT"],
+                  "kind": "product-neutral-media-search-maintenance",
+              },
+              "claim": {
+                  "branch": os.environ["CLAIM_BRANCH"],
+                  "commit": os.environ["CLAIM_COMMIT"],
+                  "tree": os.environ["CLAIM_TREE"],
+                  "receipt_sha256": os.environ["CLAIM_RECEIPT_SHA"],
+              },
+              "source": {
+                  "branch": os.environ["SOURCE_BRANCH"],
+                  "commit": os.environ["SOURCE_COMMIT"],
+                  "receipt_sha256": os.environ["SOURCE_RECEIPT_SHA"],
+              },
+              "source_review": {
+                  "branch": os.environ["SOURCE_REVIEW_BRANCH"],
+                  "commit": os.environ["SOURCE_REVIEW_COMMIT"],
+                  "review_sha256": os.environ["SOURCE_REVIEW_SHA"],
+                  "verdict": "pass",
+              },
+              "task": {
+                  "id": os.environ["TASK_ID"],
+                  "lease_id": os.environ["EXPECTED_LEASE"],
+                  "performer": os.environ["EXPECTED_PERFORMER"],
+                  "character": os.environ["EXPECTED_CHARACTER"],
+                  "source_fingerprint": os.environ["EXPECTED_FINGERPRINT"],
+                  "status": "leased",
+                  "attempts": 1,
+              },
+              "adjudication": {
+                  "adjudicated_kind": "voice",
+                  "performance_mode": "voice-animation",
+                  "series": "Star Trek: Lower Decks",
+                  "episode": "The Least Dangerous Game",
+                  "year": "2022",
+                  "first_aired": "1 September 2022",
+                  "physical_performance_attributed": False,
+                  "prosthetic_performance_attributed": False,
+                  "animation_labor_attributed": False,
+                  "maker_attribution": "unresolved",
+                  "transformation_measured": False,
+              },
+              "still": {
+                  "title": still_page["title"],
+                  "descriptionurl": still_source,
+                  "origin": still_info.get("url"),
+                  "download_url": still_download,
+                  "sha256": still_sha,
+                  "bytes": len(still_bytes),
+                  "source_size": still_source_size,
+                  "output_size": still_output_size,
+                  "source_format": still_source_format,
+                  "mime": still_info.get("mime"),
+                  "timestamp": still_info.get("timestamp"),
+                  "expected_subject": "Morgo in the 2381 animated Lower Decks appearance",
+                  "source_binding": "frozen Morgo infobox primary image and caption",
+              },
+              "portrait": {
+                  "title": portrait_page["title"],
+                  "descriptionurl": portrait_source,
+                  "origin": portrait_source,
+                  "download_url": portrait_download,
+                  "sha256": portrait_sha,
+                  "bytes": len(portrait_bytes),
+                  "source_size": portrait_source_size,
+                  "output_size": portrait_output_size,
+                  "source_format": portrait_source_format,
+                  "mime": portrait_info.get("mime"),
+                  "timestamp": portrait_info.get("timestamp"),
+                  "author": author,
+                  "license": license_name,
+                  "description": description,
+                  "expected_subject": "Fred Tatasciore",
+              },
+              "existing_actor_records": existing_actor_records,
+              "boundary": {
+                  "primary_morgo_still": True,
+                  "automatic_crater_page_image_excluded": True,
+                  "source_distinct": still_source != portrait_source,
+                  "byte_distinct": still_sha != portrait_sha,
+                  "source_collision": False,
+                  "byte_collision": False,
+                  "cross_facet_substitution": False,
+                  "canonical_mutation": False,
+                  "lease_mutation": False,
+                  "additional_lease_issued": False,
+                  "product_staged": False,
+                  "waterline_cycle_recorded": False,
+              },
+          }
+          encoded = pretty(body)
+          body["receipt_sha256"] = hashlib.sha256(encoded.encode()).hexdigest()
+          (out / "media-scout.json").write_text(pretty(body))
+          PY
+
+          printf '%s\n' "$(sha256sum "$WORK/data/AUTOPILOT.json" | awk '{print $1}')" > "$OUT/autopilot-after.sha256"
+          diff -u "$OUT/autopilot-before.sha256" "$OUT/autopilot-after.sha256"
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg lease "$EXPECTED_LEASE" \
+            '.transaction == "STAR-TREK-MORGO-MEDIA-SCOUT-V1"
+             and .status == "success"
+             and .task.id == $task
+             and .task.lease_id == $lease
+             and .task.status == "leased"
+             and .adjudication.performance_mode == "voice-animation"
+             and .still.title == "File:Morgo.jpg"
+             and .portrait.title == "File:Fred Tatasciore (52261767885).jpg"
+             and .still.expected_subject == "Morgo in the 2381 animated Lower Decks appearance"
+             and .portrait.expected_subject == "Fred Tatasciore"
+             and .still.sha256 != .portrait.sha256
+             and .boundary.primary_morgo_still == true
+             and .boundary.automatic_crater_page_image_excluded == true
+             and .boundary.source_distinct == true
+             and .boundary.byte_distinct == true
+             and .boundary.source_collision == false
+             and .boundary.byte_collision == false
+             and .boundary.cross_facet_substitution == false
+             and .boundary.canonical_mutation == false
+             and .boundary.lease_mutation == false
+             and .boundary.additional_lease_issued == false
+             and .boundary.product_staged == false
+             and .boundary.waterline_cycle_recorded == false' \
+            "$OUT/media-scout.json" >/dev/null
+
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after.json"
+          test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$LIVE_MAIN"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload Morgo media evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-morgo-media-v1
+          path: /tmp/star-trek-morgo-media-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable Morgo media result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq \
+            --argjson id "$ARTIFACT_ID" \
+            --arg digest "$ARTIFACT_DIGEST" \
+            '.artifact={id:$id,digest:$digest}' \
+            "$OUT/media-scout.json" > "$OUT/media-scout.tmp"
+          mv "$OUT/media-scout.tmp" "$OUT/media-scout.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-morgo-media-v1
+          git config user.email undercast-morgo-media-v1@users.noreply.github.com
+          git checkout --orphan morgo-media-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-morgo-media-v1
+          cp -a "$OUT"/. transport/star-trek-morgo-media-v1/
+          git add transport/star-trek-morgo-media-v1
+          git commit -m 'Record Star Trek Morgo media v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
