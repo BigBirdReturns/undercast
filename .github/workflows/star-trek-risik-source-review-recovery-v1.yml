@@ -1,0 +1,163 @@
+name: star-trek-risik-source-review-recovery-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-source-review-recovery-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-risik-source-review-recovery-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 129e6f9c389fe61bb8027f4e046bea7de510cb84
+  EXPECTED_TREE: 6d32c386636296e76bcab61baa387cb629967ac3
+  SOURCE_BRANCH: agent/star-trek-risik-source-result-v1
+  SOURCE_COMMIT: 5a9b3750d85642bc001629353927132ea2762435
+  SOURCE_TREE: 77002b5ac1fb78db05da165457705fa9deff550e
+  SOURCE_RECEIPT_SHA: 44fc495411c23202e924232d665dc5d97110877dbd55f47bcdfbf080627bdf1e
+  SOURCE_PREFIX: transport/star-trek-risik-source-v1
+  CLAIM_COMMIT: eff3da84c7718d0894afda1fbc4e790bc88265da
+  CLAIM_RECEIPT_SHA: c83b365b93019b0fe0dfd579cabec2cbd7c8dd4b679fcce547a6e59b5980089d
+  EXPECTED_LEASE: lease_5d07d02fd67ea40a4950b1dd
+  TASK_ID: ap_096624f177ae0c9f2e91836c
+  EXPECTED_PERFORMER: Fred Tatasciore
+  EXPECTED_CHARACTER: Risik
+  EXPECTED_FINGERPRINT: 6a66df1f109bbe6f0cd679ab95e29d0090dc3f3139219a99daae82b3001f2cc6
+  RESULT_BRANCH: agent/star-trek-risik-source-review-result-v1
+  REVIEWER_SOURCE: .github/recovery/star-trek-risik-source-review-recovery-v1/reviewer.py
+  REVIEWER: /tmp/star-trek-risik-source-review-v1.py
+  OUT: /tmp/star-trek-risik-source-review-v1
+
+jobs:
+  review:
+    name: independently-review-risik-source-and-productions
+    if: ${{ github.event.head_commit.message == 'Review frozen Star Trek Risik source v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Freeze source result and run independent source review
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git hash-object "$REVIEWER_SOURCE")" = "4030f3ac5b5c16bedcea48e60eea8a95b87cc3ed"
+          cp "$REVIEWER_SOURCE" "$REVIEWER"
+          chmod +x "$REVIEWER"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          path = Path(os.environ["REVIEWER"])
+          compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          PY
+
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git fetch --no-tags --depth=2 origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          test "$(git rev-parse "refs/remotes/origin/${SOURCE_BRANCH}")" = "$SOURCE_COMMIT"
+          test "$(git show -s --format=%T "$SOURCE_COMMIT")" = "$SOURCE_TREE"
+
+          git show "refs/remotes/origin/${SOURCE_BRANCH}:${SOURCE_PREFIX}/source-probe.json" > "$OUT/source-probe.json"
+          git show "refs/remotes/origin/${SOURCE_BRANCH}:${SOURCE_PREFIX}/risik-source.wikitext" > "$OUT/risik-source.wikitext"
+          git show "refs/remotes/origin/${SOURCE_BRANCH}:${SOURCE_PREFIX}/risik-extract.txt" > "$OUT/risik-extract.txt"
+
+          python3 "$REVIEWER"
+
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg lease "$EXPECTED_LEASE" \
+            '.transaction == "STAR-TREK-RISIK-SOURCE-REVIEW-V1"
+             and .verdict == "pass"
+             and .canonical_parent == env.EXPECTED_MAIN
+             and .source.commit == env.SOURCE_COMMIT
+             and .source.tree == env.SOURCE_TREE
+             and .source.receipt_sha256 == env.SOURCE_RECEIPT_SHA
+             and .claim.commit == env.CLAIM_COMMIT
+             and .claim.receipt_sha256 == env.CLAIM_RECEIPT_SHA
+             and .task.id == $task
+             and .task.lease_id == $lease
+             and .task.status == "leased"
+             and .adjudication.adjudicated_kind == "voice"
+             and .adjudication.performance_mode == "voice-animation"
+             and .adjudication.series == "Star Trek: Lower Decks"
+             and .adjudication.episodes == [
+               "Something Borrowed, Something Green",
+               "The Inner Fight",
+               "Old Friends, New Planets"
+             ]
+             and .adjudication.year == "2023"
+             and .adjudication.single_card_production == null
+             and .adjudication.single_card_production_status == "pending-source-bound-media-selection"
+             and .adjudication.physical_performance_attributed == false
+             and .adjudication.prosthetic_performance_attributed == false
+             and .adjudication.animation_labor_attributed == false
+             and .adjudication.character_design_attributed == false
+             and .adjudication.voice_direction_attributed == false
+             and .adjudication.vocal_processing_attributed == false
+             and .adjudication.sound_attributed == false
+             and .adjudication.maker_attribution == "unresolved"
+             and .adjudication.transformation_measured == false
+             and (.source.production_revisions | length) == 3
+             and .media_boundary.single_card_production_selection_pending == true
+             and .boundary.source_revision_frozen == true
+             and .boundary.production_revisions_frozen == true
+             and .boundary.independent_source_review_complete == true
+             and .boundary.canonical_mutation == false
+             and .boundary.lease_mutation == false
+             and .boundary.additional_lease_issued == false
+             and .boundary.product_staged == false
+             and .boundary.waterline_cycle_recorded == false' \
+            "$OUT/source-review.json" >/dev/null
+
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)" = "$EXPECTED_MAIN"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload source review evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-risik-source-review-v1
+          path: /tmp/star-trek-risik-source-review-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable source review result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq \
+            --argjson id "$ARTIFACT_ID" \
+            --arg digest "$ARTIFACT_DIGEST" \
+            '.artifact={id:$id,digest:$digest}' \
+            "$OUT/source-review.json" > "$OUT/review.tmp"
+          mv "$OUT/review.tmp" "$OUT/source-review.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-risik-source-review-v1
+          git config user.email undercast-risik-source-review-v1@users.noreply.github.com
+          git checkout --orphan risik-source-review-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-risik-source-review-v1
+          cp -a "$OUT"/. transport/star-trek-risik-source-review-v1/
+          git add transport/star-trek-risik-source-review-v1
+          git commit -m "Record Star Trek Risik source review v1"
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
