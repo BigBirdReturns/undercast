@@ -1,0 +1,65 @@
+name: star-trek-morgo-finalizer-source-extract-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-morgo-finalizer-source-extract-v1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: star-trek-morgo-finalizer-source-extract-v1
+  cancel-in-progress: false
+
+env:
+  SOURCE_COMMIT: 126478fed16a8c0afc6e1cebe8ef4f3f91091408
+  SOURCE_TREE: 8b92bc5774e4d983e7c336bf9ece70601609d1c9
+  PART_ROOT: .github/recovery/star-trek-benbassat-finalizer-recovery-v2
+  CARRIER_SHA256: b3225741d0fe90dc3209ca09fcefe0b2c1ba6f2b69b15135e3418a1be921a4cb
+  OUT: /tmp/star-trek-morgo-finalizer-source-extract-v1
+
+jobs:
+  extract:
+    name: reconstruct-proven-benbassat-finalizer-source
+    if: ${{ github.event.head_commit.message == 'Extract proven Star Trek finalizer source for Morgo' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Reconstruct and verify the sealed reference finalizer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/parts" "$OUT/unpacked"
+
+          git fetch --no-tags origin "$SOURCE_COMMIT"
+          test "$(git show -s --format=%T "$SOURCE_COMMIT")" = "$SOURCE_TREE"
+
+          for number in 01 02 03 04 05 06; do
+            git show "${SOURCE_COMMIT}:${PART_ROOT}/carrier.part${number}" > "$OUT/parts/carrier.part${number}"
+          done
+
+          cat "$OUT/parts"/carrier.part* | tr -d '\r\n' > "$OUT/carrier.base64"
+          base64 --decode "$OUT/carrier.base64" > "$OUT/star-trek-benbassat-finalizer-recovery-v2.zip"
+          test "$(sha256sum "$OUT/star-trek-benbassat-finalizer-recovery-v2.zip" | awk '{print $1}')" = "$CARRIER_SHA256"
+
+          unzip -q "$OUT/star-trek-benbassat-finalizer-recovery-v2.zip" -d "$OUT/unpacked"
+          package="$OUT/unpacked/star-trek-benbassat-finalizer-recovery-v2"
+          test -d "$package"
+          (cd "$package" && sha256sum -c manifest.sha256)
+
+          find "$OUT" -type f ! -name extraction-manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/extraction-manifest.sha256"
+
+      - name: Upload reconstructed reference finalizer
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-morgo-finalizer-source-extract-v1
+          path: /tmp/star-trek-morgo-finalizer-source-extract-v1/
+          if-no-files-found: error
+          retention-days: 30
