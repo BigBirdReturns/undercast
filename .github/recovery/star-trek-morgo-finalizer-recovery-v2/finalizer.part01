@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+import hashlib
+import json
+import os
+import subprocess
+import sys
+
+OUT = Path(os.environ["OUT"])
+LIVE_MAIN = os.environ["LIVE_MAIN"]
+LIVE_TREE = os.environ["LIVE_TREE"]
+LIVE_MESSAGE = os.environ["LIVE_MESSAGE"]
+PREDECESSOR_PRODUCT = os.environ["PREDECESSOR_PRODUCT"]
+PREDECESSOR_TREE = os.environ["PREDECESSOR_TREE"]
+CLAIM_COMMIT = os.environ["CLAIM_COMMIT"]
+CLAIM_TREE = os.environ["CLAIM_TREE"]
+CLAIM_RECEIPT_SHA = os.environ["CLAIM_RECEIPT_SHA"]
+SOURCE_REVIEW_SHA = os.environ["SOURCE_REVIEW_SHA"]
+MEDIA_RECEIPT_SHA = os.environ["MEDIA_RECEIPT_SHA"]
+MEDIA_REVIEW_SHA = os.environ["MEDIA_REVIEW_SHA"]
+CANDIDATE_COMMIT = os.environ["CANDIDATE_COMMIT"]
+CANDIDATE_TREE = os.environ["CANDIDATE_TREE"]
+CANDIDATE_RECEIPT_SHA = os.environ["CANDIDATE_RECEIPT_SHA"]
+REVIEW_COMMIT = os.environ["REVIEW_COMMIT"]
+REVIEW_SHA = os.environ["REVIEW_SHA"]
+TASK_ID = os.environ["TASK_ID"]
+PERFORMER = os.environ["PERFORMER"]
+CHARACTER = os.environ["CHARACTER"]
+FINGERPRINT = os.environ["FINGERPRINT"]
+LEASE_ID = os.environ["LEASE_ID"]
+WALL_ID = os.environ["WALL_ID"]
+STILL_SHA = os.environ["STILL_SHA"]
+PORTRAIT_SHA = os.environ["PORTRAIT_SHA"]
+STILL_ITEM = os.environ["STILL_ITEM"]
+PORTRAIT_ITEM = os.environ["PORTRAIT_ITEM"]
+PREDECESSOR_RECEIPT_PATH = Path(os.environ["PREDECESSOR_RECEIPT_PATH"])
+PREDECESSOR_RECEIPT_SHA = os.environ["PREDECESSOR_RECEIPT_SHA"]
+PREDECESSOR_CHECKER_PATH = Path(os.environ["PREDECESSOR_CHECKER_PATH"])
+PREDECESSOR_CHECKER_SHA = os.environ["PREDECESSOR_CHECKER_SHA"]
+PREDECESSOR_CYCLE_ID = os.environ["PREDECESSOR_CYCLE_ID"]
+RECEIPT_PATH = Path(os.environ["RECEIPT_PATH"])
+CHECKER_PATH = Path(os.environ["CHECKER_PATH"])
+PRODUCT_MESSAGE = os.environ["PRODUCT_MESSAGE"]
+MAINTENANCE_PATHS = [
+    "data/MEDIA-SEARCH-LATEST.json",
+    "data/journal/media-search.jsonl",
+]
+
+
+def run(
+    *args: str,
+    capture: bool = True,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> str:
+    result = subprocess.run(
+        list(args),
+        text=True,
+        capture_output=capture,
+        check=False,
+        env=env,
+    )
+    if check and result.returncode != 0:
+        detail = (result.stderr or result.stdout or f"exit {result.returncode}").strip()
+        raise SystemExit(f"{' '.join(args)} failed: {detail}")
+    return result.stdout.strip() if capture else ""
+
+
+def git(*args: str) -> str:
+    return run("git", *args)
+
+
+def stable(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: stable(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [stable(item) for item in value]
+    return value
+
+
+def pretty(value: Any) -> str:
+    return json.dumps(stable(value), indent=2, ensure_ascii=False) + "\n"
+
+
+def compact(value: Any) -> str:
+    return json.dumps(stable(value), ensure_ascii=False, separators=(",", ":"))
+
+
+def object_hash(value: Any) -> str:
+    return hashlib.sha256(pretty(value).encode()).hexdigest()
+
+
+def compact_hash(value: Any) -> str:
+    return hashlib.sha256(compact(value).encode()).hexdigest()
+
+
+def file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def read_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(pretty(value), encoding="utf-8")
+
+
+def verify_identity(
+    path: Path,
+    field: str,
+    expected: str,
+    omitted: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    payload = read_json(path)
+    if payload.get(field) != expected:
+        raise SystemExit(f"{path} sealed {field} drifted: {payload.get(field)}")
+    body = dict(payload)
+    body.pop(field, None)
+    for key in omitted:
+        body.pop(key, None)
+    actual = object_hash(body)
+    if actual != expected:
+        raise SystemExit(f"{path} stable identity mismatch: {actual} != {expected}")
+    return payload
+
+
+def count_queue(state: dict[str, Any]) -> dict[str, int]:
+    trek = [row for row in state.get("jobs", []) if row.get("scope") == "star-trek"]
+    return {
+        "total": len(trek),
+        "queued": sum(row.get("status") == "queued" for row in trek),
+        "resolved": sum(row.get("status") == "resolved" for row in trek),
+        "blocked": sum(row.get("status") == "blocked" for row in trek),
+        "rejected": sum(row.get("status") == "rejected" for row in trek),
+        "in_flight": sum(
+            row.get("status") in {"leased", "drafted", "merged"} for row in trek
+        ),
+    }
+
+
+def asset_src(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return value.get("src")
+    return None
+
+
+def verify_input_documents() -> dict[str, Any]:
+    docs = {
+        "claim": verify_identity(
+            OUT / "claim-receipt.json",
+            "receipt_sha256",
+            CLAIM_RECEIPT_SHA,
+            ("artifact",),
+        ),
+        "source": verify_identity(
+            OUT / "source-review.json",
+            "review_sha256",
+            SOURCE_REVIEW_SHA,
+            ("artifact",),
+        ),
+        "media": verify_identity(
+            OUT / "media-receipt.json",
+            "receipt_sha256",
+            MEDIA_RECEIPT_SHA,
+            ("artifact",),
+        ),
+        "media_review": verify_identity(
+            OUT / "media-review.json",
+            "review_sha256",
+            MEDIA_REVIEW_SHA,
+            ("artifact",),
+        ),
+        "candidate": verify_identity(
