@@ -1,0 +1,342 @@
+name: star-trek-morgo-media-v3
+
+on:
+  push:
+    branches:
+      - agent/star-trek-morgo-media-recovery-v3
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-morgo-media-v3
+  cancel-in-progress: false
+
+env:
+  LIVE_MAIN: 5e89a0ba59f36feae7986a9260b8fa17a824a8b7
+  LIVE_TREE: 0819bd9ace59e2d8cf8721a5acd1f5de5498cd87
+  BENBASSAT_PRODUCT: 5afac948405d67c94090f2da55a510689e5eb583
+  CLAIM_BRANCH: agent/star-trek-morgo-claim-result-v1
+  CLAIM_COMMIT: 645b066b25309e1e8bdc2f13f64b8a04f95bfa96
+  CLAIM_TREE: 408a69a0af29dea5052db22b564f63939c43f7a8
+  CLAIM_RECEIPT_SHA: dd0f6787c555c110185bc8b5cc2b234e299791401b9bdec6a0088ba6a5217fb4
+  SOURCE_BRANCH: agent/star-trek-morgo-source-result-v2
+  SOURCE_COMMIT: 5ed276475be6f3a12629866d77e3811d15aed2f7
+  SOURCE_RECEIPT_SHA: 25046adf915ee4425e152d2b5ec9e79af69bfcdaa2b7a924f55245778dcdd103
+  SOURCE_REVIEW_BRANCH: agent/star-trek-morgo-source-review-result-v1
+  SOURCE_REVIEW_COMMIT: 7198f9c272dbb1806fb6d2b6b09e889d4e57e7b0
+  SOURCE_REVIEW_TREE: 4ed47ea6dcb5568173e10775fc37ae5282d5af3d
+  SOURCE_REVIEW_SHA: 603a4bdab4b58086d94c1d99751a749802d054659f1c16d04b15c7b111a83c5d
+  MEDIA_V1_BRANCH: agent/star-trek-morgo-media-recovery-v1
+  MEDIA_V1_COMMIT: 9a0b310fb075c362210c958025096794a4240105
+  MEDIA_V1_WORKFLOW_BLOB: 0e108619a8bea700e592eb548619cfafd40c7ba6
+  TASK_ID: ap_a7fb29c5cce85c86708ea0e6
+  EXPECTED_PERFORMER: Fred Tatasciore
+  EXPECTED_CHARACTER: Morgo
+  EXPECTED_FINGERPRINT: 279c816ebd1b83899f5b257f7880df5734bb855f4206c2fc92c5278c9370ff46
+  EXPECTED_LEASE: lease_578930730585295673ca706d
+  STILL_TITLE: File:Morgo.jpg
+  PORTRAIT_TITLE: Category:Fred Tatasciore
+  RESULT_BRANCH: agent/star-trek-morgo-media-result-v1
+  WORK: /tmp/star-trek-morgo-media-worktree-v3
+  OUT: /tmp/star-trek-morgo-media-v3
+
+jobs:
+  scout:
+    name: select-source-distinct-morgo-and-tatasciore-media
+    if: ${{ github.event.head_commit.message == 'Prepare Star Trek Morgo media v3' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Reconstruct the reviewed v1 program with deterministic portrait selection
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin "$MEDIA_V1_BRANCH"
+          test "$(git rev-parse "refs/remotes/origin/${MEDIA_V1_BRANCH}")" = "$MEDIA_V1_COMMIT"
+          git show "${MEDIA_V1_COMMIT}:.github/workflows/star-trek-morgo-media-v1.yml" > /tmp/morgo-media-v1.yml
+          test "$(git hash-object /tmp/morgo-media-v1.yml)" = "$MEDIA_V1_WORKFLOW_BLOB"
+
+          python3 -m pip install --disable-pip-version-check --no-input PyYAML==6.0.2
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+          import yaml
+
+          doc = yaml.safe_load(Path("/tmp/morgo-media-v1.yml").read_text())
+          steps = doc["jobs"]["scout"]["steps"]
+          wanted = {
+              "Verify source review, claim custody, and live publication base": "/tmp/morgo-media-v3-preflight.sh",
+              "Download, normalize, and audit exact media facets": "/tmp/morgo-media-v3-audit.sh",
+          }
+
+          portrait_program = textwrap.dedent(r'''
+          commons_api = "https://commons.wikimedia.org/w/api.php"
+          canonical_files_for_selection = [
+              repo / "data/specimens.json",
+              repo / "data/SOURCES.json",
+              repo / "data/MEDIA-AUDIT.json",
+              repo / "data/media-manifest.json",
+          ]
+          canonical_text_for_selection = "\n".join(
+              path.read_text(errors="replace")
+              for path in canonical_files_for_selection
+              if path.exists()
+          )
+          existing_for_selection = {}
+          for file in (repo / "images").iterdir():
+              if file.is_file():
+                  existing_for_selection.setdefault(
+                      digest(file.read_bytes()), []
+                  ).append(str(file.relative_to(repo)))
+
+          category_api = api(commons_api, {
+              "action": "query",
+              "list": "categorymembers",
+              "cmtitle": "Category:Fred Tatasciore",
+              "cmtype": "file",
+              "cmlimit": "max",
+              "format": "json",
+              "formatversion": "2",
+          })
+          category_titles = [
+              item.get("title")
+              for item in category_api.get("query", {}).get("categorymembers", [])
+              if (item.get("title") or "").startswith("File:")
+          ]
+          preferred = [
+              "File:Fred Tatasciore (27230249598).jpg",
+              "File:Fred Tatasciore by Gage Skidmore.jpg",
+              "File:Fred Tatasciore.jpg",
+              "File:Fred Tatasciore in 2025.jpg",
+              "File:Fred Tatasciore in 2025 (cropped).jpg",
+          ]
+          candidate_titles = preferred + sorted(
+              title for title in set(category_titles) if title not in preferred
+          )
+          rejected_titles = {
+              "File:Fred Tatasciore (52261767885).jpg",
+              "File:Fred Tatasciore in 2025 (cropped).jpg",
+          }
+
+          selection_attempts = []
+          portrait_api = None
+          portrait_page = None
+          portrait_info = None
+          portrait_bytes = None
+          portrait_raw = None
+          portrait_download = None
+          portrait_source_size = None
+          portrait_source_format = None
+          portrait_output_size = None
+          portrait_sha = None
+          portrait_source = None
+          description = None
+          author = None
+          license_name = None
+
+          for title in candidate_titles:
+              if title in rejected_titles:
+                  selection_attempts.append({"title": title, "result": "previously-canonical"})
+                  continue
+              try:
+                  candidate_api = api(commons_api, {
+                      "action": "query",
+                      "prop": "imageinfo",
+                      "titles": title,
+                      "iiprop": "url|size|sha1|mime|timestamp|extmetadata",
+                      "iiurlwidth": "1200",
+                      "format": "json",
+                      "formatversion": "2",
+                  })
+                  candidate_page = (candidate_api.get("query", {}).get("pages") or [None])[0]
+                  candidate_infos = candidate_page.get("imageinfo") if candidate_page else None
+                  if not candidate_page or candidate_page.get("title") != title or not candidate_infos or len(candidate_infos) != 1:
+                      raise RuntimeError("imageinfo identity drift")
+                  candidate_info = candidate_infos[0]
+                  ext = candidate_info.get("extmetadata") or {}
+                  candidate_description = clean(
+                      (ext.get("ImageDescription") or ext.get("ObjectName") or {}).get("value")
+                  )
+                  candidate_author = clean((ext.get("Artist") or {}).get("value"))
+                  candidate_license = clean((ext.get("LicenseShortName") or {}).get("value"))
+                  identity = (candidate_page["title"] + " " + candidate_description).lower()
+                  if "fred" not in identity or "tatasciore" not in identity:
+                      raise RuntimeError("metadata does not identify Fred Tatasciore")
+                  if not any(
+                      token in candidate_license.lower()
+                      for token in ("cc by", "cc0", "public domain")
+                  ):
+                      raise RuntimeError(f"license not accepted: {candidate_license}")
+
+                  candidate_raw, candidate_download = download_image(
+                      candidate_info, "https://commons.wikimedia.org/"
+                  )
+                  (
+                      candidate_bytes,
+                      candidate_source_size,
+                      candidate_source_format,
+                      candidate_output_size,
+                  ) = normalize(candidate_raw, "portrait")
+                  candidate_sha = digest(candidate_bytes)
+                  candidate_source = (
+                      candidate_info.get("descriptionurl")
+                      or "https://commons.wikimedia.org/wiki/"
+                      + candidate_page["title"].replace(" ", "_")
+                  )
+                  if candidate_sha == still_sha:
+                      raise RuntimeError("portrait collides with Morgo still")
+                  if candidate_sha in existing_for_selection:
+                      raise RuntimeError(
+                          "canonical byte collision: "
+                          + ",".join(existing_for_selection[candidate_sha])
+                      )
+                  if (
+                      candidate_source in canonical_text_for_selection
+                      or candidate_page["title"] in canonical_text_for_selection
+                  ):
+                      raise RuntimeError("canonical source collision")
+
+                  portrait_api = candidate_api
+                  portrait_page = candidate_page
+                  portrait_info = candidate_info
+                  portrait_raw = candidate_raw
+                  portrait_download = candidate_download
+                  portrait_bytes = candidate_bytes
+                  portrait_source_size = candidate_source_size
+                  portrait_source_format = candidate_source_format
+                  portrait_output_size = candidate_output_size
+                  portrait_sha = candidate_sha
+                  portrait_source = candidate_source
+                  description = candidate_description
+                  author = candidate_author
+                  license_name = candidate_license
+                  selection_attempts.append({"title": title, "result": "selected"})
+                  break
+              except Exception as exc:
+                  selection_attempts.append({
+                      "title": title,
+                      "result": "rejected",
+                      "reason": f"{type(exc).__name__}:{exc}",
+                  })
+
+          (out / "portrait-selection.json").write_text(pretty({
+              "category": "Category:Fred Tatasciore",
+              "attempts": selection_attempts,
+              "selected": portrait_page["title"] if portrait_page else None,
+          }))
+          (out / "portrait-category.json").write_text(pretty(category_api))
+
+          if portrait_info is None or portrait_bytes is None or portrait_sha is None:
+              raise SystemExit("no source-distinct licensed Fred Tatasciore portrait remained")
+
+          (out / "fred-tatasciore-portrait.jpg").write_bytes(portrait_bytes)
+          (out / "portrait-imageinfo.json").write_text(pretty(portrait_api))
+          ''')
+
+          found = set()
+          for step in steps:
+              name = step.get("name")
+              if name not in wanted:
+                  continue
+              body = step["run"]
+              if name.startswith("Download"):
+                  start = 'commons_api = "https://commons.wikimedia.org/w/api.php"\n'
+                  end = "\nif still_sha == portrait_sha:\n"
+                  if start not in body or end not in body:
+                      raise SystemExit("reviewed portrait program markers drifted")
+                  prefix, remainder = body.split(start, 1)
+                  _, suffix = remainder.split(end, 1)
+                  body = prefix + portrait_program + "\nif still_sha == portrait_sha:\n" + suffix
+                  body = body.replace(
+                      'portrait_info.get("descriptionurl") or "https://commons.wikimedia.org/wiki/File:Fred_Tatasciore_(52261767885).jpg"',
+                      'portrait_info.get("descriptionurl") or ("https://commons.wikimedia.org/wiki/" + portrait_page["title"].replace(" ", "_"))',
+                  )
+                  body = body.replace(
+                      'if portrait_source in canonical_text or os.environ["PORTRAIT_TITLE"] in canonical_text:',
+                      'if portrait_source in canonical_text or portrait_page["title"] in canonical_text:',
+                  )
+                  body = body.replace(
+                      'and .portrait.title == "File:Fred Tatasciore (52261767885).jpg"',
+                      'and (.portrait.title | startswith("File:Fred Tatasciore"))',
+                  )
+              target = Path(wanted[name])
+              target.write_text("#!/usr/bin/env bash\n" + body + "\n")
+              target.chmod(0o755)
+              found.add(name)
+
+          if found != set(wanted):
+              raise SystemExit(f"missing reviewed run blocks: {set(wanted) - found}")
+          PY
+
+          bash -n /tmp/morgo-media-v3-preflight.sh
+          bash -n /tmp/morgo-media-v3-audit.sh
+          sha256sum /tmp/morgo-media-v1.yml /tmp/morgo-media-v3-preflight.sh /tmp/morgo-media-v3-audit.sh > /tmp/morgo-media-v3-program.sha256
+
+      - name: Verify immutable layers and select exact media
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash /tmp/morgo-media-v3-preflight.sh
+          bash /tmp/morgo-media-v3-audit.sh
+          jq -n \
+            --arg prior_run_1 "32953156836" \
+            --arg prior_run_2 "32954959059" \
+            --arg category "$PORTRAIT_TITLE" \
+            '{
+              version:3,
+              transaction:"STAR-TREK-MORGO-MEDIA-RECOVERY-V3",
+              prior_failures:[
+                {run_id:($prior_run_1|tonumber),reason:"portrait-source-already-canonical"},
+                {run_id:($prior_run_2|tonumber),reason:"alternate-portrait-source-already-canonical"}
+              ],
+              portrait_selection_category:$category,
+              selection_policy:"first identity-bound licensed source with no canonical source or byte collision",
+              canonical_mutation:false,
+              lease_mutation:false,
+              additional_lease_issued:false
+            }' > "$OUT/recovery.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload Morgo media evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-morgo-media-v3
+          path: /tmp/star-trek-morgo-media-v3/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable Morgo media result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq \
+            --argjson id "$ARTIFACT_ID" \
+            --arg digest "$ARTIFACT_DIGEST" \
+            '.artifact={id:$id,digest:$digest}' \
+            "$OUT/media-scout.json" > "$OUT/media-scout.tmp"
+          mv "$OUT/media-scout.tmp" "$OUT/media-scout.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-morgo-media-v3
+          git config user.email undercast-morgo-media-v3@users.noreply.github.com
+          git checkout --orphan morgo-media-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-morgo-media-v1
+          cp -a "$OUT"/. transport/star-trek-morgo-media-v1/
+          git add transport/star-trek-morgo-media-v1
+          git commit -m 'Record Star Trek Morgo media v1 via recovery v3'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
