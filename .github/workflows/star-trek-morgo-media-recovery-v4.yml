@@ -1,0 +1,256 @@
+name: star-trek-morgo-media-recovery-v4
+
+on:
+  push:
+    branches:
+      - agent/star-trek-morgo-media-recovery-v4
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-morgo-media-recovery-v4
+  cancel-in-progress: false
+
+env:
+  LIVE_MAIN: 5e89a0ba59f36feae7986a9260b8fa17a824a8b7
+  LIVE_TREE: 0819bd9ace59e2d8cf8721a5acd1f5de5498cd87
+  BENBASSAT_PRODUCT: 5afac948405d67c94090f2da55a510689e5eb583
+  CLAIM_BRANCH: agent/star-trek-morgo-claim-result-v1
+  CLAIM_COMMIT: 645b066b25309e1e8bdc2f13f64b8a04f95bfa96
+  CLAIM_TREE: 408a69a0af29dea5052db22b564f63939c43f7a8
+  SOURCE_BRANCH: agent/star-trek-morgo-source-result-v2
+  SOURCE_COMMIT: 5ed276475be6f3a12629866d77e3811d15aed2f7
+  SOURCE_REVIEW_BRANCH: agent/star-trek-morgo-source-review-result-v1
+  SOURCE_REVIEW_COMMIT: 7198f9c272dbb1806fb6d2b6b09e889d4e57e7b0
+  MEDIA_V1_BRANCH: agent/star-trek-morgo-media-recovery-v1
+  MEDIA_V1_COMMIT: 9a0b310fb075c362210c958025096794a4240105
+  MEDIA_V1_WORKFLOW_BLOB: 0e108619a8bea700e592eb548619cfafd40c7ba6
+  TASK_ID: ap_a7fb29c5cce85c86708ea0e6
+  EXPECTED_LEASE: lease_578930730585295673ca706d
+  EXPECTED_PERFORMER: Fred Tatasciore
+  PORTRAIT_SOURCE: https://commons.wikimedia.org/wiki/File:Fred_Tatasciore_(52261767885).jpg
+  REUSE_WALL: UC-1364
+  REUSE_ITEM: ma_537a379be32ae825b9f60176
+  REUSE_ASSET_SHA: 57fe0dfa3d15c825d718b55fe0017f0c41506e343043f9f1e050fe514bfcf6c1
+  RESULT_BRANCH: agent/star-trek-morgo-media-result-v4
+  WORK: /tmp/star-trek-morgo-media-worktree-v4
+  OUT: /tmp/star-trek-morgo-media-v4
+
+jobs:
+  prepare:
+    name: prepare-morgo-media-with-audited-source-reuse
+    if: ${{ github.event.head_commit.message == 'Prepare Star Trek Morgo media v4 with audited performer-source reuse' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Reconstruct and execute the reviewed media program
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$WORK" "$OUT"
+          mkdir -p "$OUT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          git fetch --no-tags origin main "$CLAIM_BRANCH" "$SOURCE_BRANCH" "$SOURCE_REVIEW_BRANCH" "$MEDIA_V1_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$LIVE_MAIN"
+          test "$(git show -s --format=%T "$LIVE_MAIN")" = "$LIVE_TREE"
+          test "$(git show -s --format=%P "$LIVE_MAIN")" = "$BENBASSAT_PRODUCT"
+          test "$(git rev-parse refs/remotes/origin/${CLAIM_BRANCH})" = "$CLAIM_COMMIT"
+          test "$(git show -s --format=%T refs/remotes/origin/${CLAIM_BRANCH})" = "$CLAIM_TREE"
+          test "$(git rev-parse refs/remotes/origin/${SOURCE_BRANCH})" = "$SOURCE_COMMIT"
+          test "$(git rev-parse refs/remotes/origin/${SOURCE_REVIEW_BRANCH})" = "$SOURCE_REVIEW_COMMIT"
+          test "$(git rev-parse refs/remotes/origin/${MEDIA_V1_BRANCH})" = "$MEDIA_V1_COMMIT"
+
+          git show "${MEDIA_V1_COMMIT}:.github/workflows/star-trek-morgo-media-v1.yml" > /tmp/morgo-media-v1.yml
+          test "$(git hash-object /tmp/morgo-media-v1.yml)" = "$MEDIA_V1_WORKFLOW_BLOB"
+
+          python3 -m pip install --disable-pip-version-check --no-input PyYAML==6.0.2 Pillow==11.3.0
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          doc = yaml.safe_load(Path("/tmp/morgo-media-v1.yml").read_text())
+          steps = doc["jobs"]["scout"]["steps"]
+          selected = {
+              "Verify source review, claim custody, and live publication base": "/tmp/morgo-media-v4-preflight.sh",
+              "Download, normalize, and audit exact media facets": "/tmp/morgo-media-v4-audit.sh",
+          }
+          found = set()
+          old_check = '''if portrait_source in canonical_text or os.environ["PORTRAIT_TITLE"] in canonical_text:
+              raise SystemExit("Fred Tatasciore portrait source is already canonical")'''
+          replacement = '''audit_state = json.loads((repo / "data/MEDIA-AUDIT.json").read_text())
+          reuse_matches = [
+              item for item in audit_state.get("items", [])
+              if item.get("id") == os.environ["REUSE_ITEM"]
+              and item.get("wall_id") == os.environ["REUSE_WALL"]
+              and item.get("side") == "portrait"
+          ]
+          if len(reuse_matches) != 1:
+              raise SystemExit(f"audited performer-source reuse cardinality drifted: {len(reuse_matches)}")
+          reuse = reuse_matches[0]
+          asset = reuse.get("asset") or {}
+          claims = reuse.get("claims") or {}
+          if (
+              portrait_source != os.environ["PORTRAIT_SOURCE"]
+              or portrait_source not in canonical_text
+              or reuse.get("actor") != os.environ["EXPECTED_PERFORMER"]
+              or reuse.get("expected_subject") != os.environ["EXPECTED_PERFORMER"]
+              or reuse.get("status") != "verified"
+              or asset.get("origin") != os.environ["PORTRAIT_SOURCE"]
+              or asset.get("sha256") != os.environ["REUSE_ASSET_SHA"]
+              or (claims.get("identity") or {}).get("state") != "enforced"
+              or (claims.get("identity") or {}).get("value") != "expected"
+              or (claims.get("presentation") or {}).get("state") != "enforced"
+              or (claims.get("presentation") or {}).get("value") != "neutral-human"
+          ):
+              raise SystemExit(f"audited Fred Tatasciore reuse boundary drifted: {reuse}")
+          (out / "audited-performer-source-reuse.json").write_text(pretty(reuse))'''
+          for step in steps:
+              name = step.get("name")
+              if name not in selected:
+                  continue
+              body = step["run"]
+              if name.startswith("Download"):
+                  if old_check not in body:
+                      raise SystemExit("reviewed global-source check drifted")
+                  body = body.replace(old_check, replacement)
+                  old_encode = 'image.save(buffer, format="JPEG", quality=94, optimize=True, progressive=False)'
+                  if old_encode not in body:
+                      raise SystemExit("reviewed portrait encoder drifted")
+                  body = body.replace(
+                      old_encode,
+                      'image.save(buffer, format="JPEG", quality=93, optimize=True, progressive=False)',
+                      1,
+                  )
+              target = Path(selected[name])
+              target.write_text("#!/usr/bin/env bash\n" + body + "\n")
+              target.chmod(0o755)
+              found.add(name)
+          if found != set(selected):
+              raise SystemExit(f"missing reviewed run blocks: {set(selected) - found}")
+          PY
+
+          bash -n /tmp/morgo-media-v4-preflight.sh
+          bash -n /tmp/morgo-media-v4-audit.sh
+          bash /tmp/morgo-media-v4-preflight.sh
+          bash /tmp/morgo-media-v4-audit.sh
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os
+
+          out = Path(os.environ["OUT"])
+          scout = json.loads((out / "media-scout.json").read_text())
+          reuse = json.loads((out / "audited-performer-source-reuse.json").read_text())
+          scout.pop("receipt_sha256", None)
+          scout["version"] = 4
+          scout["transaction"] = "STAR-TREK-MORGO-MEDIA-RECOVERY-V4"
+          scout["status"] = "media-prepared-with-audited-source-reuse"
+          scout["portrait"]["reuse"] = {
+              "wall_id": os.environ["REUSE_WALL"],
+              "item_id": os.environ["REUSE_ITEM"],
+              "prior_asset_sha256": os.environ["REUSE_ASSET_SHA"],
+              "prior_identity_claim": reuse["claims"]["identity"],
+              "prior_presentation_claim": reuse["claims"]["presentation"],
+          }
+          scout["portrait"]["review_status"] = "audited-source-reuse-pending-new-facet-votes"
+          scout["still"]["review_status"] = "source-bound-pending-new-facet-votes"
+          scout["boundary"].update({
+              "performer_source_reused": True,
+              "performer_source_reuse_same_actor": True,
+              "performer_source_prior_identity_enforced": True,
+              "performer_source_prior_presentation_enforced": True,
+              "new_derivative_preserves_full_frame": True,
+              "new_derivative_encoding": "JPEG quality 93, full frame, max 1200x1500",
+              "new_facet_votes_pending": True,
+          })
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          encoded = json.dumps(stable(scout), indent=2, ensure_ascii=False) + "\n"
+          scout["receipt_sha256"] = hashlib.sha256(encoded.encode()).hexdigest()
+          (out / "media-receipt.json").write_text(
+              json.dumps(stable(scout), indent=2, ensure_ascii=False) + "\n"
+          )
+          PY
+
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg lease "$EXPECTED_LEASE" \
+            '.transaction == "STAR-TREK-MORGO-MEDIA-RECOVERY-V4"
+             and .status == "media-prepared-with-audited-source-reuse"
+             and .task.id == $task
+             and .task.lease_id == $lease
+             and .task.status == "leased"
+             and .still.title == "File:Morgo.jpg"
+             and .portrait.title == "File:Fred Tatasciore (52261767885).jpg"
+             and .portrait.reuse.wall_id == "UC-1364"
+             and .portrait.reuse.item_id == "ma_537a379be32ae825b9f60176"
+             and .still.sha256 != .portrait.sha256
+             and .boundary.primary_morgo_still == true
+             and .boundary.automatic_crater_page_image_excluded == true
+             and .boundary.performer_source_reused == true
+             and .boundary.performer_source_prior_identity_enforced == true
+             and .boundary.performer_source_prior_presentation_enforced == true
+             and .boundary.new_derivative_encoding == "JPEG quality 93, full frame, max 1200x1500"
+             and .boundary.new_facet_votes_pending == true
+             and .boundary.canonical_mutation == false
+             and .boundary.lease_mutation == false
+             and .boundary.additional_lease_issued == false
+             and .boundary.product_staged == false
+             and .boundary.waterline_cycle_recorded == false' \
+            "$OUT/media-receipt.json" >/dev/null
+
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after.json"
+          test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$LIVE_MAIN"
+          sha256sum /tmp/morgo-media-v1.yml /tmp/morgo-media-v4-preflight.sh /tmp/morgo-media-v4-audit.sh > "$OUT/program.sha256"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload Morgo media v4 evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-morgo-media-recovery-v4
+          path: /tmp/star-trek-morgo-media-v4/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable Morgo media v4 result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq \
+            --argjson id "$ARTIFACT_ID" \
+            --arg digest "$ARTIFACT_DIGEST" \
+            '.artifact={id:$id,digest:$digest}' \
+            "$OUT/media-receipt.json" > "$OUT/media.tmp"
+          mv "$OUT/media.tmp" "$OUT/media-receipt.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-morgo-media-v4
+          git config user.email undercast-morgo-media-v4@users.noreply.github.com
+          git checkout --orphan morgo-media-result-v4
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-morgo-media-v4
+          cp -a "$OUT"/. transport/star-trek-morgo-media-v4/
+          git add transport/star-trek-morgo-media-v4
+          git commit -m "Record Star Trek Morgo media recovery v4"
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
