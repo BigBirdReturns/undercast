@@ -1,0 +1,466 @@
+name: star-trek-morgo-source-review-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-morgo-source-review-recovery-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-morgo-source-review-v1
+  cancel-in-progress: false
+
+env:
+  LIVE_MAIN: 5e89a0ba59f36feae7986a9260b8fa17a824a8b7
+  LIVE_TREE: 0819bd9ace59e2d8cf8721a5acd1f5de5498cd87
+  BENBASSAT_PRODUCT: 5afac948405d67c94090f2da55a510689e5eb583
+  SOURCE_BRANCH: agent/star-trek-morgo-source-result-v2
+  SOURCE_COMMIT: 5ed276475be6f3a12629866d77e3811d15aed2f7
+  SOURCE_TREE: 6960ed17a212c7e8ef47adf3d523c45739745d05
+  SOURCE_RECEIPT_SHA: 25046adf915ee4425e152d2b5ec9e79af69bfcdaa2b7a924f55245778dcdd103
+  SOURCE_ARTIFACT_ID: 9600466683
+  SOURCE_ARTIFACT_DIGEST: a389c6ad57b30a5d03881e3e43e23c0d9eb4ba818b4fc5bdf796695348e69174
+  CLAIM_BRANCH: agent/star-trek-morgo-claim-result-v1
+  CLAIM_COMMIT: 645b066b25309e1e8bdc2f13f64b8a04f95bfa96
+  CLAIM_TREE: 408a69a0af29dea5052db22b564f63939c43f7a8
+  CLAIM_RECEIPT_SHA: dd0f6787c555c110185bc8b5cc2b234e299791401b9bdec6a0088ba6a5217fb4
+  TASK_ID: ap_a7fb29c5cce85c86708ea0e6
+  EXPECTED_PERFORMER: Fred Tatasciore
+  EXPECTED_CHARACTER: Morgo
+  EXPECTED_FINGERPRINT: 279c816ebd1b83899f5b257f7880df5734bb855f4206c2fc92c5278c9370ff46
+  EXPECTED_LEASE: lease_578930730585295673ca706d
+  ROLE_PAGEID: 282744
+  ROLE_REVISION: 2971912
+  ROLE_CONTENT_SHA: d3a8251a6da07a172c3c71033f55cf01067d826e774197303e58ef4666412cd6
+  EPISODE_PAGEID: 282236
+  EPISODE_REVISION: 3483708
+  EPISODE_CONTENT_SHA: a65e59c54d9cc6fb7d79b0cbab533f9bb3ba83b873dac1102c44764b4bcc7f04
+  RESULT_BRANCH: agent/star-trek-morgo-source-review-result-v1
+  OUT: /tmp/star-trek-morgo-source-review-v1
+
+jobs:
+  review:
+    name: independently-review-frozen-morgo-source
+    if: ${{ github.event.head_commit.message == 'Review frozen Star Trek Morgo source v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Verify frozen source and claim identities
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/source"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          git fetch --no-tags origin main "$SOURCE_BRANCH" "$CLAIM_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$LIVE_MAIN"
+          test "$(git show -s --format=%T "$LIVE_MAIN")" = "$LIVE_TREE"
+          test "$(git show -s --format=%P "$LIVE_MAIN")" = "$BENBASSAT_PRODUCT"
+
+          source_ref="refs/remotes/origin/${SOURCE_BRANCH}"
+          claim_ref="refs/remotes/origin/${CLAIM_BRANCH}"
+          test "$(git rev-parse "$source_ref")" = "$SOURCE_COMMIT"
+          test "$(git show -s --format=%T "$source_ref")" = "$SOURCE_TREE"
+          test "$(git rev-parse "$claim_ref")" = "$CLAIM_COMMIT"
+          test "$(git show -s --format=%T "$claim_ref")" = "$CLAIM_TREE"
+          test "$(git show -s --format=%P "$claim_ref")" = "$BENBASSAT_PRODUCT"
+
+          for name in source-probe.json morgo-source.wikitext episode-source.wikitext role-evidence-lines.txt episode-evidence-lines.txt manifest.sha256; do
+            git show "${source_ref}:transport/star-trek-morgo-source-v2/${name}" > "$OUT/source/${name}"
+          done
+          git show "${claim_ref}:data/review/adapter-sdk/star-trek-morgo-claim.json" > "$OUT/claim-receipt.json"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os
+
+          out = Path(os.environ["OUT"])
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          def digest_json(path, field, omitted=()):
+              payload = json.loads(path.read_text())
+              expected = payload[field]
+              body = dict(payload)
+              body.pop(field, None)
+              for key in omitted:
+                  body.pop(key, None)
+              actual = hashlib.sha256(
+                  (json.dumps(stable(body), indent=2, ensure_ascii=False) + "\n").encode()
+              ).hexdigest()
+              if actual != expected:
+                  raise SystemExit(f"{path.name} identity mismatch: {actual} != {expected}")
+              return payload
+
+          probe = digest_json(out / "source/source-probe.json", "receipt_sha256", ("artifact",))
+          claim = digest_json(out / "claim-receipt.json", "receipt_sha256")
+
+          if probe["receipt_sha256"] != os.environ["SOURCE_RECEIPT_SHA"]:
+              raise SystemExit("source receipt identity drifted")
+          if probe.get("artifact") != {
+              "id": int(os.environ["SOURCE_ARTIFACT_ID"]),
+              "digest": os.environ["SOURCE_ARTIFACT_DIGEST"],
+          }:
+              raise SystemExit("source artifact identity drifted")
+          if claim["receipt_sha256"] != os.environ["CLAIM_RECEIPT_SHA"]:
+              raise SystemExit("claim receipt identity drifted")
+
+          expected_task = {
+              "id": os.environ["TASK_ID"],
+              "performer": os.environ["EXPECTED_PERFORMER"],
+              "character": os.environ["EXPECTED_CHARACTER"],
+              "source_fingerprint": os.environ["EXPECTED_FINGERPRINT"],
+              "performance_modes": ["voice-animation"],
+              "status": "leased",
+              "attempts": 1,
+          }
+          if any(probe["task"].get(key) != value for key, value in expected_task.items()):
+              raise SystemExit(f"source task drifted: {probe['task']}")
+          if probe["claim"]["lease_id"] != os.environ["EXPECTED_LEASE"]:
+              raise SystemExit("source probe lease drifted")
+          if claim["lease"]["id"] != os.environ["EXPECTED_LEASE"]:
+              raise SystemExit("claim lease drifted")
+          if probe["live_publication_base"] != {
+              "commit": os.environ["LIVE_MAIN"],
+              "tree": os.environ["LIVE_TREE"],
+              "parent": os.environ["BENBASSAT_PRODUCT"],
+              "kind": "product-neutral-media-search-maintenance",
+          }:
+              raise SystemExit("source publication base drifted")
+
+          role = probe["sources"]["role"]
+          episode = probe["sources"]["production"]
+          required_role = {
+              "title": "Morgo",
+              "pageid": int(os.environ["ROLE_PAGEID"]),
+              "revision": int(os.environ["ROLE_REVISION"]),
+              "content_sha256": os.environ["ROLE_CONTENT_SHA"],
+          }
+          required_episode = {
+              "title": "The Least Dangerous Game (episode)",
+              "pageid": int(os.environ["EPISODE_PAGEID"]),
+              "revision": int(os.environ["EPISODE_REVISION"]),
+              "content_sha256": os.environ["EPISODE_CONTENT_SHA"],
+          }
+          if any(role.get(key) != value for key, value in required_role.items()):
+              raise SystemExit(f"role revision drifted: {role}")
+          if any(episode.get(key) != value for key, value in required_episode.items()):
+              raise SystemExit(f"episode revision drifted: {episode}")
+
+          role_bytes = (out / "source/morgo-source.wikitext").read_bytes()
+          episode_bytes = (out / "source/episode-source.wikitext").read_bytes()
+          if hashlib.sha256(role_bytes).hexdigest() != os.environ["ROLE_CONTENT_SHA"]:
+              raise SystemExit("role wikitext bytes drifted")
+          if hashlib.sha256(episode_bytes).hexdigest() != os.environ["EPISODE_CONTENT_SHA"]:
+              raise SystemExit("episode wikitext bytes drifted")
+
+          markers = probe["attribution_markers"]
+          if not markers["voice"] or not markers["animation"]:
+              raise SystemExit(f"required attribution markers absent: {markers}")
+          if markers["physical"] or markers["prosthetic"]:
+              raise SystemExit(f"unsupported attribution markers appeared: {markers}")
+          if probe["boundary"] != {
+              "source_revision_frozen": True,
+              "independent_source_review_complete": False,
+              "canonical_mutation": False,
+              "lease_mutation": False,
+              "additional_lease_issued": False,
+              "product_staged": False,
+              "waterline_cycle_recorded": False,
+          }:
+              raise SystemExit(f"source boundary drifted: {probe['boundary']}")
+          PY
+
+      - name: Review rendered pages at the exact frozen revisions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          from html import unescape
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+          import hashlib
+          import json
+          import os
+          import re
+
+          out = Path(os.environ["OUT"])
+          probe = json.loads((out / "source/source-probe.json").read_text())
+
+          def fetch_rendered(oldid, expected_title):
+              query = {
+                  "action": "parse",
+                  "oldid": str(oldid),
+                  "prop": "text|displaytitle|revid",
+                  "format": "json",
+                  "formatversion": "2",
+              }
+              url = "https://memory-alpha.fandom.com/api.php?" + urlencode(query)
+              request = Request(
+                  url,
+                  headers={
+                      "User-Agent": "UNDERCAST-Morgo-Independent-Source-Review/1.0",
+                      "Accept": "application/json",
+                  },
+              )
+              with urlopen(request, timeout=90) as response:
+                  payload = json.load(response)
+              parsed = payload.get("parse") or {}
+              if parsed.get("revid") != oldid:
+                  raise SystemExit(f"rendered revision drifted: {parsed.get('revid')} != {oldid}")
+              if parsed.get("title") != expected_title:
+                  raise SystemExit(f"rendered title drifted: {parsed.get('title')}")
+              html = parsed.get("text") or ""
+              text = unescape(re.sub(r"<[^>]+>", " ", html))
+              text = re.sub(r"\s+", " ", text).strip()
+              return payload, html, text
+
+          role_payload, role_html, role_text = fetch_rendered(
+              int(os.environ["ROLE_REVISION"]), "Morgo"
+          )
+          episode_payload, episode_html, episode_text = fetch_rendered(
+              int(os.environ["EPISODE_REVISION"]), "The Least Dangerous Game (episode)"
+          )
+
+          if "Morgo was voiced by Fred Tatasciore" not in role_text:
+              raise SystemExit("rendered Morgo page lacks the exact voice credit")
+          if "The Least Dangerous Game" not in role_text:
+              raise SystemExit("rendered Morgo page lacks the production binding")
+          if "Morgo" not in episode_text or "Fred Tatasciore" not in episode_text:
+              raise SystemExit("rendered episode page lacks the Morgo cast binding")
+          if "1 September 2022" not in episode_text:
+              raise SystemExit("rendered episode page lacks the exact first-air date")
+          if "Star Trek: Lower Decks" not in episode_text:
+              raise SystemExit("rendered episode page lacks the series binding")
+
+          rendered = {
+              "version": 1,
+              "transaction": "STAR-TREK-MORGO-RENDERED-SOURCE-REVIEW-V1",
+              "reviewed_at": datetime.now(timezone.utc)
+                  .replace(microsecond=0)
+                  .isoformat()
+                  .replace("+00:00", "Z"),
+              "role": {
+                  "title": "Morgo",
+                  "revision": int(os.environ["ROLE_REVISION"]),
+                  "api_sha256": hashlib.sha256(
+                      (json.dumps(role_payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                  ).hexdigest(),
+                  "html_sha256": hashlib.sha256(role_html.encode()).hexdigest(),
+                  "text_sha256": hashlib.sha256(role_text.encode()).hexdigest(),
+                  "voice_credit_verified": True,
+                  "production_binding_verified": True,
+              },
+              "episode": {
+                  "title": "The Least Dangerous Game (episode)",
+                  "revision": int(os.environ["EPISODE_REVISION"]),
+                  "api_sha256": hashlib.sha256(
+                      (json.dumps(episode_payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                  ).hexdigest(),
+                  "html_sha256": hashlib.sha256(episode_html.encode()).hexdigest(),
+                  "text_sha256": hashlib.sha256(episode_text.encode()).hexdigest(),
+                  "morgo_cast_verified": True,
+                  "series_verified": "Star Trek: Lower Decks",
+                  "first_aired_verified": "1 September 2022",
+              },
+          }
+          (out / "rendered-review.json").write_text(
+              json.dumps(rendered, indent=2, ensure_ascii=False) + "\n"
+          )
+          (out / "morgo-rendered-api.json").write_text(
+              json.dumps(role_payload, indent=2, ensure_ascii=False) + "\n"
+          )
+          (out / "morgo-rendered.html").write_text(role_html)
+          (out / "episode-rendered-api.json").write_text(
+              json.dumps(episode_payload, indent=2, ensure_ascii=False) + "\n"
+          )
+          (out / "episode-rendered.html").write_text(episode_html)
+          PY
+
+      - name: Write independent Morgo source review
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import hashlib, json, os
+
+          out = Path(os.environ["OUT"])
+          probe = json.loads((out / "source/source-probe.json").read_text())
+          rendered = json.loads((out / "rendered-review.json").read_text())
+
+          review = {
+              "version": 1,
+              "transaction": "STAR-TREK-MORGO-SOURCE-REVIEW-V1",
+              "reviewed_at": datetime.now(timezone.utc)
+                  .replace(microsecond=0)
+                  .isoformat()
+                  .replace("+00:00", "Z"),
+              "reviewer": "chatgpt-morgo-independent-source-reviewer-v1",
+              "reviewed_role": "second-desk",
+              "verdict": "pass",
+              "live_publication_base": probe["live_publication_base"],
+              "claim": probe["claim"],
+              "source": {
+                  "branch": os.environ["SOURCE_BRANCH"],
+                  "commit": os.environ["SOURCE_COMMIT"],
+                  "tree": os.environ["SOURCE_TREE"],
+                  "receipt_sha256": probe["receipt_sha256"],
+                  "artifact": probe["artifact"],
+                  "role_revision": probe["sources"]["role"],
+                  "production_revision": probe["sources"]["production"],
+              },
+              "rendered_review": rendered,
+              "task": {
+                  "id": os.environ["TASK_ID"],
+                  "lease_id": os.environ["EXPECTED_LEASE"],
+                  "performer": os.environ["EXPECTED_PERFORMER"],
+                  "character": os.environ["EXPECTED_CHARACTER"],
+                  "source_fingerprint": os.environ["EXPECTED_FINGERPRINT"],
+                  "status": "leased",
+                  "attempts": 1,
+              },
+              "adjudication": {
+                  "adjudicated_kind": "voice",
+                  "performance_mode": "voice-animation",
+                  "performance_scope": (
+                      "Fred Tatasciore's animated voice performance as Volcanic Lord "
+                      "Morgo in the Star Trek: Lower Decks episode "
+                      "The Least Dangerous Game (2022)."
+                  ),
+                  "series": "Star Trek: Lower Decks",
+                  "episode": "The Least Dangerous Game",
+                  "year": "2022",
+                  "first_aired": "1 September 2022",
+                  "physical_performance_attributed": False,
+                  "prosthetic_performance_attributed": False,
+                  "animation_labor_attributed": False,
+                  "character_design_attributed": False,
+                  "voice_direction_attributed": False,
+                  "vocal_processing_attributed": False,
+                  "sound_attributed": False,
+                  "maker_attribution": "unresolved",
+                  "transformation_measured": False,
+              },
+              "media_boundary": {
+                  "character_page_image": probe["media_boundary"]["character_page_image"],
+                  "still_status": "pending-source-bound-media-review",
+                  "portrait_status": "pending-independent-performer-media-review",
+                  "cross_facet_substitution": False,
+              },
+              "boundary": {
+                  "source_revision_frozen": True,
+                  "rendered_revision_frozen": True,
+                  "independent_source_review_complete": True,
+                  "canonical_mutation": False,
+                  "lease_mutation": False,
+                  "additional_lease_issued": False,
+                  "product_staged": False,
+                  "waterline_cycle_recorded": False,
+              },
+          }
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          body = json.dumps(stable(review), indent=2, ensure_ascii=False) + "\n"
+          review["review_sha256"] = hashlib.sha256(body.encode()).hexdigest()
+          (out / "source-review.json").write_text(
+              json.dumps(stable(review), indent=2, ensure_ascii=False) + "\n"
+          )
+          PY
+
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg lease "$EXPECTED_LEASE" \
+            '.transaction == "STAR-TREK-MORGO-SOURCE-REVIEW-V1"
+             and .verdict == "pass"
+             and .task.id == $task
+             and .task.lease_id == $lease
+             and .task.status == "leased"
+             and .adjudication.adjudicated_kind == "voice"
+             and .adjudication.performance_mode == "voice-animation"
+             and .adjudication.series == "Star Trek: Lower Decks"
+             and .adjudication.episode == "The Least Dangerous Game"
+             and .adjudication.year == "2022"
+             and .adjudication.first_aired == "1 September 2022"
+             and .adjudication.physical_performance_attributed == false
+             and .adjudication.prosthetic_performance_attributed == false
+             and .adjudication.animation_labor_attributed == false
+             and .adjudication.character_design_attributed == false
+             and .adjudication.voice_direction_attributed == false
+             and .adjudication.vocal_processing_attributed == false
+             and .adjudication.sound_attributed == false
+             and .adjudication.maker_attribution == "unresolved"
+             and .adjudication.transformation_measured == false
+             and .boundary.source_revision_frozen == true
+             and .boundary.rendered_revision_frozen == true
+             and .boundary.independent_source_review_complete == true
+             and .boundary.canonical_mutation == false
+             and .boundary.lease_mutation == false
+             and .boundary.additional_lease_issued == false
+             and .boundary.product_staged == false
+             and .boundary.waterline_cycle_recorded == false' \
+            "$OUT/source-review.json" >/dev/null
+
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after.json"
+          test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$LIVE_MAIN"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload independent source-review evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-morgo-source-review-v1
+          path: /tmp/star-trek-morgo-source-review-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable source-review result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq \
+            --argjson id "$ARTIFACT_ID" \
+            --arg digest "$ARTIFACT_DIGEST" \
+            '.artifact={id:$id,digest:$digest}' \
+            "$OUT/source-review.json" > "$OUT/source-review.tmp"
+          mv "$OUT/source-review.tmp" "$OUT/source-review.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-morgo-source-review-v1
+          git config user.email undercast-morgo-source-review-v1@users.noreply.github.com
+          git checkout --orphan morgo-source-review-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-morgo-source-review-v1
+          cp -a "$OUT"/. transport/star-trek-morgo-source-review-v1/
+          git add transport/star-trek-morgo-source-review-v1
+          git commit -m 'Record Star Trek Morgo independent source review v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
