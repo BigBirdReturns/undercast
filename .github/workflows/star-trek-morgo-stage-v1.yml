@@ -1,0 +1,129 @@
+name: star-trek-morgo-stage-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-morgo-stage-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-morgo-stage-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 5afac948405d67c94090f2da55a510689e5eb583
+  EXPECTED_TREE: 639b57c87ca23e895ec730099c0ce937eb1b88da
+  LIVE_MAIN: 5e89a0ba59f36feae7986a9260b8fa17a824a8b7
+  LIVE_TREE: 0819bd9ace59e2d8cf8721a5acd1f5de5498cd87
+  CLAIM_COMMIT: 645b066b25309e1e8bdc2f13f64b8a04f95bfa96
+  CLAIM_TREE: 408a69a0af29dea5052db22b564f63939c43f7a8
+  CLAIM_RECEIPT_SHA: dd0f6787c555c110185bc8b5cc2b234e299791401b9bdec6a0088ba6a5217fb4
+  SOURCE_REVIEW_SHA: 603a4bdab4b58086d94c1d99751a749802d054659f1c16d04b15c7b111a83c5d
+  MEDIA_RECEIPT_SHA: fb9b1fc40b507a133483ec220627de1595ee97c33483bf437d641355773eec15
+  MEDIA_REVIEW_SHA: f6f4ef76e5fa82554109621910242bb630e7aa18aee6321cca53552782113ecb
+  TASK_ID: ap_a7fb29c5cce85c86708ea0e6
+  EXPECTED_PERFORMER: Fred Tatasciore
+  EXPECTED_CHARACTER: Morgo
+  EXPECTED_FINGERPRINT: 279c816ebd1b83899f5b257f7880df5734bb855f4206c2fc92c5278c9370ff46
+  EXPECTED_LEASE: lease_578930730585295673ca706d
+  WALL_ID: UC-1398
+  CANDIDATE_BRANCH: agent/star-trek-morgo-candidate-v1
+  CLAIM_BRANCH: agent/star-trek-morgo-claim-result-v1
+  SOURCE_REVIEW_BRANCH: agent/star-trek-morgo-source-review-result-v1
+  MEDIA_BRANCH: agent/star-trek-morgo-media-result-v4
+  MEDIA_REVIEW_BRANCH: agent/star-trek-morgo-media-review-result-v1
+  RESULT_BRANCH: agent/star-trek-morgo-stage-result-v1
+  TRACKED_ROOT: .github/recovery/star-trek-morgo-stage-v1
+  PAYLOAD_SHA256: c239e94fb589ad30477cd08fe890128ff04cc2548b8fb0e341c75fea274a89bf
+  LIFECYCLE: /tmp/star-trek-morgo-stage-v1.py
+  BATCH: /tmp/star-trek-morgo-batch-v1.json
+  CENSUS_HELPER: /tmp/star-trek-morgo-census-v1.sh
+  STEPS_ROOT: /tmp/star-trek-morgo-stage-v1-steps
+  INPUT_ROOT: /tmp/star-trek-morgo-stage-v1-input
+  OUT: /tmp/star-trek-morgo-stage-v1-output
+  CENSUS_MAX_ATTEMPTS: 3
+  CENSUS_RETRY_DELAY_SECONDS: 12
+
+jobs:
+  stage:
+    name: stage-one-reviewed-morgo-candidate
+    if: ${{ github.event.head_commit.message == 'Stage reviewed Star Trek Morgo candidate v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Externalize sealed stage runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf /tmp/star-trek-morgo-stage-v1-payload "$STEPS_ROOT"
+          mkdir -p /tmp/star-trek-morgo-stage-v1-payload "$STEPS_ROOT"
+          cat "$TRACKED_ROOT"/payload.part-*.txt | tr -d '\n' | base64 -d > /tmp/star-trek-morgo-stage-v1-runtime.tar.gz
+          test "$(sha256sum /tmp/star-trek-morgo-stage-v1-runtime.tar.gz | awk '{print $1}')" = "$PAYLOAD_SHA256"
+          tar -xzf /tmp/star-trek-morgo-stage-v1-runtime.tar.gz -C /tmp/star-trek-morgo-stage-v1-payload
+          (cd /tmp/star-trek-morgo-stage-v1-payload && sha256sum -c manifest.sha256)
+          cp /tmp/star-trek-morgo-stage-v1-payload/candidate-lifecycle.py "$LIFECYCLE"
+          cp /tmp/star-trek-morgo-stage-v1-payload/batch.json "$BATCH"
+          cp /tmp/star-trek-morgo-stage-v1-payload/census-refresh.sh "$CENSUS_HELPER"
+          cp /tmp/star-trek-morgo-stage-v1-payload/steps/[0-9][0-9].sh "$STEPS_ROOT"/
+          chmod +x "$LIFECYCLE" "$CENSUS_HELPER" "$STEPS_ROOT"/[0-9][0-9].sh
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          path=Path(os.environ['LIFECYCLE']);compile(path.read_text(),str(path),'exec')
+          PY
+          bash -n "$CENSUS_HELPER"; for script in "$STEPS_ROOT"/[0-9][0-9].sh; do bash -n "$script"; done
+      - name: Verify exact inputs and prepare bounded draft
+        shell: bash
+        run: bash "$STEPS_ROOT/01.sh"
+      - name: Submit, grow, patch, and bind media review
+        shell: bash
+        run: bash "$STEPS_ROOT/02.sh"
+      - name: Complete the exact reviewed task
+        shell: bash
+        run: bash "$STEPS_ROOT/03.sh"
+      - name: Qualify the immutable candidate
+        shell: bash
+        run: bash "$STEPS_ROOT/04.sh"
+      - name: Publish one candidate commit
+        shell: bash
+        run: bash "$STEPS_ROOT/05.sh"
+      - name: Upload Morgo stage evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-morgo-stage-v1
+          path: /tmp/star-trek-morgo-stage-v1-output/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish staged Morgo candidate locator
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq --argjson id "$ARTIFACT_ID" --arg digest "$ARTIFACT_DIGEST" '.artifact={id:$id,digest:$digest}' "$OUT/candidate-commit.json" > "$OUT/candidate-commit.tmp"
+          mv "$OUT/candidate-commit.tmp" "$OUT/candidate-commit.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-morgo-stage-v1
+          git config user.email undercast-morgo-stage-v1@users.noreply.github.com
+          git checkout --orphan morgo-stage-result-v1
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-morgo-stage-v1
+          cp -a "$OUT"/. transport/star-trek-morgo-stage-v1/
+          git add transport/star-trek-morgo-stage-v1
+          git commit -m 'Record staged Star Trek Morgo candidate v1'
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
