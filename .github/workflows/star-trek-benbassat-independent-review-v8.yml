@@ -1,0 +1,180 @@
+name: star-trek-benbassat-independent-review-v8
+
+on:
+  push:
+    branches:
+      - agent/star-trek-benbassat-independent-review-recovery-v8
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-benbassat-independent-review-v8
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: ed79424013b92460d16c01cad4e590eca01e6bff
+  EXPECTED_TREE: 7f9057770c8e622d71ef41b183811fe47fcdd6ed
+  LIVE_MAIN: 29b9ab279dac90fad82aac48633ef83d5ac81b39
+  LIVE_TREE: 7c2ad054ceb3b3cbd1f0c00c838cfc3d014ff169
+  LIVE_MESSAGE: "Media search: record rolling candidate attempt (2026-08-25)"
+  EXPECTED_CLAIM_COMMIT: 0a7e2ed0c1fa7d97b1feb9c0b7e3ef78fd4e5ca2
+  EXPECTED_CLAIM_TREE: 63802f7e11f19f7f5ffc5e8093c9866e0429813c
+  EXPECTED_CANDIDATE_COMMIT: 637d0b9d0cef669f354b9c4f5961a8e8bd0b1c19
+  EXPECTED_CANDIDATE_TREE: 0c09b5da9d37157f954725578a9b17bcd7d08109
+  EXPECTED_CANDIDATE_RECEIPT_SHA: 5d4f02fab0a0e77f9b8ab19d155be3b9f09437332403bb3e9a0681c0ab2512e3
+  EXPECTED_MEDIA_AUDIT_SHA: def539a1736d50d3a93b5631db8f8ab93dc28b29563a49632d4eecdabc282c6f
+  EXPECTED_SOURCE_REVIEW_SHA: 4568d3e5a64d671e83b6f4f37049131b7000943ce3521986495b88916857cfc5
+  EXPECTED_MEDIA_RECEIPT_SHA: cb2db2f214ac4ecbd10cca1e26a71b80c9fe09ba08127617ceaadf586d9a4af0
+  EXPECTED_SETTLEMENT_SHA: 1ce1896b186cd3c7a6ec5540cfb79367aa7b8e95525a30a4a40dca0a925122f8
+  TASK_ID: ap_dd7d1c73ed237230cd6e1d0b
+  EXPECTED_PERFORMER: Nolan North
+  EXPECTED_CHARACTER: Benbassat
+  EXPECTED_FINGERPRINT: 78e1384a3a11787064f98516e5759b55b33369d161067804c2d77f2ef6ef8885
+  EXPECTED_LEASE: lease_151ba8f5efac7d922ea2f8c2
+  WALL_ID: UC-1397
+  CANDIDATE_BRANCH: agent/star-trek-benbassat-candidate-result-v4
+  CLAIM_BRANCH: agent/star-trek-benbassat-claim-result-v1
+  SOURCE_REVIEW_BRANCH: agent/star-trek-benbassat-source-review-result-v1
+  SOURCE_REVIEW_PATH: transport/star-trek-benbassat-source-review-v1/source-review.json
+  MEDIA_BRANCH: agent/star-trek-benbassat-media-result-v1
+  MEDIA_PATH: transport/star-trek-benbassat-media-v1/media-receipt.json
+  SETTLEMENT_BRANCH: agent/star-trek-benbassat-preproduct-settlement-result-v2
+  SETTLEMENT_PATH: transport/star-trek-benbassat-preproduct-settlement-v2/settlement.json
+  RESULT_BRANCH: agent/star-trek-benbassat-independent-review-result-v8
+  REVIEWER_SOURCE: .github/recovery/star-trek-benbassat-independent-review-v8/reviewer.py
+  REVIEWER: /tmp/star-trek-benbassat-independent-review-v8.py
+  OUT: /tmp/star-trek-benbassat-independent-review-v8
+
+jobs:
+  review:
+    name: independently-review-benbassat-current-candidate-v8
+    if: ${{ github.event.head_commit.message == 'Review Star Trek Benbassat candidate 637d with media schema custody v8' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify sealed reviewer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          while read -r digest relative; do
+            test -f "$relative"
+            test "$(sha256sum "$relative" | awk '{print $1}')" = "$digest"
+          done < .github/recovery/star-trek-benbassat-independent-review-v8/sealed-manifest.sha256
+          cp "$REVIEWER_SOURCE" "$REVIEWER"
+          chmod +x "$REVIEWER"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          path=Path(os.environ['REVIEWER'])
+          compile(path.read_text(encoding='utf-8'),str(path),'exec')
+          PY
+      - name: Freeze exact candidate and evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"; mkdir -p "$OUT"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git fetch --no-tags origin main "$CANDIDATE_BRANCH" "$CLAIM_BRANCH" "$SOURCE_REVIEW_BRANCH" "$MEDIA_BRANCH" "$SETTLEMENT_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$LIVE_MAIN"
+          test "$(git show -s --format=%T "$LIVE_MAIN")" = "$LIVE_TREE"
+          test "$(git show -s --format=%P "$LIVE_MAIN")" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%s "$LIVE_MAIN")" = "$LIVE_MESSAGE"
+          git diff --name-only "$EXPECTED_MAIN..$LIVE_MAIN" | LC_ALL=C sort > "$OUT/live-maintenance-paths.txt"
+          printf "%s\n" "data/MEDIA-SEARCH-LATEST.json" "data/journal/media-search.jsonl" > "$OUT/expected-maintenance-paths.txt"
+          diff -u "$OUT/expected-maintenance-paths.txt" "$OUT/live-maintenance-paths.txt"
+          candidate_ref="refs/remotes/origin/${CANDIDATE_BRANCH}"; claim_ref="refs/remotes/origin/${CLAIM_BRANCH}"
+          source_ref="refs/remotes/origin/${SOURCE_REVIEW_BRANCH}"; media_ref="refs/remotes/origin/${MEDIA_BRANCH}"; settlement_ref="refs/remotes/origin/${SETTLEMENT_BRANCH}"
+          candidate_commit="$(git rev-parse "$candidate_ref")"; candidate_tree="$(git show -s --format=%T "$candidate_ref")"
+          claim_commit="$(git rev-parse "$claim_ref")"; claim_tree="$(git show -s --format=%T "$claim_ref")"
+          test "$candidate_commit" = "$EXPECTED_CANDIDATE_COMMIT"
+          test "$candidate_tree" = "$EXPECTED_CANDIDATE_TREE"
+          test "$claim_commit" = "$EXPECTED_CLAIM_COMMIT"
+          test "$claim_tree" = "$EXPECTED_CLAIM_TREE"
+          test "$(git show -s --format=%P "$claim_ref")" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%P "$candidate_ref")" = "$claim_commit"
+          test "$(git rev-list --count "$claim_ref..$candidate_ref")" = 1
+          test "$(git show -s --format=%s "$candidate_ref")" = "Star Trek: stage corrected Benbassat candidate v4"
+          git show "${source_ref}:${SOURCE_REVIEW_PATH}" > "$OUT/source-review.json"
+          git show "${media_ref}:${MEDIA_PATH}" > "$OUT/media-receipt.json"
+          git show "${settlement_ref}:${SETTLEMENT_PATH}" > "$OUT/preproduct-settlement.json"
+          git checkout --detach "$candidate_ref"
+          git clean -fdx
+          cp data/review/adapter-sdk/star-trek-benbassat-candidate.json "$OUT/candidate-receipt.json"
+          git diff-tree --no-commit-id --name-only -r HEAD | LC_ALL=C sort > "$OUT/candidate-paths.txt"
+          printf '%s\n' "$candidate_commit" > "$OUT/candidate-commit.txt"
+          printf '%s\n' "$candidate_tree" > "$OUT/candidate-tree.txt"
+          npm ci --ignore-scripts
+          python3 "$REVIEWER" inspect
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
+          test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$LIVE_MAIN"
+      - name: Run independent repository gates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node scripts/validate.mjs | tee "$OUT/repository-validate.log"
+          npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate.log"
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate.log"
+          npm run autopilot:fixtures | tee "$OUT/autopilot-fixtures.log"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after.json"
+          test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$LIVE_MAIN"
+      - name: Write independent review receipt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 "$REVIEWER" receipt
+          jq -e --arg task "$TASK_ID" --arg lease "$EXPECTED_LEASE" --arg wall "$WALL_ID" \
+            '.transaction == "STAR-TREK-BENBASSAT-INDEPENDENT-REVIEW-V8"
+             and .verdict == "pass"
+             and .candidate.commit == env.EXPECTED_CANDIDATE_COMMIT
+             and .candidate.tree == env.EXPECTED_CANDIDATE_TREE
+             and .task.id == $task and .task.lease_id == $lease and .task.status == "resolved" and .task.wall_id == $wall
+             and .queue == {total:2228,queued:1797,resolved:429,blocked:0,rejected:2,in_flight:0}
+             and .publication_base.commit == env.LIVE_MAIN and .publication_base.tree == env.LIVE_TREE
+             and .boundary.production == "Star Trek: Picard" and .boundary.episode == "Võx" and .boundary.performance_mode == "voice-only"
+             and .boundary.media_schema == "source-declared-absent-with-null-claims"
+             and .boundary.originating_lease_verified_in == "task.outcome.media_review.lease_id"
+             and .boundary.census_refresh_verified == true
+             and .boundary.honest_media_absence == true
+             and .boundary.waterline_cycle_recorded == false
+             and .boundary.canonical_mutation == false and .boundary.lease_mutation == false and .boundary.additional_lease_issued == false' \
+            "$OUT/independent-review.json" >/dev/null
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+      - name: Upload independent review evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-benbassat-independent-review-v8
+          path: /tmp/star-trek-benbassat-independent-review-v8/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish immutable independent review result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq --argjson id "$ARTIFACT_ID" --arg digest "$ARTIFACT_DIGEST" '.artifact={id:$id,digest:$digest}' "$OUT/independent-review.json" > "$OUT/review.tmp"
+          mv "$OUT/review.tmp" "$OUT/independent-review.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git config user.name undercast-benbassat-independent-review-v8
+          git config user.email undercast-benbassat-independent-review-v8@users.noreply.github.com
+          git checkout --orphan benbassat-independent-review-result-v8
+          git rm -rf .
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-benbassat-independent-review-v8
+          cp -a "$OUT"/. transport/star-trek-benbassat-independent-review-v8/
+          git add transport/star-trek-benbassat-independent-review-v8
+          git commit -m "Record Star Trek Benbassat independent review v8"
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
