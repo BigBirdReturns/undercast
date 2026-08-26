@@ -1,0 +1,56 @@
+if (receipt.task?.id !== C.TASK_ID || receipt.task?.performer !== C.PERFORMER || receipt.task?.character !== C.CHARACTER || receipt.task?.source_fingerprint !== C.FINGERPRINT) fail('task identity drifted');
+if (receipt.task?.production !== 'The Least Dangerous Game' || receipt.task?.series !== 'Star Trek: Lower Decks' || receipt.task?.years !== '2022' || receipt.task?.performance_mode !== 'voice-animation') fail('performance object drifted');
+for (const key of ['physical_performance_attributed','prosthetic_performance_attributed','animation_labor_attributed','character_design_attributed','voice_direction_attributed','vocal_processing_attributed','sound_attributed','transformation_measured']) {{
+  if (receipt.task?.[key] !== false) fail(`unsupported attribution promoted: ${{key}}`);
+}}
+if (receipt.task?.maker_attribution !== 'unresolved') fail('maker attribution drifted');
+if (receipt.lease?.id !== C.LEASE_ID || receipt.canonical?.wall_id !== C.WALL_ID) fail('lease or wall custody drifted');
+if (receipt.candidate?.commit !== C.CANDIDATE_COMMIT || receipt.candidate?.tree !== C.CANDIDATE_TREE || receipt.candidate?.receipt_sha256 !== C.CANDIDATE_RECEIPT_SHA) fail('candidate custody drifted');
+if (receipt.independent_review?.review_sha256 !== C.REVIEW_SHA || receipt.independent_review?.verdict !== 'pass') fail('independent review drifted');
+if (receipt.predecessor?.receipt_sha256 !== C.PREDECESSOR_RECEIPT_SHA || receipt.predecessor?.checker_sha256 !== C.PREDECESSOR_CHECKER_SHA || receipt.predecessor?.cycle_id !== C.PREDECESSOR_CYCLE_ID) fail('Benbassat predecessor custody drifted');
+
+const predecessor = read('data/review/adapter-sdk/star-trek-benbassat-cycle.json');
+const predecessorBody = {{...predecessor}};
+delete predecessorBody.receipt_sha256;
+if (digestObject(predecessorBody) !== C.PREDECESSOR_RECEIPT_SHA || predecessor.receipt_sha256 !== C.PREDECESSOR_RECEIPT_SHA) fail('Benbassat receipt identity drifted');
+if (digestFile('scripts/star-trek-benbassat-cycle.mjs') !== C.PREDECESSOR_CHECKER_SHA) fail('Benbassat checker identity drifted');
+
+const candidate = read('data/review/adapter-sdk/star-trek-morgo-candidate.json');
+const candidateBody = {{...candidate}};
+delete candidateBody.receipt_sha256;
+if (digestObject(candidateBody) !== C.CANDIDATE_RECEIPT_SHA || candidate.receipt_sha256 !== C.CANDIDATE_RECEIPT_SHA) fail('candidate receipt identity drifted');
+for (const key of ['precomplete','terminal']) {{
+  const row = candidate.projection_refresh?.[key];
+  if (!row) fail(`candidate ${{key}} census receipt missing`);
+  const body = {{...row}};
+  delete body.receipt_sha256;
+  if (digestCompact(body) !== row.receipt_sha256) fail(`candidate ${{key}} census identity drifted`);
+}}
+
+const state = read('data/AUTOPILOT.json');
+const trek = state.jobs.filter((row) => row.scope === 'star-trek');
+const task = trek.find((row) => row.id === C.TASK_ID);
+if (!task || task.status !== 'resolved' || task.attempts !== 1 || task.performer !== C.PERFORMER || task.character !== C.CHARACTER || task.source_fingerprint !== C.FINGERPRINT || task.lease != null || task.outcome?.media_review?.lease_id !== C.LEASE_ID || JSON.stringify(task.wall_ids) !== JSON.stringify([C.WALL_ID])) fail('durable task drifted');
+if (trek.length !== 2228) fail('Star Trek denominator drifted');
+if (trek.filter((row) => row.status === 'resolved').length < 430) fail('resolved floor regressed');
+if (trek.filter((row) => ['leased','drafted','merged'].includes(row.status)).length > 1) fail('later-cycle active-task bound exceeded');
+
+const water = read('data/WATERLINE-STATE.json');
+const cycle = water.cycles.find((row) => row.id === receipt.reviewed_cycle?.id && row.scope_id === 'star-trek' && row.lease_id === C.LEASE_ID);
+if (!cycle || cycle.outcome !== 'completed' || cycle.task_statuses?.[C.TASK_ID] !== 'resolved') fail('waterline custody drifted');
+if (!water.cycles.some((row) => row.id === C.PREDECESSOR_CYCLE_ID && row.outcome === 'completed')) fail('Benbassat predecessor cycle missing');
+
+const records = read('data/specimens.json').filter((row) => row.id === C.WALL_ID);
+if (records.length !== 1) fail(`canonical record cardinality drifted (${{records.length}})`);
+const record = records[0];
+if (record.actor !== C.PERFORMER || record.character !== C.CHARACTER || record.production !== 'The Least Dangerous Game' || record.years !== '2022' || record.kind !== 'voice' || record.designer !== '—' || record.transform !== 2) fail('canonical record boundary drifted');
+if (assetSrc(record.still) !== 'images/uc-1398-still.webp' || assetSrc(record.portrait) !== 'images/uc-1398-portrait.jpg') fail('canonical media paths drifted');
+if (digestFile('images/uc-1398-still.webp') !== C.STILL_SHA || digestFile('images/uc-1398-portrait.jpg') !== C.PORTRAIT_SHA) fail('canonical media bytes drifted');
+
+const audit = read('data/MEDIA-AUDIT.json');
+const facets = audit.items.filter((row) => row.wall_id === C.WALL_ID && ['still','portrait'].includes(row.side));
+if (facets.length !== 2 || new Set(facets.map((row) => row.side)).size !== 2) fail('media facet cardinality drifted');
+for (const facet of facets) {{
+  const expected = facet.side === 'still'
+    ? {{id:C.STILL_ITEM, sha:C.STILL_SHA, presentation:'character-depiction'}}
+    : {{id:C.PORTRAIT_ITEM, sha:C.PORTRAIT_SHA, presentation:'neutral-human'}};
