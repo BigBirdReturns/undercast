@@ -59,6 +59,26 @@ def fetch_json(params):
     with urlopen(request, timeout=120) as response:
         return json.loads(response.read())
 
+def fetch_rendered(oldid: int, expected_title: str):
+    payload = fetch_json(
+        {
+            "action": "parse",
+            "oldid": str(oldid),
+            "prop": "text|displaytitle|revid",
+            "format": "json",
+            "formatversion": "2",
+        }
+    )
+    parsed = payload.get("parse") or {}
+    if parsed.get("revid") != oldid:
+        raise SystemExit(f"rendered revision drifted: {parsed.get('revid')} != {oldid}")
+    if parsed.get("title") != expected_title:
+        raise SystemExit(f"rendered title drifted: {parsed.get('title')}")
+    rendered_html = parsed.get("text") or ""
+    rendered_text = html.unescape(re.sub(r"<[^>]+>", " ", rendered_html))
+    rendered_text = re.sub(r"\s+", " ", rendered_text).strip()
+    return payload, rendered_html, rendered_text
+
 def extract_airdate(wikitext: str, rendered: str):
     patterns = [
         r"^\|\s*(?:date|airdate|first[_ ]aired)\s*=\s*([^\n]+?)\s*$",
@@ -130,15 +150,29 @@ for index, title in enumerate(EPISODE_TITLES, 1):
         raise SystemExit(f"{title} wikitext absent")
     rendered = page.get("extract") or ""
     if "lower decks" not in (wikitext + "\n" + rendered).lower():
-        raise SystemExit(f"{title} does not bind Star Trek: Lower Decks")
-    if "2023" not in (wikitext + "\n" + rendered):
-        raise SystemExit(f"{title} does not expose the 2023 production year")
+        raise SystemExit(f"{title} does not bind Star Trek: Lower Decks in source text")
+    rendered_api, rendered_html, rendered_text = fetch_rendered(
+        int(revision.get("revid")), title
+    )
+    if "Star Trek: Lower Decks" not in rendered_text:
+        raise SystemExit(f"{title} rendered page does not bind Star Trek: Lower Decks")
+    if "2023" not in rendered_text:
+        raise SystemExit(f"{title} rendered page does not expose the 2023 production year")
     episode_name = title.removesuffix(" (episode)")
     if episode_name not in role_wikitext:
         raise SystemExit(f"{title} is not bound by the frozen role source")
 
     (OUT / f"episode-{index}.wikitext").write_text(wikitext, encoding="utf-8")
     (OUT / f"episode-{index}.txt").write_text(rendered, encoding="utf-8")
+    (OUT / f"episode-{index}-rendered-api.json").write_text(
+        pretty(rendered_api), encoding="utf-8"
+    )
+    (OUT / f"episode-{index}-rendered.html").write_text(
+        rendered_html, encoding="utf-8"
+    )
+    (OUT / f"episode-{index}-rendered.txt").write_text(
+        rendered_text, encoding="utf-8"
+    )
     production_revisions.append(
         {
             "title": title,
@@ -149,8 +183,13 @@ for index, title in enumerate(EPISODE_TITLES, 1):
             "timestamp": revision.get("timestamp"),
             "content_sha256": digest_text(wikitext),
             "rendered_extract_sha256": digest_text(rendered),
+            "rendered_api_sha256": hashlib.sha256(
+                (json.dumps(stable(rendered_api), separators=(",", ":"), ensure_ascii=False) + "\n").encode()
+            ).hexdigest(),
+            "rendered_html_sha256": digest_text(rendered_html),
+            "rendered_text_sha256": digest_text(rendered_text),
             "page_image": page.get("original"),
-            "first_aired": extract_airdate(wikitext, rendered),
+            "first_aired": extract_airdate(wikitext, rendered_text),
             "series_verified": "Star Trek: Lower Decks",
             "year_verified": "2023",
         }
