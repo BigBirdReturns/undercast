@@ -38,41 +38,84 @@ if sys.argv[1:] == ["prepare"]:
         Path.cwd()
         / "data/review/adapter-sdk/star-trek-risik-cycle.json"
     )
+    old_assertion = "if (JSON.stringify(episodes) !== JSON.stringify([{\"title\": \"Something Borrowed, Something Green\", \"first_aired\": \"21 September 2023\"}, {\"title\": \"The Inner Fight\", \"first_aired\": \"26 October 2023\"}, {\"title\": \"Old Friends, New Planets\", \"first_aired\": \"2 November 2023\"}])) fail('reviewed episode set drifted');"
+    new_assertion = "const expectedEpisodes = [{\"title\": \"Something Borrowed, Something Green\", \"first_aired\": \"21 September 2023\"}, {\"title\": \"The Inner Fight\", \"first_aired\": \"26 October 2023\"}, {\"title\": \"Old Friends, New Planets\", \"first_aired\": \"2 November 2023\"}];\nif (!Array.isArray(episodes)\n  || episodes.some((row) => !row\n    || typeof row !== 'object'\n    || Array.isArray(row)\n    || JSON.stringify(Object.keys(row).sort()) !== JSON.stringify(['first_aired','title']))\n  || JSON.stringify(episodes.map((row) => ({title: row.title, first_aired: row.first_aired}))) !== JSON.stringify(expectedEpisodes)) fail('reviewed episode set drifted');"
+
     text = checker.read_text(encoding="utf-8")
-    lines = text.splitlines()
-    matches = [
-        index for index, line in enumerate(lines)
-        if "reviewed episode set drifted" in line
-    ]
-    if len(matches) != 1:
+    if text.count(old_assertion) != 1:
         raise SystemExit(
-            f"Risik checker diagnostic anchor drifted: {len(matches)} matches"
+            f"Risik checker key-order patch anchor drifted: "
+            f"{text.count(old_assertion)} matches"
         )
-    center = matches[0]
-    start = max(0, center - 35)
-    end = min(len(lines), center + 36)
-    print("RISIK-CHECKER-DIAGNOSTIC-BEGIN")
-    for index in range(start, end):
-        print(f"{index + 1:04d}: {lines[index]}")
-    print("RISIK-CHECKER-DIAGNOSTIC-END")
+    patched = text.replace(old_assertion, new_assertion, 1)
+    if old_assertion in patched or patched.count(new_assertion) != 1:
+        raise SystemExit("Risik checker key-order patch did not close")
+    checker.write_text(patched, encoding="utf-8")
+    subprocess.run(["node", "--check", str(checker)], check=True)
 
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    print("RISIK-RECEIPT-DIAGNOSTIC-BEGIN")
-    print(json.dumps(
+    episodes = (receipt.get("source_review") or {}).get(
+        "confirmed_voiced_episodes"
+    )
+    expected = [
         {
-            "source_review": receipt.get("source_review"),
-            "checker_fields": {
-                key: value
-                for key, value in receipt.items()
-                if "check" in key.lower() or "sha" in key.lower()
-            },
-            "receipt_sha256": receipt.get("receipt_sha256"),
-            "checker_sha256": hashlib.sha256(checker.read_bytes()).hexdigest(),
-            "receipt_file_sha256": hashlib.sha256(
-                receipt_path.read_bytes()
-            ).hexdigest(),
+            "title": "Something Borrowed, Something Green",
+            "first_aired": "21 September 2023",
         },
-        indent=2,
-        ensure_ascii=False,
-    ))
-    print("RISIK-RECEIPT-DIAGNOSTIC-END")
+        {
+            "title": "The Inner Fight",
+            "first_aired": "26 October 2023",
+        },
+        {
+            "title": "Old Friends, New Planets",
+            "first_aired": "2 November 2023",
+        },
+    ]
+    if not isinstance(episodes, list):
+        raise SystemExit("Risik receipt episode set is not a list")
+    if any(
+        not isinstance(row, dict)
+        or sorted(row) != ["first_aired", "title"]
+        for row in episodes
+    ):
+        raise SystemExit(
+            f"Risik receipt episode object shape drifted: {episodes}"
+        )
+    projected = [
+        {
+            "title": row["title"],
+            "first_aired": row["first_aired"],
+        }
+        for row in episodes
+    ]
+    if projected != expected:
+        raise SystemExit(
+            f"Risik receipt episode values drifted: {projected}"
+        )
+
+    repair = {
+        "version": 1,
+        "transaction": "STAR-TREK-RISIK-CHECKER-KEY-ORDER-REPAIR-V1",
+        "classification": "exact-object-key-set-and-title-date-projection",
+        "receipt_sha256": receipt.get("receipt_sha256"),
+        "original_checker_sha256": hashlib.sha256(
+            text.encode("utf-8")
+        ).hexdigest(),
+        "patched_checker_sha256": hashlib.sha256(
+            checker.read_bytes()
+        ).hexdigest(),
+        "episodes": projected,
+        "object_keys": ["first_aired", "title"],
+        "product_data_changed": False,
+        "media_changed": False,
+        "attribution_changed": False,
+        "waterline_logic_changed": False,
+        "publication_logic_changed": False,
+    }
+    out = Path(os.environ["OUT"])
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "checker-key-order-repair.json").write_text(
+        json.dumps(repair, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    print(json.dumps(repair, indent=2, ensure_ascii=False))
