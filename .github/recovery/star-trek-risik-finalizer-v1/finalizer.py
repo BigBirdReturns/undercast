@@ -59,6 +59,14 @@ if (!Array.isArray(episodes)
     checker.write_text(patched, encoding="utf-8")
     subprocess.run(["node", "--check", str(checker)], check=True)
 
+    print("RISIK-CHECKER-SELF-IDENTITY-BEGIN")
+    for index, line in enumerate(
+        checker.read_text(encoding="utf-8").splitlines()[:50],
+        start=1,
+    ):
+        print(f"{index:04d}: {line}")
+    print("RISIK-CHECKER-SELF-IDENTITY-END")
+
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     episodes = (receipt.get("source_review") or {}).get(
         "confirmed_voiced_episodes"
