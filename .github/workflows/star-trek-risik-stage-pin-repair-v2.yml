@@ -1,0 +1,160 @@
+name: star-trek-risik-stage-pin-repair-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-stage-recovery-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-trek-risik-stage-pin-repair-v2
+  cancel-in-progress: false
+
+env:
+  BRANCH: agent/star-trek-risik-stage-recovery-v1
+  EXPECTED_PARENT: 98e099e1429c570d3033ffb6ba8fc4b8ecc61c4a
+  EXPECTED_MAIN: 129e6f9c389fe61bb8027f4e046bea7de510cb84
+  EXPECTED_MAIN_TREE: 6d32c386636296e76bcab61baa387cb629967ac3
+  CANDIDATE_BRANCH: agent/star-trek-risik-candidate-v1
+  EXPECTED_CANDIDATE: eff3da84c7718d0894afda1fbc4e790bc88265da
+  RESULT_BRANCH: agent/star-trek-risik-stage-result-v1
+  RECON_BRANCH: agent/star-trek-risik-media-reconciliation-result-v1
+  OLD_RECON_COMMIT: c6294eb231c375a8aa46ea5e8fc19080429943e0
+  OLD_RECON_TREE: 05cabace2eda20f928661c83902a0fd546fae7b0
+  NEW_RECON_COMMIT: 934d15d6ebf3f0b42b05ed94bc8efe9f256fa2df
+  NEW_RECON_TREE: af0db02e139886ba235ba5c61e912b99384ee031
+  RECON_SHA: 4817c8158c87ca9a8ed95ea9ca93a5020249719e10159066b47d44ce1ad83355
+  STAGE_WORKFLOW: .github/workflows/star-trek-risik-stage-recovery-v1.yml
+  STAGE_TRIGGER: .github/recovery/star-trek-risik-stage-recovery-v1/run.trigger
+  STAGE_MANIFEST: .github/recovery/star-trek-risik-stage-recovery-v1/sealed-manifest.sha256
+  SELF_PATH: .github/workflows/star-trek-risik-stage-pin-repair-v2.yml
+
+jobs:
+  repair:
+    name: repair-stale-risik-reconciliation-pin
+    if: ${{ github.event.head_commit.message == 'Install Star Trek Risik stage pin repair v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify exact failed boundary and patch only custody pins
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          test "$(git show -s --format=%P "$GITHUB_SHA")" = "$EXPECTED_PARENT"
+          test "$(git show -s --format=%s "$GITHUB_SHA")" = "Install Star Trek Risik stage pin repair v2"
+
+          git fetch --no-tags --depth=2 origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${CANDIDATE_BRANCH}:refs/remotes/origin/${CANDIDATE_BRANCH}" \
+            "+refs/heads/${RECON_BRANCH}:refs/remotes/origin/${RECON_BRANCH}"
+
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_MAIN_TREE"
+          test "$(git rev-parse "refs/remotes/origin/${CANDIDATE_BRANCH}")" = "$EXPECTED_CANDIDATE"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          test "$(git rev-parse "refs/remotes/origin/${RECON_BRANCH}")" = "$NEW_RECON_COMMIT"
+          test "$(git show -s --format=%T "$NEW_RECON_COMMIT")" = "$NEW_RECON_TREE"
+          test -z "$(git show -s --format=%P "$NEW_RECON_COMMIT")"
+
+          recon="$(mktemp)"
+          git show \
+            "refs/remotes/origin/${RECON_BRANCH}:transport/star-trek-risik-media-reconciliation-v1/media-reconciliation.json" \
+            > "$recon"
+          test "$(jq -r .transaction "$recon")" = "STAR-TREK-RISIK-MEDIA-RECONCILIATION-V1"
+          test "$(jq -r .verdict "$recon")" = "pass"
+          test "$(jq -r .reconciliation_sha256 "$recon")" = "$RECON_SHA"
+          test "$(jq -r .candidate_staging_admissible "$recon")" = "true"
+
+          sha256sum -c "$STAGE_MANIFEST"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+
+          workflow = Path(os.environ["STAGE_WORKFLOW"])
+          trigger = Path(os.environ["STAGE_TRIGGER"])
+          manifest = Path(os.environ["STAGE_MANIFEST"])
+
+          old_commit = os.environ["OLD_RECON_COMMIT"]
+          old_tree = os.environ["OLD_RECON_TREE"]
+          new_commit = os.environ["NEW_RECON_COMMIT"]
+          new_tree = os.environ["NEW_RECON_TREE"]
+
+          text = workflow.read_text(encoding="utf-8")
+          replacements = (
+              (
+                  f"RECONCILIATION_COMMIT: {old_commit}",
+                  f"RECONCILIATION_COMMIT: {new_commit}",
+              ),
+              (
+                  f"RECONCILIATION_TREE: {old_tree}",
+                  f"RECONCILIATION_TREE: {new_tree}",
+              ),
+          )
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f"workflow patch anchor drifted: {old}")
+              text = text.replace(old, new, 1)
+          workflow.write_text(text, encoding="utf-8")
+
+          document = json.loads(trigger.read_text(encoding="utf-8"))
+          media = document.get("media_reconciliation") or {}
+          if media.get("commit") != old_commit:
+              raise SystemExit("trigger reconciliation commit drifted")
+          media["commit"] = new_commit
+          document["media_reconciliation"] = media
+          trigger.write_text(
+              json.dumps(document, indent=2, ensure_ascii=False) + "\n",
+              encoding="utf-8",
+          )
+
+          entries = []
+          for line in manifest.read_text(encoding="utf-8").splitlines():
+              if not line:
+                  continue
+              _, relative = line.split("  ", 1)
+              path = Path(relative)
+              if not path.is_file():
+                  raise SystemExit(f"sealed path is absent: {relative}")
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              entries.append(f"{digest}  {relative}")
+          manifest.write_text("\n".join(entries) + "\n", encoding="utf-8")
+          PY
+
+          sha256sum -c "$STAGE_MANIFEST"
+          grep -F "RECONCILIATION_COMMIT: $NEW_RECON_COMMIT" "$STAGE_WORKFLOW" >/dev/null
+          grep -F "RECONCILIATION_TREE: $NEW_RECON_TREE" "$STAGE_WORKFLOW" >/dev/null
+          test "$(jq -r .media_reconciliation.commit "$STAGE_TRIGGER")" = "$NEW_RECON_COMMIT"
+
+          git rm "$SELF_PATH"
+
+          git diff --name-only | LC_ALL=C sort > /tmp/actual-paths
+          printf '%s\n' \
+            "$STAGE_WORKFLOW" \
+            "$STAGE_TRIGGER" \
+            "$STAGE_MANIFEST" \
+            "$SELF_PATH" \
+            | LC_ALL=C sort > /tmp/expected-paths
+          diff -u /tmp/expected-paths /tmp/actual-paths
+          git diff --check
+
+          git add "$STAGE_WORKFLOW" "$STAGE_TRIGGER" "$STAGE_MANIFEST"
+          git diff --cached --name-only | LC_ALL=C sort \
+            | diff -u /tmp/expected-paths -
+          git diff --cached --check
+
+          git config user.name undercast-risik-stage-pin-repair-v2
+          git config user.email undercast-risik-stage-pin-repair-v2@users.noreply.github.com
+          git commit -m "Repair Star Trek Risik stage reconciliation pin v2"
+          git push origin "HEAD:refs/heads/${BRANCH}"
