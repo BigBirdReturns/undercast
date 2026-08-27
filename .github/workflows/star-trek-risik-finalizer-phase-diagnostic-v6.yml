@@ -1,0 +1,211 @@
+name: star-trek-risik-finalizer-phase-diagnostic-v6
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-finalizer-phase-diagnostic-v6
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: star-trek-risik-finalizer-phase-diagnostic-v6
+  cancel-in-progress: false
+
+env:
+  ORIGINAL_WORKFLOW: ".github/workflows/star-trek-risik-finalizer-v1.yml"
+  EXPECTED_WORKFLOW_BLOB: "80991fa5c7f869e6a7b962c94daae237ca076fa7"
+  EXPECTED_WRAPPER_SHA: "a11a318b19388dee339d4311ca6c939eb30439772dd84dc554ad2f7a4e1bcd06"
+  EXPECTED_TRIGGER_SHA: "4202278fd486207f7ce15023f8e9f54636afbcb3dcfbaf27ab1a7f0d8444cd3e"
+  RECOVERY_OUT: "/tmp/star-trek-risik-finalizer-phase-diagnostic-v6"
+
+jobs:
+  diagnose:
+    name: diagnose-reviewed-risik-cycle-phase-gate-v6
+    if: ${{ github.event.head_commit.message == 'Diagnose Star Trek Risik finalizer phase gate v6' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Reconstruct bounded diagnostic program
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$RECOVERY_OUT"
+          mkdir -p "$RECOVERY_OUT"
+
+          test "$(git rev-parse "HEAD:${ORIGINAL_WORKFLOW}")" = "$EXPECTED_WORKFLOW_BLOB"
+          test "$(sha256sum .github/recovery/star-trek-risik-finalizer-v1/finalizer.py | awk '{print $1}')" = "$EXPECTED_WRAPPER_SHA"
+          test "$(sha256sum .github/recovery/star-trek-risik-finalizer-v1/run.trigger | awk '{print $1}')" = "$EXPECTED_TRIGGER_SHA"
+          sha256sum -c .github/recovery/star-trek-risik-finalizer-v1/sealed-manifest.sha256
+
+          export ORIGINAL_WORKFLOW RECOVERY_OUT
+          ruby <<'RUBY'
+          require "yaml"
+
+          document = YAML.load_file(ENV.fetch("ORIGINAL_WORKFLOW"))
+          output = ENV.fetch("RECOVERY_OUT")
+          File.open(ENV.fetch("GITHUB_ENV"), "a") do |file|
+            document.fetch("env").each { |key, value| file.puts("#{key}=#{value}") }
+          end
+
+          steps = document.fetch("jobs").fetch("finalize").fetch("steps")
+          names = {
+            "Verify sealed finalizer and immutable review inputs" => "verify.sh",
+            "Build deterministic receipt-bearing Risik product" => "build.sh",
+          }
+          scripts = {}
+          steps.each do |step|
+            name = step["name"]
+            scripts[name] = step.fetch("run") if names.key?(name)
+          end
+          abort("original Risik finalizer diagnostic step set drifted") unless scripts.keys.sort == names.keys.sort
+
+          build = scripts.fetch("Build deterministic receipt-bearing Risik product")
+          diff_anchor = 'git diff --name-only "$CANDIDATE_COMMIT" | LC_ALL=C sort > "$OUT/finalization-paths.txt"'
+          abort("Risik finalizer diff anchor drifted") unless build.scan(diff_anchor).length == 1
+          baseline_block = <<~'BASH'
+            baseline_path="data/review/adapter-sdk/BASELINE.json"
+            baseline_before="$(sha256sum "$baseline_path" | awk '{print $1}')"
+            npm run adapter:write | tee "$OUT/adapter-write.log"
+            baseline_after="$(sha256sum "$baseline_path" | awk '{print $1}')"
+            test "$baseline_after" != "$baseline_before"
+            test "$(git diff --name-only -- "$baseline_path")" = "$baseline_path"
+            npm run adapter:check | tee "$OUT/adapter-check.log"
+            jq -n \
+              --arg path "$baseline_path" \
+              --arg before "$baseline_before" \
+              --arg after "$baseline_after" \
+              '{version:6,transaction:"STAR-TREK-RISIK-FINALIZER-PHASE-DIAGNOSTIC-V6",path:$path,before_sha256:$before,after_sha256:$after,changed:true}' \
+              > "$OUT/adapter-baseline-diagnostic.json"
+
+          BASH
+          build = build.sub(diff_anchor, baseline_block + diff_anchor)
+
+          compare_anchor = 'diff -u "$OUT/expected-finalization-paths.txt" "$OUT/finalization-paths.txt"'
+          abort("Risik finalizer expected-path comparison anchor drifted") unless build.scan(compare_anchor).length == 1
+          expected_patch = <<~'BASH'
+            printf '%s\n' data/review/adapter-sdk/BASELINE.json >> "$OUT/expected-finalization-paths.txt"
+            LC_ALL=C sort -u "$OUT/expected-finalization-paths.txt" -o "$OUT/expected-finalization-paths.txt"
+          BASH
+          build = build.sub(compare_anchor, expected_patch + compare_anchor)
+
+          history_start = 'if test "$(git rev-parse --is-shallow-repository)" = true; then'
+          history_end = 'git cat-file -e "$MORGO_PRODUCT^{commit}"'
+          start_index = build.index(history_start)
+          abort("Risik finalizer history start anchor drifted") unless start_index
+          end_index = build.index(history_end, start_index)
+          abort("Risik finalizer history end anchor drifted") unless end_index
+          end_index += history_end.length
+
+          diagnostic_block = <<~'BASH'
+            export PRODUCT_COMMIT="$product_commit"
+            node --input-type=module - <<'NODE' | tee "$OUT/kzinti-phase-diagnostic.json"
+            import fs from 'node:fs';
+            import { execFileSync } from 'node:child_process';
+
+            const read = (path) => JSON.parse(fs.readFileSync(path, 'utf8'));
+            const jsonl = (path) => fs.readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse);
+            const state = read('data/AUTOPILOT.json');
+            const trek = state.jobs.filter((row) => row.scope === 'star-trek');
+            const water = read('data/WATERLINE-STATE.json');
+            const receipts = water.cycles.filter((row) => row.scope_id === 'star-trek');
+            const registry = read('data/ESTATE-REGISTRY.json');
+            const estate = registry.estates.find((row) => row.id === 'star-trek');
+            const claims = jsonl('data/journal/autopilot.jsonl').filter((row) => row.op === 'lease.claimed' && row.scope === 'star-trek');
+            const byLease = new Map(receipts.map((row) => [row.lease_id, row]));
+            const later = claims.filter((row) => Date.parse(row.at) > Date.parse('2026-08-20T23:05:32.168Z'));
+            const unreceipted = later.filter((row) => !byLease.has(row.lease_id));
+            const queued = trek.filter((row) => row.status === 'queued').length;
+            const resolved = trek.filter((row) => row.status === 'resolved').length;
+            const rejected = trek.filter((row) => row.status === 'rejected').length;
+            const inFlight = trek.filter((row) => ['leased','drafted','merged'].includes(row.status)).length;
+            const tail = receipts.at(-1) || null;
+            const latestByReviewedAt = [...receipts].sort((left, right) => {
+              const a = Date.parse(left.reviewed_at || left.closed_at || left.claimed_at || 0);
+              const b = Date.parse(right.reviewed_at || right.closed_at || right.claimed_at || 0);
+              return a - b;
+            }).at(-1) || null;
+            const formula = queued + unreceipted.length;
+            const gate = estate?.next_gate || '';
+            const result = {
+              transaction: 'STAR-TREK-RISIK-FINALIZER-KZINTI-PHASE-DIAGNOSTIC-V6',
+              product: {
+                commit: execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim(),
+                tree: execFileSync('git', ['show', '-s', '--format=%T', 'HEAD'], {encoding:'utf8'}).trim(),
+                parent: execFileSync('git', ['show', '-s', '--format=%P', 'HEAD'], {encoding:'utf8'}).trim(),
+              },
+              counts: {total:trek.length,queued,resolved,rejected,in_flight:inFlight,later_claims:later.length,later_unreceipted:unreceipted.length,registry_queued_formula:formula},
+              waterline_tail: tail && {id:tail.id,lease_id:tail.lease_id,reviewed_at:tail.reviewed_at,closed_at:tail.closed_at},
+              latest_by_reviewed_at: latestByReviewedAt && {id:latestByReviewedAt.id,lease_id:latestByReviewedAt.lease_id,reviewed_at:latestByReviewedAt.reviewed_at,closed_at:latestByReviewedAt.closed_at},
+              recent_receipts: receipts.slice(-10).map((row) => ({id:row.id,lease_id:row.lease_id,reviewed_at:row.reviewed_at,closed_at:row.closed_at})),
+              unreceipted_claims: unreceipted.map((row) => ({id:row.id,lease_id:row.lease_id,task_id:row.task_id,at:row.at})),
+              estate_next_gate: gate,
+              kzinti_phase_condition: {
+                latest_exists: Boolean(tail),
+                tail_id_in_gate: Boolean(tail && gate.includes(tail.id)),
+                reviewed_latest_id_in_gate: Boolean(latestByReviewedAt && gate.includes(latestByReviewedAt.id)),
+                queued_formula_text: formula.toLocaleString('en-US') + ' tasks remain queued',
+                queued_formula_in_gate: gate.includes(formula.toLocaleString('en-US') + ' tasks remain queued'),
+              },
+            };
+            console.log(JSON.stringify(result, null, 2));
+            NODE
+            set +e
+            node scripts/star-trek-kzinti-flyer-cycle.mjs > "$OUT/kzinti-checker.log" 2>&1
+            kzinti_status="$?"
+            set -e
+            printf '%s\n' "$kzinti_status" > "$OUT/kzinti-checker-status.txt"
+            cp data/ESTATE-REGISTRY.json "$OUT/estate-registry-after-product.json"
+            cp data/review/adapter-sdk/BASELINE.json "$OUT/adapter-baseline-after-product.json"
+            git show -s --format='%H%n%T%n%P%n%s' HEAD > "$OUT/product-object.txt"
+            exit 0
+          BASH
+          build[start_index...end_index] = diagnostic_block
+          scripts["Build deterministic receipt-bearing Risik product"] = build
+
+          names.each do |name, filename|
+            target = File.join(output, filename)
+            File.write(target, "#!/usr/bin/env bash\n" + scripts.fetch(name) + "\n")
+            File.chmod(0755, target)
+          end
+          RUBY
+
+          bash -n "$RECOVERY_OUT/verify.sh"
+          bash -n "$RECOVERY_OUT/build.sh"
+          grep -F 'STAR-TREK-RISIK-FINALIZER-KZINTI-PHASE-DIAGNOSTIC-V6' "$RECOVERY_OUT/build.sh" >/dev/null
+          if grep -F "git fetch --no-tags --unshallow origin '+refs/heads/*:refs/remotes/origin/*'" "$RECOVERY_OUT/build.sh"; then
+            echo "unbounded history fetch survived diagnostic reconstruction" >&2
+            exit 1
+          fi
+          sha256sum "$RECOVERY_OUT"/*.sh > "$RECOVERY_OUT/reconstructed-scripts.sha256"
+
+      - name: Verify sealed finalizer and immutable review inputs
+        shell: bash
+        run: bash "$RECOVERY_OUT/verify.sh"
+
+      - name: Build and inspect deterministic Risik product before history expansion
+        shell: bash
+        run: bash "$RECOVERY_OUT/build.sh"
+
+      - name: Upload bounded phase diagnostic evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-risik-finalizer-phase-diagnostic-v6-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-risik-finalizer-v1/
+            /tmp/star-trek-risik-finalizer-phase-diagnostic-v6/
+          if-no-files-found: error
+          retention-days: 30
