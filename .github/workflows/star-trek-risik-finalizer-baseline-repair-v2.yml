@@ -1,0 +1,284 @@
+name: star-trek-risik-finalizer-baseline-repair-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-finalizer-baseline-repair-v2
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-risik-finalizer-baseline-repair-v2
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: "agent/star-trek-risik-finalizer-v1"
+  EXPECTED_TARGET_HEAD: "048328ee73239b645c00a0bbaaca84c6e2077368"
+  EXPECTED_MAIN: "4a2f98c4dc2039f596857cfdff01e701acbd2e4d"
+  FAILED_RUN_ID: "33111533077"
+  RESULT_BRANCH: "agent/star-trek-risik-finalizer-result-v1"
+  TARGET_WORKFLOW: ".github/workflows/star-trek-risik-finalizer-v1.yml"
+  TARGET_WRAPPER: ".github/recovery/star-trek-risik-finalizer-v1/finalizer.py"
+  TARGET_MANIFEST: ".github/recovery/star-trek-risik-finalizer-v1/sealed-manifest.sha256"
+  TARGET_TRIGGER: ".github/recovery/star-trek-risik-finalizer-v1/run.trigger"
+  EXPECTED_WORKFLOW_BLOB: "80991fa5c7f869e6a7b962c94daae237ca076fa7"
+  EXPECTED_WRAPPER_SHA: "a11a318b19388dee339d4311ca6c939eb30439772dd84dc554ad2f7a4e1bcd06"
+  EXPECTED_TRIGGER_SHA: "4202278fd486207f7ce15023f8e9f54636afbcb3dcfbaf27ab1a7f0d8444cd3e"
+  FINALIZER_MESSAGE: "Finalize reviewed Star Trek Risik cycle v1"
+  OUT: "/tmp/star-trek-risik-finalizer-baseline-repair-v2"
+
+jobs:
+  repair:
+    name: api-repair-risik-finalizer-adapter-baseline-v2
+    if: ${{ github.event.head_commit.message == 'Repair Star Trek Risik finalizer adapter baseline v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Patch target Git objects and retrigger finalizer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/source"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/$FAILED_RUN_ID" > "$OUT/failed-run.json"
+          test "$(jq -r .status "$OUT/failed-run.json")" = completed
+          test "$(jq -r .conclusion "$OUT/failed-run.json")" = failure
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)" = "$EXPECTED_MAIN"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/${TARGET_BRANCH}" --jq .object.sha)" = "$EXPECTED_TARGET_HEAD"
+          if gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/${RESULT_BRANCH}" >/dev/null 2>&1; then
+            echo "Risik finalizer result already exists" >&2
+            exit 1
+          fi
+
+          export TARGET_WORKFLOW TARGET_WRAPPER TARGET_MANIFEST TARGET_TRIGGER
+          for variable in TARGET_WORKFLOW TARGET_WRAPPER TARGET_MANIFEST TARGET_TRIGGER; do
+            relative="${!variable}"
+            destination="$OUT/source/$variable"
+            gh api "/repos/${GITHUB_REPOSITORY}/contents/${relative}?ref=${EXPECTED_TARGET_HEAD}" \
+              --jq .content | tr -d '\n' | base64 -d > "$destination"
+          done
+
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/contents/${TARGET_WORKFLOW}?ref=${EXPECTED_TARGET_HEAD}" --jq .sha)" = "$EXPECTED_WORKFLOW_BLOB"
+          test "$(sha256sum "$OUT/source/TARGET_WRAPPER" | awk '{print $1}')" = "$EXPECTED_WRAPPER_SHA"
+          test "$(sha256sum "$OUT/source/TARGET_TRIGGER" | awk '{print $1}')" = "$EXPECTED_TRIGGER_SHA"
+
+          export SOURCE_ROOT="$OUT/source"
+          export EXPECTED_WORKFLOW_BLOB EXPECTED_WRAPPER_SHA
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+          import subprocess
+
+          root = Path(os.environ["SOURCE_ROOT"])
+          workflow = root / "TARGET_WORKFLOW"
+          wrapper = root / "TARGET_WRAPPER"
+          manifest = root / "TARGET_MANIFEST"
+          trigger = root / "TARGET_TRIGGER"
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label} patch anchor drifted: {count}")
+              result = text.replace(old, new, 1)
+              if old in result or result.count(new) != 1:
+                  raise SystemExit(f"{label} patch did not close")
+              return result
+
+          workflow_anchor = (
+              "            data/journal/waterline.jsonl \\\n"
+              "            data/review/adapter-sdk/star-trek-risik-cycle.json \\\n"
+          )
+          workflow_replacement = (
+              "            data/journal/waterline.jsonl \\\n"
+              "            data/review/adapter-sdk/BASELINE.json \\\n"
+              "            data/review/adapter-sdk/star-trek-risik-cycle.json \\\n"
+          )
+          wrapper_anchor = (
+              "    if staged_product_paths != sorted(new_product_paths):\n"
+              "        raise SystemExit(\n"
+              "            \"Risik generated product paths did not enter the index exactly: \"\n"
+              "            f\"{staged_product_paths}\"\n"
+              "        )\n"
+              "\n"
+              "    repair = {\n"
+          )
+          wrapper_replacement = (
+              "    if staged_product_paths != sorted(new_product_paths):\n"
+              "        raise SystemExit(\n"
+              "            \"Risik generated product paths did not enter the index exactly: \"\n"
+              "            f\"{staged_product_paths}\"\n"
+              "        )\n"
+              "\n"
+              "    baseline_path = Path(\"data/review/adapter-sdk/BASELINE.json\")\n"
+              "    if not baseline_path.is_file():\n"
+              "        raise SystemExit(\"Risik adapter baseline path is absent\")\n"
+              "    baseline_before = hashlib.sha256(baseline_path.read_bytes()).hexdigest()\n"
+              "    subprocess.run([\"npm\", \"run\", \"adapter:write\"], check=True)\n"
+              "    baseline_after = hashlib.sha256(baseline_path.read_bytes()).hexdigest()\n"
+              "    if baseline_after == baseline_before:\n"
+              "        raise SystemExit(\"Risik adapter baseline did not change\")\n"
+              "    baseline_changed_paths = sorted(\n"
+              "        line\n"
+              "        for line in subprocess.check_output(\n"
+              "            [\"git\", \"diff\", \"--name-only\", \"--\", baseline_path.as_posix()],\n"
+              "            text=True,\n"
+              "        ).splitlines()\n"
+              "        if line\n"
+              "    )\n"
+              "    if baseline_changed_paths != [baseline_path.as_posix()]:\n"
+              "        raise SystemExit(\n"
+              "            f\"Risik adapter baseline path drifted: {baseline_changed_paths}\"\n"
+              "        )\n"
+              "    subprocess.run([\"npm\", \"run\", \"adapter:check\"], check=True)\n"
+              "\n"
+              "    repair = {\n"
+          )
+          repair_anchor = '        "pre_staged_new_product_paths": new_product_paths,\n'
+          repair_replacement = (
+              '        "pre_staged_new_product_paths": new_product_paths,\n'
+              '        "adapter_baseline_path": baseline_path.as_posix(),\n'
+              '        "adapter_baseline_before_sha256": baseline_before,\n'
+              '        "adapter_baseline_after_sha256": baseline_after,\n'
+              '        "adapter_baseline_changed": True,\n'
+          )
+
+          workflow_text = replace_once(
+              workflow.read_text(encoding="utf-8"),
+              workflow_anchor,
+              workflow_replacement,
+              "workflow baseline path",
+          )
+          workflow.write_text(workflow_text, encoding="utf-8")
+
+          def git_blob(path):
+              header = f"blob {path.stat().st_size}\0".encode()
+              return hashlib.sha1(header + path.read_bytes()).hexdigest()
+
+          patched_workflow_blob = git_blob(workflow)
+          wrapper_text = replace_once(
+              wrapper.read_text(encoding="utf-8"),
+              f'expected_workflow_blob = "{os.environ["EXPECTED_WORKFLOW_BLOB"]}"',
+              f'expected_workflow_blob = "{patched_workflow_blob}"',
+              "wrapper workflow guard",
+          )
+          wrapper_text = replace_once(
+              wrapper_text, wrapper_anchor, wrapper_replacement,
+              "wrapper adapter baseline",
+          )
+          wrapper_text = replace_once(
+              wrapper_text, repair_anchor, repair_replacement,
+              "wrapper repair evidence",
+          )
+          compile(wrapper_text, str(wrapper), "exec")
+          wrapper.write_text(wrapper_text, encoding="utf-8")
+
+          path_map = {
+              os.environ["TARGET_WRAPPER"]: wrapper,
+              os.environ["TARGET_TRIGGER"]: trigger,
+          }
+          entries = []
+          for line in manifest.read_text(encoding="utf-8").splitlines():
+              if not line:
+                  continue
+              _, relative = line.split("  ", 1)
+              source = path_map.get(relative)
+              if source is None:
+                  content = subprocess.check_output(
+                      [
+                          "gh", "api",
+                          f"/repos/{os.environ['GITHUB_REPOSITORY']}/contents/{relative}?ref={os.environ['EXPECTED_TARGET_HEAD']}",
+                          "--jq", ".content",
+                      ],
+                      text=True,
+                  )
+                  data = __import__("base64").b64decode(content.replace("\n", ""))
+                  digest = hashlib.sha256(data).hexdigest()
+              else:
+                  digest = hashlib.sha256(source.read_bytes()).hexdigest()
+              entries.append(f"{digest}  {relative}")
+          manifest.write_text("\n".join(entries) + "\n", encoding="utf-8")
+
+          evidence = {
+              "version": 2,
+              "transaction": "STAR-TREK-RISIK-FINALIZER-ADAPTER-BASELINE-REPAIR-V2",
+              "patched_workflow_blob": patched_workflow_blob,
+              "patched_wrapper_sha256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+              "baseline_path": "data/review/adapter-sdk/BASELINE.json",
+              "expected_finalization_path_count": 10,
+              "runtime_payload_changed": False,
+              "trigger_changed": False,
+              "candidate_changed": False,
+              "review_changed": False,
+              "media_changed": False,
+              "lease_changed": False,
+              "waterline_changed_by_repair": False,
+              "canonical_main_changed_by_repair": False,
+          }
+          (Path(os.environ["OUT"]) / "repair.json").write_text(
+              json.dumps(evidence, indent=2) + "\n"
+          )
+          PY
+
+          workflow_blob="$(
+            base64 -w0 "$OUT/source/TARGET_WORKFLOW" \
+              | jq -Rs '{content:.,encoding:"base64"}' \
+              | gh api -X POST "/repos/${GITHUB_REPOSITORY}/git/blobs" --input - --jq .sha
+          )"
+          wrapper_blob="$(
+            base64 -w0 "$OUT/source/TARGET_WRAPPER" \
+              | jq -Rs '{content:.,encoding:"base64"}' \
+              | gh api -X POST "/repos/${GITHUB_REPOSITORY}/git/blobs" --input - --jq .sha
+          )"
+          manifest_blob="$(
+            base64 -w0 "$OUT/source/TARGET_MANIFEST" \
+              | jq -Rs '{content:.,encoding:"base64"}' \
+              | gh api -X POST "/repos/${GITHUB_REPOSITORY}/git/blobs" --input - --jq .sha
+          )"
+
+          base_tree="$(gh api "/repos/${GITHUB_REPOSITORY}/git/commits/${EXPECTED_TARGET_HEAD}" --jq .tree.sha)"
+          jq -n \
+            --arg base_tree "$base_tree" \
+            --arg workflow "$TARGET_WORKFLOW" --arg workflow_blob "$workflow_blob" \
+            --arg wrapper "$TARGET_WRAPPER" --arg wrapper_blob "$wrapper_blob" \
+            --arg manifest "$TARGET_MANIFEST" --arg manifest_blob "$manifest_blob" \
+            '{
+              base_tree:$base_tree,
+              tree:[
+                {path:$workflow,mode:"100644",type:"blob",sha:$workflow_blob},
+                {path:$wrapper,mode:"100644",type:"blob",sha:$wrapper_blob},
+                {path:$manifest,mode:"100644",type:"blob",sha:$manifest_blob}
+              ]
+            }' > "$OUT/tree.json"
+          tree_sha="$(gh api -X POST "/repos/${GITHUB_REPOSITORY}/git/trees" --input "$OUT/tree.json" --jq .sha)"
+
+          jq -n \
+            --arg message "$FINALIZER_MESSAGE" \
+            --arg tree "$tree_sha" \
+            --arg parent "$EXPECTED_TARGET_HEAD" \
+            '{message:$message,tree:$tree,parents:[$parent]}' > "$OUT/commit.json"
+          commit_sha="$(gh api -X POST "/repos/${GITHUB_REPOSITORY}/git/commits" --input "$OUT/commit.json" --jq .sha)"
+
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/${TARGET_BRANCH}" --jq .object.sha)" = "$EXPECTED_TARGET_HEAD"
+          jq -n --arg sha "$commit_sha" '{sha:$sha,force:false}' \
+            | gh api -X PATCH "/repos/${GITHUB_REPOSITORY}/git/refs/heads/${TARGET_BRANCH}" --input - >/dev/null
+
+          printf '%s\n%s\n' "$commit_sha" "$tree_sha" > "$OUT/target-commit.txt"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 \
+            | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload API repair evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-risik-finalizer-baseline-repair-v2-${{ github.run_id }}
+          path: /tmp/star-trek-risik-finalizer-baseline-repair-v2/
+          if-no-files-found: warn
+          retention-days: 30
