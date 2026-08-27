@@ -72,6 +72,27 @@ EXPECTED_EPISODES = [
 ]
 
 
+
+def episode_projection(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise SystemExit(f"episode evidence is not a list: {value!r}")
+    projected: list[dict[str, Any]] = []
+    for row in value:
+        if not isinstance(row, dict):
+            raise SystemExit(f"episode evidence row is not an object: {row!r}")
+        title = row.get("title")
+        first_aired = row.get("first_aired")
+        if not isinstance(title, str) or not isinstance(first_aired, str):
+            raise SystemExit(f"episode evidence lacks title or air date: {row!r}")
+        projected.append(
+            {
+                "title": title,
+                "first_aired": first_aired,
+            }
+        )
+    return projected
+
+
 def stable(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: stable(value[key]) for key in sorted(value)}
@@ -265,7 +286,7 @@ def inspect() -> None:
         or adjudication.get("primary_production")
         != "Something Borrowed, Something Green"
         or adjudication.get("primary_year") != "2023"
-        or adjudication.get("confirmed_voiced_episodes") != EXPECTED_EPISODES
+        or episode_projection(adjudication.get("confirmed_voiced_episodes")) != EXPECTED_EPISODES
     ):
         raise SystemExit(f"source-review adjudication drifted: {adjudication}")
 
@@ -347,7 +368,7 @@ def inspect() -> None:
         or source_summary.get("primary_production")
         != "Something Borrowed, Something Green"
         or source_summary.get("year") != "2023"
-        or source_summary.get("confirmed_voiced_episodes") != EXPECTED_EPISODES
+        or episode_projection(source_summary.get("confirmed_voiced_episodes")) != EXPECTED_EPISODES
     ):
         raise SystemExit(f"candidate source summary drifted: {source_summary}")
 
