@@ -1,0 +1,156 @@
+name: star-trek-risik-independent-review-repair-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-independent-review-recovery-v2
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-risik-independent-review-repair-v2
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 129e6f9c389fe61bb8027f4e046bea7de510cb84
+  EXPECTED_MAIN_TREE: 6d32c386636296e76bcab61baa387cb629967ac3
+  CANDIDATE_BRANCH: agent/star-trek-risik-candidate-v1
+  EXPECTED_CANDIDATE: 03afc14da5b1cbe53cb99708edddb3c4c33a0adf
+  TARGET_BRANCH: agent/star-trek-risik-independent-review-recovery-v1
+  EXPECTED_TARGET_HEAD: 6a98e5b12b06f41d33ed2ba968c2b2f45559c7bc
+  TARGET_RESULT_BRANCH: agent/star-trek-risik-independent-review-result-v1
+  TARGET_REVIEWER_PATH: .github/recovery/star-trek-risik-independent-product-review-v1/reviewer.py
+  TARGET_MANIFEST_PATH: .github/recovery/star-trek-risik-independent-product-review-v1/sealed-manifest.sha256
+  EXPECTED_REVIEWER_BLOB: 814bef1cf98a58d760f79d17c45d91e796358248
+  FAILED_RUN_ID: "33050776540"
+  PATCHER_SOURCE: .github/recovery/star-trek-risik-independent-product-review-v2/patch-reviewer.py
+  PATCHER: /tmp/star-trek-risik-independent-review-v2-patcher.py
+  REPAIR_ROOT: /tmp/star-trek-risik-independent-review-repair-v2
+
+jobs:
+  repair:
+    name: repair-exact-risik-independent-reviewer-v2
+    if: ${{ github.event.head_commit.message == 'Repair Star Trek Risik independent reviewer v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Verify repair carrier and failed review boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sha256sum -c .github/recovery/star-trek-risik-independent-product-review-v2/sealed-manifest.sha256
+
+          rm -rf "$REPAIR_ROOT"
+          mkdir -p "$REPAIR_ROOT"
+          cp "$PATCHER_SOURCE" "$PATCHER"
+          chmod +x "$PATCHER"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          path = Path(os.environ["PATCHER"])
+          compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          PY
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/$FAILED_RUN_ID" > "$REPAIR_ROOT/failed-run.json"
+          test "$(jq -r .status "$REPAIR_ROOT/failed-run.json")" = completed
+          test "$(jq -r .conclusion "$REPAIR_ROOT/failed-run.json")" = failure
+          test -z "$(git ls-remote --heads origin "refs/heads/${TARGET_RESULT_BRANCH}")"
+
+          git fetch --no-tags --depth=2 origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${CANDIDATE_BRANCH}:refs/remotes/origin/${CANDIDATE_BRANCH}" \
+            "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_MAIN_TREE"
+          test "$(git rev-parse "refs/remotes/origin/${CANDIDATE_BRANCH}")" = "$EXPECTED_CANDIDATE"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$EXPECTED_TARGET_HEAD"
+          test "$(git rev-parse "$EXPECTED_TARGET_HEAD:$TARGET_REVIEWER_PATH")" = "$EXPECTED_REVIEWER_BLOB"
+
+      - name: Patch and reseal the existing v1 second desk
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git switch -C "$TARGET_BRANCH" "refs/remotes/origin/${TARGET_BRANCH}"
+          test -z "$(git status --porcelain)"
+
+          cp "$TARGET_REVIEWER_PATH" "$REPAIR_ROOT/original-reviewer.py"
+          python3 "$PATCHER" \
+            "$REPAIR_ROOT/original-reviewer.py" \
+            "$REPAIR_ROOT/patched-reviewer.py" \
+            "$REPAIR_ROOT/projection-repair.json" \
+            "$REPAIR_ROOT/projection-repair.diff"
+          cp "$REPAIR_ROOT/patched-reviewer.py" "$TARGET_REVIEWER_PATH"
+
+          export TARGET_MANIFEST_PATH
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import os
+
+          manifest = Path(os.environ["TARGET_MANIFEST_PATH"])
+          entries = []
+          for line in manifest.read_text(encoding="utf-8").splitlines():
+              if not line:
+                  continue
+              _, relative = line.split("  ", 1)
+              path = Path(relative)
+              if not path.is_file():
+                  raise SystemExit(f"sealed path is absent: {relative}")
+              entries.append(
+                  f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {relative}"
+              )
+          manifest.write_text("\n".join(entries) + "\n", encoding="utf-8")
+          PY
+
+          compileall_output="$REPAIR_ROOT/compile.txt"
+          python3 - <<'PY' > "$compileall_output"
+          from pathlib import Path
+          import os
+          path = Path(os.environ["TARGET_REVIEWER_PATH"])
+          compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          print("reviewer compile: pass")
+          PY
+
+          sha256sum -c "$TARGET_MANIFEST_PATH" | tee "$REPAIR_ROOT/target-seal.txt"
+
+          git diff --name-only | LC_ALL=C sort > "$REPAIR_ROOT/changed-paths.txt"
+          printf '%s\n' "$TARGET_MANIFEST_PATH" "$TARGET_REVIEWER_PATH" \
+            | LC_ALL=C sort > "$REPAIR_ROOT/expected-paths.txt"
+          diff -u "$REPAIR_ROOT/expected-paths.txt" "$REPAIR_ROOT/changed-paths.txt"
+          git diff --check
+
+          git add "$TARGET_REVIEWER_PATH" "$TARGET_MANIFEST_PATH"
+          git diff --cached --name-only | LC_ALL=C sort \
+            | diff -u "$REPAIR_ROOT/expected-paths.txt" -
+          git diff --cached --check
+
+          git config user.name undercast-risik-independent-review-repair-v2
+          git config user.email undercast-risik-independent-review-repair-v2@users.noreply.github.com
+          git commit -m "Independently review Star Trek Risik candidate v1"
+
+          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_TARGET_HEAD"
+          test "$(git show -s --format=%s HEAD)" = "Independently review Star Trek Risik candidate v1"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+
+          git show -s --format='%H%n%T%n%P%n%s' HEAD > "$REPAIR_ROOT/repair-commit.txt"
+          find "$REPAIR_ROOT" -type f ! -name manifest.sha256 -print0 \
+            | LC_ALL=C sort -z | xargs -0 sha256sum > "$REPAIR_ROOT/manifest.sha256"
+
+      - name: Upload reviewer repair evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-risik-independent-review-repair-v2-${{ github.run_id }}
+          path: /tmp/star-trek-risik-independent-review-repair-v2/
+          if-no-files-found: warn
+          retention-days: 30
