@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "transaction": "STAR-TREK-RISIK-FINALIZER-V1-TRIGGER",
+  "canonical_parent": "4a2f98c4dc2039f596857cfdff01e701acbd2e4d",
+  "canonical_tree": "cc87894c72de3a7331b7ebe63e11badfaaecb4c5",
+  "canonical_parent_parent": "129e6f9c389fe61bb8027f4e046bea7de510cb84",
+  "candidate_commit": "03afc14da5b1cbe53cb99708edddb3c4c33a0adf",
+  "candidate_tree": "945e4da7a8b325173ac2b7b8da9fd3d65c5525c3",
+  "candidate_receipt_sha256": "831bc23f0060dfdebd3c99ffd905947bf3143344568ee174fe66dac4fcab1641",
+  "independent_review_commit": "9c3916a64b8026f6dbc50c5a1251ac8950caf378",
+  "independent_review_tree": "cc47fccda9d604d22f64b57c82647d497e39ed2f",
+  "independent_review_sha256": "ed561287b1008f0b1a4cc571fc84c8aa0b91d28000df541e69447330c3ba8c04",
+  "task_id": "ap_096624f177ae0c9f2e91836c",
+  "lease_id": "lease_5d07d02fd67ea40a4950b1dd",
+  "wall_id": "UC-1399",
+  "carrier_branch": "agent/star-trek-risik-finalizer-v1",
+  "result_branch": "agent/star-trek-risik-finalizer-result-v1",
+  "product_message": "Star Trek: publish Risik cycle",
+  "additional_lease_issued": false,
+  "workflow_blob": "80991fa5c7f869e6a7b962c94daae237ca076fa7",
+  "runtime_source_sha256": "5075a7c26555bfb9a869aea71c397ece7c1a3a840ce4aa11608647aa23e933bc",
+  "runtime_parts": 3
+}
