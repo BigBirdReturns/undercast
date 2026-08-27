@@ -1,0 +1,276 @@
+name: star-trek-risik-finalizer-baseline-repair-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-finalizer-baseline-repair-v1
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-risik-finalizer-baseline-repair-v1
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: "agent/star-trek-risik-finalizer-v1"
+  EXPECTED_TARGET_HEAD: "048328ee73239b645c00a0bbaaca84c6e2077368"
+  EXPECTED_MAIN: "4a2f98c4dc2039f596857cfdff01e701acbd2e4d"
+  FAILED_RUN_ID: "33111533077"
+  RESULT_BRANCH: "agent/star-trek-risik-finalizer-result-v1"
+  TARGET_WORKFLOW: ".github/workflows/star-trek-risik-finalizer-v1.yml"
+  TARGET_WRAPPER: ".github/recovery/star-trek-risik-finalizer-v1/finalizer.py"
+  TARGET_MANIFEST: ".github/recovery/star-trek-risik-finalizer-v1/sealed-manifest.sha256"
+  EXPECTED_WORKFLOW_BLOB: "80991fa5c7f869e6a7b962c94daae237ca076fa7"
+  EXPECTED_WRAPPER_SHA: "a11a318b19388dee339d4311ca6c939eb30439772dd84dc554ad2f7a4e1bcd06"
+  EXPECTED_TRIGGER_SHA: "4202278fd486207f7ce15023f8e9f54636afbcb3dcfbaf27ab1a7f0d8444cd3e"
+  OUT: "/tmp/star-trek-risik-finalizer-baseline-repair-v1"
+
+jobs:
+  repair:
+    name: repair-risik-finalizer-adapter-baseline-v1
+    if: ${{ github.event.head_commit.message == 'Repair Star Trek Risik finalizer adapter baseline v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Patch and retrigger the exact Risik finalizer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/$FAILED_RUN_ID" > "$OUT/failed-run.json"
+          test "$(jq -r .status "$OUT/failed-run.json")" = completed
+          test "$(jq -r .conclusion "$OUT/failed-run.json")" = failure
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          git fetch --no-tags --depth=2 origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$EXPECTED_TARGET_HEAD"
+
+          git switch -C "$TARGET_BRANCH" "refs/remotes/origin/${TARGET_BRANCH}"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse "HEAD:${TARGET_WORKFLOW}")" = "$EXPECTED_WORKFLOW_BLOB"
+          test "$(sha256sum "$TARGET_WRAPPER" | awk '{print $1}')" = "$EXPECTED_WRAPPER_SHA"
+          test "$(sha256sum .github/recovery/star-trek-risik-finalizer-v1/run.trigger | awk '{print $1}')" = "$EXPECTED_TRIGGER_SHA"
+          sha256sum -c "$TARGET_MANIFEST"
+
+          export TARGET_WORKFLOW TARGET_WRAPPER TARGET_MANIFEST
+          export EXPECTED_WORKFLOW_BLOB EXPECTED_WRAPPER_SHA
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+          import subprocess
+
+          workflow = Path(os.environ["TARGET_WORKFLOW"])
+          wrapper = Path(os.environ["TARGET_WRAPPER"])
+          manifest = Path(os.environ["TARGET_MANIFEST"])
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label} patch anchor drifted: {count}")
+              patched = text.replace(old, new, 1)
+              if old in patched or patched.count(new) != 1:
+                  raise SystemExit(f"{label} patch did not close")
+              return patched
+
+          workflow_anchor = (
+              "            data/journal/waterline.jsonl \\\n"
+              "            data/review/adapter-sdk/star-trek-risik-cycle.json \\\n"
+          )
+          workflow_replacement = (
+              "            data/journal/waterline.jsonl \\\n"
+              "            data/review/adapter-sdk/BASELINE.json \\\n"
+              "            data/review/adapter-sdk/star-trek-risik-cycle.json \\\n"
+          )
+          wrapper_anchor = (
+              "    if staged_product_paths != sorted(new_product_paths):\n"
+              "        raise SystemExit(\n"
+              "            \"Risik generated product paths did not enter the index exactly: \"\n"
+              "            f\"{staged_product_paths}\"\n"
+              "        )\n"
+              "\n"
+              "    repair = {\n"
+          )
+          wrapper_replacement = (
+              "    if staged_product_paths != sorted(new_product_paths):\n"
+              "        raise SystemExit(\n"
+              "            \"Risik generated product paths did not enter the index exactly: \"\n"
+              "            f\"{staged_product_paths}\"\n"
+              "        )\n"
+              "\n"
+              "    baseline_path = Path(\"data/review/adapter-sdk/BASELINE.json\")\n"
+              "    if not baseline_path.is_file():\n"
+              "        raise SystemExit(\"Risik adapter baseline path is absent\")\n"
+              "    baseline_before = hashlib.sha256(baseline_path.read_bytes()).hexdigest()\n"
+              "    subprocess.run([\"npm\", \"run\", \"adapter:write\"], check=True)\n"
+              "    baseline_after = hashlib.sha256(baseline_path.read_bytes()).hexdigest()\n"
+              "    if baseline_after == baseline_before:\n"
+              "        raise SystemExit(\n"
+              "            \"Risik adapter baseline did not change after adding the cycle receipt\"\n"
+              "        )\n"
+              "    baseline_changed_paths = sorted(\n"
+              "        line\n"
+              "        for line in subprocess.check_output(\n"
+              "            [\n"
+              "                \"git\",\n"
+              "                \"diff\",\n"
+              "                \"--name-only\",\n"
+              "                \"--\",\n"
+              "                baseline_path.as_posix(),\n"
+              "            ],\n"
+              "            text=True,\n"
+              "        ).splitlines()\n"
+              "        if line\n"
+              "    )\n"
+              "    if baseline_changed_paths != [baseline_path.as_posix()]:\n"
+              "        raise SystemExit(\n"
+              "            \"Risik adapter baseline refresh path drifted: \"\n"
+              "            f\"{baseline_changed_paths}\"\n"
+              "        )\n"
+              "    subprocess.run([\"npm\", \"run\", \"adapter:check\"], check=True)\n"
+              "\n"
+              "    repair = {\n"
+          )
+          repair_anchor = (
+              '        "pre_staged_new_product_paths": new_product_paths,\n'
+          )
+          repair_replacement = (
+              '        "pre_staged_new_product_paths": new_product_paths,\n'
+              '        "adapter_baseline_path": baseline_path.as_posix(),\n'
+              '        "adapter_baseline_before_sha256": baseline_before,\n'
+              '        "adapter_baseline_after_sha256": baseline_after,\n'
+              '        "adapter_baseline_changed": True,\n'
+          )
+
+          workflow_text = replace_once(
+              workflow.read_text(encoding="utf-8"),
+              workflow_anchor,
+              workflow_replacement,
+              "workflow finalization path",
+          )
+          workflow.write_text(workflow_text, encoding="utf-8")
+          patched_workflow_blob = subprocess.check_output(
+              ["git", "hash-object", workflow.as_posix()],
+              text=True,
+          ).strip()
+
+          wrapper_text = wrapper.read_text(encoding="utf-8")
+          wrapper_text = replace_once(
+              wrapper_text,
+              f'expected_workflow_blob = "{os.environ["EXPECTED_WORKFLOW_BLOB"]}"',
+              f'expected_workflow_blob = "{patched_workflow_blob}"',
+              "wrapper workflow blob",
+          )
+          wrapper_text = replace_once(
+              wrapper_text,
+              wrapper_anchor,
+              wrapper_replacement,
+              "wrapper adapter baseline",
+          )
+          wrapper_text = replace_once(
+              wrapper_text,
+              repair_anchor,
+              repair_replacement,
+              "wrapper repair evidence",
+          )
+          compile(wrapper_text, str(wrapper), "exec")
+          wrapper.write_text(wrapper_text, encoding="utf-8")
+
+          entries = []
+          for line in manifest.read_text(encoding="utf-8").splitlines():
+              if not line:
+                  continue
+              _, relative = line.split("  ", 1)
+              path = Path(relative)
+              if not path.is_file():
+                  raise SystemExit(f"sealed path absent: {relative}")
+              entries.append(
+                  f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {relative}"
+              )
+          manifest.write_text("\n".join(entries) + "\n", encoding="utf-8")
+
+          evidence = {
+              "version": 1,
+              "transaction": "STAR-TREK-RISIK-FINALIZER-ADAPTER-BASELINE-REPAIR-V1",
+              "classification": "deterministic-adapter-baseline-refresh",
+              "original_workflow_blob": os.environ["EXPECTED_WORKFLOW_BLOB"],
+              "patched_workflow_blob": patched_workflow_blob,
+              "original_wrapper_sha256": os.environ["EXPECTED_WRAPPER_SHA"],
+              "patched_wrapper_sha256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+              "baseline_path": "data/review/adapter-sdk/BASELINE.json",
+              "expected_finalization_path_count": 10,
+              "runtime_payload_changed": False,
+              "trigger_changed": False,
+              "candidate_changed": False,
+              "review_changed": False,
+              "media_changed": False,
+              "lease_changed": False,
+              "waterline_changed_by_repair": False,
+              "canonical_main_changed_by_repair": False,
+          }
+          Path(os.environ["OUT"], "repair.json").write_text(
+              json.dumps(evidence, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          sha256sum -c "$TARGET_MANIFEST"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          path = Path(os.environ["TARGET_WRAPPER"])
+          compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          PY
+          grep -F 'data/review/adapter-sdk/BASELINE.json' "$TARGET_WORKFLOW" >/dev/null
+          grep -F 'npm", "run", "adapter:write"' "$TARGET_WRAPPER" >/dev/null
+          grep -F 'npm", "run", "adapter:check"' "$TARGET_WRAPPER" >/dev/null
+
+          git diff --name-only | LC_ALL=C sort > "$OUT/changed-paths.txt"
+          printf '%s\n' \
+            "$TARGET_MANIFEST" \
+            "$TARGET_WORKFLOW" \
+            "$TARGET_WRAPPER" \
+            | LC_ALL=C sort > "$OUT/expected-paths.txt"
+          diff -u "$OUT/expected-paths.txt" "$OUT/changed-paths.txt"
+          git diff --check
+
+          git add "$TARGET_WORKFLOW" "$TARGET_WRAPPER" "$TARGET_MANIFEST"
+          git diff --cached --name-only | LC_ALL=C sort \
+            | diff -u "$OUT/expected-paths.txt" -
+          git diff --cached --check
+
+          git config user.name undercast-risik-finalizer-baseline-repair-v1
+          git config user.email undercast-risik-finalizer-baseline-repair-v1@users.noreply.github.com
+          git commit -m "Finalize reviewed Star Trek Risik cycle v1"
+          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_TARGET_HEAD"
+          test "$(git show -s --format=%s HEAD)" = "Finalize reviewed Star Trek Risik cycle v1"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+
+          git show -s --format='%H%n%T%n%P%n%s' HEAD > "$OUT/target-commit.txt"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 \
+            | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload baseline repair evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-risik-finalizer-baseline-repair-v1-${{ github.run_id }}
+          path: /tmp/star-trek-risik-finalizer-baseline-repair-v1/
+          if-no-files-found: warn
+          retention-days: 30
