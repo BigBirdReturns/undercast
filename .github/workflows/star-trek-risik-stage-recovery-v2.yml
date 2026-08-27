@@ -60,6 +60,8 @@ env:
   EXPECTED_PORTRAIT_SHA: e38d8c94d6ae0d64f41c2c24a4957b576e9cc2ac815a8824d4ee625519de9b42
   STILL_ITEM_ID: ma_4c177d5d20dfebfb937e6de7
   PORTRAIT_ITEM_ID: ma_de751c877d2d3f6945d4e140
+  AUDIT_STILL_ITEM_ID: ma_c33a2bc57b2edeb77c2170e9
+  AUDIT_PORTRAIT_ITEM_ID: ma_1c7457e3778e5c94ece5dabd
 
   CANDIDATE_BRANCH: agent/star-trek-risik-candidate-v1
   RESULT_BRANCH: agent/star-trek-risik-stage-result-v2
@@ -126,6 +128,69 @@ jobs:
       - name: Submit and grow the bounded Risik draft
         shell: bash
         run: bash "$STEP_ROOT/02.sh"
+
+      - name: Rebind reviewed votes to canonical media-audit identities
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+
+          def canonical(side: str) -> str:
+              body = f"star-trek|{os.environ['WALL_ID']}|{side}"
+              return "ma_" + hashlib.sha256(body.encode()).hexdigest()[:24]
+
+          expected = {
+              os.environ["STILL_ITEM_ID"]: os.environ["AUDIT_STILL_ITEM_ID"],
+              os.environ["PORTRAIT_ITEM_ID"]: os.environ["AUDIT_PORTRAIT_ITEM_ID"],
+          }
+          if os.environ["AUDIT_STILL_ITEM_ID"] != canonical("still"):
+              raise SystemExit("canonical Risik still media-audit identity drifted")
+          if os.environ["AUDIT_PORTRAIT_ITEM_ID"] != canonical("portrait"):
+              raise SystemExit("canonical Risik portrait media-audit identity drifted")
+
+          path = Path(os.environ["OUT"]) / "media-audit-resolution.json"
+          document = json.loads(path.read_text(encoding="utf-8"))
+          counts = {key: 0 for key in expected}
+          for vote in document.get("votes", []):
+              item_id = vote.get("item_id")
+              if item_id in expected:
+                  vote["item_id"] = expected[item_id]
+                  counts[item_id] += 1
+          if counts != {
+              os.environ["STILL_ITEM_ID"]: 2,
+              os.environ["PORTRAIT_ITEM_ID"]: 2,
+          }:
+              raise SystemExit(f"Risik media-audit vote cardinality drifted: {counts}")
+          path.write_text(
+              json.dumps(document, indent=2, ensure_ascii=False) + "\n",
+              encoding="utf-8",
+          )
+          receipt = {
+              "version": 1,
+              "transaction": "STAR-TREK-RISIK-MEDIA-AUDIT-IDENTITY-REBIND-V1",
+              "wall_id": os.environ["WALL_ID"],
+              "review_identity": {
+                  "still": os.environ["STILL_ITEM_ID"],
+                  "portrait": os.environ["PORTRAIT_ITEM_ID"],
+              },
+              "canonical_audit_identity": {
+                  "still": os.environ["AUDIT_STILL_ITEM_ID"],
+                  "portrait": os.environ["AUDIT_PORTRAIT_ITEM_ID"],
+              },
+              "votes_rebound": 4,
+              "asset_hashes_changed": False,
+              "claim_values_changed": False,
+              "review_custody_changed": False,
+          }
+          (Path(os.environ["OUT"]) / "media-audit-identity-rebind.json").write_text(
+              json.dumps(receipt, indent=2, ensure_ascii=False) + "\n",
+              encoding="utf-8",
+          )
+          PY
 
       - name: Resolve reviewed media and complete the Risik task
         shell: bash
