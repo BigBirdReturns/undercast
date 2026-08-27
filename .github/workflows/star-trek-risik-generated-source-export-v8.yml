@@ -1,0 +1,156 @@
+name: star-trek-risik-generated-source-export-v8
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-generated-source-export-v8
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: star-trek-risik-generated-source-export-v8
+  cancel-in-progress: false
+
+env:
+  ORIGINAL_WORKFLOW: ".github/workflows/star-trek-risik-finalizer-v1.yml"
+  EXPECTED_WORKFLOW_BLOB: "80991fa5c7f869e6a7b962c94daae237ca076fa7"
+  EXPECTED_WRAPPER_SHA: "a11a318b19388dee339d4311ca6c939eb30439772dd84dc554ad2f7a4e1bcd06"
+  EXPECTED_TRIGGER_SHA: "4202278fd486207f7ce15023f8e9f54636afbcb3dcfbaf27ab1a7f0d8444cd3e"
+  EXPORT_OUT: "/tmp/star-trek-risik-generated-source-export-v8"
+  EXPORT_WORK: "/tmp/star-trek-risik-generated-source-export-v8-work"
+
+jobs:
+  export:
+    name: export-generated-risik-checker-and-receipt-v8
+    if: ${{ github.event.head_commit.message == 'Export generated Star Trek Risik checker and receipt v8' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Reconstruct sealed verification program
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$EXPORT_OUT" "$EXPORT_WORK"
+          mkdir -p "$EXPORT_OUT"
+
+          test "$(git rev-parse "HEAD:${ORIGINAL_WORKFLOW}")" = "$EXPECTED_WORKFLOW_BLOB"
+          test "$(sha256sum .github/recovery/star-trek-risik-finalizer-v1/finalizer.py | awk '{print $1}')" = "$EXPECTED_WRAPPER_SHA"
+          test "$(sha256sum .github/recovery/star-trek-risik-finalizer-v1/run.trigger | awk '{print $1}')" = "$EXPECTED_TRIGGER_SHA"
+          sha256sum -c .github/recovery/star-trek-risik-finalizer-v1/sealed-manifest.sha256
+
+          export ORIGINAL_WORKFLOW EXPORT_OUT
+          ruby <<'RUBY'
+          require "yaml"
+
+          document = YAML.load_file(ENV.fetch("ORIGINAL_WORKFLOW"))
+          environment = document.fetch("env")
+          File.open(ENV.fetch("GITHUB_ENV"), "a") do |file|
+            environment.each { |key, value| file.puts("#{key}=#{value}") }
+          end
+          steps = document.fetch("jobs").fetch("finalize").fetch("steps")
+          step = steps.find do |row|
+            row["name"] == "Verify sealed finalizer and immutable review inputs"
+          end
+          abort("sealed Risik verify step is absent") unless step
+          target = File.join(ENV.fetch("EXPORT_OUT"), "verify.sh")
+          File.write(target, "#!/usr/bin/env bash\n" + step.fetch("run") + "\n")
+          File.chmod(0755, target)
+          RUBY
+
+          bash -n "$EXPORT_OUT/verify.sh"
+          sha256sum "$EXPORT_OUT/verify.sh" > "$EXPORT_OUT/verify.sha256"
+
+      - name: Verify immutable Risik inputs
+        shell: bash
+        run: bash "$EXPORT_OUT/verify.sh"
+
+      - name: Generate and export sealed product sources
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git worktree add --detach "$EXPORT_WORK" "$CANDIDATE_COMMIT"
+
+          for relative in data/MEDIA-SEARCH-LATEST.json data/journal/media-search.jsonl; do
+            mkdir -p "$EXPORT_WORK/$(dirname "$relative")"
+            git show "$LIVE_MAIN:$relative" > "$EXPORT_WORK/$relative"
+          done
+
+          cd "$EXPORT_WORK"
+          npm ci --ignore-scripts
+
+          jq -n \
+            --arg scope "star-trek" \
+            --arg lease "$LEASE_ID" \
+            --arg reviewed_by "$(jq -r .reviewer "$OUT/independent-review.json")" \
+            --arg reviewed_role "$(jq -r .reviewed_role "$OUT/independent-review.json")" \
+            --arg reviewed_at "$(jq -r .reviewed_at "$OUT/independent-review.json")" \
+            --arg artifact_id "$(jq -r .artifact.id "$OUT/independent-review.json")" \
+            --arg artifact_digest "$(jq -r .artifact.digest "$OUT/independent-review.json")" \
+            --arg candidate "$CANDIDATE_COMMIT" \
+            --arg candidate_receipt "$CANDIDATE_RECEIPT_SHA" \
+            --arg review "$REVIEW_SHA" \
+            --arg task "$TASK_ID" \
+            '{
+              scope_id:$scope,
+              lease_id:$lease,
+              outcome:"completed",
+              reviewed_by:$reviewed_by,
+              reviewed_role:$reviewed_role,
+              reviewed_at:$reviewed_at,
+              note:"The reviewed Risik cycle resolves Fred Tatasciore’s animated voice performance as Orion pirate Risik across the three reviewed 2023 Star Trek: Lower Decks appearances, files Something Borrowed, Something Green as the single card production, preserves the exact source-distinct still and performer portrait, and leaves unsupported physical, prosthetic, animation-labor, design, direction, processing, sound, transformation, production-shop, and maker functions unattributed.",
+              evidence:[
+                {type:"workflow-run",value:("github-actions-artifact:"+$artifact_id+":"+$artifact_digest)},
+                {type:"commit",value:$candidate},
+                {type:"restart-proof",value:("candidate-receipt:"+$candidate_receipt+";independent-review:"+$review+";lease:"+$lease)}
+              ]
+            }' > "$OUT/cycle-input.json"
+
+          node scripts/waterline.mjs record-cycle --input "$OUT/cycle-input.json" \
+            | tee "$OUT/waterline-record.log"
+          node scripts/thesis-rails.mjs next --json > "$OUT/next.json"
+          python3 "$FINALIZER" prepare
+          node scripts/star-trek-risik-cycle.mjs \
+            | tee "$OUT/risik-checker-export.log"
+
+          mkdir -p "$EXPORT_OUT/generated/data/review/adapter-sdk"
+          mkdir -p "$EXPORT_OUT/generated/scripts"
+          cp data/ESTATE-REGISTRY.json "$EXPORT_OUT/generated/data/ESTATE-REGISTRY.json"
+          cp data/review/adapter-sdk/star-trek-risik-cycle.json \
+            "$EXPORT_OUT/generated/data/review/adapter-sdk/star-trek-risik-cycle.json"
+          cp scripts/star-trek-risik-cycle.mjs \
+            "$EXPORT_OUT/generated/scripts/star-trek-risik-cycle.mjs"
+          cp scripts/star-trek-morgo-cycle-composable.mjs \
+            "$EXPORT_OUT/generated/scripts/star-trek-morgo-cycle-composable.mjs"
+          cp package.json "$EXPORT_OUT/generated/package.json"
+          cp "$OUT/checker-receipt-reseal.json" "$EXPORT_OUT/"
+          cp "$OUT/permanent-receipt.json" "$EXPORT_OUT/permanent-receipt-runtime.json"
+          cp "$OUT/receipt-sha256.txt" "$EXPORT_OUT/receipt-sha256-runtime.txt"
+          cp "$OUT/checker-sha256.txt" "$EXPORT_OUT/checker-sha256-runtime.txt"
+          git status --porcelain=v1 > "$EXPORT_OUT/generated-status.txt"
+          git diff --name-only "$CANDIDATE_COMMIT" | LC_ALL=C sort \
+            > "$EXPORT_OUT/generated-paths.txt"
+
+          find "$EXPORT_OUT" -type f ! -name manifest.sha256 -print0 \
+            | LC_ALL=C sort -z | xargs -0 sha256sum > "$EXPORT_OUT/manifest.sha256"
+
+      - name: Upload generated Risik source evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-risik-generated-source-export-v8-${{ github.run_id }}
+          path: /tmp/star-trek-risik-generated-source-export-v8/
+          if-no-files-found: error
+          retention-days: 30
