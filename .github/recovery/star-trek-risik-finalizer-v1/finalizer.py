@@ -38,8 +38,14 @@ if sys.argv[1:] == ["prepare"]:
         Path.cwd()
         / "data/review/adapter-sdk/star-trek-risik-cycle.json"
     )
-    old_assertion = "if (JSON.stringify(episodes) !== JSON.stringify([{\"title\": \"Something Borrowed, Something Green\", \"first_aired\": \"21 September 2023\"}, {\"title\": \"The Inner Fight\", \"first_aired\": \"26 October 2023\"}, {\"title\": \"Old Friends, New Planets\", \"first_aired\": \"2 November 2023\"}])) fail('reviewed episode set drifted');"
-    new_assertion = "const expectedEpisodes = [{\"title\": \"Something Borrowed, Something Green\", \"first_aired\": \"21 September 2023\"}, {\"title\": \"The Inner Fight\", \"first_aired\": \"26 October 2023\"}, {\"title\": \"Old Friends, New Planets\", \"first_aired\": \"2 November 2023\"}];\nif (!Array.isArray(episodes)\n  || episodes.some((row) => !row\n    || typeof row !== 'object'\n    || Array.isArray(row)\n    || JSON.stringify(Object.keys(row).sort()) !== JSON.stringify(['first_aired','title']))\n  || JSON.stringify(episodes.map((row) => ({title: row.title, first_aired: row.first_aired}))) !== JSON.stringify(expectedEpisodes)) fail('reviewed episode set drifted');"
+    old_assertion = """if (JSON.stringify(episodes) !== JSON.stringify([{"title": "Something Borrowed, Something Green", "first_aired": "21 September 2023"}, {"title": "The Inner Fight", "first_aired": "26 October 2023"}, {"title": "Old Friends, New Planets", "first_aired": "2 November 2023"}])) fail('reviewed episode set drifted');"""
+    new_assertion = """const expectedEpisodes = [{"title": "Something Borrowed, Something Green", "first_aired": "21 September 2023"}, {"title": "The Inner Fight", "first_aired": "26 October 2023"}, {"title": "Old Friends, New Planets", "first_aired": "2 November 2023"}];
+if (!Array.isArray(episodes)
+  || episodes.some((row) => !row
+    || typeof row !== 'object'
+    || Array.isArray(row)
+    || JSON.stringify(Object.keys(row).sort()) !== JSON.stringify(['first_aired','title']))
+  || JSON.stringify(episodes.map((row) => ({title: row.title, first_aired: row.first_aired}))) !== JSON.stringify(expectedEpisodes)) fail('reviewed episode set drifted');"""
 
     text = checker.read_text(encoding="utf-8")
     if text.count(old_assertion) != 1:
