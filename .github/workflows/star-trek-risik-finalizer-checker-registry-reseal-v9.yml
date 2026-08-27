@@ -1,0 +1,370 @@
+name: star-trek-risik-finalizer-checker-registry-reseal-v9
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-finalizer-checker-registry-reseal-v9
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: star-trek-risik-finalizer-checker-registry-reseal-v9
+  cancel-in-progress: false
+
+env:
+  BASE_WORKFLOW: ".github/workflows/star-trek-risik-finalizer-registry-format-recovery-v7.yml"
+  EXPECTED_BASE_WORKFLOW_BLOB: "777ac8f64cf8455cc435b02e4ec2b752b3ce30db"
+  ORIGINAL_WORKFLOW: ".github/workflows/star-trek-risik-finalizer-v1.yml"
+  EXPECTED_WORKFLOW_BLOB: "80991fa5c7f869e6a7b962c94daae237ca076fa7"
+  EXPECTED_WRAPPER_SHA: "a11a318b19388dee339d4311ca6c939eb30439772dd84dc554ad2f7a4e1bcd06"
+  EXPECTED_TRIGGER_SHA: "4202278fd486207f7ce15023f8e9f54636afbcb3dcfbaf27ab1a7f0d8444cd3e"
+  INTERMEDIATE_RECEIPT_SHA: "f2a01345edf0ecd479b0a918a5e92e45411ab483a5a9db5b777d79164b9ae742"
+  FINAL_CHECKER_SHA: "e0a2e827947ca4773f681d1b6e4ef33c7ff74512820c77a67c4139a93b77f869"
+  ORIGINAL_OUTPUT_RECEIPT_SHA: "9d379622334bf6376ca06ba4c6ee20faf12c3ca239bc6e87ccc4da6c1b1c6830"
+  ORIGINAL_OUTPUT_CHECKER_SHA: "f3a38d1b25f148eeb103063019234892b5b91511adc0155694dfab9ed4253d1b"
+  ORIGINAL_REGISTRY_SHA: "f5e4f86882cbeb3d6922f8d1ee59e1bae87912a2406f1edaa59abbf93f2cfdc9"
+  ORIGINAL_GATE_SHA: "334b7d340d3401f4ca66221079a5a5737e48ec7b65745a0456037a9945fa1703"
+  EXPECTED_CYCLE_ID: "cycle_208262c3f2dc4b499ef5f2f4"
+  EXPECTED_QUEUE: "1795"
+  EXPECTED_NEXT_TASK_ID: "ap_3d10b7a97efdbdd11c50bc2a"
+  V7_RECEIPT_SHA: "fc82a8d206433366cdbb93b2e5a12542ef5f2804bef6ce827c3ca22385e8a75d"
+  V7_REGISTRY_SHA: "6e09c6c2d0e10c94acea62a53653adfc9c627c578b4c5e02d005661a76becd2c"
+  V7_GATE_SHA: "51cdbd86c39b17af88bfee46bc81873bb305e3d6f718447f9b86a30f6fb47b83"
+  EXPECTED_V9_CHECKER_SHA: "e82284082662b8d13f776c201e36ceca82618d438116f0ad1460c6697663e33f"
+  EXPECTED_V9_RECEIPT_SHA: "f413490e8a5daec61c7c3055950bfcee62c6899132677cac07dc197663c649e0"
+  RECOVERY_OUT: "/tmp/star-trek-risik-finalizer-checker-registry-reseal-v9"
+
+jobs:
+  finalize:
+    name: finalize-reviewed-risik-cycle-checker-registry-reseal-v9
+    if: ${{ github.event.head_commit.message == 'Finalize reviewed Star Trek Risik cycle checker registry reseal v9' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Reconstruct v7 recovery and add terminal checker registry reseal
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse "HEAD:${BASE_WORKFLOW}")" = "$EXPECTED_BASE_WORKFLOW_BLOB"
+
+          export BASE_WORKFLOW
+          ruby <<'RUBY'
+          require "yaml"
+          document = YAML.load_file(ENV.fetch("BASE_WORKFLOW"))
+          step = document.fetch("jobs").fetch("finalize").fetch("steps").find do |row|
+            row["name"] == "Reconstruct sealed finalizer with coherent registry and receipt reseal"
+          end
+          abort("v7 Risik reconstruction step is absent") unless step
+          path = "/tmp/reconstruct-risik-v7-for-v9.sh"
+          File.write(path, "#!/usr/bin/env bash\n" + step.fetch("run") + "\n")
+          File.chmod(0755, path)
+          RUBY
+
+          bash -n /tmp/reconstruct-risik-v7-for-v9.sh
+          bash /tmp/reconstruct-risik-v7-for-v9.sh
+          printf 'RECOVERY_OUT=%s\n' "$RECOVERY_OUT" >> "$GITHUB_ENV"
+
+          export RECOVERY_OUT
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          build_path = Path(os.environ["RECOVERY_OUT"]) / "build.sh"
+          text = build_path.read_text(encoding="utf-8")
+          anchor = '''node scripts/star-trek-risik-cycle.mjs \\
+            | tee "$OUT/risik-checker-after-registry-reseal.log"'''
+          if text.count(anchor) != 1:
+              raise SystemExit(
+                  "Risik v9 checker-registry anchor drifted: "
+                  f"{text.count(anchor)} matches"
+              )
+
+          block = r'''export V7_RECEIPT_SHA V7_REGISTRY_SHA V7_GATE_SHA
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+          import subprocess
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          def pretty(value):
+              return json.dumps(
+                  stable(value),
+                  indent=2,
+                  ensure_ascii=False,
+              ) + "\n"
+
+          def sha_bytes(value):
+              return hashlib.sha256(value).hexdigest()
+
+          def file_sha(path):
+              return sha_bytes(path.read_bytes())
+
+          def text_sha(value):
+              return sha_bytes(value.encode("utf-8"))
+
+          out = Path(os.environ["OUT"])
+          checker_path = Path("scripts/star-trek-risik-cycle.mjs")
+          receipt_path = Path(
+              "data/review/adapter-sdk/star-trek-risik-cycle.json"
+          )
+          registry_path = Path("data/ESTATE-REGISTRY.json")
+
+          registry = json.loads(registry_path.read_text(encoding="utf-8"))
+          estates = [
+              row for row in registry.get("estates", [])
+              if row.get("id") == "star-trek"
+          ]
+          if len(estates) != 1:
+              raise SystemExit(
+                  f"Risik v9 Star Trek estate cardinality drifted: {len(estates)}"
+              )
+          gate = estates[0].get("next_gate")
+          if not isinstance(gate, str):
+              raise SystemExit("Risik v9 estate gate is absent")
+
+          registry_sha = file_sha(registry_path)
+          gate_sha = text_sha(gate)
+          if registry_sha != os.environ["V7_REGISTRY_SHA"]:
+              raise SystemExit(
+                  f"Risik v9 formatted registry identity drifted: {registry_sha}"
+              )
+          if gate_sha != os.environ["V7_GATE_SHA"]:
+              raise SystemExit(
+                  f"Risik v9 formatted gate identity drifted: {gate_sha}"
+              )
+          expected_queue_text = f"{int(os.environ['EXPECTED_QUEUE']):,} tasks remain queued"
+          if expected_queue_text not in gate:
+              raise SystemExit("Risik v9 formatted queue text is absent")
+          if os.environ["EXPECTED_CYCLE_ID"] not in gate:
+              raise SystemExit("Risik v9 reviewed cycle is absent from gate")
+          if os.environ["EXPECTED_NEXT_TASK_ID"] not in gate:
+              raise SystemExit("Risik v9 next-task custody is absent from gate")
+
+          checker_before_sha = file_sha(checker_path)
+          if checker_before_sha != os.environ["FINAL_CHECKER_SHA"]:
+              raise SystemExit(
+                  "Risik v9 pre-reseal checker identity drifted: "
+                  f"{checker_before_sha}"
+              )
+          checker_text = checker_path.read_text(encoding="utf-8")
+          old_registry = (
+              f'"REGISTRY_SHA": "{os.environ["ORIGINAL_REGISTRY_SHA"]}"'
+          )
+          new_registry = f'"REGISTRY_SHA": "{registry_sha}"'
+          old_gate = (
+              f'"REGISTRY_GATE_SHA": "{os.environ["ORIGINAL_GATE_SHA"]}"'
+          )
+          new_gate = f'"REGISTRY_GATE_SHA": "{gate_sha}"'
+          if checker_text.count(old_registry) != 1:
+              raise SystemExit(
+                  "Risik v9 checker registry constant anchor drifted: "
+                  f"{checker_text.count(old_registry)} matches"
+              )
+          if checker_text.count(old_gate) != 1:
+              raise SystemExit(
+                  "Risik v9 checker gate constant anchor drifted: "
+                  f"{checker_text.count(old_gate)} matches"
+              )
+          patched_checker = checker_text.replace(
+              old_registry,
+              new_registry,
+              1,
+          ).replace(
+              old_gate,
+              new_gate,
+              1,
+          )
+          if old_registry in patched_checker or old_gate in patched_checker:
+              raise SystemExit("Risik v9 checker registry reseal did not close")
+          if patched_checker.count(new_registry) != 1:
+              raise SystemExit("Risik v9 checker registry constant duplicated")
+          if patched_checker.count(new_gate) != 1:
+              raise SystemExit("Risik v9 checker gate constant duplicated")
+          checker_path.write_text(patched_checker, encoding="utf-8")
+          subprocess.run(["node", "--check", str(checker_path)], check=True)
+          checker_after_sha = file_sha(checker_path)
+          if checker_after_sha == checker_before_sha:
+              raise SystemExit("Risik v9 checker reseal changed no bytes")
+          if checker_after_sha != os.environ["EXPECTED_V9_CHECKER_SHA"]:
+              raise SystemExit(
+                  "Risik v9 final checker identity drifted: "
+                  f"{checker_after_sha}"
+              )
+
+          receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+          receipt_body = dict(receipt)
+          receipt_before_sha = receipt_body.pop("receipt_sha256", None)
+          reproduced_before = sha_bytes(
+              pretty(receipt_body).encode("utf-8")
+          )
+          if not (
+              receipt_before_sha
+              == reproduced_before
+              == os.environ["V7_RECEIPT_SHA"]
+          ):
+              raise SystemExit(
+                  "Risik v9 pre-reseal receipt identity drifted: "
+                  f"{receipt_before_sha} / {reproduced_before}"
+              )
+          qualification = receipt.get("qualification")
+          if not isinstance(qualification, dict):
+              raise SystemExit("Risik v9 qualification object is absent")
+          if qualification.get("checker_sha256") != checker_before_sha:
+              raise SystemExit("Risik v9 pre-reseal checker binding drifted")
+          receipt_registry = receipt.get("registry")
+          if not isinstance(receipt_registry, dict):
+              raise SystemExit("Risik v9 receipt registry object is absent")
+          if receipt_registry.get("sha256") != registry_sha:
+              raise SystemExit("Risik v9 receipt registry file binding drifted")
+          if receipt_registry.get("next_gate") != gate:
+              raise SystemExit("Risik v9 receipt registry gate drifted")
+          if receipt_registry.get("next_gate_sha256") != gate_sha:
+              raise SystemExit("Risik v9 receipt registry gate identity drifted")
+
+          qualification["checker_sha256"] = checker_after_sha
+          final_body = dict(receipt)
+          final_body.pop("receipt_sha256", None)
+          receipt_after_sha = sha_bytes(
+              pretty(final_body).encode("utf-8")
+          )
+          if receipt_after_sha != os.environ["EXPECTED_V9_RECEIPT_SHA"]:
+              raise SystemExit(
+                  "Risik v9 final receipt identity drifted: "
+                  f"{receipt_after_sha}"
+              )
+          receipt["receipt_sha256"] = receipt_after_sha
+          receipt_path.write_text(pretty(receipt), encoding="utf-8")
+
+          reread = json.loads(receipt_path.read_text(encoding="utf-8"))
+          reread_body = dict(reread)
+          reread_identity = reread_body.pop("receipt_sha256", None)
+          reproduced_after = sha_bytes(
+              pretty(reread_body).encode("utf-8")
+          )
+          if not (
+              reread_identity
+              == reproduced_after
+              == receipt_after_sha
+          ):
+              raise SystemExit("Risik v9 final receipt identity did not reproduce")
+          if (reread.get("qualification") or {}).get(
+              "checker_sha256"
+          ) != checker_after_sha:
+              raise SystemExit("Risik v9 final checker binding drifted")
+          if file_sha(checker_path) != checker_after_sha:
+              raise SystemExit("Risik v9 final checker identity did not reproduce")
+
+          permanent_path = out / "permanent-receipt.json"
+          runtime_receipt = json.loads(
+              permanent_path.read_text(encoding="utf-8")
+          )
+          if runtime_receipt.get("receipt_sha256") != receipt_before_sha:
+              raise SystemExit("Risik v9 runtime receipt predecessor drifted")
+          permanent_path.write_text(pretty(reread), encoding="utf-8")
+          (out / "receipt-sha256.txt").write_text(
+              receipt_after_sha + "\n",
+              encoding="utf-8",
+          )
+          (out / "checker-sha256.txt").write_text(
+              checker_after_sha + "\n",
+              encoding="utf-8",
+          )
+
+          evidence = {
+              "version": 9,
+              "transaction": (
+                  "STAR-TREK-RISIK-CHECKER-REGISTRY-"
+                  "AND-RECEIPT-RESEAL-V9"
+              ),
+              "classification": (
+                  "coherent-terminal-registry-checker-and-receipt-reseal"
+              ),
+              "registry_sha256": registry_sha,
+              "registry_gate_sha256": gate_sha,
+              "checker_before_sha256": checker_before_sha,
+              "checker_after_sha256": checker_after_sha,
+              "receipt_before_sha256": receipt_before_sha,
+              "receipt_after_sha256": receipt_after_sha,
+              "changed_checker_constants": [
+                  "C.REGISTRY_SHA",
+                  "C.REGISTRY_GATE_SHA",
+              ],
+              "changed_receipt_fields": [
+                  "qualification.checker_sha256",
+                  "receipt_sha256",
+              ],
+              "queue_value_changed": False,
+              "task_changed": False,
+              "media_changed": False,
+              "attribution_changed": False,
+              "waterline_changed_by_reseal": False,
+              "publication_logic_changed": False,
+              "canonical_main_changed_by_reseal": False,
+          }
+          (out / "checker-registry-receipt-reseal-v9.json").write_text(
+              json.dumps(evidence, indent=2, ensure_ascii=False) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(evidence, indent=2, ensure_ascii=False))
+          PY'''
+
+          patched = text.replace(anchor, block + "\n          " + anchor, 1)
+          if anchor not in patched or patched.count(block) != 1:
+              raise SystemExit("Risik v9 build patch did not close")
+          build_path.write_text(patched, encoding="utf-8")
+          PY
+
+          bash -n "$RECOVERY_OUT/verify.sh"
+          bash -n "$RECOVERY_OUT/build.sh"
+          bash -n "$RECOVERY_OUT/publish.sh"
+          grep -F 'STAR-TREK-RISIK-CHECKER-REGISTRY-' "$RECOVERY_OUT/build.sh" >/dev/null
+          grep -F 'C.REGISTRY_SHA' "$RECOVERY_OUT/build.sh" >/dev/null
+          grep -F 'npm run adapter:write' "$RECOVERY_OUT/build.sh" >/dev/null
+          grep -F 'npm run autopilot:fixtures' "$RECOVERY_OUT/build.sh" >/dev/null
+          sha256sum "$RECOVERY_OUT"/*.sh > "$RECOVERY_OUT/reconstructed-scripts-v9.sha256"
+
+      - name: Verify sealed finalizer and immutable review inputs
+        shell: bash
+        run: bash "$RECOVERY_OUT/verify.sh"
+
+      - name: Build and validate deterministic Risik product
+        shell: bash
+        run: bash "$RECOVERY_OUT/build.sh"
+
+      - name: Upload prepared Risik recovery evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-risik-finalizer-checker-registry-reseal-v9-${{ github.run_id }}
+          path: /tmp/star-trek-risik-finalizer-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish, deploy, and seal the Risik cycle
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: bash "$RECOVERY_OUT/publish.sh"
