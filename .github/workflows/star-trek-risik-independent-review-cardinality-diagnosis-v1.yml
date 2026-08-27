@@ -1,0 +1,106 @@
+name: star-trek-risik-independent-review-cardinality-diagnosis-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-independent-review-cardinality-repair-v3
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: star-trek-risik-independent-review-cardinality-diagnosis-v1
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    name: diagnose-risik-review-repair-preflight
+    if: ${{ github.event.head_commit.message == 'Diagnose Star Trek Risik independent review cardinality v3' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_MAIN: 129e6f9c389fe61bb8027f4e046bea7de510cb84
+      LIVE_MAIN: 4a2f98c4dc2039f596857cfdff01e701acbd2e4d
+      TARGET_BRANCH: agent/star-trek-risik-independent-review-recovery-v1
+      TARGET_HEAD: 02fe8d61c9a3d0f60fd4a1e4ab94a79906d2a831
+      CANDIDATE_BRANCH: agent/star-trek-risik-candidate-v1
+      CANDIDATE_COMMIT: 03afc14da5b1cbe53cb99708edddb3c4c33a0adf
+      CLAIM_COMMIT: eff3da84c7718d0894afda1fbc4e790bc88265da
+      FAILED_RUN_ID: "33088555696"
+      RESULT_BRANCH: agent/star-trek-risik-independent-review-result-v1
+      OUT: /tmp/star-trek-risik-independent-review-cardinality-diagnosis-v1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Capture every preflight observation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          git fetch --no-tags --depth=2 origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}" \
+            "+refs/heads/${CANDIDATE_BRANCH}:refs/remotes/origin/${CANDIDATE_BRANCH}"
+
+          {
+            echo "main=$(git rev-parse refs/remotes/origin/main)"
+            echo "main_tree=$(git show -s --format=%T refs/remotes/origin/main)"
+            echo "main_parent=$(git show -s --format=%P refs/remotes/origin/main)"
+            echo "base_tree=$(git show -s --format=%T "$BASE_MAIN")"
+            echo "main_paths_begin"
+            git diff --name-only "$BASE_MAIN" "$LIVE_MAIN" | LC_ALL=C sort
+            echo "main_paths_end"
+            echo "target=$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
+            echo "target_tree=$(git show -s --format=%T "refs/remotes/origin/${TARGET_BRANCH}")"
+            echo "workflow_blob=$(git rev-parse "$TARGET_HEAD:.github/workflows/star-trek-risik-independent-product-review-v1.yml")"
+            echo "reviewer_blob=$(git rev-parse "$TARGET_HEAD:.github/recovery/star-trek-risik-independent-product-review-v1/reviewer.py")"
+            echo "manifest_blob=$(git rev-parse "$TARGET_HEAD:.github/recovery/star-trek-risik-independent-product-review-v1/sealed-manifest.sha256")"
+            echo "candidate=$(git rev-parse "refs/remotes/origin/${CANDIDATE_BRANCH}")"
+            echo "candidate_tree=$(git show -s --format=%T "$CANDIDATE_COMMIT")"
+            echo "candidate_parent=$(git show -s --format=%P "$CANDIDATE_COMMIT")"
+            echo "result_remote=$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}" | awk '{print $1}')"
+          } | tee "$OUT/observations.txt"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/$FAILED_RUN_ID" > "$OUT/failed-run.json"
+          git diff --name-only "$CLAIM_COMMIT" "$CANDIDATE_COMMIT" | LC_ALL=C sort > "$OUT/candidate-paths.txt"
+          git show "$CANDIDATE_COMMIT:data/review/adapter-sdk/star-trek-risik-candidate.json" > "$OUT/candidate.json"
+
+          export OUT
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, os
+          root = Path(os.environ["OUT"])
+          actual = [x for x in (root / "candidate-paths.txt").read_text().splitlines() if x]
+          candidate = json.loads((root / "candidate.json").read_text())
+          excluded = {
+              "data/review/adapter-sdk/star-trek-risik-candidate.json",
+              "images/uc-1399-portrait.jpg",
+              "images/uc-1399-still.webp",
+          }
+          projected = sorted(x for x in actual if x not in excluded)
+          diagnosis = {
+              "actual_count": len(actual),
+              "projected_count": len(projected),
+              "receipt_count": len(candidate.get("changed_paths") or []),
+              "projected_equals_receipt": projected == sorted(candidate.get("changed_paths") or []),
+              "actual_paths": actual,
+              "projected_paths": projected,
+          }
+          (root / "cardinality.json").write_text(json.dumps(diagnosis, indent=2) + "\n")
+          print(json.dumps(diagnosis, indent=2))
+          PY
+
+      - name: Upload diagnosis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-risik-independent-review-cardinality-diagnosis-v1-${{ github.run_id }}
+          path: /tmp/star-trek-risik-independent-review-cardinality-diagnosis-v1/
+          if-no-files-found: warn
+          retention-days: 30
