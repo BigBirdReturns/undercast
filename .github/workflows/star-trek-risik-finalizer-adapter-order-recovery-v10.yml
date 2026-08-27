@@ -1,0 +1,176 @@
+name: star-trek-risik-finalizer-adapter-order-recovery-v10
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-finalizer-adapter-order-recovery-v10
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: star-trek-risik-finalizer-adapter-order-recovery-v10
+  cancel-in-progress: false
+
+env:
+  PARENT_WORKFLOW: ".github/workflows/star-trek-risik-finalizer-checker-registry-reseal-v9.yml"
+  EXPECTED_PARENT_WORKFLOW_BLOB: "3bf016035486231fa03c64fa1c6e78c23758bec3"
+  BASE_WORKFLOW: ".github/workflows/star-trek-risik-finalizer-registry-format-recovery-v7.yml"
+  EXPECTED_BASE_WORKFLOW_BLOB: "777ac8f64cf8455cc435b02e4ec2b752b3ce30db"
+  ORIGINAL_WORKFLOW: ".github/workflows/star-trek-risik-finalizer-v1.yml"
+  EXPECTED_WORKFLOW_BLOB: "80991fa5c7f869e6a7b962c94daae237ca076fa7"
+  EXPECTED_WRAPPER_SHA: "a11a318b19388dee339d4311ca6c939eb30439772dd84dc554ad2f7a4e1bcd06"
+  EXPECTED_TRIGGER_SHA: "4202278fd486207f7ce15023f8e9f54636afbcb3dcfbaf27ab1a7f0d8444cd3e"
+  INTERMEDIATE_RECEIPT_SHA: "f2a01345edf0ecd479b0a918a5e92e45411ab483a5a9db5b777d79164b9ae742"
+  FINAL_CHECKER_SHA: "e0a2e827947ca4773f681d1b6e4ef33c7ff74512820c77a67c4139a93b77f869"
+  ORIGINAL_OUTPUT_RECEIPT_SHA: "9d379622334bf6376ca06ba4c6ee20faf12c3ca239bc6e87ccc4da6c1b1c6830"
+  ORIGINAL_OUTPUT_CHECKER_SHA: "f3a38d1b25f148eeb103063019234892b5b91511adc0155694dfab9ed4253d1b"
+  ORIGINAL_REGISTRY_SHA: "f5e4f86882cbeb3d6922f8d1ee59e1bae87912a2406f1edaa59abbf93f2cfdc9"
+  ORIGINAL_GATE_SHA: "334b7d340d3401f4ca66221079a5a5737e48ec7b65745a0456037a9945fa1703"
+  EXPECTED_CYCLE_ID: "cycle_208262c3f2dc4b499ef5f2f4"
+  EXPECTED_QUEUE: "1795"
+  EXPECTED_NEXT_TASK_ID: "ap_3d10b7a97efdbdd11c50bc2a"
+  V7_RECEIPT_SHA: "fc82a8d206433366cdbb93b2e5a12542ef5f2804bef6ce827c3ca22385e8a75d"
+  V7_REGISTRY_SHA: "6e09c6c2d0e10c94acea62a53653adfc9c627c578b4c5e02d005661a76becd2c"
+  V7_GATE_SHA: "51cdbd86c39b17af88bfee46bc81873bb305e3d6f718447f9b86a30f6fb47b83"
+  EXPECTED_V9_CHECKER_SHA: "e82284082662b8d13f776c201e36ceca82618d438116f0ad1460c6697663e33f"
+  EXPECTED_V9_RECEIPT_SHA: "f413490e8a5daec61c7c3055950bfcee62c6899132677cac07dc197663c649e0"
+  RECOVERY_OUT: "/tmp/star-trek-risik-finalizer-adapter-order-recovery-v10"
+
+jobs:
+  finalize:
+    name: finalize-reviewed-risik-cycle-adapter-order-recovery-v10
+    if: ${{ github.event.head_commit.message == 'Finalize reviewed Star Trek Risik cycle adapter order recovery v10' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Reconstruct v9 recovery and move predecessor check after adapter refresh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse "HEAD:${PARENT_WORKFLOW}")" = "$EXPECTED_PARENT_WORKFLOW_BLOB"
+
+          export PARENT_WORKFLOW
+          ruby <<'RUBY'
+          require "yaml"
+          document = YAML.load_file(ENV.fetch("PARENT_WORKFLOW"))
+          step = document.fetch("jobs").fetch("finalize").fetch("steps").find do |row|
+            row["name"] == "Reconstruct v7 recovery and add terminal checker registry reseal"
+          end
+          abort("v9 Risik reconstruction step is absent") unless step
+          path = "/tmp/reconstruct-risik-v9-for-v10.sh"
+          File.write(path, "#!/usr/bin/env bash\n" + step.fetch("run") + "\n")
+          File.chmod(0755, path)
+          RUBY
+
+          bash -n /tmp/reconstruct-risik-v9-for-v10.sh
+          bash /tmp/reconstruct-risik-v9-for-v10.sh
+          printf 'RECOVERY_OUT=%s\n' "$RECOVERY_OUT" >> "$GITHUB_ENV"
+
+          export RECOVERY_OUT
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          build_path = Path(os.environ["RECOVERY_OUT"]) / "build.sh"
+          text = build_path.read_text(encoding="utf-8")
+          predecessor = '''node scripts/star-trek-kzinti-flyer-cycle.mjs \\
+            | tee "$OUT/kzinti-checker-after-registry-reseal.log"'''
+          adapter = 'npm run adapter:check | tee "$OUT/adapter-check.log"'
+
+          if text.count(predecessor) != 1:
+              raise SystemExit(
+                  "Risik v10 Kzinti predecessor anchor drifted: "
+                  f"{text.count(predecessor)} matches"
+              )
+          if text.count(adapter) != 1:
+              raise SystemExit(
+                  "Risik v10 adapter-check anchor drifted: "
+                  f"{text.count(adapter)} matches"
+              )
+          if text.index(predecessor) > text.index(adapter):
+              raise SystemExit("Risik v10 predecessor check was already ordered")
+
+          without_predecessor = text.replace(predecessor, "", 1)
+          evidence = '''jq -n \\
+            --arg baseline "$(sha256sum \"$baseline_path\" | awk '{print $1}')" \\
+            --arg receipt "$(cat \"$OUT/receipt-sha256.txt\")" \\
+            --arg checker "$(cat \"$OUT/checker-sha256.txt\")" \\
+            '{
+              version:10,
+              transaction:"STAR-TREK-RISIK-ADAPTER-PREDECESSOR-ORDER-RECOVERY-V10",
+              classification:"refresh-adapter-baseline-before-historical-predecessor-check",
+              baseline_sha256:$baseline,
+              receipt_sha256:$receipt,
+              checker_sha256:$checker,
+              task_changed:false,
+              media_changed:false,
+              attribution_changed:false,
+              waterline_changed:false,
+              publication_logic_changed:false,
+              canonical_main_changed:false
+            }' > "$OUT/adapter-predecessor-order-recovery-v10.json"'''
+          replacement = adapter + "\n" + predecessor + "\n" + evidence
+          patched = without_predecessor.replace(adapter, replacement, 1)
+
+          if patched.count(predecessor) != 1:
+              raise SystemExit("Risik v10 predecessor relocation did not close")
+          if patched.count(evidence) != 1:
+              raise SystemExit("Risik v10 order evidence did not enter build")
+          if patched.index(adapter) >= patched.index(predecessor):
+              raise SystemExit("Risik v10 predecessor remains before adapter refresh")
+          build_path.write_text(patched, encoding="utf-8")
+          PY
+
+          bash -n "$RECOVERY_OUT/verify.sh"
+          bash -n "$RECOVERY_OUT/build.sh"
+          bash -n "$RECOVERY_OUT/publish.sh"
+          grep -F 'STAR-TREK-RISIK-CHECKER-REGISTRY-' "$RECOVERY_OUT/build.sh" >/dev/null
+          grep -F 'STAR-TREK-RISIK-ADAPTER-PREDECESSOR-ORDER-RECOVERY-V10' "$RECOVERY_OUT/build.sh" >/dev/null
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          text = (Path(os.environ["RECOVERY_OUT"]) / "build.sh").read_text()
+          adapter = 'npm run adapter:check | tee "$OUT/adapter-check.log"'
+          predecessor = 'node scripts/star-trek-kzinti-flyer-cycle.mjs'
+          if text.index(adapter) >= text.index(predecessor):
+              raise SystemExit("Risik v10 final build order is not closed")
+          PY
+          sha256sum "$RECOVERY_OUT"/*.sh > "$RECOVERY_OUT/reconstructed-scripts-v10.sha256"
+
+      - name: Verify sealed finalizer and immutable review inputs
+        shell: bash
+        run: bash "$RECOVERY_OUT/verify.sh"
+
+      - name: Build and validate deterministic Risik product
+        shell: bash
+        run: bash "$RECOVERY_OUT/build.sh"
+
+      - name: Upload prepared Risik recovery evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-risik-finalizer-adapter-order-recovery-v10-${{ github.run_id }}
+          path: /tmp/star-trek-risik-finalizer-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish, deploy, and seal the Risik cycle
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: bash "$RECOVERY_OUT/publish.sh"
