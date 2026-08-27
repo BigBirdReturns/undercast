@@ -1,0 +1,168 @@
+name: star-trek-risik-finalizer-baseline-recovery-v4
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-finalizer-baseline-recovery-v4
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: star-trek-risik-finalizer-baseline-recovery-v4
+  cancel-in-progress: false
+
+env:
+  ORIGINAL_WORKFLOW: ".github/workflows/star-trek-risik-finalizer-v1.yml"
+  EXPECTED_WORKFLOW_BLOB: "80991fa5c7f869e6a7b962c94daae237ca076fa7"
+  EXPECTED_WRAPPER_SHA: "a11a318b19388dee339d4311ca6c939eb30439772dd84dc554ad2f7a4e1bcd06"
+  EXPECTED_TRIGGER_SHA: "4202278fd486207f7ce15023f8e9f54636afbcb3dcfbaf27ab1a7f0d8444cd3e"
+  RECOVERY_OUT: "/tmp/star-trek-risik-finalizer-baseline-recovery-v4"
+
+jobs:
+  finalize:
+    name: finalize-reviewed-risik-cycle-baseline-recovery-v4
+    if: ${{ github.event.head_commit.message == 'Finalize reviewed Star Trek Risik cycle baseline recovery v4' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Reconstruct the sealed original finalizer steps
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$RECOVERY_OUT"
+          mkdir -p "$RECOVERY_OUT"
+
+          test "$(git rev-parse "HEAD:${ORIGINAL_WORKFLOW}")" = "$EXPECTED_WORKFLOW_BLOB"
+          test "$(sha256sum .github/recovery/star-trek-risik-finalizer-v1/finalizer.py | awk '{print $1}')" = "$EXPECTED_WRAPPER_SHA"
+          test "$(sha256sum .github/recovery/star-trek-risik-finalizer-v1/run.trigger | awk '{print $1}')" = "$EXPECTED_TRIGGER_SHA"
+          sha256sum -c .github/recovery/star-trek-risik-finalizer-v1/sealed-manifest.sha256
+
+          export ORIGINAL_WORKFLOW RECOVERY_OUT
+          ruby <<'RUBY'
+          require "yaml"
+
+          path = ENV.fetch("ORIGINAL_WORKFLOW")
+          output = ENV.fetch("RECOVERY_OUT")
+          document = YAML.load_file(path)
+          environment = document.fetch("env")
+          File.open(ENV.fetch("GITHUB_ENV"), "a") do |file|
+            environment.each do |key, value|
+              file.puts("#{key}=#{value}")
+            end
+          end
+
+          steps = document.fetch("jobs").fetch("finalize").fetch("steps")
+          names = {
+            "Verify sealed finalizer and immutable review inputs" => "verify.sh",
+            "Build deterministic receipt-bearing Risik product" => "build.sh",
+            "Publish, deploy, and seal the Risik cycle" => "publish.sh",
+          }
+          scripts = {}
+          steps.each do |step|
+            name = step["name"]
+            next unless names.key?(name)
+            scripts[name] = step.fetch("run")
+          end
+          unless scripts.keys.sort == names.keys.sort
+            abort("original Risik finalizer step set drifted: #{scripts.keys}")
+          end
+
+          build = scripts.fetch("Build deterministic receipt-bearing Risik product")
+          diff_anchor = 'git diff --name-only "$CANDIDATE_COMMIT" | LC_ALL=C sort > "$OUT/finalization-paths.txt"'
+          if build.scan(diff_anchor).length != 1
+            abort("Risik finalizer diff anchor drifted")
+          end
+          baseline_block = <<~'BASH'
+            baseline_path="data/review/adapter-sdk/BASELINE.json"
+            baseline_before="$(sha256sum "$baseline_path" | awk '{print $1}')"
+            npm run adapter:write | tee "$OUT/adapter-write.log"
+            baseline_after="$(sha256sum "$baseline_path" | awk '{print $1}')"
+            test "$baseline_after" != "$baseline_before"
+            test "$(git diff --name-only -- "$baseline_path")" = "$baseline_path"
+            npm run adapter:check | tee "$OUT/adapter-check.log"
+            jq -n \
+              --arg path "$baseline_path" \
+              --arg before "$baseline_before" \
+              --arg after "$baseline_after" \
+              '{
+                version:4,
+                transaction:"STAR-TREK-RISIK-FINALIZER-ADAPTER-BASELINE-RECOVERY-V4",
+                path:$path,
+                before_sha256:$before,
+                after_sha256:$after,
+                changed:true,
+                candidate_changed:false,
+                review_changed:false,
+                media_changed:false,
+                lease_changed:false,
+                canonical_main_changed:false
+              }' > "$OUT/adapter-baseline-recovery.json"
+
+          BASH
+          build = build.sub(diff_anchor, baseline_block + diff_anchor)
+
+          compare_anchor = 'diff -u "$OUT/expected-finalization-paths.txt" "$OUT/finalization-paths.txt"'
+          if build.scan(compare_anchor).length != 1
+            abort("Risik finalizer expected-path comparison anchor drifted")
+          end
+          expected_patch = <<~'BASH'
+            printf '%s\n' data/review/adapter-sdk/BASELINE.json >> "$OUT/expected-finalization-paths.txt"
+            LC_ALL=C sort -u "$OUT/expected-finalization-paths.txt" -o "$OUT/expected-finalization-paths.txt"
+          BASH
+          build = build.sub(compare_anchor, expected_patch + compare_anchor)
+          scripts["Build deterministic receipt-bearing Risik product"] = build
+
+          names.each do |name, filename|
+            target = File.join(output, filename)
+            File.write(target, "#!/usr/bin/env bash\n" + scripts.fetch(name) + "\n")
+            File.chmod(0755, target)
+          end
+          RUBY
+
+          bash -n "$RECOVERY_OUT/verify.sh"
+          bash -n "$RECOVERY_OUT/build.sh"
+          bash -n "$RECOVERY_OUT/publish.sh"
+          grep -F 'npm run adapter:write' "$RECOVERY_OUT/build.sh" >/dev/null
+          grep -F 'npm run adapter:check' "$RECOVERY_OUT/build.sh" >/dev/null
+          grep -F 'data/review/adapter-sdk/BASELINE.json' "$RECOVERY_OUT/build.sh" >/dev/null
+          sha256sum "$RECOVERY_OUT"/*.sh > "$RECOVERY_OUT/reconstructed-scripts.sha256"
+
+      - name: Verify sealed finalizer and immutable review inputs
+        shell: bash
+        run: bash "$RECOVERY_OUT/verify.sh"
+
+      - name: Build deterministic receipt-bearing Risik product with adapter baseline
+        shell: bash
+        run: bash "$RECOVERY_OUT/build.sh"
+
+      - name: Upload prepared Risik finalizer evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-risik-finalizer-baseline-recovery-v4-${{ github.run_id }}
+          path: |
+            /tmp/star-trek-risik-finalizer-v1/
+            /tmp/star-trek-risik-finalizer-baseline-recovery-v4/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish, deploy, and seal the Risik cycle
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: bash "$RECOVERY_OUT/publish.sh"
