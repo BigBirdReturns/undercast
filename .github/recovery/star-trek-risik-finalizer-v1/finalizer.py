@@ -147,9 +147,69 @@ if (!Array.isArray(episodes)
             f"Risik receipt episode values drifted: {projected}"
         )
 
+
+    new_product_paths = [
+        "data/review/adapter-sdk/star-trek-risik-cycle.json",
+        "scripts/star-trek-morgo-cycle-composable.mjs",
+        "scripts/star-trek-risik-cycle.mjs",
+    ]
+    missing_product_paths = [
+        relative
+        for relative in new_product_paths
+        if not Path(relative).is_file()
+    ]
+    if missing_product_paths:
+        raise SystemExit(
+            f"Risik generated product paths are absent: {missing_product_paths}"
+        )
+    untracked_product_paths = sorted(
+        line
+        for line in subprocess.check_output(
+            [
+                "git",
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "--",
+                *new_product_paths,
+            ],
+            text=True,
+        ).splitlines()
+        if line
+    )
+    if untracked_product_paths != sorted(new_product_paths):
+        raise SystemExit(
+            "Risik generated product path topology drifted before staging: "
+            f"{untracked_product_paths}"
+        )
+    subprocess.run(
+        ["git", "add", "--", *new_product_paths],
+        check=True,
+    )
+    staged_product_paths = sorted(
+        line
+        for line in subprocess.check_output(
+            [
+                "git",
+                "diff",
+                "--cached",
+                "--name-only",
+                "--",
+                *new_product_paths,
+            ],
+            text=True,
+        ).splitlines()
+        if line
+    )
+    if staged_product_paths != sorted(new_product_paths):
+        raise SystemExit(
+            "Risik generated product paths did not enter the index exactly: "
+            f"{staged_product_paths}"
+        )
+
     repair = {
         "version": 1,
-        "transaction": "STAR-TREK-RISIK-CHECKER-RECEIPT-RESEAL-V1",
+        "transaction": "STAR-TREK-RISIK-CHECKER-RECEIPT-PATH-RESEAL-V1",
         "classification": "coherent-checker-and-receipt-identity-reseal",
         "original_receipt_sha256": original_receipt_sha,
         "patched_receipt_sha256": patched_receipt_sha,
@@ -170,6 +230,11 @@ if (!Array.isArray(episodes)
         "attribution_changed": False,
         "waterline_logic_changed": False,
         "publication_logic_changed": False,
+        "pre_staged_new_product_paths": new_product_paths,
+        "path_contract_change": (
+            "place the exact three generated terminal files in the Git index "
+            "before the unchanged workflow computes its candidate delta"
+        ),
     }
     out = Path(os.environ["OUT"])
     out.mkdir(parents=True, exist_ok=True)
