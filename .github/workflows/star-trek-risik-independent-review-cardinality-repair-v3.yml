@@ -1,0 +1,217 @@
+name: star-trek-risik-independent-review-cardinality-repair-v3
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-independent-review-cardinality-repair-v3
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-risik-independent-review-cardinality-repair-v3
+  cancel-in-progress: false
+
+env:
+  BASE_MAIN: 129e6f9c389fe61bb8027f4e046bea7de510cb84
+  BASE_MAIN_TREE: 6d32c386636296e76bcab61baa387cb629967ac3
+  LIVE_MAIN: 4a2f98c4dc2039f596857cfdff01e701acbd2e4d
+  LIVE_MAIN_TREE: cc87894c72de3a7331b7ebe63e11badfaaecb4c5
+  TARGET_BRANCH: agent/star-trek-risik-independent-review-recovery-v1
+  TARGET_HEAD: 02fe8d61c9a3d0f60fd4a1e4ab94a79906d2a831
+  TARGET_TREE: 140e1ad9f7915c34a244dbc8458d00b895a35bbf
+  TARGET_WORKFLOW: .github/workflows/star-trek-risik-independent-product-review-v1.yml
+  TARGET_WORKFLOW_BLOB: 4d3fc763d0678a8bbe73daf121bf77a1c16445f2
+  TARGET_REVIEWER: .github/recovery/star-trek-risik-independent-product-review-v1/reviewer.py
+  TARGET_REVIEWER_BLOB: d3196eb376cb53e8d26ec10afcb1093c8af254be
+  TARGET_REVIEWER_SHA: 98f4a67a83fff2f32f61d4ce9f7588667c194cee380ea838427bcb85829f6988
+  TARGET_TRIGGER: .github/recovery/star-trek-risik-independent-product-review-v1/run.trigger
+  TARGET_TRIGGER_SHA: f7b11b5667dbf6b732ebefa535711d9a788bffa2df41197986408879f942cd33
+  TARGET_MANIFEST: .github/recovery/star-trek-risik-independent-product-review-v1/sealed-manifest.sha256
+  TARGET_MANIFEST_BLOB: 3ca306a1950167b829224050b48be37730b9a7d6
+  RESULT_BRANCH: agent/star-trek-risik-independent-review-result-v1
+  CLAIM_COMMIT: eff3da84c7718d0894afda1fbc4e790bc88265da
+  CANDIDATE_BRANCH: agent/star-trek-risik-candidate-v1
+  CANDIDATE_COMMIT: 03afc14da5b1cbe53cb99708edddb3c4c33a0adf
+  CANDIDATE_TREE: 945e4da7a8b325173ac2b7b8da9fd3d65c5525c3
+  CANDIDATE_RECEIPT_SHA: 831bc23f0060dfdebd3c99ffd905947bf3143344568ee174fe66dac4fcab1641
+  FAILED_RUN_ID: "33088555696"
+  OUT: /tmp/star-trek-risik-independent-review-cardinality-repair-v3
+
+jobs:
+  repair:
+    name: repair-risik-review-cardinality-and-live-main-v3
+    if: ${{ github.event.head_commit.message == 'Repair Star Trek Risik independent review cardinality v3' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Verify exact failed boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/$FAILED_RUN_ID" > "$OUT/failed-run.json"
+          test "$(jq -r .status "$OUT/failed-run.json")" = completed
+          test "$(jq -r .conclusion "$OUT/failed-run.json")" = failure
+          test "$(jq -r .head_sha "$OUT/failed-run.json")" = "$TARGET_HEAD"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          git fetch --no-tags --depth=2 origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}" \
+            "+refs/heads/${CANDIDATE_BRANCH}:refs/remotes/origin/${CANDIDATE_BRANCH}"
+
+          test "$(git rev-parse refs/remotes/origin/main)" = "$LIVE_MAIN"
+          test "$(git show -s --format=%T "$LIVE_MAIN")" = "$LIVE_MAIN_TREE"
+          test "$(git show -s --format=%P "$LIVE_MAIN")" = "$BASE_MAIN"
+          test "$(git show -s --format=%T "$BASE_MAIN")" = "$BASE_MAIN_TREE"
+          test "$(git diff --name-only "$BASE_MAIN" "$LIVE_MAIN")" = "data/MEDIA-SEARCH-LATEST.json"
+
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "$TARGET_HEAD"
+          test "$(git show -s --format=%T "$TARGET_HEAD")" = "$TARGET_TREE"
+          test "$(git rev-parse "$TARGET_HEAD:$TARGET_WORKFLOW")" = "$TARGET_WORKFLOW_BLOB"
+          test "$(git rev-parse "$TARGET_HEAD:$TARGET_REVIEWER")" = "$TARGET_REVIEWER_BLOB"
+          test "$(git rev-parse "$TARGET_HEAD:$TARGET_MANIFEST")" = "$TARGET_MANIFEST_BLOB"
+
+          test "$(git rev-parse "refs/remotes/origin/${CANDIDATE_BRANCH}")" = "$CANDIDATE_COMMIT"
+          test "$(git show -s --format=%T "$CANDIDATE_COMMIT")" = "$CANDIDATE_TREE"
+          test "$(git show -s --format=%P "$CANDIDATE_COMMIT")" = "$CLAIM_COMMIT"
+
+          git diff --name-only "$CLAIM_COMMIT" "$CANDIDATE_COMMIT" | LC_ALL=C sort > "$OUT/candidate-paths.txt"
+          git show "$CANDIDATE_COMMIT:data/review/adapter-sdk/star-trek-risik-candidate.json" > "$OUT/candidate.json"
+          export OUT CANDIDATE_RECEIPT_SHA
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, os
+          root = Path(os.environ["OUT"])
+          actual = [x for x in (root / "candidate-paths.txt").read_text().splitlines() if x]
+          candidate = json.loads((root / "candidate.json").read_text())
+          assert candidate["receipt_sha256"] == os.environ["CANDIDATE_RECEIPT_SHA"]
+          excluded = {
+              "data/review/adapter-sdk/star-trek-risik-candidate.json",
+              "images/uc-1399-portrait.jpg",
+              "images/uc-1399-still.webp",
+          }
+          projected = sorted(x for x in actual if x not in excluded)
+          assert projected == sorted(candidate["changed_paths"])
+          assert (len(actual), len(projected)) == (43, 40)
+          (root / "cardinality.json").write_text(
+              json.dumps({"actual": 43, "projected": 40, "verdict": "pass"}, indent=2) + "\n"
+          )
+          PY
+
+      - name: Patch and retrigger the existing second desk
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git switch -C "$TARGET_BRANCH" "refs/remotes/origin/${TARGET_BRANCH}"
+          sha256sum -c "$TARGET_MANIFEST"
+          test "$(sha256sum "$TARGET_REVIEWER" | awk '{print $1}')" = "$TARGET_REVIEWER_SHA"
+          test "$(sha256sum "$TARGET_TRIGGER" | awk '{print $1}')" = "$TARGET_TRIGGER_SHA"
+
+          export TARGET_REVIEWER TARGET_WORKFLOW TARGET_MANIFEST
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, os
+          reviewer = Path(os.environ["TARGET_REVIEWER"])
+          workflow = Path(os.environ["TARGET_WORKFLOW"])
+          manifest = Path(os.environ["TARGET_MANIFEST"])
+
+          text = reviewer.read_text()
+          anchor = 'EXPECTED_MAIN_TREE = os.environ["EXPECTED_MAIN_TREE"]\n'
+          assert text.count(anchor) == 1
+          assert 'LIVE_MAIN = os.environ["LIVE_MAIN"]' not in text
+          text = text.replace(anchor, anchor + 'LIVE_MAIN = os.environ["LIVE_MAIN"]\n', 1)
+          old = 'if len(actual_paths) != 44 or len(projected_paths) != 41:'
+          assert text.count(old) == 1
+          text = text.replace(old, 'if len(actual_paths) != 43 or len(projected_paths) != 40:', 1)
+          old = 'if main_now != EXPECTED_MAIN:'
+          assert text.count(old) == 1
+          text = text.replace(old, 'if main_now != LIVE_MAIN:', 1)
+          compile(text, str(reviewer), "exec")
+          reviewer.write_text(text)
+
+          doc = workflow.read_text()
+          anchor = '  EXPECTED_MAIN_MESSAGE: "Star Trek: publish Morgo cycle"\n'
+          assert doc.count(anchor) == 1 and '\n  LIVE_MAIN:' not in doc
+          doc = doc.replace(
+              anchor,
+              anchor
+              + '  LIVE_MAIN: 4a2f98c4dc2039f596857cfdff01e701acbd2e4d\n'
+              + '  LIVE_MAIN_TREE: cc87894c72de3a7331b7ebe63e11badfaaecb4c5\n'
+              + '  LIVE_MAIN_MESSAGE: "Media search: record rolling candidate attempt (2026-08-27)"\n',
+              1,
+          )
+          old = (
+              '          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"\n'
+              '          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_MAIN_TREE"\n'
+              '          test "$(git show -s --format=%s "$EXPECTED_MAIN")" = "$EXPECTED_MAIN_MESSAGE"\n'
+          )
+          new = (
+              '          test "$(git rev-parse refs/remotes/origin/main)" = "$LIVE_MAIN"\n'
+              '          test "$(git show -s --format=%T "$LIVE_MAIN")" = "$LIVE_MAIN_TREE"\n'
+              '          test "$(git show -s --format=%P "$LIVE_MAIN")" = "$EXPECTED_MAIN"\n'
+              '          test "$(git show -s --format=%s "$LIVE_MAIN")" = "$LIVE_MAIN_MESSAGE"\n'
+              '          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_MAIN_TREE"\n'
+              '          test "$(git show -s --format=%s "$EXPECTED_MAIN")" = "$EXPECTED_MAIN_MESSAGE"\n'
+              '          test "$(git diff --name-only "$EXPECTED_MAIN" "$LIVE_MAIN")" = "data/MEDIA-SEARCH-LATEST.json"\n'
+          )
+          assert doc.count(old) == 1
+          doc = doc.replace(old, new, 1)
+          old = '          test "$(jq -r .commit.sha "$OUT/main-after.json")" = "$EXPECTED_MAIN"\n'
+          assert doc.count(old) == 1
+          doc = doc.replace(old, old.replace("$EXPECTED_MAIN", "$LIVE_MAIN"), 1)
+          old = '          printf \'%s\\n\' "$EXPECTED_MAIN" > "$OUT/main-after.txt"\n'
+          assert doc.count(old) == 1
+          doc = doc.replace(old, old.replace("$EXPECTED_MAIN", "$LIVE_MAIN"), 1)
+          workflow.write_text(doc)
+
+          rows = []
+          for line in manifest.read_text().splitlines():
+              if line:
+                  _, rel = line.split("  ", 1)
+                  path = Path(rel)
+                  rows.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {rel}")
+          manifest.write_text("\n".join(rows) + "\n")
+          PY
+
+          sha256sum -c "$TARGET_MANIFEST"
+          python3 -m py_compile "$TARGET_REVIEWER"
+          rm -rf "$(dirname "$TARGET_REVIEWER")/__pycache__"
+
+          git diff --name-only | LC_ALL=C sort > "$OUT/changed-paths.txt"
+          printf '%s\n' "$TARGET_MANIFEST" "$TARGET_REVIEWER" "$TARGET_WORKFLOW" \
+            | LC_ALL=C sort > "$OUT/expected-paths.txt"
+          diff -u "$OUT/expected-paths.txt" "$OUT/changed-paths.txt"
+          git diff --check
+          git add "$TARGET_MANIFEST" "$TARGET_REVIEWER" "$TARGET_WORKFLOW"
+          git diff --cached --check
+
+          git config user.name undercast-risik-independent-review-cardinality-repair-v3
+          git config user.email undercast-risik-independent-review-cardinality-repair-v3@users.noreply.github.com
+          git commit -m "Independently review Star Trek Risik candidate v1"
+          test "$(git show -s --format=%P HEAD)" = "$TARGET_HEAD"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+
+          git show -s --format='%H%n%T%n%P%n%s' HEAD > "$OUT/repair-commit.txt"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 \
+            | LC_ALL=C sort -z | xargs -0 sha256sum > "$OUT/manifest.sha256"
+
+      - name: Upload repair evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-risik-independent-review-cardinality-repair-v3-${{ github.run_id }}
+          path: /tmp/star-trek-risik-independent-review-cardinality-repair-v3/
+          if-no-files-found: warn
+          retention-days: 30
