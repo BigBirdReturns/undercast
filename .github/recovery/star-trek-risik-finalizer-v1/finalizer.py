@@ -59,16 +59,56 @@ if (!Array.isArray(episodes)
     checker.write_text(patched, encoding="utf-8")
     subprocess.run(["node", "--check", str(checker)], check=True)
 
-    print("RISIK-CHECKER-SELF-IDENTITY-BEGIN")
-    for index, line in enumerate(
-        checker.read_text(encoding="utf-8").splitlines()[:50],
-        start=1,
-    ):
-        print(f"{index:04d}: {line}")
-    print("RISIK-CHECKER-SELF-IDENTITY-END")
+    def stable(value):
+        if isinstance(value, dict):
+            return {key: stable(value[key]) for key in sorted(value)}
+        if isinstance(value, list):
+            return [stable(item) for item in value]
+        return value
+
+    def pretty(value):
+        return json.dumps(
+            stable(value),
+            indent=2,
+            ensure_ascii=False,
+        ) + "\n"
 
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    episodes = (receipt.get("source_review") or {}).get(
+    original_receipt_sha = receipt.get("receipt_sha256")
+    qualification = receipt.get("qualification")
+    if not isinstance(qualification, dict):
+        raise SystemExit("Risik receipt qualification object is absent")
+    original_checker_sha = qualification.get("checker_sha256")
+    if not isinstance(original_checker_sha, str):
+        raise SystemExit("Risik receipt checker identity is absent")
+
+    patched_checker_sha = hashlib.sha256(checker.read_bytes()).hexdigest()
+    qualification["checker_sha256"] = patched_checker_sha
+
+    receipt_body = dict(receipt)
+    receipt_body.pop("receipt_sha256", None)
+    patched_receipt_sha = hashlib.sha256(
+        pretty(receipt_body).encode("utf-8")
+    ).hexdigest()
+    receipt["receipt_sha256"] = patched_receipt_sha
+    receipt_path.write_text(pretty(receipt), encoding="utf-8")
+
+    reread = json.loads(receipt_path.read_text(encoding="utf-8"))
+    reread_body = dict(reread)
+    reread_identity = reread_body.pop("receipt_sha256", None)
+    reproduced_identity = hashlib.sha256(
+        pretty(reread_body).encode("utf-8")
+    ).hexdigest()
+    if reread_identity != patched_receipt_sha or reproduced_identity != patched_receipt_sha:
+        raise SystemExit(
+            "Risik receipt identity did not reproduce after checker reseal"
+        )
+    if hashlib.sha256(checker.read_bytes()).hexdigest() != (
+        (reread.get("qualification") or {}).get("checker_sha256")
+    ):
+        raise SystemExit("Risik checker identity did not reproduce after reseal")
+
+    episodes = (reread.get("source_review") or {}).get(
         "confirmed_voiced_episodes"
     )
     expected = [
@@ -109,15 +149,20 @@ if (!Array.isArray(episodes)
 
     repair = {
         "version": 1,
-        "transaction": "STAR-TREK-RISIK-CHECKER-KEY-ORDER-REPAIR-V1",
-        "classification": "exact-object-key-set-and-title-date-projection",
-        "receipt_sha256": receipt.get("receipt_sha256"),
-        "original_checker_sha256": hashlib.sha256(
-            text.encode("utf-8")
-        ).hexdigest(),
-        "patched_checker_sha256": hashlib.sha256(
-            checker.read_bytes()
-        ).hexdigest(),
+        "transaction": "STAR-TREK-RISIK-CHECKER-RECEIPT-RESEAL-V1",
+        "classification": "coherent-checker-and-receipt-identity-reseal",
+        "original_receipt_sha256": original_receipt_sha,
+        "patched_receipt_sha256": patched_receipt_sha,
+        "original_checker_sha256": original_checker_sha,
+        "patched_checker_sha256": patched_checker_sha,
+        "changed_receipt_fields": [
+            "qualification.checker_sha256",
+            "receipt_sha256",
+        ],
+        "checker_change": (
+            "replace key-order-sensitive raw JSON comparison with exact "
+            "object-key-set and ordered title/date projection"
+        ),
         "episodes": projected,
         "object_keys": ["first_aired", "title"],
         "product_data_changed": False,
@@ -128,7 +173,7 @@ if (!Array.isArray(episodes)
     }
     out = Path(os.environ["OUT"])
     out.mkdir(parents=True, exist_ok=True)
-    (out / "checker-key-order-repair.json").write_text(
+    (out / "checker-receipt-reseal.json").write_text(
         json.dumps(repair, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
