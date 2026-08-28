@@ -1,0 +1,157 @@
+name: star-trek-henoch-source-review-recovery-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-henoch-source-review-recovery-v2
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-henoch-source-review-recovery-v2
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 28ea3efc9f71d6207794d45cc654af765b36c63e
+  SOURCE_WORKFLOW_BRANCH: agent/star-trek-henoch-source-review-v1
+  SOURCE_WORKFLOW_COMMIT: 2e5c37a4a7bde905a7fa009c0b0accbd575b5ba1
+  SOURCE_WORKFLOW_TREE: 5b8b15fca0efc75330bbecbdc52d819dcab9e6be
+  SOURCE_WORKFLOW_PATH: .github/workflows/star-trek-henoch-source-review-v1.yml
+  SOURCE_WORKFLOW_BLOB: d59a2c2ea198f4a5fa35c76a36ed9c99a5b1f54c
+  RECOVERY_OUT: /tmp/star-trek-henoch-source-review-recovery-v2
+  OUT: /tmp/star-trek-henoch-source-review-v1
+
+jobs:
+  review:
+    name: recover-and-independently-review-frozen-henoch-source
+    if: ${{ github.event.head_commit.message == 'Review frozen Star Trek Henoch source v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Reconstruct exact review and isolate orphan-source transport
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$RECOVERY_OUT"
+          mkdir -p "$RECOVERY_OUT"
+
+          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%s HEAD)" = "Review frozen Star Trek Henoch source v1"
+          git diff --name-only "$EXPECTED_MAIN" HEAD | LC_ALL=C sort > "$RECOVERY_OUT/carrier-paths.txt"
+          printf '%s\n' .github/workflows/star-trek-henoch-source-review-recovery-v2.yml \
+            > "$RECOVERY_OUT/expected-carrier-paths.txt"
+          diff -u "$RECOVERY_OUT/expected-carrier-paths.txt" "$RECOVERY_OUT/carrier-paths.txt"
+
+          git fetch --no-tags --depth=1 origin \
+            "+refs/heads/${SOURCE_WORKFLOW_BRANCH}:refs/remotes/origin/henoch-source-review-program"
+          test "$(git rev-parse refs/remotes/origin/henoch-source-review-program)" = "$SOURCE_WORKFLOW_COMMIT"
+          test "$(git show -s --format=%T "$SOURCE_WORKFLOW_COMMIT")" = "$SOURCE_WORKFLOW_TREE"
+          test "$(git rev-parse "$SOURCE_WORKFLOW_COMMIT:$SOURCE_WORKFLOW_PATH")" = "$SOURCE_WORKFLOW_BLOB"
+          git show "$SOURCE_WORKFLOW_COMMIT:$SOURCE_WORKFLOW_PATH" > "$RECOVERY_OUT/source-workflow.yml"
+
+          export RECOVERY_OUT
+          ruby <<'RUBY'
+          require "yaml"
+
+          output = ENV.fetch("RECOVERY_OUT")
+          document = YAML.load_file(File.join(output, "source-workflow.yml"))
+          File.open(ENV.fetch("GITHUB_ENV"), "a") do |file|
+            document.fetch("env").each { |key, value| file.puts("#{key}=#{value}") }
+          end
+
+          names = {
+            "Verify carrier, frozen source, and claim identities" => "verify.sh",
+            "Freeze and independently review supporting exact revisions" => "support.sh",
+            "Write independent Henoch source review" => "review.sh",
+            "Publish immutable Henoch source-review result" => "publish.sh",
+          }
+          scripts = {}
+          document.fetch("jobs").fetch("review").fetch("steps").each do |step|
+            name = step["name"]
+            scripts[name] = step.fetch("run") if names.key?(name)
+          end
+          abort("Henoch source-review step set drifted: #{scripts.keys}") unless scripts.keys.sort == names.keys.sort
+
+          verify = scripts.fetch("Verify carrier, frozen source, and claim identities")
+
+          old_path = ".github/workflows/star-trek-henoch-source-review-v1.yml"
+          new_path = ".github/workflows/star-trek-henoch-source-review-recovery-v2.yml"
+          abort("Henoch carrier-path anchor drifted") unless verify.scan(old_path).length == 1
+          verify = verify.sub(old_path, new_path)
+
+          old_fetch = <<~'BASH'.strip
+            git fetch --no-tags --depth=2 origin \
+              "+refs/heads/main:refs/remotes/origin/main" \
+              "+refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}" \
+              "+refs/heads/${CLAIM_BRANCH}:refs/remotes/origin/${CLAIM_BRANCH}"
+          BASH
+          new_fetch = <<~'BASH'.strip
+            git fetch --no-tags --depth=2 origin \
+              "+refs/heads/main:refs/remotes/origin/main" \
+              "+refs/heads/${CLAIM_BRANCH}:refs/remotes/origin/${CLAIM_BRANCH}"
+            git fetch --no-tags --depth=1 origin \
+              "+refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}"
+          BASH
+          abort("Henoch mixed-history fetch anchor drifted") unless verify.scan(old_fetch).length == 1
+          verify = verify.sub(old_fetch, new_fetch)
+
+          trace = "set -Eeuo pipefail"
+          abort("Henoch trace anchor drifted") unless verify.scan(trace).length == 1
+          verify = verify.sub(trace, trace + "\nset -x")
+          scripts["Verify carrier, frozen source, and claim identities"] = verify
+
+          names.each do |name, filename|
+            path = File.join(output, filename)
+            File.write(path, "#!/usr/bin/env bash\n" + scripts.fetch(name) + "\n")
+            File.chmod(0755, path)
+          end
+          RUBY
+
+          for script in "$RECOVERY_OUT"/{verify,support,review,publish}.sh; do
+            bash -n "$script"
+          done
+          grep -F 'star-trek-henoch-source-review-recovery-v2.yml' "$RECOVERY_OUT/verify.sh" >/dev/null
+          grep -F 'refs/heads/${CLAIM_BRANCH}:refs/remotes/origin/${CLAIM_BRANCH}' "$RECOVERY_OUT/verify.sh" >/dev/null
+          grep -F 'git fetch --no-tags --depth=1 origin' "$RECOVERY_OUT/verify.sh" >/dev/null
+          grep -F 'refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}' "$RECOVERY_OUT/verify.sh" >/dev/null
+          sha256sum "$RECOVERY_OUT"/{source-workflow.yml,verify.sh,support.sh,review.sh,publish.sh} \
+            > "$RECOVERY_OUT/reconstructed-program.sha256"
+
+      - name: Verify carrier, frozen source, and claim identities
+        shell: bash
+        run: bash "$RECOVERY_OUT/verify.sh"
+
+      - name: Freeze and independently review supporting exact revisions
+        shell: bash
+        run: bash "$RECOVERY_OUT/support.sh"
+
+      - name: Write independent Henoch source review
+        shell: bash
+        run: bash "$RECOVERY_OUT/review.sh"
+
+      - name: Upload independent Henoch source-review evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-henoch-source-review-v1
+          path: |
+            /tmp/star-trek-henoch-source-review-v1/
+            /tmp/star-trek-henoch-source-review-recovery-v2/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable Henoch source-review result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: bash "$RECOVERY_OUT/publish.sh"
