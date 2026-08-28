@@ -1,0 +1,450 @@
+name: star-trek-henoch-claim-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-henoch-claim-v1
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-henoch-claim-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 28ea3efc9f71d6207794d45cc654af765b36c63e
+  EXPECTED_TREE: 52fd54b4f8e5e42977b23cbccb75fb0e05f11a6c
+  EXPECTED_MESSAGE: "Star Trek: publish Risik cycle"
+  READBACK_BRANCH: agent/star-trek-risik-terminal-readback-result-v1
+  READBACK_COMMIT: f27f88400d97adc63b78c152d8fe5ee4d5dac57d
+  READBACK_TREE: 1b1a9d5bd2c345d45bce992126e02a5fb6929cfd
+  READBACK_PATH: transport/star-trek-risik-terminal-readback-v1/terminal-readback.json
+  READBACK_ATTESTATION_SHA: 783a86a86786a466efa8135ebc28019200e101db1fb644e3aa2b00c8535448ef
+  READBACK_ARTIFACT_ID: "9672705813"
+  READBACK_ARTIFACT_DIGEST: 3284db5630fdd02924633ef8c86d4b1224a4744d070b0c386618f8503298a9fd
+  TASK_ID: ap_3d10b7a97efdbdd11c50bc2a
+  EXPECTED_PERFORMER: Leonard Nimoy
+  EXPECTED_CHARACTER: Henoch
+  EXPECTED_FINGERPRINT: 53b562ce31db6635c5398b4dbcd9c391aacf8e1997a49e2ac103854afb18e839
+  RESULT_BRANCH: agent/star-trek-henoch-claim-result-v1
+  RECEIPT_PATH: data/review/adapter-sdk/star-trek-henoch-claim.json
+  OUT: /tmp/star-trek-henoch-claim-v1
+
+jobs:
+  claim:
+    name: claim-one-repository-selected-henoch-cycle
+    if: ${{ github.event.head_commit.message == 'Claim repository-selected Star Trek Henoch cycle v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify terminal Risik readback and pristine Henoch task
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+
+          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          test "$(git show -s --format=%s HEAD)" = "Claim repository-selected Star Trek Henoch cycle v1"
+          git diff --name-only "$EXPECTED_MAIN" HEAD | LC_ALL=C sort > "$OUT/carrier-paths.txt"
+          printf '%s\n' .github/workflows/star-trek-henoch-claim-v1.yml > "$OUT/expected-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/carrier-paths.txt"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          git fetch --no-tags --depth=2 origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${READBACK_BRANCH}:refs/remotes/origin/${READBACK_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          test "$(git show -s --format=%s "$EXPECTED_MAIN")" = "$EXPECTED_MESSAGE"
+          test "$(git rev-parse "refs/remotes/origin/${READBACK_BRANCH}")" = "$READBACK_COMMIT"
+          test "$(git show -s --format=%T "$READBACK_COMMIT")" = "$READBACK_TREE"
+          test -z "$(git show -s --format=%P "$READBACK_COMMIT")"
+
+          git show "refs/remotes/origin/${READBACK_BRANCH}:${READBACK_PATH}" > "$OUT/risik-terminal-readback.json"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          path = Path(os.environ["OUT"]) / "risik-terminal-readback.json"
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          body = dict(receipt)
+          identity = body.pop("attestation_sha256", None)
+          body.pop("artifact", None)
+          body.pop("recovery", None)
+          actual = hashlib.sha256(
+              (json.dumps(stable(body), indent=2, ensure_ascii=False) + "\n").encode()
+          ).hexdigest()
+          if identity != os.environ["READBACK_ATTESTATION_SHA"] or actual != identity:
+              raise SystemExit(f"Risik terminal readback identity drifted: {identity} / {actual}")
+          if receipt.get("transaction") != "STAR-TREK-RISIK-TERMINAL-READBACK-V1":
+              raise SystemExit("Risik terminal readback transaction drifted")
+          if receipt.get("verdict") != "pass":
+              raise SystemExit("Risik terminal readback did not pass")
+          if receipt.get("canonical", {}).get("commit") != os.environ["EXPECTED_MAIN"]:
+              raise SystemExit("Risik terminal canonical commit drifted")
+          if receipt.get("canonical", {}).get("tree") != os.environ["EXPECTED_TREE"]:
+              raise SystemExit("Risik terminal canonical tree drifted")
+          artifact = receipt.get("artifact") or {}
+          if (
+              artifact.get("id") != int(os.environ["READBACK_ARTIFACT_ID"])
+              or artifact.get("digest") != os.environ["READBACK_ARTIFACT_DIGEST"]
+          ):
+              raise SystemExit("Risik terminal artifact custody drifted")
+          if receipt.get("queue") != {
+              "total": 2228,
+              "queued": 1795,
+              "resolved": 431,
+              "blocked": 0,
+              "rejected": 2,
+              "in_flight": 0,
+          }:
+              raise SystemExit("Risik terminal queue drifted")
+          next_doc = receipt.get("next") or {}
+          candidate = next_doc.get("candidate") or {}
+          if (
+              next_doc.get("phase") != "ready-for-one-cycle"
+              or next_doc.get("scope_id") != "star-trek"
+              or candidate.get("task_id") != os.environ["TASK_ID"]
+              or candidate.get("performer") != os.environ["EXPECTED_PERFORMER"]
+              or candidate.get("character") != os.environ["EXPECTED_CHARACTER"]
+              or candidate.get("source_fingerprint") != os.environ["EXPECTED_FINGERPRINT"]
+              or candidate.get("performance_modes") != ["physical-prosthetic"]
+          ):
+              raise SystemExit(f"Risik successor rail drifted: {next_doc}")
+          boundary = receipt.get("boundary") or {}
+          if (
+              boundary.get("exact_head_deployment_complete") is not True
+              or boundary.get("queue_closed") is not True
+              or boundary.get("originating_lease_completed") is not True
+              or boundary.get("additional_lease_issued") is not False
+              or boundary.get("successor_claimed") is not False
+              or boundary.get("canonical_mutation_by_readback") is not False
+          ):
+              raise SystemExit("Risik terminal boundary is not claimable")
+          PY
+
+          git checkout --detach refs/remotes/origin/main
+          git clean -fdx
+          npm ci --ignore-scripts
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate-before.log"
+          node scripts/thesis-rails.mjs next --json > "$OUT/rail-before.json"
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg fingerprint "$EXPECTED_FINGERPRINT" \
+            '.phase == "ready-for-one-cycle"
+             and .scope_id == "star-trek"
+             and .candidate.task_id == $task
+             and .candidate.performer == $performer
+             and .candidate.character == $character
+             and .candidate.source_fingerprint == $fingerprint
+             and .candidate.performance_modes == ["physical-prosthetic"]' \
+            "$OUT/rail-before.json" >/dev/null
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import os
+
+          state = json.loads(Path("data/AUTOPILOT.json").read_text())
+          trek = [row for row in state.get("jobs", []) if row.get("scope") == "star-trek"]
+          task = next((row for row in trek if row.get("id") == os.environ["TASK_ID"]), None)
+          active = [row for row in trek if row.get("status") in {"leased", "drafted", "merged"}]
+          counts = {
+              "total": len(trek),
+              "queued": sum(row.get("status") == "queued" for row in trek),
+              "resolved": sum(row.get("status") == "resolved" for row in trek),
+              "blocked": sum(row.get("status") == "blocked" for row in trek),
+              "rejected": sum(row.get("status") == "rejected" for row in trek),
+              "in_flight": len(active),
+          }
+          expected = {
+              "total": 2228,
+              "queued": 1795,
+              "resolved": 431,
+              "blocked": 0,
+              "rejected": 2,
+              "in_flight": 0,
+          }
+          if counts != expected:
+              raise SystemExit(f"pre-claim queue drifted: {counts}")
+          if active:
+              raise SystemExit(f"pre-claim active Star Trek work exists: {[row.get('id') for row in active]}")
+          if not task or task.get("status") != "queued" or task.get("attempts") != 0 or task.get("lease") is not None:
+              raise SystemExit(f"Henoch task is not pristine: {task}")
+          if (
+              task.get("performer") != os.environ["EXPECTED_PERFORMER"]
+              or task.get("character") != os.environ["EXPECTED_CHARACTER"]
+              or task.get("source_fingerprint") != os.environ["EXPECTED_FINGERPRINT"]
+              or task.get("performance_modes") != ["physical-prosthetic"]
+          ):
+              raise SystemExit(f"Henoch task identity drifted: {task}")
+          Path(os.environ["OUT"], "pre-claim-state.json").write_text(
+              json.dumps({"task": task, "counts": counts, "active": active}, indent=2) + "\n"
+          )
+          PY
+
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-before.json"
+          test "$(jq -r .commit.sha "$OUT/main-before.json")" = "$EXPECTED_MAIN"
+
+      - name: Issue exactly one repository-native Henoch lease
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm run autopilot -- next \
+            --agent luna \
+            --scope star-trek \
+            --capability-profile text-vision \
+            --limit 1 \
+            --out "$OUT/batch.json" \
+            --prompt "$OUT/AUTOPILOT-PROMPT.md" \
+            | tee "$OUT/autopilot-next.log"
+
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg performer "$EXPECTED_PERFORMER" \
+            --arg character "$EXPECTED_CHARACTER" \
+            --arg fingerprint "$EXPECTED_FINGERPRINT" \
+            '.tasks | length == 1
+             and .[0].id == $task
+             and .[0].performer == $performer
+             and .[0].character == $character
+             and .[0].source_fingerprint == $fingerprint
+             and .[0].performance_modes == ["physical-prosthetic"]' \
+            "$OUT/batch.json" >/dev/null
+
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+
+          out = Path(os.environ["OUT"])
+          state = json.loads(Path("data/AUTOPILOT.json").read_text())
+          batch = json.loads((out / "batch.json").read_text())
+          rail = json.loads((out / "rail-before.json").read_text())
+          before = json.loads((out / "pre-claim-state.json").read_text())
+          predecessor = json.loads((out / "risik-terminal-readback.json").read_text())
+          trek = [row for row in state.get("jobs", []) if row.get("scope") == "star-trek"]
+          task = next((row for row in trek if row.get("id") == os.environ["TASK_ID"]), None)
+          active = [row for row in trek if row.get("status") in {"leased", "drafted", "merged"}]
+          counts = {
+              "total": len(trek),
+              "queued": sum(row.get("status") == "queued" for row in trek),
+              "resolved": sum(row.get("status") == "resolved" for row in trek),
+              "blocked": sum(row.get("status") == "blocked" for row in trek),
+              "rejected": sum(row.get("status") == "rejected" for row in trek),
+              "in_flight": len(active),
+          }
+          expected = {
+              "total": 2228,
+              "queued": 1794,
+              "resolved": 431,
+              "blocked": 0,
+              "rejected": 2,
+              "in_flight": 1,
+          }
+          if counts != expected:
+              raise SystemExit(f"post-claim queue drifted: {counts}")
+          if len(active) != 1 or active[0].get("id") != os.environ["TASK_ID"]:
+              raise SystemExit(f"claim was not singular: {[row.get('id') for row in active]}")
+          lease = task.get("lease") if task else None
+          if not task or task.get("status") != "leased" or task.get("attempts") != 1 or not lease:
+              raise SystemExit(f"Henoch claim state drifted: {task}")
+          if lease.get("id") != batch.get("lease_id"):
+              raise SystemExit("Henoch lease differs from native batch")
+          if (
+              task.get("performer") != os.environ["EXPECTED_PERFORMER"]
+              or task.get("character") != os.environ["EXPECTED_CHARACTER"]
+              or task.get("source_fingerprint") != os.environ["EXPECTED_FINGERPRINT"]
+              or task.get("performance_modes") != ["physical-prosthetic"]
+          ):
+              raise SystemExit("claimed Henoch identity drifted")
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          receipt = {
+              "version": 1,
+              "transaction": "STAR-TREK-HENOCH-CLAIM-V1",
+              "generated_at": datetime.now(timezone.utc)
+                  .replace(microsecond=0)
+                  .isoformat()
+                  .replace("+00:00", "Z"),
+              "canonical_parent": os.environ["EXPECTED_MAIN"],
+              "canonical_tree": os.environ["EXPECTED_TREE"],
+              "predecessor": {
+                  "transaction": predecessor["transaction"],
+                  "verdict": predecessor["verdict"],
+                  "branch": os.environ["READBACK_BRANCH"],
+                  "commit": os.environ["READBACK_COMMIT"],
+                  "attestation_sha256": os.environ["READBACK_ATTESTATION_SHA"],
+                  "canonical_commit": predecessor["canonical"]["commit"],
+                  "reviewed_cycle_id": predecessor["reviewed_cycle_id"],
+              },
+              "rail": rail,
+              "task": {
+                  "id": task["id"],
+                  "performer": task["performer"],
+                  "character": task["character"],
+                  "source_fingerprint": task["source_fingerprint"],
+                  "performance_modes": task.get("performance_modes") or [],
+                  "status": task["status"],
+                  "attempts": task["attempts"],
+              },
+              "lease": lease,
+              "queue": {
+                  "before": before["counts"],
+                  "after": counts,
+              },
+              "changed_paths": [
+                  "data/AUTOPILOT.json",
+                  "data/journal/autopilot.jsonl",
+              ],
+              "source_boundary": {
+                  "sources": (batch.get("tasks") or [{}])[0].get("sources") or [],
+                  "source_revision_frozen": False,
+                  "independent_source_review_complete": False,
+                  "performance_mode_adjudicated": False,
+                  "queued_mode_hint": task.get("performance_modes") or [],
+                  "maker_attribution": "unresolved",
+                  "transformation_measured": False,
+              },
+              "boundary": {
+                  "canonical_mutation": False,
+                  "product_staged": False,
+                  "additional_lease_issued": False,
+                  "only_active_star_trek_task": task["id"],
+                  "source_review_pending": True,
+                  "media_review_pending": True,
+                  "waterline_cycle_recorded": False,
+              },
+          }
+          body = json.dumps(stable(receipt), indent=2, ensure_ascii=False) + "\n"
+          receipt["receipt_sha256"] = hashlib.sha256(body.encode()).hexdigest()
+          path = Path(os.environ["RECEIPT_PATH"])
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(json.dumps(stable(receipt), indent=2, ensure_ascii=False) + "\n")
+          (out / "claim-receipt.json").write_text(path.read_text())
+          (out / "post-claim-state.json").write_text(
+              json.dumps({"task": task, "counts": counts, "active": active}, indent=2) + "\n"
+          )
+          PY
+
+          git diff --name-only "$EXPECTED_MAIN" | LC_ALL=C sort > "$OUT/changed-paths-before-receipt.txt"
+          printf '%s\n' data/AUTOPILOT.json data/journal/autopilot.jsonl | LC_ALL=C sort > "$OUT/expected-native-paths.txt"
+          diff -u "$OUT/expected-native-paths.txt" "$OUT/changed-paths-before-receipt.txt"
+          node scripts/validate.mjs | tee "$OUT/repository-validate.log"
+          node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate-after.log"
+          gh api "/repos/${GITHUB_REPOSITORY}/branches/main" > "$OUT/main-after-claim.json"
+          test "$(jq -r .commit.sha "$OUT/main-after-claim.json")" = "$EXPECTED_MAIN"
+
+      - name: Upload Henoch claim evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-henoch-claim-v1
+          path: /tmp/star-trek-henoch-claim-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable Henoch claim result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          path = Path(os.environ["RECEIPT_PATH"])
+          receipt = json.loads(path.read_text())
+          receipt.pop("receipt_sha256", None)
+          receipt["artifact"] = {
+              "id": int(os.environ["ARTIFACT_ID"]),
+              "digest": os.environ["ARTIFACT_DIGEST"],
+          }
+          body = json.dumps(stable(receipt), indent=2, ensure_ascii=False) + "\n"
+          receipt["receipt_sha256"] = hashlib.sha256(body.encode()).hexdigest()
+          path.write_text(json.dumps(stable(receipt), indent=2, ensure_ascii=False) + "\n")
+          Path(os.environ["OUT"], "published-claim-receipt.json").write_text(path.read_text())
+          PY
+
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git add data/AUTOPILOT.json data/journal/autopilot.jsonl "$RECEIPT_PATH"
+          git diff --cached --check
+          git diff --cached --name-only | LC_ALL=C sort > "$OUT/published-paths.txt"
+          printf '%s\n' data/AUTOPILOT.json data/journal/autopilot.jsonl "$RECEIPT_PATH" | LC_ALL=C sort > "$OUT/expected-published-paths.txt"
+          diff -u "$OUT/expected-published-paths.txt" "$OUT/published-paths.txt"
+          git config user.name undercast-henoch-claim-v1
+          git config user.email undercast-henoch-claim-v1@users.noreply.github.com
+          git commit -m 'Star Trek: claim Henoch cycle v1'
+          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_MAIN"
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+          result_commit="$(git rev-parse HEAD)"
+          test "$(git ls-remote origin "refs/heads/${RESULT_BRANCH}" | awk '{print $1}')" = "$result_commit"
+          test "$(git ls-remote origin refs/heads/main | awk '{print $1}')" = "$EXPECTED_MAIN"
+          git show "${result_commit}:${RECEIPT_PATH}" | jq -e \
+            --arg task "$TASK_ID" \
+            --argjson artifact "$ARTIFACT_ID" \
+            --arg digest "$ARTIFACT_DIGEST" \
+            '.transaction == "STAR-TREK-HENOCH-CLAIM-V1"
+             and .task.id == $task
+             and .task.status == "leased"
+             and .queue.after == {total:2228,queued:1794,resolved:431,blocked:0,rejected:2,in_flight:1}
+             and .artifact == {id:$artifact,digest:$digest}
+             and .boundary.canonical_mutation == false
+             and .boundary.additional_lease_issued == false' >/dev/null
+
+          {
+            echo "### Henoch claim result published"
+            echo
+            echo "- Result branch: \`$RESULT_BRANCH\`"
+            echo "- Result commit: \`$result_commit\`"
+            echo "- Result tree: \`$(git show -s --format=%T "$result_commit")\`"
+            echo "- Canonical main: \`$EXPECTED_MAIN\`"
+            echo "- Task: \`$TASK_ID\`"
+          } >> "$GITHUB_STEP_SUMMARY"
