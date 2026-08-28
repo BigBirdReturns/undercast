@@ -1,0 +1,196 @@
+name: star-trek-risik-terminal-readback-recovery-v3
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-terminal-readback-recovery-v3
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-risik-terminal-readback-recovery-v3
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 28ea3efc9f71d6207794d45cc654af765b36c63e
+  EXPECTED_TREE: 52fd54b4f8e5e42977b23cbccb75fb0e05f11a6c
+  SOURCE_COMMIT: 6ba0490bc42f8ef453ab77b597864f97b8d63a3e
+  SOURCE_TREE: bc9d490fb1609636af11d212111a19d183666c39
+  SOURCE_WORKFLOW_PATH: .github/workflows/star-trek-risik-terminal-readback-v1.yml
+  SOURCE_WORKFLOW_BLOB: 95d0f70fce6bbe11b0eac9d8a866ed0183f7365b
+  FIRST_FAILED_RUN_ID: "33136544420"
+  SECOND_FAILED_RUN_ID: "33136868775"
+  THIRD_FAILED_RUN_ID: "33137266918"
+  HISTORICAL_FIXTURE_COMMIT: efdce8dec82fb803fd165d7af0c1a6c77e3eecb8
+  RECOVERY_OUT: /tmp/star-trek-risik-terminal-readback-recovery-v3
+  OUT: /tmp/star-trek-risik-terminal-readback-v1
+
+jobs:
+  verify:
+    name: recover-and-independently-read-back-terminal-risik-cycle
+    if: ${{ github.event.head_commit.message == 'Read back terminal Star Trek Risik cycle v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Reconstruct exact readback and repair transport-only history predicates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$RECOVERY_OUT"
+          mkdir -p "$RECOVERY_OUT"
+
+          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%s HEAD)" = "Read back terminal Star Trek Risik cycle v1"
+          git diff --name-only "$EXPECTED_MAIN" HEAD | LC_ALL=C sort > "$RECOVERY_OUT/carrier-paths.txt"
+          printf '%s\n' .github/workflows/star-trek-risik-terminal-readback-recovery-v3.yml > "$RECOVERY_OUT/expected-carrier-paths.txt"
+          diff -u "$RECOVERY_OUT/expected-carrier-paths.txt" "$RECOVERY_OUT/carrier-paths.txt"
+
+          git fetch --no-tags --depth=1 origin "$SOURCE_COMMIT"
+          test "$(git show -s --format=%T "$SOURCE_COMMIT")" = "$SOURCE_TREE"
+          test "$(git rev-parse "$SOURCE_COMMIT:$SOURCE_WORKFLOW_PATH")" = "$SOURCE_WORKFLOW_BLOB"
+          git show "$SOURCE_COMMIT:$SOURCE_WORKFLOW_PATH" > "$RECOVERY_OUT/source-workflow.yml"
+
+          export RECOVERY_OUT
+          ruby <<'RUBY'
+          require "yaml"
+
+          output = ENV.fetch("RECOVERY_OUT")
+          source = File.join(output, "source-workflow.yml")
+          document = YAML.load_file(source)
+          File.open(ENV.fetch("GITHUB_ENV"), "a") do |file|
+            document.fetch("env").each { |key, value| file.puts("#{key}=#{value}") }
+          end
+
+          steps = document.fetch("jobs").fetch("verify").fetch("steps")
+          names = {
+            "Freeze exact canonical and publication custody" => "freeze.sh",
+            "Independently verify terminal product state" => "product.sh",
+            "Run independent canonical gates and reproduce successor rail" => "gates.sh",
+            "Write terminal readback attestation" => "attest.sh",
+            "Publish immutable terminal readback result" => "publish.sh",
+          }
+          scripts = {}
+          steps.each do |step|
+            name = step["name"]
+            scripts[name] = step.fetch("run") if names.key?(name)
+          end
+          abort("readback source step set drifted: #{scripts.keys}") unless scripts.keys.sort == names.keys.sort
+
+          freeze = scripts.fetch("Freeze exact canonical and publication custody")
+          old_parent = <<~'BASH'.strip
+            test "$(git show -s --format=%P HEAD)" = "$PRIOR_CARRIER_COMMIT"
+            test "$(git show -s --format=%P "$PRIOR_CARRIER_COMMIT")" = "$EXPECTED_MAIN"
+          BASH
+          new_parent = <<~'BASH'.strip
+            test "$(git show -s --format=%P HEAD)" = "$EXPECTED_MAIN"
+            test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          BASH
+          abort("readback parent anchor drifted") unless freeze.scan(old_parent).length == 1
+          freeze = freeze.sub(old_parent, new_parent)
+
+          old_path = "printf '%s\\n' .github/workflows/star-trek-risik-terminal-readback-v1.yml > \"$OUT/expected-carrier-paths.txt\""
+          new_path = "printf '%s\\n' .github/workflows/star-trek-risik-terminal-readback-recovery-v3.yml > \"$OUT/expected-carrier-paths.txt\""
+          abort("readback carrier-path anchor drifted") unless freeze.scan(old_path).length == 1
+          freeze = freeze.sub(old_path, new_path)
+
+          failed_anchor = 'test "$(jq -r .conclusion "$OUT/prior-readback-run.json")" = failure'
+          second_failed = <<~'BASH'.strip
+            test "$(jq -r .conclusion "$OUT/prior-readback-run.json")" = failure
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${SECOND_FAILED_RUN_ID}" > "$OUT/second-readback-run.json"
+            test "$(jq -r .status "$OUT/second-readback-run.json")" = completed
+            test "$(jq -r .conclusion "$OUT/second-readback-run.json")" = failure
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${THIRD_FAILED_RUN_ID}" > "$OUT/third-readback-run.json"
+            test "$(jq -r .status "$OUT/third-readback-run.json")" = completed
+            test "$(jq -r .conclusion "$OUT/third-readback-run.json")" = failure
+          BASH
+          abort("first failed-run anchor drifted") unless freeze.scan(failed_anchor).length == 1
+          freeze = freeze.sub(failed_anchor, second_failed)
+          scripts["Freeze exact canonical and publication custody"] = freeze
+
+          gates = scripts.fetch("Run independent canonical gates and reproduce successor rail")
+          fixture_anchor = 'npm run autopilot:fixtures | tee "$OUT/autopilot-fixtures.log"'
+          history = <<~'BASH'.strip
+            if test "$(git rev-parse --is-shallow-repository)" = true; then
+              git fetch --no-tags --unshallow origin main
+            else
+              git fetch --no-tags origin main
+            fi
+            git cat-file -e "${HISTORICAL_FIXTURE_COMMIT}^{commit}"
+            npm run autopilot:fixtures | tee "$OUT/autopilot-fixtures.log"
+          BASH
+          abort("fixture anchor drifted") unless gates.scan(fixture_anchor).length == 1
+          gates = gates.sub(fixture_anchor, history)
+          scripts["Run independent canonical gates and reproduce successor rail"] = gates
+
+          publish = scripts.fetch("Publish immutable terminal readback result")
+          cleanup_anchor = 'git rm -rf .'
+          cleanup_repair = 'git rm -rf . 2>/dev/null || true'
+          abort("orphan cleanup anchor drifted") unless publish.scan(cleanup_anchor).length == 1
+          publish = publish.sub(cleanup_anchor, cleanup_repair)
+          scripts["Publish immutable terminal readback result"] = publish
+
+          names.each do |name, filename|
+            path = File.join(output, filename)
+            File.write(path, "#!/usr/bin/env bash\n" + scripts.fetch(name) + "\n")
+            File.chmod(0755, path)
+          end
+          RUBY
+
+          for script in "$RECOVERY_OUT"/{freeze,product,gates,attest,publish}.sh; do
+            bash -n "$script"
+          done
+          grep -F 'star-trek-risik-terminal-readback-recovery-v3.yml' "$RECOVERY_OUT/freeze.sh" >/dev/null
+          grep -F 'SECOND_FAILED_RUN_ID' "$RECOVERY_OUT/freeze.sh" >/dev/null
+          grep -F 'THIRD_FAILED_RUN_ID' "$RECOVERY_OUT/freeze.sh" >/dev/null
+          grep -F 'git fetch --no-tags --unshallow origin main' "$RECOVERY_OUT/gates.sh" >/dev/null
+          grep -F 'HISTORICAL_FIXTURE_COMMIT' "$RECOVERY_OUT/gates.sh" >/dev/null
+          grep -F 'git rm -rf . 2>/dev/null || true' "$RECOVERY_OUT/publish.sh" >/dev/null
+          sha256sum "$RECOVERY_OUT"/{source-workflow.yml,freeze.sh,product.sh,gates.sh,attest.sh,publish.sh} > "$RECOVERY_OUT/reconstructed-program.sha256"
+
+      - name: Freeze exact canonical and publication custody
+        shell: bash
+        run: bash "$RECOVERY_OUT/freeze.sh"
+
+      - name: Independently verify terminal product state
+        shell: bash
+        run: bash "$RECOVERY_OUT/product.sh"
+
+      - name: Run independent canonical gates and reproduce successor rail
+        shell: bash
+        run: bash "$RECOVERY_OUT/gates.sh"
+
+      - name: Write terminal readback attestation
+        shell: bash
+        run: bash "$RECOVERY_OUT/attest.sh"
+
+      - name: Upload terminal readback evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-risik-terminal-readback-v1
+          path: |
+            /tmp/star-trek-risik-terminal-readback-v1/
+            /tmp/star-trek-risik-terminal-readback-recovery-v3/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable terminal readback result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: bash "$RECOVERY_OUT/publish.sh"
