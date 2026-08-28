@@ -1,0 +1,87 @@
+name: star-trek-henoch-stage-runtime-inspect-v3
+
+on:
+  push:
+    branches:
+      - agent/star-trek-henoch-stage-recovery-v1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: star-trek-henoch-stage-runtime-inspect-v3
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    name: recover-partial-sealed-henoch-stage-runtime
+    if: ${{ github.event.head_commit.message == 'Recover partial sealed Henoch stage runtime v3' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Fetch and recover every intact runtime member
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root=.github/recovery/star-trek-henoch-stage-recovery-v1
+          out=/tmp/star-trek-henoch-stage-runtime-inspect-v3
+          rm -rf "$out"
+          mkdir -p "$out/runtime"
+          : > "$out/runtime.tar.gz.b64"
+
+          for part in 00 01 02; do
+            path="$root/runtime.tar.gz.b64.part${part}"
+            gh api "/repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${GITHUB_SHA}" --jq .content \
+              | tr -d '\n' \
+              | base64 -d \
+              >> "$out/runtime.tar.gz.b64"
+          done
+
+          tr -d '\n' < "$out/runtime.tar.gz.b64" | base64 -d > "$out/runtime.tar.gz"
+          wc -c "$out/runtime.tar.gz.b64" "$out/runtime.tar.gz" | tee "$out/runtime-sizes.txt"
+          sha256sum "$out/runtime.tar.gz.b64" "$out/runtime.tar.gz" | tee "$out/runtime-hashes.txt"
+
+          set +e
+          gzip -t "$out/runtime.tar.gz" > "$out/gzip-test.log" 2>&1
+          gzip_rc=$?
+          tar -tzvf "$out/runtime.tar.gz" > "$out/archive-list.txt" 2> "$out/archive-list.stderr"
+          list_rc=$?
+          tar -xzf "$out/runtime.tar.gz" -C "$out/runtime" > "$out/extract.stdout" 2> "$out/extract.stderr"
+          extract_rc=$?
+          set -e
+
+          jq -n \
+            --argjson gzip_rc "$gzip_rc" \
+            --argjson list_rc "$list_rc" \
+            --argjson extract_rc "$extract_rc" \
+            '{gzip_test_exit:$gzip_rc,tar_list_exit:$list_rc,tar_extract_exit:$extract_rc}' \
+            > "$out/recovery-status.json"
+
+          find "$out/runtime" -type f -printf '%P\n' | LC_ALL=C sort | tee "$out/runtime-files.txt"
+          find "$out/runtime" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$out/recovered-files.sha256"
+
+          if test -f "$out/runtime/batch.json"; then
+            jq . "$out/runtime/batch.json" > "$out/batch.pretty.json"
+          fi
+          if test -f "$out/runtime/candidate-lifecycle.py"; then
+            python3 -m py_compile "$out/runtime/candidate-lifecycle.py"
+            rm -rf "$out/runtime/__pycache__"
+          fi
+          if test -f "$out/runtime/census-refresh.sh"; then
+            bash -n "$out/runtime/census-refresh.sh"
+          fi
+
+          cat "$out/recovery-status.json"
+          cat "$out/runtime-files.txt"
+
+      - name: Upload partial-runtime recovery
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-henoch-stage-runtime-inspect-v3
+          path: /tmp/star-trek-henoch-stage-runtime-inspect-v3/
+          if-no-files-found: error
+          retention-days: 30
