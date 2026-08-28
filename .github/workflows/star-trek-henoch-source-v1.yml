@@ -1,0 +1,319 @@
+name: star-trek-henoch-source-v1
+
+on:
+  push:
+    branches:
+      - agent/star-trek-henoch-source-v1
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-henoch-source-v1
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 28ea3efc9f71d6207794d45cc654af765b36c63e
+  EXPECTED_TREE: 52fd54b4f8e5e42977b23cbccb75fb0e05f11a6c
+  EXPECTED_MESSAGE: "Star Trek: publish Risik cycle"
+  CLAIM_BRANCH: agent/star-trek-henoch-claim-result-v1
+  CLAIM_COMMIT: d1039f1e3cb263d7be47b63cba05eca9f0cf24b8
+  CLAIM_TREE: affc7614a284b8b8acfdeb8b14871fdd135a6f46
+  CLAIM_RECEIPT_SHA: 3f86f82e287de56e401dd754b846fab4e0d60618931e24e129885e689fc44b05
+  CLAIM_ARTIFACT_ID: "9674193910"
+  CLAIM_ARTIFACT_DIGEST: 2d260a705592e93936b875420e7de22fc1a37e4f28bc75795f94187e396bbf34
+  EXPECTED_LEASE: lease_7495c4d823c439f1ae201c13
+  TASK_ID: ap_3d10b7a97efdbdd11c50bc2a
+  EXPECTED_PERFORMER: Leonard Nimoy
+  EXPECTED_CHARACTER: Henoch
+  EXPECTED_FINGERPRINT: 53b562ce31db6635c5398b4dbcd9c391aacf8e1997a49e2ac103854afb18e839
+  RESULT_BRANCH: agent/star-trek-henoch-source-result-v1
+  FREEZER_SOURCE: .github/recovery/star-trek-henoch-source-v1/freeze.py
+  FREEZER_SHA256: 05e2904e8bcdb13f38c42989fa2632500f1e545e29fc7583bca20a6fdebdc8f4
+  FREEZER: /tmp/star-trek-henoch-source-v1.py
+  WORK: /tmp/star-trek-henoch-claim-worktree-v1
+  OUT: /tmp/star-trek-henoch-source-v1
+
+jobs:
+  freeze:
+    name: freeze-exact-henoch-source-revision
+    if: ${{ github.event.head_commit.message == 'Freeze claimed Star Trek Henoch source v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify claim custody and freeze one exact source revision
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$OUT" "$WORK" "$FREEZER"
+          mkdir -p "$OUT"
+
+          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          test "$(git show -s --format=%s HEAD)" = "Freeze claimed Star Trek Henoch source v1"
+          git diff --name-only "$EXPECTED_MAIN" HEAD | LC_ALL=C sort > "$OUT/carrier-paths.txt"
+          printf '%s\n' \
+            .github/recovery/star-trek-henoch-source-v1/freeze.py \
+            .github/workflows/star-trek-henoch-source-v1.yml \
+            | LC_ALL=C sort > "$OUT/expected-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/carrier-paths.txt"
+
+          test "$(sha256sum "$FREEZER_SOURCE" | awk '{print $1}')" = "$FREEZER_SHA256"
+          cp "$FREEZER_SOURCE" "$FREEZER"
+          chmod +x "$FREEZER"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          path = Path(os.environ["FREEZER"])
+          compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          PY
+
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+          git fetch --no-tags --depth=2 origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/${CLAIM_BRANCH}:refs/remotes/origin/${CLAIM_BRANCH}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          test "$(git show -s --format=%s "$EXPECTED_MAIN")" = "$EXPECTED_MESSAGE"
+          test "$(git rev-parse "refs/remotes/origin/${CLAIM_BRANCH}")" = "$CLAIM_COMMIT"
+          test "$(git show -s --format=%T "$CLAIM_COMMIT")" = "$CLAIM_TREE"
+          test "$(git show -s --format=%P "$CLAIM_COMMIT")" = "$EXPECTED_MAIN"
+
+          git show "refs/remotes/origin/${CLAIM_BRANCH}:data/review/adapter-sdk/star-trek-henoch-claim.json" \
+            > "$OUT/claim-receipt.json"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+
+          def stable(value):
+              if isinstance(value, dict):
+                  return {key: stable(value[key]) for key in sorted(value)}
+              if isinstance(value, list):
+                  return [stable(item) for item in value]
+              return value
+
+          path = Path(os.environ["OUT"]) / "claim-receipt.json"
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          identity = receipt.get("receipt_sha256")
+          body = dict(receipt)
+          body.pop("receipt_sha256", None)
+          actual = hashlib.sha256(
+              (json.dumps(stable(body), indent=2, ensure_ascii=False) + "\n").encode()
+          ).hexdigest()
+          expected_after = {
+              "total": 2228,
+              "queued": 1794,
+              "resolved": 431,
+              "blocked": 0,
+              "rejected": 2,
+              "in_flight": 1,
+          }
+          if identity != os.environ["CLAIM_RECEIPT_SHA"] or actual != identity:
+              raise SystemExit(f"Henoch claim identity drifted: {identity} / {actual}")
+          artifact = receipt.get("artifact") or {}
+          if (
+              receipt.get("transaction") != "STAR-TREK-HENOCH-CLAIM-V1"
+              or receipt.get("canonical_parent") != os.environ["EXPECTED_MAIN"]
+              or receipt.get("canonical_tree") != os.environ["EXPECTED_TREE"]
+              or receipt.get("task", {}).get("id") != os.environ["TASK_ID"]
+              or receipt.get("task", {}).get("performer") != os.environ["EXPECTED_PERFORMER"]
+              or receipt.get("task", {}).get("character") != os.environ["EXPECTED_CHARACTER"]
+              or receipt.get("task", {}).get("source_fingerprint")
+                 != os.environ["EXPECTED_FINGERPRINT"]
+              or receipt.get("task", {}).get("performance_modes")
+                 != ["physical-prosthetic"]
+              or receipt.get("task", {}).get("status") != "leased"
+              or receipt.get("task", {}).get("attempts") != 1
+              or receipt.get("lease", {}).get("id") != os.environ["EXPECTED_LEASE"]
+              or receipt.get("queue", {}).get("after") != expected_after
+              or artifact.get("id") != int(os.environ["CLAIM_ARTIFACT_ID"])
+              or artifact.get("digest") != os.environ["CLAIM_ARTIFACT_DIGEST"]
+              or receipt.get("boundary", {}).get("canonical_mutation") is not False
+              or receipt.get("boundary", {}).get("additional_lease_issued") is not False
+          ):
+              raise SystemExit("Henoch claim custody drifted")
+          PY
+
+          git worktree add --detach "$WORK" "$CLAIM_COMMIT"
+          ROOT="$WORK" python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import os
+
+          root = Path(os.environ["ROOT"])
+          out = Path(os.environ["OUT"])
+          state = json.loads((root / "data/AUTOPILOT.json").read_text(encoding="utf-8"))
+          trek = [row for row in state.get("jobs", []) if row.get("scope") == "star-trek"]
+          task = next((row for row in trek if row.get("id") == os.environ["TASK_ID"]), None)
+          active = [
+              row for row in trek
+              if row.get("status") in {"leased", "drafted", "merged"}
+          ]
+          counts = {
+              "total": len(trek),
+              "queued": sum(row.get("status") == "queued" for row in trek),
+              "resolved": sum(row.get("status") == "resolved" for row in trek),
+              "blocked": sum(row.get("status") == "blocked" for row in trek),
+              "rejected": sum(row.get("status") == "rejected" for row in trek),
+              "in_flight": len(active),
+          }
+          expected = {
+              "total": 2228,
+              "queued": 1794,
+              "resolved": 431,
+              "blocked": 0,
+              "rejected": 2,
+              "in_flight": 1,
+          }
+          lease = (task or {}).get("lease") or {}
+          if counts != expected:
+              raise SystemExit(f"Henoch claim queue drifted: {counts}")
+          if (
+              len(active) != 1
+              or active[0].get("id") != os.environ["TASK_ID"]
+              or not task
+              or task.get("status") != "leased"
+              or task.get("attempts") != 1
+              or lease.get("id") != os.environ["EXPECTED_LEASE"]
+              or task.get("performer") != os.environ["EXPECTED_PERFORMER"]
+              or task.get("character") != os.environ["EXPECTED_CHARACTER"]
+              or task.get("source_fingerprint") != os.environ["EXPECTED_FINGERPRINT"]
+              or task.get("performance_modes") != ["physical-prosthetic"]
+          ):
+              raise SystemExit(f"Henoch durable lease custody drifted: {task}")
+          (out / "claim-task-state.json").write_text(
+              json.dumps(
+                  {"task": task, "counts": counts, "active": active},
+                  indent=2,
+                  ensure_ascii=False,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          python3 "$FREEZER"
+
+          jq -e \
+            --arg task "$TASK_ID" \
+            --arg lease "$EXPECTED_LEASE" \
+            '.transaction == "STAR-TREK-HENOCH-SOURCE-PROBE-V1"
+             and .status == "source-frozen-pending-independent-review"
+             and .canonical_parent == env.EXPECTED_MAIN
+             and .canonical_tree == env.EXPECTED_TREE
+             and .claim.commit == env.CLAIM_COMMIT
+             and .claim.receipt_sha256 == env.CLAIM_RECEIPT_SHA
+             and .claim.lease_id == $lease
+             and .task.id == $task
+             and .task.status == "leased"
+             and .task.attempts == 1
+             and .task.performance_modes == ["physical-prosthetic"]
+             and .source_discovery.title == "Henoch"
+             and .source_revision.title == "Henoch"
+             and .source_discovery.pageid == .source_revision.pageid
+             and .source_discovery.revision == .source_revision.revision
+             and .source_discovery.content_sha256 == .source_revision.content_sha256
+             and (.source_revision.pageid | type) == "number"
+             and (.source_revision.revision | type) == "number"
+             and (.source_revision.content_sha256 | length) == 64
+             and (.attribution_markers.performer | length) > 0
+             and (.attribution_markers.identity | length) > 0
+             and .provisional_adjudication.performance_mode
+                 == "pending-independent-review"
+             and .boundary.source_revision_frozen == true
+             and .boundary.discovery_and_exact_revision_agree == true
+             and .boundary.independent_source_review_complete == false
+             and .boundary.canonical_mutation == false
+             and .boundary.lease_mutation == false
+             and .boundary.additional_lease_issued == false
+             and .boundary.product_staged == false
+             and .boundary.media_review_complete == false
+             and .boundary.waterline_cycle_recorded == false' \
+            "$OUT/source-probe.json" >/dev/null
+
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)" = "$EXPECTED_MAIN"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 \
+            | LC_ALL=C sort -z \
+            | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          sha256sum -c "$OUT/manifest.sha256"
+
+      - name: Upload Henoch source evidence
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-henoch-source-v1
+          path: /tmp/star-trek-henoch-source-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish immutable Henoch source result
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -Eeuo pipefail
+          jq \
+            --argjson id "$ARTIFACT_ID" \
+            --arg digest "$ARTIFACT_DIGEST" \
+            '.artifact={id:$id,digest:$digest}' \
+            "$OUT/source-probe.json" > "$OUT/source.tmp"
+          mv "$OUT/source.tmp" "$OUT/source-probe.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 \
+            | LC_ALL=C sort -z \
+            | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          sha256sum -c "$OUT/manifest.sha256"
+
+          test "$(git ls-remote origin refs/heads/main | awk '{print $1}')" = "$EXPECTED_MAIN"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          git config user.name undercast-henoch-source-v1
+          git config user.email undercast-henoch-source-v1@users.noreply.github.com
+          git checkout --orphan henoch-source-result-v1
+          git rm -rf -q . 2>/dev/null || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-henoch-source-v1
+          cp -a "$OUT"/. transport/star-trek-henoch-source-v1/
+          git add transport/star-trek-henoch-source-v1
+          test -z "$(git diff --cached --name-only | grep -Ev '^transport/star-trek-henoch-source-v1/' || true)"
+          git commit -m "Record Star Trek Henoch source v1"
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+          result_commit="$(git rev-parse HEAD)"
+          test "$(git ls-remote origin "refs/heads/${RESULT_BRANCH}" | awk '{print $1}')" = "$result_commit"
+          test -z "$(git show -s --format=%P "$result_commit")"
+          test "$(git show -s --format=%s "$result_commit")" = "Record Star Trek Henoch source v1"
+          test "$(git ls-remote origin refs/heads/main | awk '{print $1}')" = "$EXPECTED_MAIN"
+          git show "${result_commit}:transport/star-trek-henoch-source-v1/source-probe.json" \
+            | jq -e \
+                --argjson artifact "$ARTIFACT_ID" \
+                --arg digest "$ARTIFACT_DIGEST" \
+                '.transaction == "STAR-TREK-HENOCH-SOURCE-PROBE-V1"
+                 and .status == "source-frozen-pending-independent-review"
+                 and .artifact == {id:$artifact,digest:$digest}
+                 and .boundary.source_revision_frozen == true
+                 and .boundary.canonical_mutation == false
+                 and .boundary.lease_mutation == false' >/dev/null
+          test -z "$(git ls-tree -r --name-only "$result_commit" \
+            | grep -Ev '^transport/star-trek-henoch-source-v1/' || true)"
+
+          {
+            echo "### Henoch source revision frozen"
+            echo
+            echo "- Result branch: \`$RESULT_BRANCH\`"
+            echo "- Result commit: \`$result_commit\`"
+            echo "- Result tree: \`$(git show -s --format=%T "$result_commit")\`"
+            echo "- Canonical main: \`$EXPECTED_MAIN\`"
+            echo "- Task: \`$TASK_ID\`"
+            echo "- Lease: \`$EXPECTED_LEASE\`"
+          } >> "$GITHUB_STEP_SUMMARY"
