@@ -46,6 +46,9 @@ env:
   NEXT_FINGERPRINT: 53b562ce31db6635c5398b4dbcd9c391aacf8e1997a49e2ac103854afb18e839
   NEXT_PRIORITY: "1320"
   RESULT_BRANCH: agent/star-trek-risik-terminal-readback-result-v1
+  PRIOR_CARRIER_COMMIT: 25bd1060de679b551300cf02c6bf944f6e102dc8
+  PRIOR_FAILED_RUN_ID: "33136544420"
+  HISTORICAL_FIXTURE_COMMIT: efdce8dec82fb803fd165d7af0c1a6c77e3eecb8
   OUT: /tmp/star-trek-risik-terminal-readback-v1
 
 jobs:
@@ -74,8 +77,13 @@ jobs:
           rm -rf "$OUT"
           mkdir -p "$OUT"
 
-          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%P HEAD)" = "$PRIOR_CARRIER_COMMIT"
+          test "$(git show -s --format=%P "$PRIOR_CARRIER_COMMIT")" = "$EXPECTED_MAIN"
           test "$(git show -s --format=%s HEAD)" = "Read back terminal Star Trek Risik cycle v1"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${PRIOR_FAILED_RUN_ID}" > "$OUT/prior-readback-run.json"
+          test "$(jq -r .status "$OUT/prior-readback-run.json")" = completed
+          test "$(jq -r .conclusion "$OUT/prior-readback-run.json")" = failure
           git diff --name-only "$EXPECTED_MAIN" HEAD | LC_ALL=C sort > "$OUT/carrier-paths.txt"
           printf '%s\n' .github/workflows/star-trek-risik-terminal-readback-v1.yml > "$OUT/expected-carrier-paths.txt"
           diff -u "$OUT/expected-carrier-paths.txt" "$OUT/carrier-paths.txt"
@@ -427,6 +435,13 @@ jobs:
           npm run media:audit -- gate --scope star-trek | tee "$OUT/media-gate.log"
           node scripts/waterline.mjs validate | tee "$OUT/waterline-validate.log"
           node scripts/thesis-rails.mjs validate | tee "$OUT/thesis-validate.log"
+
+          if test "$(git rev-parse --is-shallow-repository)" = true; then
+            git fetch --no-tags --unshallow origin main
+          else
+            git fetch --no-tags origin main
+          fi
+          git cat-file -e "${HISTORICAL_FIXTURE_COMMIT}^{commit}"
           npm run autopilot:fixtures | tee "$OUT/autopilot-fixtures.log"
           node scripts/thesis-rails.mjs next --json > "$OUT/next-readback.json"
 
