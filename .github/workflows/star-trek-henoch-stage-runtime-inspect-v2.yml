@@ -1,0 +1,81 @@
+name: star-trek-henoch-stage-runtime-inspect-v2
+
+on:
+  push:
+    branches:
+      - agent/star-trek-henoch-stage-recovery-v1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: star-trek-henoch-stage-runtime-inspect-v2
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    name: inspect-sealed-henoch-stage-runtime-without-checkout
+    if: ${{ github.event.head_commit.message == 'Inspect sealed Henoch stage runtime v2' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Fetch, reconstruct, and inspect the sealed runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root=.github/recovery/star-trek-henoch-stage-recovery-v1
+          out=/tmp/star-trek-henoch-stage-runtime-inspect-v2
+          rm -rf "$out"
+          mkdir -p "$out/runtime"
+          : > "$out/runtime.tar.gz.b64"
+
+          for part in 00 01 02; do
+            path="$root/runtime.tar.gz.b64.part${part}"
+            gh api "/repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${GITHUB_SHA}" --jq .content \
+              | tr -d '\n' \
+              | base64 -d \
+              >> "$out/runtime.tar.gz.b64"
+          done
+
+          tr -d '\n' < "$out/runtime.tar.gz.b64" | base64 -d > "$out/runtime.tar.gz"
+          sha256sum "$out/runtime.tar.gz" | tee "$out/runtime.tar.gz.sha256"
+          tar -tzvf "$out/runtime.tar.gz" | tee "$out/archive-list.txt"
+          tar -xzf "$out/runtime.tar.gz" -C "$out/runtime"
+
+          find "$out/runtime" -type f -printf '%P\n' | LC_ALL=C sort | tee "$out/runtime-files.txt"
+          if test -f "$out/runtime/manifest.sha256"; then
+            (cd "$out/runtime" && sha256sum -c manifest.sha256) | tee "$out/manifest-check.txt"
+            cp "$out/runtime/manifest.sha256" "$out/runtime-manifest.sha256"
+          fi
+
+          if test -f "$out/runtime/batch.json"; then
+            jq . "$out/runtime/batch.json" | tee "$out/batch.json"
+          fi
+
+          if test -f "$out/runtime/candidate-lifecycle.py"; then
+            python3 -m py_compile "$out/runtime/candidate-lifecycle.py"
+            rm -rf "$out/runtime/__pycache__"
+          fi
+
+          find "$out/runtime" -type f -name '*.sh' -print0 | while IFS= read -r -d '' script; do
+            bash -n "$script"
+          done
+
+          grep -RhoE '\$\{?[A-Z][A-Z0-9_]+\}?' "$out/runtime" \
+            | sed -E 's/^\$\{{0,1}//; s/\}$//' \
+            | LC_ALL=C sort -u \
+            | tee "$out/environment-symbols.txt"
+
+          grep -RInE 'RESULT_BRANCH|CANDIDATE_BRANCH|CLAIM_BRANCH|SOURCE_REVIEW|MEDIA_REVIEW|WALL_ID|EXPECTED_' "$out/runtime" \
+            | tee "$out/control-references.txt" || true
+
+      - name: Upload runtime inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-trek-henoch-stage-runtime-inspect-v2
+          path: /tmp/star-trek-henoch-stage-runtime-inspect-v2/
+          if-no-files-found: error
+          retention-days: 30
