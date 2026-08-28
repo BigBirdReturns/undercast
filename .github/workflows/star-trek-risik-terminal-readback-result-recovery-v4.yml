@@ -1,0 +1,225 @@
+name: star-trek-risik-terminal-readback-result-recovery-v4
+
+on:
+  push:
+    branches:
+      - agent/star-trek-risik-terminal-readback-result-recovery-v4
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: star-trek-risik-terminal-readback-result-recovery-v4
+  cancel-in-progress: false
+
+env:
+  EXPECTED_MAIN: 28ea3efc9f71d6207794d45cc654af765b36c63e
+  EXPECTED_TREE: 52fd54b4f8e5e42977b23cbccb75fb0e05f11a6c
+  FAILED_RUN_ID: "33137714578"
+  FAILED_HEAD: 92faa59196903f4a275debd80899281fd903c7c7
+  FAILED_BRANCH: agent/star-trek-risik-terminal-readback-recovery-v3
+  FAILED_WORKFLOW_PATH: .github/workflows/star-trek-risik-terminal-readback-recovery-v3.yml
+  ARTIFACT_ID: "9672705813"
+  ARTIFACT_DIGEST: 3284db5630fdd02924633ef8c86d4b1224a4744d070b0c386618f8503298a9fd
+  SOURCE_WORKFLOW_BLOB: 95d0f70fce6bbe11b0eac9d8a866ed0183f7365b
+  RESULT_BRANCH: agent/star-trek-risik-terminal-readback-result-v1
+  OUT: /tmp/star-trek-risik-terminal-readback-v1
+  PROGRAM_OUT: /tmp/star-trek-risik-terminal-readback-recovery-v3
+  RECOVERY: /tmp/star-trek-risik-terminal-readback-result-recovery-v4
+
+jobs:
+  publish:
+    name: verify-v3-custody-and-publish-terminal-risik-readback
+    if: ${{ github.event.head_commit.message == 'Recover terminal Star Trek Risik result publication v4' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Recover and publish the verified v3 terminal result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$RECOVERY" "$OUT" "$PROGRAM_OUT"
+          mkdir -p "$RECOVERY"
+
+          test "$(git show -s --format=%P HEAD)" = "$EXPECTED_MAIN"
+          test "$(git show -s --format=%T "$EXPECTED_MAIN")" = "$EXPECTED_TREE"
+          test "$(git show -s --format=%s HEAD)" = "Recover terminal Star Trek Risik result publication v4"
+          git diff --name-only "$EXPECTED_MAIN" HEAD | LC_ALL=C sort > "$RECOVERY/carrier-paths.txt"
+          printf '%s\n' .github/workflows/star-trek-risik-terminal-readback-result-recovery-v4.yml > "$RECOVERY/expected-carrier-paths.txt"
+          diff -u "$RECOVERY/expected-carrier-paths.txt" "$RECOVERY/carrier-paths.txt"
+
+          test "$(git ls-remote origin refs/heads/main | awk '{print $1}')" = "$EXPECTED_MAIN"
+          test "$(git ls-remote origin "refs/heads/${FAILED_BRANCH}" | awk '{print $1}')" = "$FAILED_HEAD"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${FAILED_RUN_ID}" > "$RECOVERY/failed-run.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${FAILED_RUN_ID}/jobs?filter=latest&per_page=100" > "$RECOVERY/failed-run-jobs.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" > "$RECOVERY/artifact.json"
+
+          jq -e \
+            --argjson run "$FAILED_RUN_ID" \
+            --arg head "$FAILED_HEAD" \
+            --arg branch "$FAILED_BRANCH" \
+            --arg path "$FAILED_WORKFLOW_PATH" \
+            '.id == $run
+             and .status == "completed"
+             and .conclusion == "failure"
+             and .event == "push"
+             and .head_sha == $head
+             and .head_branch == $branch
+             and .path == $path' \
+            "$RECOVERY/failed-run.json" >/dev/null
+
+          jq -e '
+            (.jobs | length) == 1
+            and .jobs[0].name == "recover-and-independently-read-back-terminal-risik-cycle"
+            and .jobs[0].status == "completed"
+            and .jobs[0].conclusion == "failure"
+            and ([.jobs[0].steps[] | select(.name == "Reconstruct exact readback and repair transport-only history predicates" and .conclusion == "success")] | length) == 1
+            and ([.jobs[0].steps[] | select(.name == "Freeze exact canonical and publication custody" and .conclusion == "success")] | length) == 1
+            and ([.jobs[0].steps[] | select(.name == "Independently verify terminal product state" and .conclusion == "success")] | length) == 1
+            and ([.jobs[0].steps[] | select(.name == "Run independent canonical gates and reproduce successor rail" and .conclusion == "success")] | length) == 1
+            and ([.jobs[0].steps[] | select(.name == "Write terminal readback attestation" and .conclusion == "success")] | length) == 1
+            and ([.jobs[0].steps[] | select(.name == "Upload terminal readback evidence" and .conclusion == "success")] | length) == 1
+            and ([.jobs[0].steps[] | select(.name == "Publish immutable terminal readback result" and .conclusion == "failure")] | length) == 1' \
+            "$RECOVERY/failed-run-jobs.json" >/dev/null
+
+          jq -e \
+            --argjson id "$ARTIFACT_ID" \
+            --argjson run "$FAILED_RUN_ID" \
+            '.id == $id
+             and .name == "star-trek-risik-terminal-readback-v1"
+             and .expired == false
+             and .workflow_run.id == $run' \
+            "$RECOVERY/artifact.json" >/dev/null
+          metadata_digest="$(jq -r '.digest // ""' "$RECOVERY/artifact.json")"
+          if test -n "$metadata_digest"; then
+            test "${metadata_digest#sha256:}" = "$ARTIFACT_DIGEST"
+          fi
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > "$RECOVERY/artifact.zip"
+          test "$(sha256sum "$RECOVERY/artifact.zip" | awk '{print $1}')" = "$ARTIFACT_DIGEST"
+          unzip -q "$RECOVERY/artifact.zip" -d /tmp
+
+          test -d "$OUT"
+          test -d "$PROGRAM_OUT"
+          sha256sum -c "$OUT/manifest.sha256"
+          sha256sum -c "$PROGRAM_OUT/reconstructed-program.sha256"
+          test "$(git hash-object "$PROGRAM_OUT/source-workflow.yml")" = "$SOURCE_WORKFLOW_BLOB"
+          for script in "$PROGRAM_OUT"/{freeze,product,gates,attest,publish}.sh; do
+            bash -n "$script"
+          done
+          grep -F 'git rm -rf . 2>/dev/null || true' "$PROGRAM_OUT/publish.sh" >/dev/null
+          grep -F 'git fetch --no-tags --unshallow origin main' "$PROGRAM_OUT/gates.sh" >/dev/null
+
+          jq -e \
+            --arg commit "$EXPECTED_MAIN" \
+            --arg tree "$EXPECTED_TREE" \
+            '.version == 1
+             and .transaction == "STAR-TREK-RISIK-TERMINAL-READBACK-V1"
+             and .verdict == "pass"
+             and .canonical.commit == $commit
+             and .canonical.tree == $tree
+             and .task.id == "ap_096624f177ae0c9f2e91836c"
+             and .task.performer == "Fred Tatasciore"
+             and .task.character == "Risik"
+             and .task.lease_id == "lease_5d07d02fd67ea40a4950b1dd"
+             and .task.wall_id == "UC-1399"
+             and .task.status == "resolved"
+             and .queue == {total:2228,queued:1795,resolved:431,blocked:0,rejected:2,in_flight:0}
+             and .reviewed_cycle_id == "cycle_208262c3f2dc4b499ef5f2f4"
+             and .pages.run_id == 33127952335
+             and .pages.deploy_job_id == 98710484501
+             and .pages.status == "completed"
+             and .pages.conclusion == "success"
+             and .pages.head_sha == $commit
+             and .next.phase == "ready-for-one-cycle"
+             and .next.scope_id == "star-trek"
+             and .next.candidate.task_id == "ap_3d10b7a97efdbdd11c50bc2a"
+             and .next.candidate.performer == "Leonard Nimoy"
+             and .next.candidate.character == "Henoch"
+             and .next.candidate.priority == 1320
+             and .next.candidate.source_fingerprint == "53b562ce31db6635c5398b4dbcd9c391aacf8e1997a49e2ac103854afb18e839"
+             and .boundary.exact_head_deployment_complete == true
+             and .boundary.queue_closed == true
+             and .boundary.originating_lease_completed == true
+             and .boundary.additional_lease_issued == false
+             and .boundary.successor_claimed == false
+             and .boundary.canonical_mutation_by_readback == false
+             and (has("artifact") | not)' \
+            "$OUT/terminal-readback.json" >/dev/null
+
+          jq -e \
+            --arg commit "$EXPECTED_MAIN" \
+            --arg tree "$EXPECTED_TREE" \
+            '.status == "published-and-deployed"
+             and .canonical.commit == $commit
+             and .canonical.tree == $tree
+             and .boundary.canonical_mutation_complete == true
+             and .boundary.exact_head_deployment_complete == true
+             and .boundary.originating_lease_completed == true
+             and .boundary.queue_closed == true
+             and .boundary.additional_lease_issued == false
+             and .boundary.successor_claimed == false' \
+            "$OUT/publication.json" >/dev/null
+
+          jq \
+            --argjson id "$ARTIFACT_ID" \
+            --arg digest "$ARTIFACT_DIGEST" \
+            '.artifact={id:$id,digest:$digest}' \
+            "$OUT/terminal-readback.json" > "$OUT/readback.tmp"
+          mv "$OUT/readback.tmp" "$OUT/terminal-readback.json"
+          find "$OUT" -type f ! -name manifest.sha256 -print0 \
+            | LC_ALL=C sort -z \
+            | xargs -0 sha256sum > "$OUT/manifest.sha256"
+          sha256sum -c "$OUT/manifest.sha256"
+
+          test "$(git ls-remote origin refs/heads/main | awk '{print $1}')" = "$EXPECTED_MAIN"
+          test -z "$(git ls-remote --heads origin "refs/heads/${RESULT_BRANCH}")"
+
+          git config user.name undercast-risik-terminal-readback-result-recovery-v4
+          git config user.email undercast-risik-terminal-readback-result-recovery-v4@users.noreply.github.com
+          git checkout --orphan risik-terminal-readback-result-v1
+          git rm -rf -q . 2>/dev/null || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p transport/star-trek-risik-terminal-readback-v1
+          cp -a "$OUT"/. transport/star-trek-risik-terminal-readback-v1/
+          git add transport/star-trek-risik-terminal-readback-v1
+          git -c core.whitespace=-blank-at-eof diff --cached --check
+          git commit -m "Record Star Trek Risik terminal readback v1"
+          git push origin "HEAD:refs/heads/${RESULT_BRANCH}"
+
+          result_commit="$(git rev-parse HEAD)"
+          test "$(git ls-remote origin "refs/heads/${RESULT_BRANCH}" | awk '{print $1}')" = "$result_commit"
+          test -z "$(git show -s --format=%P "$result_commit")"
+          test "$(git show -s --format=%s "$result_commit")" = "Record Star Trek Risik terminal readback v1"
+          test "$(git ls-remote origin refs/heads/main | awk '{print $1}')" = "$EXPECTED_MAIN"
+          git show "${result_commit}:transport/star-trek-risik-terminal-readback-v1/terminal-readback.json" \
+            | jq -e \
+                --arg commit "$EXPECTED_MAIN" \
+                --argjson artifact "$ARTIFACT_ID" \
+                --arg digest "$ARTIFACT_DIGEST" \
+                '.verdict == "pass"
+                 and .canonical.commit == $commit
+                 and .artifact == {id:$artifact,digest:$digest}
+                 and .boundary.successor_claimed == false' >/dev/null
+          test -z "$(git ls-tree -r --name-only "$result_commit" | grep -Ev '^transport/star-trek-risik-terminal-readback-v1/' || true)"
+
+          {
+            echo "### Terminal Risik readback result published"
+            echo
+            echo "- Result branch: \`$RESULT_BRANCH\`"
+            echo "- Result commit: \`$result_commit\`"
+            echo "- Result tree: \`$(git show -s --format=%T "$result_commit")\`"
+            echo "- Canonical main: \`$EXPECTED_MAIN\`"
+            echo "- Evidence artifact: \`$ARTIFACT_ID\`"
+            echo "- Artifact digest: \`$ARTIFACT_DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
