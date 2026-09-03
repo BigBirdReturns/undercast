@@ -23,6 +23,35 @@ function runGit(root, args, { allowFail = false } = {}) {
   return { status: result.status, stdout: String(result.stdout || "").trim(), stderr: String(result.stderr || "").trim() };
 }
 
+function assertFullTreeBaselineCustody(manifest, checkerSource, label) {
+  const match = checkerSource.match(/\bconst BASELINE_COMMIT = ["']([0-9a-f]{40})["'];/);
+  assert.ok(match, `${label} checker must declare one exact BASELINE_COMMIT`);
+  const entry = manifest.entries.find((candidate) => candidate.commit === match[1]);
+  assert.ok(entry, `${label} baseline ${match[1]} is missing from the operational restore Git-object manifest`);
+  assert.deepEqual(entry.paths, ["**"], `${label} baseline ${match[1]} must retain full-tree restore custody`);
+  return match[1];
+}
+
+const productionManifest = JSON.parse(await readFile(
+  new URL("../data/review/operational-restore-git-object-set.json", import.meta.url),
+  "utf8",
+));
+validateGitObjectManifest(productionManifest);
+const starTrekHistoryChecker = await readFile(new URL("./star-trek-history-composable.mjs", import.meta.url), "utf8");
+const starTrekBaseline = assertFullTreeBaselineCustody(productionManifest, starTrekHistoryChecker, "Star Trek history");
+assert.throws(() => assertFullTreeBaselineCustody({
+  ...productionManifest,
+  entries: productionManifest.entries.filter((entry) => entry.commit !== starTrekBaseline),
+}, starTrekHistoryChecker, "Star Trek history"), /missing from the operational restore Git-object manifest/);
+assert.throws(() => assertFullTreeBaselineCustody({
+  ...productionManifest,
+  entries: productionManifest.entries.map((entry) => (
+    entry.commit === starTrekBaseline
+      ? { ...entry, paths: ["scripts/star-trek-history-composable.mjs"] }
+      : entry
+  )),
+}, starTrekHistoryChecker, "Star Trek history"), /full-tree restore custody/);
+
 const root = await mkdtemp(path.join(tmpdir(), "undercast-operational-execute-fixtures-"));
 try {
   await mkdir(path.join(root, "data"), { recursive: true });
@@ -209,7 +238,7 @@ try {
     boundary: { ...receipt.boundary, source_history_restored: true },
   }), /source-history boundary|mutation boundary/);
   assert.equal(await readFile(path.join(root, "index.html"), "utf8"), "<!doctype html><title>restored</title>\n");
-  console.log("PASS — disposable verification index, bounded historical Git objects, exact target binding, source-history boundary, and executed receipt contract");
+  console.log("PASS — production historical baseline closure, disposable verification index, bounded historical Git objects, exact target binding, source-history boundary, and executed receipt contract");
 } finally {
   await rm(root, { recursive: true, force: true });
 }
