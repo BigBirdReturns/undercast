@@ -1,0 +1,497 @@
+name: operational-reliability-second-desk-review-704c966f-v2
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/operational-reliability-second-desk-review-704c966f.yml"
+
+permissions:
+  contents: read
+  actions: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: operational-reliability-second-desk-review-704c966f-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == 'BigBirdReturns/undercast'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ROOT: /tmp/operational-reliability-second-desk-704c966f
+      TARGET_ROOT: /tmp/operational-reliability-second-desk-704c966f/target
+      WORKFLOW_PATH: .github/workflows/operational-reliability-second-desk-review-704c966f.yml
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      TARGET_SHA: 704c966ff97a6f1d664c914238bbb632c6e40767
+      TARGET_TREE: 95211f65a56e013449682044bee482cb836326a5
+      TARGET_PARENT: f79ab4e39c1642039bd747207e161b1cbd6fb5db
+      BASELINE_SHA: 38116aaf55371fd267db4733bba17a5fcb39d9fd
+      BASELINE_TREE: 5421b9a2d0a9d63df148ab302040cd6f0baed332
+      BASELINE_PARENT_ONE: 472f1a1942a6f78ec2a6d3260cfe275c2b804e61
+      BASELINE_PARENT_TWO: 17ceda88e2c10c88a3276b4ee55a4f24b8c556ec
+      PRODUCER_RUN_ID: "33760105739"
+      PRODUCER_JOB_ID: "100664013494"
+      PUBLISHER_RUN_ID: "33760602429"
+      ARTIFACT_ID: "9895250410"
+      ARTIFACT_NAME: operational-reliability-evidence-33760105739-attempt-1
+      ARTIFACT_SHA256: b491cefb4c55fa546f074904642e4d03c2b72f1820253ea4bedfbf313293b8be
+      RESTORE_SHA256: e24ce7f353f8338a5851e10f9c43c670ae245999af3b12f8f1a08cb073e391d8
+      ROLLBACK_SHA256: 8531da35d01fc71a2c2f7c9a69a26afcbbd7c8af8e4abae621d7c5511b5d28f7
+      LEDGER_SHA256: 954b2dd29a8f10fdacb419efbcf1f4b24a62dca8b869a582bb16b4aa45082dc7
+      ISSUE_NUMBER: "971"
+
+    steps:
+      - name: Check out the exact review carrier
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind the carrier, immutable evidence, and producer ledger
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"/{artifact,metadata,output}
+
+          test "$GITHUB_REPOSITORY" = "BigBirdReturns/undercast"
+          test "$GITHUB_EVENT_NAME" = "pull_request"
+          test "$EVENT_BASE_SHA" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD)" = "$EVENT_HEAD_SHA"
+          test "$(git rev-parse HEAD^)" = "$TARGET_SHA"
+          test "$(git rev-list --count "$TARGET_SHA..$EVENT_HEAD_SHA")" = "1"
+          test "$(git diff --name-only "$TARGET_SHA...$EVENT_HEAD_SHA")" = "$WORKFLOW_PATH"
+          git diff --check "$TARGET_SHA...$EVENT_HEAD_SHA"
+
+          api="$ROOT/metadata"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" > "$api/pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" > "$api/main-start.json"
+          gh api "/repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA" > "$api/target.json"
+          gh api "/repos/$GITHUB_REPOSITORY/commits/$BASELINE_SHA" > "$api/baseline.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCER_RUN_ID" > "$api/producer-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCER_RUN_ID/jobs?per_page=100" > "$api/producer-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCER_RUN_ID/artifacts" > "$api/producer-artifacts.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$PUBLISHER_RUN_ID" > "$api/publisher-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$PUBLISHER_RUN_ID/jobs?per_page=100" > "$api/publisher-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER" > "$api/issue.json"
+
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --output "$ROOT/evidence.zip" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip"
+          test "$(sha256sum "$ROOT/evidence.zip" | awk '{print $1}')" = "$ARTIFACT_SHA256"
+
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import stat
+          import zipfile
+          from pathlib import Path, PurePosixPath
+
+          root = Path(os.environ["ROOT"])
+          metadata = root / "metadata"
+          artifact_root = root / "artifact"
+          expected_members = {
+              "selection.json",
+              "git-object-set.json",
+              "publisher-handoff.json",
+              "evidence/repository-restore.json",
+              "evidence/publication-rollback.json",
+              "evidence/bundle.json",
+              "restore/diagnostics/forward-recovery.patch",
+              "restore/diagnostics/gate.stderr.log",
+              "restore/diagnostics/gate.stdout.log",
+              "restore/diagnostics/npm-ci.stderr.log",
+              "restore/diagnostics/npm-ci.stdout.log",
+              "diagnostics/bundle-validation.json",
+              "diagnostics/git-object-set.stdout.json",
+          }
+
+          with zipfile.ZipFile(root / "evidence.zip") as archive:
+              names = set()
+              for info in archive.infolist():
+                  path = PurePosixPath(info.filename)
+                  assert info.filename not in names
+                  names.add(info.filename)
+                  assert not path.is_absolute() and ".." not in path.parts and "\\" not in info.filename
+                  assert not stat.S_ISLNK(info.external_attr >> 16)
+              assert names == expected_members
+              archive.extractall(artifact_root)
+
+          def load(path):
+              return json.loads(Path(path).read_text())
+
+          def sha(path):
+              return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+          def embedded_facts(body):
+              match = re.search(
+                  r"<details><summary>Machine-readable facts</summary>\s*```json\s*(\{.*?\})\s*```",
+                  body,
+                  re.S,
+              )
+              assert match, "machine-readable facts missing"
+              return json.loads(match.group(1))
+
+          pr = load(metadata / "pr.json")
+          main = load(metadata / "main-start.json")
+          target = load(metadata / "target.json")
+          baseline = load(metadata / "baseline.json")
+          producer = load(metadata / "producer-run.json")
+          producer_jobs = load(metadata / "producer-jobs.json")
+          producer_artifacts = load(metadata / "producer-artifacts.json")
+          publisher = load(metadata / "publisher-run.json")
+          publisher_jobs = load(metadata / "publisher-jobs.json")
+          issue = load(metadata / "issue.json")
+
+          assert pr["number"] == int(os.environ["PR_NUMBER"])
+          assert pr["state"] == "open" and pr["draft"] is True and pr["merged"] is False
+          assert pr["base"]["sha"] == os.environ["TARGET_SHA"]
+          assert pr["head"]["sha"] == os.environ["EVENT_HEAD_SHA"]
+          assert main["object"]["sha"] == os.environ["TARGET_SHA"]
+          assert target["sha"] == os.environ["TARGET_SHA"]
+          assert target["commit"]["tree"]["sha"] == os.environ["TARGET_TREE"]
+          assert target["commit"]["verification"]["verified"] is True
+          assert [row["sha"] for row in target["parents"]] == [os.environ["TARGET_PARENT"]]
+          assert baseline["sha"] == os.environ["BASELINE_SHA"]
+          assert baseline["commit"]["tree"]["sha"] == os.environ["BASELINE_TREE"]
+          assert baseline["commit"]["verification"]["verified"] is True
+          assert [row["sha"] for row in baseline["parents"]] == [
+              os.environ["BASELINE_PARENT_ONE"],
+              os.environ["BASELINE_PARENT_TWO"],
+          ]
+
+          assert producer["id"] == int(os.environ["PRODUCER_RUN_ID"])
+          assert producer["name"] == "operational-reliability-evidence"
+          assert producer["event"] == "push" and producer["head_branch"] == "main"
+          assert producer["head_sha"] == os.environ["TARGET_SHA"]
+          assert producer["run_attempt"] == 1 and producer["conclusion"] == "success"
+          jobs = producer_jobs["jobs"]
+          assert len(jobs) == 1 and jobs[0]["id"] == int(os.environ["PRODUCER_JOB_ID"])
+          assert jobs[0]["head_sha"] == os.environ["TARGET_SHA"] and jobs[0]["conclusion"] == "success"
+
+          artifacts = producer_artifacts["artifacts"]
+          assert len(artifacts) == 1
+          artifact = artifacts[0]
+          assert artifact["id"] == int(os.environ["ARTIFACT_ID"])
+          assert artifact["name"] == os.environ["ARTIFACT_NAME"]
+          assert artifact["digest"] == "sha256:" + os.environ["ARTIFACT_SHA256"]
+          assert artifact["expired"] is False
+          assert artifact["workflow_run"]["id"] == int(os.environ["PRODUCER_RUN_ID"])
+          assert artifact["workflow_run"]["head_sha"] == os.environ["TARGET_SHA"]
+
+          assert publisher["id"] == int(os.environ["PUBLISHER_RUN_ID"])
+          assert publisher["name"] == "operational-reliability-evidence-publisher"
+          assert publisher["event"] == "workflow_run" and publisher["head_sha"] == os.environ["TARGET_SHA"]
+          assert publisher["run_attempt"] == 1 and publisher["conclusion"] == "success"
+          assert publisher_jobs["total_count"] >= 1
+          assert all(row["conclusion"] == "success" for row in publisher_jobs["jobs"])
+
+          assert issue["number"] == int(os.environ["ISSUE_NUMBER"])
+          assert issue["state"] == "open"
+          assert issue["title"] == f"Operational reliability evidence run {os.environ['PRODUCER_RUN_ID']} @ {os.environ['TARGET_SHA'][:12]}"
+          live_facts = embedded_facts(issue["body"])
+          assert live_facts["ledger_sha256"] == os.environ["LEDGER_SHA256"]
+          assert live_facts["target_head"] == os.environ["TARGET_SHA"]
+          assert live_facts["artifact"]["id"] == int(os.environ["ARTIFACT_ID"])
+          assert live_facts["artifact"]["digest"] == "sha256:" + os.environ["ARTIFACT_SHA256"]
+          assert live_facts["receipt_sha256"]["repository_restore"] == os.environ["RESTORE_SHA256"]
+          assert live_facts["receipt_sha256"]["publication_rollback"] == os.environ["ROLLBACK_SHA256"]
+          assert live_facts["boundary"]["discovery_issue_is_mutable"] is True
+          assert live_facts["boundary"]["artifact_and_receipt_hashes_are_authoritative"] is True
+          (root / "output/generated-at.txt").write_text(live_facts["generated_at"] + "\n")
+
+          handoff = load(artifact_root / "publisher-handoff.json")
+          expected_handoff = {
+              "selection.json",
+              "git-object-set.json",
+              "evidence/repository-restore.json",
+              "evidence/publication-rollback.json",
+              "evidence/bundle.json",
+              "diagnostics/bundle-validation.json",
+          }
+          assert handoff["run_id"] == int(os.environ["PRODUCER_RUN_ID"])
+          assert handoff["run_attempt"] == 1 and handoff["head_sha"] == os.environ["TARGET_SHA"]
+          assert set(handoff["files"]) == expected_handoff
+          for name, digest in handoff["files"].items():
+              assert sha(artifact_root / name) == digest
+
+          restore = load(artifact_root / "evidence/repository-restore.json")
+          rollback = load(artifact_root / "evidence/publication-rollback.json")
+          bundle = load(artifact_root / "evidence/bundle.json")
+          object_receipt = load(artifact_root / "git-object-set.json")
+          assert sha(artifact_root / "evidence/repository-restore.json") == os.environ["RESTORE_SHA256"]
+          assert sha(artifact_root / "evidence/publication-rollback.json") == os.environ["ROLLBACK_SHA256"]
+          assert restore["status"] == "passed" and restore["forward_recovery"]["target_head"] == os.environ["TARGET_SHA"]
+          assert restore["forward_recovery"]["target_files"] == 4395
+          assert restore["forward_recovery"]["exact_tracked_tree_match"] is True
+          assert restore["verification_index"]["source_history_restored"] is False
+          assert restore["canonical_gate"]["exit_code"] == 0
+          assert rollback["status"] == "passed" and rollback["known_good"]["target_head"] == os.environ["TARGET_SHA"]
+          assert rollback["fault_injection"]["detected_before_rollback"] is True
+          assert rollback["rollback"]["atomic_directory_swap"] is True
+          assert rollback["rollback"]["exact_manifest_restored"] is True
+          assert len(rollback["served_checks"]) == 8
+          assert all(row["exact_byte_match"] is True for row in rollback["served_checks"])
+          assert bundle["status"] == "passed" and bundle["evidence_tier"] == "workflow-executed-unreviewed"
+          assert bundle["boundary"]["reviewed_waterline_receipts_created"] is False
+          assert bundle["boundary"]["roadmap_milestone_completed"] is False
+          assert object_receipt["source_head"] == os.environ["TARGET_SHA"]
+          assert object_receipt["boundary"]["parent_history_copied"] is False
+          assert object_receipt["boundary"]["network_fetch_performed"] is False
+          assert load(artifact_root / "diagnostics/git-object-set.stdout.json") == object_receipt
+          assert (artifact_root / "diagnostics/bundle-validation.json").read_bytes() == (artifact_root / "evidence/bundle.json").read_bytes()
+
+          bindings = {
+              artifact_root / "restore/diagnostics/forward-recovery.patch": restore["forward_recovery"]["patch_sha256"],
+              artifact_root / "restore/diagnostics/npm-ci.stdout.log": restore["dependency_install"]["stdout_sha256"],
+              artifact_root / "restore/diagnostics/npm-ci.stderr.log": restore["dependency_install"]["stderr_sha256"],
+              artifact_root / "restore/diagnostics/gate.stdout.log": restore["canonical_gate"]["stdout_sha256"],
+              artifact_root / "restore/diagnostics/gate.stderr.log": restore["canonical_gate"]["stderr_sha256"],
+          }
+          assert all(sha(path) == digest for path, digest in bindings.items())
+          assert (artifact_root / "restore/diagnostics/gate.stdout.log").stat().st_size > 0
+
+          (root / "output/artifact-verification.json").write_text(json.dumps({
+              "schema_version": 1,
+              "status": "passed",
+              "artifact_member_count": len(names),
+              "artifact_sha256": os.environ["ARTIFACT_SHA256"],
+              "producer_run": int(os.environ["PRODUCER_RUN_ID"]),
+              "publisher_run": int(os.environ["PUBLISHER_RUN_ID"]),
+              "target_head": os.environ["TARGET_SHA"],
+              "baseline_commit": os.environ["BASELINE_SHA"],
+              "restore_receipt_sha256": os.environ["RESTORE_SHA256"],
+              "rollback_receipt_sha256": os.environ["ROLLBACK_SHA256"],
+              "ledger_sha256": os.environ["LEDGER_SHA256"],
+          }, indent=2, sort_keys=True) + "\n")
+          PY
+
+      - name: Reconstruct the ledger and adversarially rebuild the bounded object store
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$TARGET_ROOT" "$TARGET_SHA"
+          cd "$TARGET_ROOT"
+          npm ci
+
+          node scripts/operational-reliability.mjs validate-bundle \
+            --restore-receipt "$ROOT/artifact/evidence/repository-restore.json" \
+            --rollback-receipt "$ROOT/artifact/evidence/publication-rollback.json" \
+            --output "$ROOT/output/recomputed-bundle.json" \
+            > "$ROOT/output/recomputed-bundle-validation.json"
+          cmp -s "$ROOT/output/recomputed-bundle.json" "$ROOT/artifact/evidence/bundle.json"
+
+          generated_at="$(cat "$ROOT/output/generated-at.txt")"
+          node scripts/operational-reliability-ledger.mjs issue-payload \
+            --restore-receipt "$ROOT/artifact/evidence/repository-restore.json" \
+            --rollback-receipt "$ROOT/artifact/evidence/publication-rollback.json" \
+            --bundle "$ROOT/artifact/evidence/bundle.json" \
+            --run-id "$PRODUCER_RUN_ID" \
+            --run-attempt "1" \
+            --run-url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$PRODUCER_RUN_ID" \
+            --repository "$GITHUB_REPOSITORY" \
+            --event-name "push" \
+            --head-branch "main" \
+            --head-sha "$TARGET_SHA" \
+            --generated-at "$generated_at" \
+            --artifact-id "$ARTIFACT_ID" \
+            --artifact-name "$ARTIFACT_NAME" \
+            --artifact-url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$PRODUCER_RUN_ID/artifacts/$ARTIFACT_ID" \
+            --artifact-digest "sha256:$ARTIFACT_SHA256" \
+            --output "$ROOT/output/reconstructed-issue.json" \
+            > "$ROOT/output/reconstructed-facts.json"
+
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          root = Path(os.environ["ROOT"])
+          issue = json.loads((root / "metadata/issue.json").read_text())
+          reconstructed = json.loads((root / "output/reconstructed-issue.json").read_text())
+          facts = json.loads((root / "output/reconstructed-facts.json").read_text())
+
+          def embedded(body):
+              match = re.search(
+                  r"<details><summary>Machine-readable facts</summary>\s*```json\s*(\{.*?\})\s*```",
+                  body,
+                  re.S,
+              )
+              assert match
+              return json.loads(match.group(1))
+
+          live = embedded(issue["body"])
+          rebuilt = embedded(reconstructed["body"])
+          assert reconstructed["title"] == issue["title"]
+          assert facts == rebuilt == live
+          assert facts["ledger_sha256"] == os.environ["LEDGER_SHA256"]
+          (root / "output/ledger-reconstruction.json").write_text(json.dumps({
+              "schema_version": 1,
+              "status": "passed",
+              "title_exact": True,
+              "embedded_facts_exact": True,
+              "body_exact": reconstructed["body"] == issue["body"],
+              "body_mutability_expected": True,
+              "ledger_sha256": facts["ledger_sha256"],
+              "live_body_sha256": hashlib.sha256(issue["body"].encode()).hexdigest(),
+              "reconstructed_body_sha256": hashlib.sha256(reconstructed["body"].encode()).hexdigest(),
+          }, indent=2, sort_keys=True) + "\n")
+          PY
+
+          node scripts/operational-restore-git-objects.mjs build \
+            --source-root . \
+            --manifest data/review/operational-restore-git-object-set.json \
+            --output "$ROOT/bounded-objects.git" \
+            --receipt "$ROOT/output/recomputed-git-object-set.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            > "$ROOT/output/recomputed-git-object-set.stdout.json"
+
+          test "$(git --git-dir="$ROOT/bounded-objects.git" cat-file -t "$BASELINE_SHA")" = "commit"
+          test "$(git --git-dir="$ROOT/bounded-objects.git" rev-parse "$BASELINE_SHA^{tree}")" = "$BASELINE_TREE"
+          git --git-dir="$ROOT/bounded-objects.git" ls-tree -r --name-only "$BASELINE_SHA" > "$ROOT/output/baseline-paths.txt"
+          test "$(wc -l < "$ROOT/output/baseline-paths.txt" | tr -d ' ')" -gt 4000
+          ! git --git-dir="$ROOT/bounded-objects.git" cat-file -e "$BASELINE_PARENT_ONE^{commit}" 2>/dev/null
+          ! git --git-dir="$ROOT/bounded-objects.git" cat-file -e "$BASELINE_PARENT_TWO^{commit}" 2>/dev/null
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["ROOT"])
+          target_root = Path(os.environ["TARGET_ROOT"])
+          receipt = json.loads((root / "output/recomputed-git-object-set.json").read_text())
+          original = json.loads((root / "artifact/git-object-set.json").read_text())
+          manifest = json.loads((target_root / "data/review/operational-restore-git-object-set.json").read_text())
+          assert [row for row in manifest["entries"] if row["commit"] == os.environ["BASELINE_SHA"]] == [
+              {"commit": os.environ["BASELINE_SHA"], "paths": ["**"]}
+          ]
+          for key in ("manifest_sha256", "commit_count", "path_count", "full_tree_commit_count", "object_count"):
+              assert receipt[key] == original[key]
+          assert receipt["source_head"] == original["source_head"] == os.environ["TARGET_SHA"]
+          assert receipt["boundary"]["parent_history_copied"] is False
+          assert receipt["boundary"]["full_history_restored"] is False
+          assert receipt["boundary"]["network_fetch_performed"] is False
+          (root / "output/object-boundary.json").write_text(json.dumps({
+              "schema_version": 1,
+              "status": "passed",
+              "baseline_commit": os.environ["BASELINE_SHA"],
+              "baseline_tree": os.environ["BASELINE_TREE"],
+              "full_tree_present": True,
+              "parent_one_present": False,
+              "parent_two_present": False,
+              "manifest_sha256": receipt["manifest_sha256"],
+              "object_count": receipt["object_count"],
+          }, indent=2, sort_keys=True) + "\n")
+          PY
+
+      - name: Replay the complete gate and seal the read-only review candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$TARGET_ROOT"
+
+          node --input-type=module - <<'NODE'
+          import { readFileSync } from "node:fs";
+          import YAML from "yaml";
+          const source = readFileSync(`${process.env.GITHUB_WORKSPACE}/${process.env.WORKFLOW_PATH}`, "utf8");
+          const document = YAML.parseDocument(source, { uniqueKeys: true, maxAliasCount: 100 });
+          if (document.errors.length) throw document.errors[0];
+          if (document.warnings.length) throw document.warnings[0];
+          NODE
+
+          npm run operational:fixtures | tee "$ROOT/output/operational-fixtures.log"
+          npx playwright install --with-deps chromium
+          npm run gate | tee "$ROOT/output/complete-gate.log"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$TARGET_SHA"
+
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          root = Path(os.environ["ROOT"])
+          review = {
+              "schema_version": 1,
+              "transaction": "OPERATIONAL-RELIABILITY-SECOND-DESK-REPLAY-704C966F-V2",
+              "status": "review-candidate-passed",
+              "review_mode": "read-only-computational-replay",
+              "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "carrier": {
+                  "pull_request": int(os.environ["PR_NUMBER"]),
+                  "head": os.environ["EVENT_HEAD_SHA"],
+                  "run_id": int(os.environ["GITHUB_RUN_ID"]),
+                  "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              },
+              "authority": {
+                  "target_head": os.environ["TARGET_SHA"],
+                  "target_tree": os.environ["TARGET_TREE"],
+                  "producer_run": int(os.environ["PRODUCER_RUN_ID"]),
+                  "publisher_run": int(os.environ["PUBLISHER_RUN_ID"]),
+                  "artifact_id": int(os.environ["ARTIFACT_ID"]),
+                  "artifact_sha256": os.environ["ARTIFACT_SHA256"],
+                  "restore_receipt_sha256": os.environ["RESTORE_SHA256"],
+                  "rollback_receipt_sha256": os.environ["ROLLBACK_SHA256"],
+                  "ledger_sha256": os.environ["LEDGER_SHA256"],
+              },
+              "findings": {
+                  "immutable_evidence_chain_verified": True,
+                  "machine_readable_ledger_reconstructed_exactly": True,
+                  "mutable_issue_prose_not_used_as_authority": True,
+                  "baseline_full_tree_present": True,
+                  "both_baseline_parents_absent": True,
+                  "operational_fixtures_replayed": True,
+                  "canonical_gate_replayed": True,
+                  "exact_main_lease_held_at_start_and_end": True,
+              },
+              "boundary": {
+                  "waterline_receipts_created": False,
+                  "roadmap_state_changed": False,
+                  "metrics_populated": False,
+                  "live_publication_changed": False,
+                  "repository_content_written": False,
+                  "review_carrier_merge_authority": False,
+                  "human_or_owner_admission_performed": False,
+                  "producer_artifact_promoted_to_reviewed_receipt": False,
+                  "next_authorized_work": "distinct second-desk or owner admission through a separate state-changing record-drill lane",
+              },
+          }
+          (root / "output/review.json").write_text(json.dumps(review, indent=2, sort_keys=True) + "\n")
+          hashes = {}
+          for path in sorted((root / "output").iterdir()):
+              if path.is_file() and path.name != "SHA256SUMS":
+                  hashes[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+          (root / "output/SHA256SUMS").write_text(
+              "".join(f"{digest}  {name}\n" for name, digest in hashes.items())
+          )
+          PY
+
+      - name: Upload the immutable read-only review packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-reliability-second-desk-review-704c966f-v2-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/operational-reliability-second-desk-704c966f/output
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
