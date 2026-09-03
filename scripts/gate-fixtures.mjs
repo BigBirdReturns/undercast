@@ -69,6 +69,27 @@ try {
   expect("Autopilot workflow fetches full immutable receipt history", autopilotCheckoutDepth, 0);
   expect("Autopilot workflow keeps full history blob-lazy", autopilotCheckoutFilter, "blob:none");
 
+  const autopilotSyncIndex = autopilotWorkflow.indexOf("run: npm run autopilot -- sync");
+const adapterWriteIndex = autopilotWorkflow.indexOf("run: npm run adapter:write && npm run adapter:check");
+const autopilotValidationIndex = autopilotWorkflow.indexOf("run: npm run autopilot -- validate && npm run autopilot:fixtures");
+expect(
+  "Autopilot regenerates the adapter baseline after sync and before validation",
+  autopilotSyncIndex >= 0 && adapterWriteIndex > autopilotSyncIndex && autopilotValidationIndex > adapterWriteIndex,
+  true,
+);
+
+const waterlineWorkflow = await readFile(new URL("../.github/workflows/waterline.yml", import.meta.url), "utf8");
+const waterlineUploadIndex = waterlineWorkflow.indexOf("uses: actions/upload-artifact@v4");
+const waterlineUploadBlock = waterlineUploadIndex >= 0 ? waterlineWorkflow.slice(waterlineUploadIndex) : "";
+expect("waterline upload retains the hidden health directory", /path:\s*\.waterline-health/.test(waterlineUploadBlock), true);
+expect("waterline upload explicitly includes hidden evidence", /include-hidden-files:\s*true/.test(waterlineUploadBlock), true);
+expect("waterline upload remains fail-closed when evidence is missing", /if-no-files-found:\s*error/.test(waterlineUploadBlock), true);
+
+const collectionPolicyWorkflow = await readFile(new URL("../.github/workflows/collection-policy.yml", import.meta.url), "utf8");
+const collectionEvidencePaths = collectionPolicyWorkflow.match(/\/tmp\/ux-02a-dec0016-evidence/g) || [];
+expect("collection policy uses one runner-independent evidence path for production and upload", collectionEvidencePaths.length, 2);
+expect("collection policy job environment does not bind the unavailable runner context", /EVIDENCE:\s*.*runner\.temp/.test(collectionPolicyWorkflow), false);
+
   runCommand("Publisher custody fixtures", process.execPath, ["test/publisher-custody-fixtures.mjs"], { stdio: "pipe" });
   pass("publisher custody fixtures run inside canonical gate fixtures");
   runCommand("Publisher handoff file fixtures", process.execPath, ["test/publisher-handoff-files-fixtures.mjs"], { stdio: "pipe" });

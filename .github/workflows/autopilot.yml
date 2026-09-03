@@ -4,6 +4,10 @@ on:
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/autopilot.yml"
 
 permissions:
   contents: write
@@ -40,8 +44,31 @@ jobs:
           fi
       - name: Reconcile only certified census scopes with downstream evidence
         run: npm run autopilot -- sync
+      - name: Regenerate deterministic adapter baseline
+        run: npm run adapter:write && npm run adapter:check
+      - name: Validate refreshed queue and adapter contracts
+        run: |
+          set -euo pipefail
+          npm run autopilot -- validate
+          node scripts/autopilot-fixtures.mjs
+          node scripts/autopilot-capability-fixtures.mjs
+          node scripts/autopilot-certification-fixtures.mjs
+          node scripts/autopilot-cli-fixtures.mjs
+          npm run adapter:fixtures
+          node scripts/estate-certification-fixtures.mjs
+          node scripts/doctor-who-activation.mjs check
+      - name: Materialize the checked-in fixture state
+        run: |
+          rm -rf "$RUNNER_TEMP/autopilot-fixtures"
+          git worktree add --detach --quiet "$RUNNER_TEMP/autopilot-fixtures" "$GITHUB_SHA"
       - name: Validate queue and certification contracts
+        working-directory: ${{ runner.temp }}/autopilot-fixtures
         run: npm run autopilot -- validate && npm run autopilot:fixtures
+      - name: Remove the checked-in fixture state
+        if: always()
+        run: |
+          git worktree remove --force "$RUNNER_TEMP/autopilot-fixtures" 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/autopilot-fixtures"
       - name: Report queue state
         run: npm run autopilot -- status
       - name: Commit state changes
