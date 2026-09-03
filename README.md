@@ -6,6 +6,12 @@ Every card flips: the character on the front, the human underneath on the back.
 
 Non-commercial fan project.
 
+## Public inspection
+
+UNDERCAST is a non-commercial fan project and provenance-governed field index of performers who vanish under designed faces. The canonical source of truth for the roster is [`data/specimens.json`](data/specimens.json). Provenance is retained in [`data/SOURCES.json`](data/SOURCES.json), missing evidence remains explicit in [`data/GAPS.json`](data/GAPS.json), and [`data/quality.json`](data/quality.json) carries the non-regression floors.
+
+The public product is the [live wall](https://bigbirdreturns.github.io/undercast/) and its [coverage surface](https://bigbirdreturns.github.io/undercast/coverage.html). `npm run gate` is the release gate.
+
 ```
 index.html            the wall — a static page; boots from the generated projections
                       (data/index.json + data/shards/ via data/shard-manifest.json),
