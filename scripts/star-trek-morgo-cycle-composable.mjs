@@ -75,7 +75,7 @@ const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'undercast-morgo-composable
 const historical = path.join(parent, 'worktree');
 let added = false;
 try {
-  run('materialize exact Morgo product', 'git', ['worktree', 'add', '--quiet', '--detach', historical, C.MORGO_PRODUCT]);
+  run('materialize exact Morgo product', 'git', ['worktree', 'add', '--detach', historical, C.MORGO_PRODUCT]);
   added = true;
   run('validate immutable Morgo product', process.execPath, [C.MORGO_CHECKER], { cwd: historical });
 } finally {
