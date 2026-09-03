@@ -6,6 +6,9 @@ const open=(page,path)=>page.goto(sitePath(path),{waitUntil:"domcontentloaded"})
 const pixel=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+Xh9WAAAAAElFTkSuQmCC","base64");
 const jpeg=await readFile(new URL("../../images/uc-035-portrait.jpg",import.meta.url));
 const specimens=JSON.parse(await readFile(new URL("../../data/specimens.json",import.meta.url),"utf8"));
+const censusSummary=JSON.parse(await readFile(new URL("../../data/CENSUS-SUMMARY.json",import.meta.url),"utf8"));
+const klingonSummary=censusSummary.groups.find(group=>group.franchise==="Star Trek"&&group.category==="Klingons");
+if(!klingonSummary) throw new Error("rendered fixture requires the filed Star Trek Klingons source snapshot");
 const decadeOf=years=>{
   const match=String(years).match(/\d{4}/);
   if(!match) return "—";
@@ -510,9 +513,12 @@ test("Recognition renders role evidence, voice truth, narrow pairs, and local co
 test("coverage and constellation preserve human-searchable, unique evidence",async({page})=>{
   await open(page,"coverage.html?franchise=Star+Trek&category=Klingons&mode=physical-any");
   await expect(page.locator("#rows tr").first()).toBeVisible();
-  await expect(page.locator("#benchmark")).toContainText("KLINGONS SOURCE SNAPSHOT · Star Trek");
-  await expect(page.locator("#benchmark")).toContainText("191 named performer-role credits across 173 performers");
-  await expect(page.locator("#benchmark")).not.toContainText("FERENGI BENCHMARK");
+  const benchmark=page.locator("#benchmark");
+  await expect(benchmark).toContainText("KLINGONS SOURCE SNAPSHOT · Star Trek");
+  await expect(benchmark).toContainText(`${klingonSummary.credits} named performer-role credits across ${klingonSummary.distinct_performers} performers`);
+  await expect(benchmark).toContainText(`${klingonSummary.covered_roles} have exact wall records and ${klingonSummary.missing_roles} remain named role gaps`);
+  await expect(benchmark).toContainText(`${klingonSummary.unresolved_characters} additional source pages have no credited performer field`);
+  await expect(benchmark).not.toContainText("FERENGI BENCHMARK");
 
   await open(page,"coverage.html?franchise=Star+Trek&category=Ferengi&mode=physical-any");
   await expect(page.locator("#rows tr").first()).toBeVisible();
