@@ -93,7 +93,7 @@ const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'undercast-lwaxana-composab
 const historical = path.join(parent, 'worktree');
 let added = false;
 try {
-  run('materialize exact Lwaxana rejection product', 'git', ['worktree', 'add', '--detach', historical, LWAXANA_PRODUCT]);
+  run('materialize exact Lwaxana rejection product', 'git', ['worktree', 'add', '--quiet', '--detach', historical, LWAXANA_PRODUCT]);
   added = true;
   run('validate immutable Lwaxana rejection at exact product', process.execPath, [LWAXANA_CHECKER], { cwd: historical });
 } finally {

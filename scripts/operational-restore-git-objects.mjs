@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const COMMIT_RE = /^[0-9a-f]{40}$/;
 const OBJECT_RE = /^[0-9a-f]{40}$/;
 const MANIFEST_KIND = "operational-restore-git-object-set";
+const FULL_TREE_PATH = "**";
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -102,9 +103,14 @@ export function validateGitObjectManifest(document) {
     const paths = entry.paths.map((file, index) => assertSafePath(file, `Git-object manifest ${commit} path ${index}`));
     assert.deepEqual(paths, [...paths].sort(), `Git-object manifest ${commit} paths must be sorted`);
     assert.equal(new Set(paths).size, paths.length, `Git-object manifest ${commit} paths must be unique`);
+    if (paths.includes(FULL_TREE_PATH)) assert.deepEqual(paths, [FULL_TREE_PATH], `Git-object manifest ${commit} full-tree sentinel must be the only path`);
     pathCount += paths.length;
   }
-  return { commit_count: commits.size, path_count: pathCount };
+  return {
+    commit_count: commits.size,
+    path_count: pathCount,
+    full_tree_commit_count: document.entries.filter((entry) => entry.paths.includes(FULL_TREE_PATH)).length,
+  };
 }
 
 async function readManifest(manifestPath) {
@@ -140,6 +146,36 @@ function treeEntry(sourceRoot, tree, component, label) {
   return { mode: match[1], type: match[2], object: match[3] };
 }
 
+
+function copyTreeClosure(sourceRoot, outputGitDir, rootTree, copied) {
+  const traversed = new Set();
+  let trees = 0;
+  let blobs = 0;
+  let gitlinks = 0;
+  function visit(tree) {
+    if (traversed.has(tree)) return;
+    traversed.add(tree);
+    copyObject(sourceRoot, outputGitDir, tree, copied);
+    trees += 1;
+    const rows = gitBytes(sourceRoot, ["ls-tree", "-z", tree], { label: `enumerate full Git tree ${tree}` })
+      .toString("utf8")
+      .split("\0")
+      .filter(Boolean);
+    for (const row of rows) {
+      const match = row.match(/^([0-7]{6})\s+(blob|tree|commit)\s+([0-9a-f]{40})\t([\s\S]+)$/);
+      assert.ok(match, `full Git tree ${tree} returned a malformed entry`);
+      const [, , type, object] = match;
+      if (type === "tree") visit(object);
+      else if (type === "blob") {
+        copyObject(sourceRoot, outputGitDir, object, copied);
+        blobs += 1;
+      } else gitlinks += 1;
+    }
+  }
+  visit(rootTree);
+  return { root_tree: rootTree, trees, blobs, gitlinks, files: blobs + gitlinks };
+}
+
 function copyCommitPath(sourceRoot, outputGitDir, commit, file, copied) {
   let tree = gitText(sourceRoot, ["rev-parse", `${commit}^{tree}`], { label: `resolve root tree for ${commit}` });
   copyObject(sourceRoot, outputGitDir, tree, copied);
@@ -163,6 +199,7 @@ export function validateGitObjectSetReceipt(receipt, expected = {}) {
   assert.match(receipt?.source_head, COMMIT_RE, "Git-object-set source head is invalid");
   assert.ok(Number.isInteger(receipt?.commit_count) && receipt.commit_count > 0, "Git-object-set commit count is invalid");
   assert.ok(Number.isInteger(receipt?.path_count) && receipt.path_count > 0, "Git-object-set path count is invalid");
+  assert.ok(Number.isInteger(receipt?.full_tree_commit_count) && receipt.full_tree_commit_count >= 0, "Git-object-set full-tree commit count is invalid");
   assert.ok(Number.isInteger(receipt?.object_count) && receipt.object_count >= receipt.commit_count, "Git-object-set object count is invalid");
   assert.equal(receipt?.boundary?.exact_declared_commits_only, true, "Git-object-set commit boundary drifted");
   assert.equal(receipt?.boundary?.exact_declared_paths_only, true, "Git-object-set path boundary drifted");
@@ -203,10 +240,21 @@ export async function buildBoundedGitObjectSet({ sourceRoot, manifestPath, outpu
     const commit = entry.commit;
     gitText(sourceRoot, ["cat-file", "-e", `${commit}^{commit}`], { label: `resolve declared historical commit ${commit}` });
     copyObject(sourceRoot, outputGitDir, commit, copied);
-    for (const file of entry.paths) copyCommitPath(sourceRoot, outputGitDir, commit, file, copied);
+    const fullTree = entry.paths.includes(FULL_TREE_PATH);
+    let fullTreeSummary = null;
+    if (fullTree) {
+      const sourceTree = gitText(sourceRoot, ["rev-parse", `${commit}^{tree}`], { label: `resolve declared full tree for ${commit}` });
+      fullTreeSummary = copyTreeClosure(sourceRoot, outputGitDir, sourceTree, copied);
+      const copiedTree = outputGitText(outputGitDir, ["rev-parse", `${commit}^{tree}`], { label: `resolve copied full tree for ${commit}` });
+      assert.equal(copiedTree, sourceTree, `bounded Git-object store tree drifted for ${commit}`);
+    } else {
+      for (const file of entry.paths) copyCommitPath(sourceRoot, outputGitDir, commit, file, copied);
+    }
 
     const copiedPaths = [];
-    for (const file of entry.paths) {
+    if (fullTree) {
+      copiedPaths.push({ path: FULL_TREE_PATH, object_type: "tree", object: fullTreeSummary.root_tree, ...fullTreeSummary });
+    } else for (const file of entry.paths) {
       const sourceBlob = gitText(sourceRoot, ["rev-parse", `${commit}:${file}`], { label: `resolve source blob ${commit}:${file}` });
       const copiedBlob = outputGitText(outputGitDir, ["rev-parse", `${commit}:${file}`], { label: `resolve copied blob ${commit}:${file}` });
       assert.equal(copiedBlob, sourceBlob, `bounded Git-object store blob drifted for ${commit}:${file}`);
@@ -240,11 +288,13 @@ export async function buildBoundedGitObjectSet({ sourceRoot, manifestPath, outpu
     manifest_sha256: manifestSha256,
     commit_count: denominator.commit_count,
     path_count: denominator.path_count,
+    full_tree_commit_count: denominator.full_tree_commit_count,
     object_count: copied.size,
     entries,
     boundary: {
       exact_declared_commits_only: true,
       exact_declared_paths_only: true,
+      declared_full_tree_sentinel: FULL_TREE_PATH,
       parent_history_copied: false,
       full_history_restored: false,
       network_fetch_performed: false,
