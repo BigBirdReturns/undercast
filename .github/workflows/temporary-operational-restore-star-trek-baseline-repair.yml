@@ -1,0 +1,210 @@
+name: temporary-operational-restore-star-trek-baseline-repair
+
+on:
+  push:
+    branches:
+      - repair/operational-restore-star-trek-baseline-20260903
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temporary-operational-restore-star-trek-baseline-repair
+  cancel-in-progress: false
+
+jobs:
+  qualify-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE: f79ab4e39c1642039bd747207e161b1cbd6fb5db
+      BASELINE: 38116aaf55371fd267db4733bba17a5fcb39d9fd
+      BRANCH: repair/operational-restore-star-trek-baseline-20260903
+      CONTROLLER: .github/workflows/temporary-operational-restore-star-trek-baseline-repair.yml
+      MANIFEST: data/review/operational-restore-git-object-set.json
+      RELIABILITY: .github/workflows/operational-reliability-evidence.yml
+      FIXTURE: scripts/operational-workflow-fixtures.mjs
+      EVIDENCE_ROOT: /tmp/undercast-operational-restore-baseline-repair
+    steps:
+      - name: Check out exact controller
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install exact dependencies and Chromium
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Build, qualify, and publish the bounded repair
+        run: |
+          set -euo pipefail
+
+          test "$(git rev-parse HEAD^)" = "$BASE"
+          test "$(git rev-list --count "$BASE"..HEAD)" -eq 1
+          test "$(git diff --name-only "$BASE"...HEAD)" = "$CONTROLLER"
+          test "$(git rev-parse "$BASE^{tree}")" = "839ed1e38bf8951870f1523fe2435519b033df6c"
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          baseline = os.environ["BASELINE"]
+
+          manifest_path = Path(os.environ["MANIFEST"])
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          matches = [entry for entry in manifest.get("entries", []) if entry.get("commit") == baseline]
+          if matches:
+              raise SystemExit(f"baseline already admitted unexpectedly: {matches}")
+          manifest["entries"].append({"commit": baseline, "paths": ["**"]})
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+          workflow_path = Path(os.environ["RELIABILITY"])
+          workflow = workflow_path.read_text(encoding="utf-8")
+          workflow_anchor = '      - "scripts/operational-workflow-fixtures.mjs"\n'
+          if workflow.count(workflow_anchor) != 2:
+              raise SystemExit("reliability trigger anchor cardinality drifted")
+          workflow = workflow.replace(
+              workflow_anchor,
+              workflow_anchor + '      - "scripts/star-trek-history-composable.mjs"\n',
+          )
+          workflow_path.write_text(workflow, encoding="utf-8")
+
+          fixture_path = Path(os.environ["FIXTURE"])
+          fixture = fixture_path.read_text(encoding="utf-8")
+          import_anchor = 'const archive = await readFile(new URL("../.github/workflows/validate.yml", import.meta.url), "utf8");\n'
+          import_insert = import_anchor + (
+              'const restoreManifest = JSON.parse(await readFile(new URL("../data/review/operational-restore-git-object-set.json", import.meta.url), "utf8"));\n'
+              'const starTrekHistory = await readFile(new URL("./star-trek-history-composable.mjs", import.meta.url), "utf8");\n'
+          )
+          if fixture.count(import_anchor) != 1:
+              raise SystemExit("operational fixture import anchor cardinality drifted")
+          fixture = fixture.replace(import_anchor, import_insert, 1)
+
+          manifest_trigger_anchor = r'''  assert.match(block, /data\/review\/operational-restore-git-object-set\.json/, `${label} trigger must track the exact Git-object manifest`);
+          '''
+          manifest_trigger_insert = manifest_trigger_anchor + r'''  assert.match(block, /scripts\/star-trek-history-composable\.mjs/, `${label} trigger must track the Star Trek historical-baseline consumer`);
+          '''
+          if fixture.count(manifest_trigger_anchor) != 1:
+              raise SystemExit("operational fixture trigger anchor cardinality drifted")
+          fixture = fixture.replace(manifest_trigger_anchor, manifest_trigger_insert, 1)
+
+          publisher_anchor = 'const reliabilityPublisherPaths = new Set(\n'
+          baseline_contract = r'''assert.ok(Array.isArray(restoreManifest.entries), "production Git-object manifest entries must be an array");
+          const starTrekBaselineMatches = [...starTrekHistory.matchAll(/const BASELINE_COMMIT = ['"]([0-9a-f]{40})['"];/g)];
+          assert.equal(starTrekBaselineMatches.length, 1, "Star Trek history checker must expose exactly one full historical baseline");
+          const starTrekBaseline = starTrekBaselineMatches[0][1];
+          const starTrekBaselineEntries = restoreManifest.entries.filter((entry) => entry.commit === starTrekBaseline);
+          assert.equal(starTrekBaselineEntries.length, 1, `bounded restore manifest must admit Star Trek baseline ${starTrekBaseline} exactly once`);
+          assert.deepEqual(starTrekBaselineEntries[0].paths, ["**"], `bounded restore manifest must carry the complete Star Trek baseline tree ${starTrekBaseline}`);
+
+          '''
+          if fixture.count(publisher_anchor) != 1:
+              raise SystemExit("operational fixture baseline-contract anchor cardinality drifted")
+          fixture = fixture.replace(publisher_anchor, baseline_contract + publisher_anchor, 1)
+          fixture_path.write_text(fixture, encoding="utf-8")
+          PY
+
+          rm "$CONTROLLER"
+          git add -A
+          git diff --cached --check "$BASE"
+          expected=$'.github/workflows/operational-reliability-evidence.yml\ndata/review/operational-restore-git-object-set.json\nscripts/operational-workflow-fixtures.mjs'
+          test "$(git diff --cached --name-only "$BASE")" = "$expected"
+          node --check "$FIXTURE"
+          npm run operational:fixtures
+
+          git config user.name "BigBirdReturns"
+          git config user.email "bigbirdreturns@proton.me"
+          candidate_tree="$(git write-tree)"
+          candidate_commit="$(printf '%s\n' 'Restore Star Trek historical baseline in bounded object set' | git commit-tree "$candidate_tree" -p "$BASE")"
+          test "$(git rev-parse "$candidate_commit^")" = "$BASE"
+          test "$(git rev-parse "$candidate_commit^{tree}")" = "$candidate_tree"
+
+          git checkout --detach "$candidate_commit"
+          git reset --hard "$candidate_commit"
+          git clean -fd
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+          GITHUB_SHA="$candidate_commit" npm run gate
+
+          git reset --hard "$candidate_commit"
+          git clean -fd
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+          rm -rf "$EVIDENCE_ROOT"
+          mkdir -p "$EVIDENCE_ROOT/download" "$EVIDENCE_ROOT/evidence" "$EVIDENCE_ROOT/diagnostics"
+          node scripts/operational-reliability.mjs select-snapshot \
+            --registry preservation/SNAPSHOTS.json \
+            > "$EVIDENCE_ROOT/selection.json"
+          snapshot_id="$(node -p "JSON.parse(require('fs').readFileSync('$EVIDENCE_ROOT/selection.json','utf8')).id")"
+          release_tag="$(node -p "JSON.parse(require('fs').readFileSync('$EVIDENCE_ROOT/selection.json','utf8')).release_tag")"
+          asset_name="$(node -p "JSON.parse(require('fs').readFileSync('$EVIDENCE_ROOT/selection.json','utf8')).asset.name")"
+          gh release download "$release_tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$asset_name" \
+            --dir "$EVIDENCE_ROOT/download"
+
+          object_store="$RUNNER_TEMP/undercast-restored-git-objects.git"
+          node scripts/operational-restore-git-objects.mjs build \
+            --source-root . \
+            --manifest "$MANIFEST" \
+            --output "$object_store" \
+            --receipt "$EVIDENCE_ROOT/git-object-set.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            > "$EVIDENCE_ROOT/diagnostics/git-object-set.stdout.json"
+
+          git --git-dir="$object_store" cat-file -e "$BASELINE^{commit}"
+          baseline_tree="$(git rev-parse "$BASELINE^{tree}")"
+          test "$(git --git-dir="$object_store" rev-parse "$BASELINE^{tree}")" = "$baseline_tree"
+          baseline_parent="$(git show -s --format=%P "$BASELINE" | awk '{print $1}')"
+          if git --git-dir="$object_store" cat-file -e "$baseline_parent^{commit}" 2>/dev/null; then
+            echo "undeclared Star Trek baseline parent leaked into the bounded store" >&2
+            exit 1
+          fi
+
+          export GIT_ALTERNATE_OBJECT_DIRECTORIES="$object_store/objects"
+          node scripts/operational-reliability-execute.mjs restore-drill \
+            --checkout-root . \
+            --registry preservation/SNAPSHOTS.json \
+            --snapshot-id "$snapshot_id" \
+            --archive "$EVIDENCE_ROOT/download/$asset_name" \
+            --target-head "$candidate_commit" \
+            --work-root "$EVIDENCE_ROOT/restore" \
+            --output "$EVIDENCE_ROOT/evidence/repository-restore.json"
+
+          TARGET="$candidate_commit" node - <<'NODE'
+          const fs = require('fs');
+          const receipt = JSON.parse(fs.readFileSync(process.env.EVIDENCE_ROOT + '/evidence/repository-restore.json', 'utf8'));
+          if (receipt.status !== 'passed') throw new Error(`restore receipt status ${receipt.status}`);
+          if (receipt.forward_recovery.target_head !== process.env.TARGET) throw new Error('restore receipt target drifted');
+          if (receipt.canonical_gate.exit_code !== 0) throw new Error('restored canonical gate did not pass');
+          NODE
+
+          git reset --hard "$candidate_commit"
+          git clean -fd
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test "$(git rev-parse HEAD^{tree})" = "$candidate_tree"
+
+          git push --force-with-lease="refs/heads/$BRANCH:$GITHUB_SHA" origin "$candidate_commit:refs/heads/$BRANCH"
+          test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$candidate_commit"
+
+          {
+            echo "### Bounded restore candidate published"
+            echo
+            echo "- base: \`$BASE\`"
+            echo "- commit: \`$candidate_commit\`"
+            echo "- tree: \`$candidate_tree\`"
+            echo "- admitted baseline: \`$BASELINE\` as \`[\"**\"]\`"
+            echo "- normal canonical gate: passed"
+            echo "- restored exact-head canonical gate: passed"
+            echo "- undeclared baseline parent: absent from bounded object store"
+          } >> "$GITHUB_STEP_SUMMARY"
