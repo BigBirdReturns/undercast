@@ -12,6 +12,7 @@ index.html            the wall — a static page; boots from the generated proje
                       falling back to data/specimens.json if they're absent
 recognition.html      one live catalog record at a time — character, performer,
                       credited work, and evidence-backed connection rails
+comparison-review.html public, paged visual QA ledger for every eligible split-face pair
 constellation.html    sourced paths beyond the wall — people, roles, episodes,
                       productions and franchises without relaxing card eligibility
 coverage.html         source-scoped franchise/species census and filed gaps
@@ -31,6 +32,8 @@ data/
   search/             prefix-sharded inverted token index for future-scale clients
   dataset.jsonld      Schema.org Dataset discovery metadata
   quality.json        generated completeness/evidence metrics with non-regression floors
+  comparison-reviews.json maintained exact-byte visual decisions
+  comparison-queue.json   generated approved/alignment/source/pending/stale work queue
   specimens.json      the CANONICAL roster (verified cards and counting) — edit this
   index.json + shards/ generated serving projections, rebuilt by scripts/shard.mjs
   media-manifest.json / media-live.json  images on GitHub Releases (see MEDIA.md)
@@ -44,6 +47,7 @@ scripts/
   retrieve.mjs        KEYLESS crawler: stills + portraits -> images/ + ledger
   credits.mjs         builds CREDITS.md from the ledger
   audit-links.mjs     checks filed fact links in polite batches; `--assets` adds media origins
+  comparison-review.mjs builds/checks the exact-byte visual review projection
   sync-sources.mjs    repairs canonical card/image drift in the provenance ledger
   grow.mjs            model triage/drafting of new cards (needs a key, or run it
                       from a Claude coding session)
@@ -81,6 +85,7 @@ See which wikis the roster will pull from, without touching the network:
 ```bash
 node scripts/retrieve.mjs --audit    # still-wiki coverage, grouped by host
 npm run audit:corpus                 # person labels, free-image provenance, filed roles
+npm run audit:comparisons            # every eligible visual pair and current review state
 npm run test:site-seams              # navigation, recovery, cache and accessibility seams
 npm run test:rendered                # Chromium interactions, failure injection, responsive geometry, all routes
 ```
@@ -99,7 +104,9 @@ The wall is built to be linked, not just visited:
   card's back copies its link.
 - **Every specimen has a Recognition Loop.** `…/recognition.html#UC-042` opens
   the focused record and connects it to shared performers, parsed maker credits,
-  and conservative method signals. Missing evidence stays visibly missing.
+  and conservative method signals. Missing evidence stays visibly missing. A
+  split-face slider appears only for an exact image pair with an approved visual
+  review; every withheld pair is traceable at `…/comparison-review.html#UC-042`.
 - **Filtered views are shareable.** Shelf, decade, search and sort live in the
   URL — `…/?shelf=Star%20Trek&decade=90s&sort=transform` reopens exactly that.
 - **Constellation nodes are shareable.** `…/constellation.html?id=constellation%3Aalbuquerque-in-space&node=person%3Ajonathan-banks`

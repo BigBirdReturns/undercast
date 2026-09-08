@@ -110,3 +110,12 @@ eye-level pair before tuning it. Forehead, eye line, chin and face width should
 land in roughly the same place at the 50% seam. A reviewed image may carry
 `comparison: {x: 50, y: 46, scale: 1.2}` for overlay-only alignment. Scale is
 zoom-in only (`1`-`2`); if one side needs to zoom out, replace that source instead.
+
+Every non-voice record with both images automatically enters
+`data/comparison-queue.json`. The Recognition Loop withholds its slider until a
+row in `data/comparison-reviews.json` approves the exact still and portrait
+SHA-256 values. Review the pair on `comparison-review.html`, fix sources or
+comparison-only alignment, record the decision, then run
+`npm run build:comparisons`. Replacing either image invalidates the approval and
+returns the pair to `stale`; a newly completed card can never inherit trust from
+an older pair.

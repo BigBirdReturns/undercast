@@ -4,20 +4,20 @@ import { readFileSync } from "node:fs";
 
 const read = path => readFileSync(path, "utf8");
 const files = Object.fromEntries([
-  "index.html","recognition.html","coverage.html","constellation.html","404.html",
+  "index.html","recognition.html","comparison-review.html","coverage.html","constellation.html","404.html",
   "assets/site-shell.css","assets/constellation.css","assets/record-page.css","scripts/build-record-pages.mjs"
 ].map(path => [path, read(path)]));
 const errors = [];
 const expect = (condition, message) => { if (!condition) errors.push(message); };
 const has = (path, pattern) => pattern.test(files[path]);
 
-for (const path of ["index.html","recognition.html","coverage.html","constellation.html"]) {
+for (const path of ["index.html","recognition.html","comparison-review.html","coverage.html","constellation.html"]) {
   expect(has(path, /class="skip-link"/), `${path}: missing skip link`);
   expect(has(path, /aria-current="page"/), `${path}: current surface is not exposed`);
 }
 
-for (const path of ["index.html","recognition.html","coverage.html","constellation.html","404.html"]) {
-  for (const label of ["Browse","Recognition Loop","Coverage","Constellations","Makers","About"]) {
+for (const path of ["index.html","recognition.html","comparison-review.html","coverage.html","constellation.html","404.html"]) {
+  for (const label of ["Browse","Recognition Loop","Coverage","Constellations","Review","Makers","About"]) {
     expect(has(path, new RegExp(`>${label}<`)), `${path}: archive navigation is missing ${label}`);
   }
 }
@@ -45,6 +45,10 @@ expect(has("recognition.html", /\.uc-wipe-layer\.is-person\{clip-path:inset\(0 0
 expect(!has("recognition.html", /\.uc-wipe-layer\.is-(?:character|person)[^{]*\{[^}]*width:/), "recognition: moving the comparison seam must not resize either image");
 expect(has("recognition.html", /transform:scale\(var\(--compare-scale\)\)/), "recognition: comparison-specific face scale is not consumed");
 expect(has("recognition.html", /transform-origin:var\(--compare-x\) var\(--compare-y\)/), "recognition: comparison alignment anchor is not consumed");
+expect(has("recognition.html", /comparisonReview\.status==="approved"/), "recognition: unreviewed image pairs can still open a slider");
+expect(has("recognition.html", /data\/comparison-queue\.json/), "recognition: exact-byte comparison queue is not loaded");
+expect(has("comparison-review.html", /data\/comparison-queue\.json/), "comparison review: queue projection is not exposed");
+expect(has("comparison-review.html", /data\/media-live\.json/), "comparison review: release media map is not used");
 
 expect(has("coverage.html", /data\/archive\.json", \{cache:"no-store"\}/), "coverage: archive snapshot is not fresh");
 expect(has("coverage.html", /readArtifact\(census\.coverage/), "coverage: census artifacts are not snapshot-versioned");
@@ -62,7 +66,7 @@ expect(has("scripts/build-record-pages.mjs", /class="skip-link" href="#record-ma
 expect(has("scripts/build-record-pages.mjs", /aria-current="page">Permanent record/), "records: current surface missing from generator");
 expect(has("assets/record-page.css", /@media\(max-width:420px\)\{\.record-pair\{grid-template-columns:1fr/), "records: narrow comparison breakpoint missing");
 
-for (const path of ["index.html","recognition.html","coverage.html","constellation.html"]) {
+for (const path of ["index.html","recognition.html","comparison-review.html","coverage.html","constellation.html"]) {
   const htmlWithoutComments = files[path].replace(/<!--[\s\S]*?-->/g, "");
   const scripts = [...htmlWithoutComments.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g)]
     .filter(match => !/application\/(?:ld\+json|json)/i.test(match[1]))

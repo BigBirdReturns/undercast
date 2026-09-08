@@ -6,10 +6,10 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
 
 ## Truth and projections
 
-- `data/specimens.json`, `data/SOURCES.json`, `data/DS9-CHANGELING-CENSUS.json`
+- `data/specimens.json`, `data/SOURCES.json`, `data/comparison-reviews.json`, `data/DS9-CHANGELING-CENSUS.json`
   and `data/tombstones.json` are maintained truth: live records, image
-  provenance, exact DS9 Changeling performer/form accounting, and retired-ID
-  continuity.
+  provenance, exact-byte visual comparison decisions, exact DS9 Changeling
+  performer/form accounting, and retired-ID continuity.
 - `data/constellations.json` is the published composite evidence graph. Curated
   constellations are maintained; the `constellation:every-ferengi-performer`
   slice is regenerated exactly from the committed census snapshot and exclusions.
@@ -48,6 +48,12 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
   projection as current.
 - `data/quality.json` publishes current completeness and claim-evidence coverage
   with non-regression floors; a gap remains a gap, not an inferred fact.
+- `data/comparison-queue.json` is the disposable review projection for every
+  non-voice record whose two images could form a slider. `approved` is valid only
+  while its still and portrait SHA-256 values match the canonical review ledger;
+  changed bytes become `stale`, and new pairs become `pending`. Recognition Loop
+  withholds every status except `approved`. The public review surface is
+  `/undercast/comparison-review.html`.
 - `data/entities.json` groups exact credit labels for navigation. Its keys are
   stable derived keys, not assertions that two similarly named humans are the
   same legal identity.
@@ -75,6 +81,9 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
 - `still.focus` and `portrait.focus` are curated display coordinates, not claims
   about image content. They use semantic horizontal/vertical positions so every
   surface can preserve the same intended subject through responsive crops.
+- `still.comparison` and `portrait.comparison` are overlay-only crop/scale
+  coordinates. They do not constitute approval; the exact image hashes and
+  decision in `data/comparison-reviews.json` do.
 
 ## Durable identifiers
 
@@ -84,10 +93,11 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
   permanent correction page and evidence but deliberately do not redirect.
 - `node scripts/shard.mjs` is the complete offline projection build. It refreshes
   census coverage, the Ferengi and DS9 Changeling graph slices, the Ferengi test,
-  shards, search, entities and archive
+  comparison review queue, shards, search, entities and archive
   hashes from committed truth before publication.
 - Permanent record: `/undercast/records/{id}/`
 - Interactive record: `/undercast/recognition.html#{id}`
+- Comparison review: `/undercast/comparison-review.html#{id}`
 - Wall record: `/undercast/index.html#{id}`
 - Species-filtered wall: `/undercast/index.html?species={singular_label}`
 - Constellation anchor: `/undercast/constellation.html?id={constellation_id}&node={node_id}`

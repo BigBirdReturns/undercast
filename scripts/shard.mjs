@@ -39,6 +39,8 @@ if (changelingProjection.status !== 0) throw new Error(`DS9 Changeling projectio
 // finalized, or a clean rebuild immediately appears stale.
 const finalCensusGate = spawnSync(process.execPath, ["scripts/census-gate.mjs", "--write"], { stdio: "inherit" });
 if (finalCensusGate.status !== 0) throw new Error(`final census benchmark failed with exit ${finalCensusGate.status}`);
+const comparisonProjection = spawnSync(process.execPath, ["scripts/comparison-review.mjs", "--write"], { stdio: "inherit" });
+if (comparisonProjection.status !== 0) throw new Error(`comparison review projection failed with exit ${comparisonProjection.status}`);
 
 const SHARD_SIZE = parseInt(process.env.SHARD_SIZE || "1000", 10);
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");

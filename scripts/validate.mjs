@@ -74,6 +74,7 @@ function validate(value, schema, root, path, errs) {
     if (!types.some((t) => typeOk(value, t))) { errs.push(`${path}: expected ${types.join("|")}, got ${typeOf(value)}`); return; }
   }
   if (schema.enum && !schema.enum.includes(value)) errs.push(`${path}: ${JSON.stringify(value)} not in enum [${schema.enum.join(", ")}]`);
+  if (schema.const !== undefined && value !== schema.const) errs.push(`${path}: expected constant ${JSON.stringify(schema.const)}`);
   if (typeof value === "string") {
     if (schema.minLength != null && value.length < schema.minLength) errs.push(`${path}: shorter than minLength ${schema.minLength}`);
     if (schema.pattern && !new RegExp(schema.pattern).test(value)) errs.push(`${path}: "${value.slice(0, 60)}" fails pattern ${schema.pattern}`);
@@ -125,6 +126,8 @@ const specimens = load("data/specimens.json");
 const sources = load("data/SOURCES.json");
 const constellationGraph = existsSync("data/constellations.json") ? load("data/constellations.json") : null;
 const tombstones = existsSync("data/tombstones.json") ? load("data/tombstones.json") : { version: 1, records: [] };
+const comparisonReviews = existsSync("data/comparison-reviews.json") ? load("data/comparison-reviews.json") : null;
+const comparisonQueue = existsSync("data/comparison-queue.json") ? load("data/comparison-queue.json") : null;
 if (!Array.isArray(specimens) || !Array.isArray(sources)) { console.error("FATAL: specimens/SOURCES are not arrays"); process.exit(1); }
 // media manifest (optional): images whose bytes live on GitHub Releases
 const media = existsSync("data/media-manifest.json") ? load("data/media-manifest.json") : null;
@@ -138,6 +141,10 @@ if (existsSync("schema/specimen.schema.json")) conformProfile("schema.specimen",
 else skip("schema.specimen", "schema/specimen.schema.json not found");
 if (existsSync("schema/source.schema.json")) conformProfile("schema.source", sources, load("schema/source.schema.json"), "source");
 else skip("schema.source", "schema/source.schema.json not found");
+if (comparisonReviews && existsSync("schema/comparison-reviews.schema.json")) conformObjectProfile("schema.comparison_reviews", comparisonReviews, load("schema/comparison-reviews.schema.json"), "comparison reviews");
+else skip("schema.comparison_reviews", "comparison review ledger or schema missing");
+if (comparisonQueue && existsSync("schema/comparison-queue.schema.json")) conformObjectProfile("schema.comparison_queue", comparisonQueue, load("schema/comparison-queue.schema.json"), "comparison queue");
+else skip("schema.comparison_queue", "comparison review queue or schema missing");
 if (existsSync("data/archive.json") && existsSync("schema/archive.schema.json")) conformObjectProfile("schema.archive", load("data/archive.json"), load("schema/archive.schema.json"), "archive");
 else skip("schema.archive", "archive contract or schema missing");
 if (existsSync("data/CENSUS-FERENGI-TEST.json") && existsSync("schema/census-test.schema.json")) conformObjectProfile("schema.census_test", load("data/CENSUS-FERENGI-TEST.json"), load("schema/census-test.schema.json"), "Ferengi benchmark");
@@ -165,6 +172,33 @@ for (const s of specimens) {
   const performanceKey = [s.actor, s.character, s.production].map((value) => String(value || "").normalize("NFKC").toLowerCase().trim()).join("|");
   if (performanceKeys.has(performanceKey)) fail("id.unique", `duplicate performer/character/production identity at ${s.id}`);
   performanceKeys.add(performanceKey);
+}
+
+// Every visual slider is explicitly reviewed against exact source bytes. New
+// pairs enter the queue as pending and are withheld until that review lands.
+mark("image.comparison_review_queue");
+if (!comparisonReviews || !comparisonQueue) {
+  fail("image.comparison_review_queue", "comparison review ledger or generated queue is missing");
+} else {
+  const eligible = specimens.filter((record) => record.kind !== "voice" && record.still?.src && record.portrait?.src);
+  if (comparisonQueue.summary?.eligible_pairs !== eligible.length) fail("image.comparison_review_queue", `queue has ${comparisonQueue.summary?.eligible_pairs} eligible pairs; canonical roster has ${eligible.length}`);
+  const rows = new Map((comparisonQueue.rows || []).map((row) => [row.id, row]));
+  if (rows.size !== eligible.length) fail("image.comparison_review_queue", `queue rows ${rows.size} do not cover ${eligible.length} eligible pairs`);
+  const ids = new Set();
+  for (const review of comparisonReviews.reviews || []) {
+    if (ids.has(review.id)) fail("image.comparison_review_queue", `duplicate review ${review.id}`);
+    ids.add(review.id);
+    const record = specimens.find((candidate) => candidate.id === review.id);
+    if (!record || record.kind === "voice" || !record.still?.src || !record.portrait?.src) { fail("image.comparison_review_queue", `${review.id} is not slider-eligible`); continue; }
+    const stillHash = mediaAssets[record.still.src]?.sha256 || (existsSync(record.still.src) ? hashBytes(record.still.src) : null);
+    const portraitHash = mediaAssets[record.portrait.src]?.sha256 || (existsSync(record.portrait.src) ? hashBytes(record.portrait.src) : null);
+    const current = review.still_sha256 === stillHash && review.portrait_sha256 === portraitHash;
+    const expected = current ? review.status : "stale";
+    if (rows.get(review.id)?.status !== expected) fail("image.comparison_review_queue", `${review.id} queue status should be ${expected}`);
+  }
+  const recognition = readFileSync("recognition.html", "utf8");
+  if (!/comparisonReview\.status==="approved"/.test(recognition)) fail("image.comparison_review_queue", "Recognition Loop does not withhold unapproved pairs");
+  if (!/data\/comparison-queue\.json/.test(recognition)) fail("image.comparison_review_queue", "Recognition Loop does not load the exact-byte review queue");
 }
 
 // ── profile: referential integrity (every image ref resolves — locally or on a release) ──

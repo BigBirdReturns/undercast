@@ -50,6 +50,7 @@ test("archive navigation stays complete, consistent, and inside every viewport",
   const surfaces=[
     {path:"index.html",ready:"#result-status",align:".controls",current:1},
     {path:"recognition.html#UC-001",ready:"#record-title",align:".uc-record",current:1},
+    {path:"comparison-review.html",ready:"#grid .card",align:".hero",current:1},
     {path:"coverage.html",ready:"#rows tr",align:".eyebrow",current:1},
     {path:"constellation.html",ready:".person-row",align:".hero",current:1},
     {path:"records/UC-001/",ready:"#record-main",align:".record-meta",current:1},
@@ -170,11 +171,8 @@ test("Recognition comparison renders the curated physical-transformation benchma
     ["UC-035","The Borg Queen"],
     ["UC-006","Odo"],
     ["UC-018","Worf"],
-    ["UC-019","Quark"],
     ["UC-026","Hellboy"],
-    ["UC-037","Seven of Nine"],
-    ["UC-057","Chewbacca"],
-    ["UC-362","Chewbacca"]
+    ["UC-057","Chewbacca"]
   ];
   for(const [id,title] of records){
     await open(page,`recognition.html#${id}`);
@@ -193,11 +191,35 @@ test("Recognition comparison renders the curated physical-transformation benchma
       expect(box.image[0]+box.image[2]).toBeGreaterThanOrEqual(box.frame[0]+box.frame[2]-1);
       expect(box.image[1]+box.image[3]).toBeGreaterThanOrEqual(box.frame[1]+box.frame[3]-1);
     }
-    if(id==="UC-006"||id==="UC-018"||id==="UC-362"){
+    if(id==="UC-006"||id==="UC-018"){
       expect(await images.first().evaluate(image=>getComputedStyle(image).objectPosition)).toMatch(/^20%\s+28%$/);
     }
-    if(id==="UC-362") expect(await images.last().evaluate(image=>getComputedStyle(image).objectPosition)).toMatch(/^50%\s+28%$/);
   }
+});
+
+test("unapproved comparisons are withheld and traceable to a byte-bound public review",async({page})=>{
+  await open(page,"recognition.html#UC-008");
+  await expect(page.getByRole("heading",{name:"Gollum",exact:true}).first()).toBeVisible();
+  await expect(page.getByRole("button",{name:"Compare in one frame",exact:true})).toHaveCount(0);
+  const note=page.locator(".uc-compare-note");
+  await expect(note).toContainText("Comparison withheld · needs source");
+  await note.getByRole("link",{name:/Open the visual review ledger/}).click();
+  await expect(page).toHaveURL(/comparison-review\.html#UC-008$/);
+  await expect(page.locator("#UC-008")).toBeVisible();
+  await expect(page.locator("#UC-008 .meta")).toContainText("needs-source");
+  await expect(page.locator("#UC-008")).toContainText("replace still with frontal Gollum closeup");
+});
+
+test("comparison review is paged, filterable, and reports the whole eligible corpus",async({page})=>{
+  await open(page,"comparison-review.html");
+  await expect(page.locator("#summary")).toContainText("450 eligible");
+  await expect(page.locator("#grid .card")).toHaveCount(48);
+  await expect(page.locator("#pager")).toContainText("page 1 of 10");
+  await page.getByRole("button",{name:"needs source",exact:true}).click();
+  await expect(page).toHaveURL(/status=needs-source/);
+  await expect(page.locator("#grid .card").first()).toBeVisible();
+  expect(await page.locator("#grid .card .meta span").allTextContents()).toEqual(expect.arrayContaining(["needs-source"]));
+  expect((await page.locator("#grid .card .meta span").allTextContents()).every(status=>status==="needs-source")).toBeTruthy();
 });
 
 test("Morn comparison consumes the human-reviewed face alignment",async({page})=>{
@@ -366,9 +388,14 @@ test("all canonical sitemap routes resolve and merged aliases stay out",async({r
   test.setTimeout(120_000);
   const sitemapResponse=await request.get(sitePath("sitemap.xml"));
   expect(sitemapResponse.ok()).toBeTruthy();
+  const [specimens,tombstones]=await Promise.all([
+    request.get(sitePath("data/specimens.json")).then(response=>response.json()),
+    request.get(sitePath("data/tombstones.json")).then(response=>response.json())
+  ]);
   const xml=await sitemapResponse.text();
   const urls=[...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(match=>new URL(match[1]).pathname);
-  expect(urls).toHaveLength(1083);
+  const publicSurfaces=5,retiredRoutes=tombstones.records.filter(record=>record.status!=="merged").length;
+  expect(urls).toHaveLength(specimens.length+retiredRoutes+publicSurfaces);
   expect(urls.some(path=>path.includes("/records/UC-257/"))).toBeFalsy();
   for(let offset=0;offset<urls.length;offset+=40){
     const batch=urls.slice(offset,offset+40);
