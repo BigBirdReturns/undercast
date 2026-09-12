@@ -196,7 +196,8 @@ test("wall search, current decade, flip semantics, and partial failure are hones
 
   const firstArticle=page.locator("article.cast").first();
   const character=await firstArticle.locator(".charname").textContent();
-  await firstArticle.getByRole("button",{name:new RegExp(`Reveal the performer for ${character}`)}).click();
+  const escapedCharacter=character.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+  await firstArticle.getByRole("button",{name:new RegExp(`Reveal the performer for ${escapedCharacter}`)}).click();
   await expect(firstArticle).toHaveAttribute("data-flipped","true");
 
   await page.unrouteAll({behavior:"ignoreErrors"});

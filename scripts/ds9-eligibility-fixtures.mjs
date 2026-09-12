@@ -11,12 +11,15 @@
  */
 import { readFile } from "node:fs/promises";
 import { validateDecisions, validateDecision, evidenceId, isSubstantive } from "./lib/eligibility.mjs";
+import { resolveDS9Key } from "./lib/ds9-coverage.mjs";
 
 const roster = JSON.parse(await readFile("data/ds9/roster.json", "utf8"));
 const dossiers = JSON.parse(await readFile("data/ds9/eligibility-evidence.json", "utf8")).performances;
 const queue = JSON.parse(await readFile("data/ds9/eligibility-queue.json", "utf8")).queue;
 const qByKey = new Map(queue.map((q) => [q.duplicate_key, q]));
 const decisionsDoc = JSON.parse(await readFile("data/ds9/eligibility-decisions.json", "utf8"));
+const aliases = JSON.parse(await readFile("data/ds9/key-aliases.json", "utf8")).aliases;
+const coverage = JSON.parse(await readFile("data/ds9/coverage.json", "utf8")).coverage;
 
 let failed = 0;
 const check = (name, cond, detail = "") => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond ? "" : "  <- " + detail}`); if (!cond) failed++; };
@@ -96,9 +99,13 @@ const rosterKeys = new Set(roster.map((r) => r.duplicate_key));
 const dossierKeys = new Set(Object.keys(dossiers));
 const queueKeys = new Set(queue.map((q) => q.duplicate_key));
 const setEq = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
-check("roster keys, dossier keys, and queue keys are EXACTLY equal sets",
-  setEq(rosterKeys, dossierKeys) && setEq(dossierKeys, queueKeys),
+check("current roster and queue keys match exactly; every historical dossier still resolves",
+  setEq(rosterKeys, queueKeys) && [...dossierKeys].every(key => rosterKeys.has(resolveDS9Key(key, aliases))),
   `roster ${rosterKeys.size} / dossiers ${dossierKeys.size} / queue ${queueKeys.size}`);
+check("new keys without dossiers explicitly disclose absent current evidence",
+  queue.filter(q => !dossiers[q.duplicate_key]).every(q => q.evidence_status === "not-collected-for-current-key" && q.evidence_count === 0 && q.owner_verdict === null));
+check("every eligibility wall join equals current coverage by duplicate_key",
+  queue.every(q => { const c = coverage.find(c => c.duplicate_key === q.duplicate_key); return c && q.on_wall === c.role_on_wall && setEq(new Set(q.wall_ids), new Set(c.wall_ids)); }));
 
 // --- owner-decision validation: substantive evidence + complete metadata; bad ones rejected ---
 const gk = CASES.garak, gEv = dossiers[gk].evidence;

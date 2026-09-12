@@ -14,9 +14,10 @@ This is the identity and must not be "modernized" into a generic streaming grid.
 
 **Palette — DESCRIPTIVE, not canonical (DEC-0010).** Shared CSS is the canonical
 source for actual token values; this table describes intent and shows the current
-values but is **not** a second source of truth. The values live inline in each page
-today (an implementation gap DEC-0010 tracks) — prefer extracting them into shared
-CSS custom properties over citing this table as law.
+values but is **not** a second source of truth. The values live in
+`assets/site-tokens.css`. Page-specific layout and theme overrides may consume those
+tokens without becoming competing token authorities; reconcile this prose to the
+shared stylesheet rather than re-extracting or duplicating it.
 
 | token | value (current) | role |
 |---|---|---|
@@ -28,13 +29,17 @@ CSS custom properties over citing this table as law.
 | `--grease` | `#A83E30` | grease-pencil red — annotation only, used sparingly |
 | `--line` | `#C3BCAD` | hairlines / rules |
 
-Recognition uses its own light/dark token set. Sitewide dark mode and global no-JS
-architecture are out of scope for a presentation PR unless a decision opens them.
+The shared shell applies the accepted light/dark hierarchy across Browse,
+Recognition, Coverage, Connections, permanent records and recovery pages. Light is
+the deterministic first-load theme; a visitor-selected theme persists. Permanent
+records and recovery remain useful without JavaScript, and JS-only controls remain
+hidden when scripting is unavailable (DEC-0014 through DEC-0016).
 
 **Type:** `Fraunces` (display serif) for titles/names/numbers; `Space Mono` for
 kickers/labels/catalog voice. These are the brand. **Typography may change only
 through an explicit design decision, not incidental substitution** (DEC-0010).
-Self-host the fonts when a build must be hermetic.
+Release builds use the verified local WOFF2 subsets declared by
+`assets/fonts/SOURCES.json`; compilation performs no live font retrieval.
 
 ## 2. Card anatomy — the primitive (DEC-0001)
 

@@ -66,6 +66,13 @@ days, weak/non-free portraits every 180 days, verified portraits annually, and s
 every two years. A no-result receipt advances the round-robin rather than repeatedly
 hammering the same card.
 
+`data/MEDIA-REJECTIONS.json` binds reviewed invalid objects to exact SHA-256 values
+and, where available, source locators. The detached retriever and the canonical
+reporter both enforce it. Rejected bytes are omitted from the 90-day artifact and the
+attempt journal names the blocking rule; a genuinely different replacement remains
+eligible for exact-subject review. The projection currently reconciles the 71
+COLLECT-001 obligations with 73 non-superseded UC-MEDIA-AUDIT-1 findings.
+
 ## Estate induction
 
 `data/ESTATE-REGISTRY.json` is the one frontier. States are:

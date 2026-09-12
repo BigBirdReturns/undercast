@@ -20,8 +20,10 @@
  * Run:  node scripts/retrieve.mjs           (chips away RETRIEVE_MAX per run)
  * Env:  RETRIEVE_MAX (default 20), CONTACT (put a real email in your User-Agent)
  */
+import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir, access } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { indexMediaRejections, matchMediaRejection } from "./lib/media-rejections.mjs";
 
 const REPO    = "https://github.com/BigBirdReturns/undercast";
 const CONTACT = process.env.CONTACT || "maintainer";
@@ -37,6 +39,7 @@ const LOOSE   = /^(loose|dense|1|true)$/i.test(process.env.IMAGE_MODE || "");
 const DATA    = "data/specimens.json";
 const LEDGER  = "data/SOURCES.json";
 const GAPS    = "data/GAPS.json";
+const REJECTIONS = "data/MEDIA-REJECTIONS.json";
 const IMGDIR  = "images";
 
 const WIKIPEDIA = "https://en.wikipedia.org/w/api.php";
@@ -164,6 +167,17 @@ async function download(url, out) {
   }
   await writeFile(out, Buffer.from(await r.arrayBuffer()));
   return true;
+}
+
+async function admittedMediaCandidate(specimen, side, candidate, rejectionIndex) {
+  if (!candidate?.src) return null;
+  let digest;
+  try { digest = createHash("sha256").update(await readFile(candidate.src)).digest("hex"); }
+  catch (error) { console.log(`  ${specimen.id} ${side}: candidate bytes unavailable (${error.message})`); return null; }
+  const rejected = matchMediaRejection(rejectionIndex, { wallId: specimen.id, side, origin: candidate.origin, sha256: digest });
+  if (!rejected) return candidate;
+  console.log(`  ${specimen.id} ${side}: rejected by ${rejected.rule.rule_id} (${rejected.match})`);
+  return null;
 }
 
 // The CHARACTER still — prefer the canonical / most-popular (usually live-action)
@@ -361,6 +375,7 @@ async function main() {
   if (process.argv.includes("--audit")) return audit();
   await mkdir(IMGDIR, { recursive: true });
   const specimens = JSON.parse(await readFile(DATA, "utf8"));
+  const rejectionIndex = indexMediaRejections(JSON.parse(await readFile(REJECTIONS, "utf8")));
   let ledger = [];
   try { ledger = JSON.parse(await readFile(LEDGER, "utf8")); } catch {}
   const gaps = [];
@@ -374,8 +389,10 @@ async function main() {
   let filled = 0;
   for (const s of todo) {
     try {
-      const still = s.still || await getStill(s).catch(() => null);
-      const portrait = s.portrait || await getPortrait(s).catch(() => null);
+      const stillCandidate = s.still || await getStill(s).catch(() => null);
+      const portraitCandidate = s.portrait || await getPortrait(s).catch(() => null);
+      const still = s.still || await admittedMediaCandidate(s, "still", stillCandidate, rejectionIndex);
+      const portrait = s.portrait || await admittedMediaCandidate(s, "portrait", portraitCandidate, rejectionIndex);
       if (still) s.still = still;
       if (portrait) s.portrait = portrait;
 

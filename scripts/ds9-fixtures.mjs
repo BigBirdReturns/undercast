@@ -10,6 +10,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import "./ds9-source-fixtures.mjs";
 
 const digest = (v) => createHash("sha256").update(v).digest("hex");
 const roster = JSON.parse(await readFile("data/ds9/roster.json", "utf8"));

@@ -63,7 +63,7 @@ export function nextOperation({registry,jobs,audit,claimAllowed}){
   for(const estate of active){
     const counts=jobCounts(jobs,estate.autopilot_scope);
     if(counts.queued){
-      if(claimAllowed===false)return {kind:"inspect-waterline",estate:estate.id,reason:"queue exists but the rolling waterline refuses a claim",command:`npm run waterline -- status --scope ${estate.autopilot_scope}`};
+      if(claimAllowed!==true)return {kind:"inspect-waterline",estate:estate.id,reason:claimAllowed===false?"queue exists but the rolling waterline refuses a claim":"queue exists but explicit waterline claim permission is unavailable or malformed; hold pending successful status",command:`npm run waterline -- status --scope ${estate.autopilot_scope}`};
       return {kind:"lease-one-cycle",estate:estate.id,reason:`${counts.queued} queued task(s), zero global in-flight work and zero media debt`,command:`npm run autopilot -- next --agent luna --scope ${estate.autopilot_scope} --capability-profile text-vision --limit 1 --out .luna/batch.json --prompt .luna/PROMPT.md`};
     }
   }

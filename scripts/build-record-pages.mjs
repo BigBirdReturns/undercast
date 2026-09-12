@@ -1,7 +1,8 @@
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT=path.resolve(new URL("..",import.meta.url).pathname.replace(/^\/(?:[A-Za-z]:)/,m=>m.slice(1)));
+const ROOT=fileURLToPath(new URL("..",import.meta.url));
 const records=JSON.parse(await readFile(path.join(ROOT,"data/specimens.json"),"utf8"));
 const tombstones=JSON.parse(await readFile(path.join(ROOT,"data/tombstones.json"),"utf8").catch(()=>'{"records":[]}'));
 const constellationGraph=JSON.parse(await readFile(path.join(ROOT,"data/constellations.json"),"utf8"));

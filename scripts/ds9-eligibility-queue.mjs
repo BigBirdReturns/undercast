@@ -11,15 +11,24 @@
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { validateDecisions } from "./lib/eligibility.mjs";
+import { coverageByKey, resolveDS9Key } from "./lib/ds9-coverage.mjs";
 
 const dossiers = JSON.parse(await readFile("data/ds9/eligibility-evidence.json", "utf8")).performances;
 const decisionsDoc = JSON.parse(await readFile("data/ds9/eligibility-decisions.json", "utf8"));
+const roster = JSON.parse(await readFile("data/ds9/roster.json", "utf8"));
+const coverage = coverageByKey(JSON.parse(await readFile("data/ds9/coverage.json", "utf8")).coverage, roster);
+const aliases = JSON.parse(await readFile("data/ds9/key-aliases.json", "utf8")).aliases;
 
 // ONE shared validator, identical to the fixtures. Any duplicate / malformed /
 // stale / dangling decision produces an error and fails this build (and CI).
 const { applied, errors } = validateDecisions(decisionsDoc.decisions, dossiers);
 
-const queue = Object.values(dossiers).map((d) => {
+if (decisionsDoc.decisions.some(d => resolveDS9Key(d.duplicate_key, aliases) !== d.duplicate_key))
+  throw new Error("Migrated eligibility decision needs explicit owner re-adjudication; cannot rebind historical evidence");
+const queue = roster.map((row) => {
+  const historical = Object.keys(dossiers).filter(key => key !== row.duplicate_key && resolveDS9Key(key, aliases) === row.duplicate_key);
+  const d = dossiers[row.duplicate_key] || { ...row, signals: [], evidence: [] };
+  const wall = coverage.get(row.duplicate_key);
   const decision = applied.get(d.duplicate_key) || null;
   return {
     duplicate_key: d.duplicate_key, performer: d.performer, character: d.character,
@@ -29,7 +38,11 @@ const queue = Object.values(dossiers).map((d) => {
     decided_by: decision ? decision.decided_by : null, date: decision ? decision.date : null,
     grow_md_version: decision ? decision.grow_md_version : null,
     signals: d.signals, evidence_count: d.evidence.filter((e) => e.kind !== "species-context").length,
-    on_wall: d.on_wall, wall_ids: d.wall_ids,
+    on_wall: wall.role_on_wall, wall_ids: wall.wall_ids,
+    ...(!dossiers[row.duplicate_key] || historical.length ? {
+      evidence_status: dossiers[row.duplicate_key] ? "current-dossier" : "not-collected-for-current-key",
+      historical_dossier_keys: historical,
+    } : {}),
   };
 }).sort((a, b) => a.performer.localeCompare(b.performer) || a.character.localeCompare(b.character));
 
@@ -38,7 +51,7 @@ const summary = {
   version: 1, production: "Star Trek: Deep Space Nine",
   title: "DS9 eligibility review queue",
   law: "GROW.md — a real, verifiable performer who vanishes under a designed face",
-  generated_from: ["data/ds9/eligibility-evidence.json (machine: pinned+verified evidence)", "data/ds9/eligibility-decisions.json (owner: verdicts)"],
+  generated_from: ["data/ds9/roster.json", "data/ds9/coverage.json", "data/ds9/key-aliases.json", "data/ds9/eligibility-evidence.json (machine: pinned+verified evidence)", "data/ds9/eligibility-decisions.json (owner: verdicts)"],
   contract: "Machines collect/pin/hash/verify evidence and prepare this queue. Verdicts come ONLY from the owner decisions file. Everything undecided is review. Signals (voice-only, bare-faced) are hints, not verdicts. Species is context only.",
   total: queue.length,
   decided: decided.length,

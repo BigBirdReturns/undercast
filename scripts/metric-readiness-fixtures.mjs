@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   emptyWaterlineState,
@@ -119,8 +119,9 @@ assert.throws(() => validateMetricReadinessConfig({
   },
 }), /mode is invalid/);
 
-const resolved = resolveMetricObservationSources(config, { root: "/repo" });
-assert.equal(resolved.cost_per_verified_record_usd.path, "/repo/data/operational-reliability/COST-OBSERVATIONS.json");
+const fixtureRoot = resolve("/repo");
+const resolved = resolveMetricObservationSources(config, { root: fixtureRoot });
+assert.equal(resolved.cost_per_verified_record_usd.path, resolve(fixtureRoot, costSource));
 assert.equal(resolved.rights_response_sla_days.source, rightsSource);
 assert.equal(normalizeMetricObservationSource(`./${costSource}`), costSource);
 assert.equal(normalizeMetricObservationSource(`data/operational-reliability/../operational-reliability/COST-OBSERVATIONS.json`), costSource);

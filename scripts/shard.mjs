@@ -19,7 +19,7 @@
  * only in the reveal) ride in `kw`, so "ferengi" still finds Quark. True 1M-scale
  * full-text is the next pass (an inverted index) — see SCALING.md.
  *
- *   node scripts/shard.mjs            # SHARD_SIZE=1000 default
+ *   node scripts/shard.mjs            # SHARD_SIZE=120 default (one wall page)
  */
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -40,7 +40,8 @@ if (changelingProjection.status !== 0) throw new Error(`DS9 Changeling projectio
 const finalCensusGate = spawnSync(process.execPath, ["scripts/census-gate.mjs", "--write"], { stdio: "inherit" });
 if (finalCensusGate.status !== 0) throw new Error(`final census benchmark failed with exit ${finalCensusGate.status}`);
 
-const SHARD_SIZE = parseInt(process.env.SHARD_SIZE || "1000", 10);
+const SHARD_SIZE = parseInt(process.env.SHARD_SIZE || "120", 10);
+if (!Number.isInteger(SHARD_SIZE) || SHARD_SIZE < 1 || SHARD_SIZE > 1000) throw new Error("SHARD_SIZE must be an integer from 1 to 1000");
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");
 const jsonBytes = (value, space) => Buffer.from(JSON.stringify(value, null, space) + "\n", "utf8");
 const idNum = (id) => { const m = String(id).match(/(\d+)/); return m ? parseInt(m[1], 10) : 0; };
@@ -52,7 +53,13 @@ const STOP = new Set(("the a an and or of to in on for with as at by from is was
 const tokens = (t) => [...new Set(String(t || "").toLowerCase().match(/[a-z0-9]{3,}/g) || [])].filter((w) => !STOP.has(w));
 
 const specimens = JSON.parse(await readFile("data/specimens.json", "utf8"));
-const speciesProjectionData = JSON.parse(await readFile("data/species.json", "utf8"));
+const speciesProjectionBytes = await readFile("data/species.json");
+const speciesProjectionData = JSON.parse(speciesProjectionBytes);
+const candidates = JSON.parse(await readFile("data/CANDIDATES.json", "utf8").catch(() => "[]"));
+const mediaData = JSON.parse(await readFile("data/media-manifest.json", "utf8").catch(() => '{"assets":{}}'));
+const releaseUrls = Object.fromEntries(Object.entries(mediaData.assets || {})
+  .filter(([, entry]) => entry.location === "release")
+  .map(([src, entry]) => [src, entry.url]));
 const speciesByRecord = new Map();
 for (const taxon of speciesProjectionData.taxa || []) {
   if (!Array.isArray(taxon.wall_records)) throw new Error(`species taxon ${taxon.key || taxon.label || "<unknown>"} lacks exact wall_records`);
@@ -84,27 +91,45 @@ const index = ordered.map((s, gi) => {
 
 // ── full-record shards (compact JSON — machine-read, not hand-edited) ──
 await rm("data/shards", { recursive: true, force: true });
+await rm("data/media-shards", { recursive: true, force: true });
 await mkdir("data/shards", { recursive: true });
+await mkdir("data/media-shards", { recursive: true });
 const shardMeta = [];
 for (let i = 0, sh = 0; i < ordered.length; i += SHARD_SIZE, sh++) {
   const slice = ordered.slice(i, i + SHARD_SIZE);
-  const file = `shards/${String(sh).padStart(4, "0")}.json`;
+  const suffix = String(sh).padStart(4, "0");
+  const file = `shards/${suffix}.json`;
   const bytes = jsonBytes(slice);
   await writeFile("data/" + file, bytes);
-  shardMeta.push({ file, n: slice.length, bytes: bytes.length, sha256: sha256(bytes) });
+  const urls = {};
+  for (const record of slice) for (const side of ["still", "portrait"]) {
+    const src = record[side]?.src;
+    if (src && releaseUrls[src]) urls[src] = releaseUrls[src];
+  }
+  const mediaFile = `media-shards/${suffix}.json`;
+  const mediaBytes = jsonBytes({ version: 1, urls });
+  await writeFile("data/" + mediaFile, mediaBytes);
+  shardMeta.push({
+    file, n: slice.length, bytes: bytes.length, sha256: sha256(bytes),
+    media_file: mediaFile, media_bytes: mediaBytes.length, media_sha256: sha256(mediaBytes),
+  });
 }
 
 const indexBytes = jsonBytes(index);
 await writeFile("data/index.json", indexBytes);
 
 const manifest = {
-  version: 1,
+  version: 2,
   built_from: "data/specimens.json",
   source_sha256: sha256(JSON.stringify(specimens)),
   count: ordered.length,
   shard_size: SHARD_SIZE,
   index_bytes: indexBytes.length,
   index_sha256: sha256(indexBytes),
+  species_indexed: true,
+  species_bytes: speciesProjectionBytes.length,
+  species_sha256: sha256(speciesProjectionBytes),
+  candidate_count: Array.isArray(candidates) ? candidates.length : 0,
   shards: shardMeta,
   redirects: Object.fromEntries((tombstones.records || []).filter((row) => row.status === "merged" && row.successor).map((row) => [row.id, row.successor])),
 };
@@ -117,15 +142,12 @@ await writeFile("data/shard-manifest.json", JSON.stringify(manifest, null, 1) + 
 // data-change or upload flow refreshes it from the manifest's current location flags.
 let liveCount = 0;
 try {
-  const media = JSON.parse(await readFile("data/media-manifest.json", "utf8"));
-  const urls = {};
-  for (const [src, e] of Object.entries(media.assets || {})) if (e.location === "release") urls[src] = e.url;
-  liveCount = Object.keys(urls).length;
-  const liveBytes = jsonBytes({ version: 1, urls });
+  liveCount = Object.keys(releaseUrls).length;
+  const liveBytes = jsonBytes({ version: 1, urls: releaseUrls });
   await writeFile("data/media-live.json", liveBytes);
   manifest.media_live_bytes = liveBytes.length;
   manifest.media_live_sha256 = sha256(liveBytes);
-} catch { /* no media manifest yet — no media-live to emit */ }
+} catch { /* no media manifest yet; no media-live to emit */ }
 
 // Rewrite after the media projection so clients can version every cached payload
 // by its advertised content hash.
@@ -134,8 +156,8 @@ await writeFile("data/shard-manifest.json", jsonBytes(manifest, 1));
 const kb = (n) => (n / 1e3).toFixed(0) + "KB";
 console.log(`sharded ${ordered.length} cards → ${shardMeta.length} shard(s) (≤${SHARD_SIZE} each)`);
 console.log(`  index.json ${kb(indexBytes.length)} (${Math.round(indexBytes.length / ordered.length)} B/card) — loaded on boot`);
-console.log(`  ${shardMeta.length} shard file(s), ${shardMeta.reduce((a, s) => a + s.n, 0)} records total — loaded lazily`);
-if (liveCount) console.log(`  media-live.json: ${liveCount} image(s) on Releases — loaded on boot (lean)`);
+console.log(`  ${shardMeta.length} record + media shard pair(s), ${shardMeta.reduce((a, s) => a + s.n, 0)} records total; loaded lazily`);
+if (liveCount) console.log(`  media-live.json: ${liveCount} Release image(s) retained as compatibility/build custody; runtime uses media shards`);
 console.log(`  rebuild any time: node scripts/shard.mjs   (projections are disposable)`);
 
 // Machine-facing discovery, entity and search projections are part of the same

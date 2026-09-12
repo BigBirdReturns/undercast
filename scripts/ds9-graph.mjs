@@ -24,13 +24,15 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { normalizeCensusKey as normalize } from "./census-key.mjs";
+import { reconcilePortrayals } from "./lib/ds9-portrayals.mjs";
 
 const UA = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT || "ds9-graph"})`;
 const API = "https://memory-alpha.fandom.com/api.php";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const args = process.argv.slice(2);
-const PROJECT_ONLY = args.includes("--project-only");
+const RECONCILE_ROSTER = args.includes("--reconcile-roster");
+const PROJECT_ONLY = args.includes("--project-only") || RECONCILE_ROSTER;
 const CAPTURED_AT = PROJECT_ONLY ? null : new Date().toISOString();
 const wikiUrl = (title) => `https://memory-alpha.fandom.com/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`;
 const catUrl = (cat) => wikiUrl("Category:" + cat);
@@ -172,6 +174,12 @@ if (PROJECT_ONLY) {
   for (const n of JSON.parse(await readFile("data/ds9/graph/nodes.json", "utf8")).nodes) nodes.set(n.type + ":" + n.id, n);
   for (const e of JSON.parse(await readFile("data/ds9/graph/edges.json", "utf8")).edges) {
     edges.push(e); edgeSeen.add(e.type + "|" + e.from + "|" + e.to);
+  }
+  if (RECONCILE_ROSTER) {
+    const migration = JSON.parse(await readFile("data/review/estate-debt/uc-1.0-ds9/migration.json", "utf8"));
+    const reconciled = reconcilePortrayals([...nodes.values()], edges, roster, migration);
+    nodes.clear(); for (const n of reconciled.nodes) nodes.set(n.type + ":" + n.id, n);
+    edges.splice(0, edges.length, ...reconciled.edges);
   }
 }
 
@@ -462,7 +470,8 @@ const relationships = {
 // ---- write ----
 const nodeCounts = nodeList.reduce((a, n) => (a[n.type] = (a[n.type] || 0) + 1, a), {});
 const edgeCounts = edges.reduce((a, e) => (a[e.type] = (a[e.type] || 0) + 1, a), {});
-const nodesDoc = { version: 2, production: "Star Trek: Deep Space Nine", captured_at: CAPTURED_AT, counts: nodeCounts, nodes: nodeList };
+const nodesDoc = { version: 2, production: "Star Trek: Deep Space Nine", captured_at: RECONCILE_ROSTER
+  ? JSON.parse(await readFile("data/ds9/graph/nodes.json", "utf8")).captured_at : CAPTURED_AT, counts: nodeCounts, nodes: nodeList };
 const edgesDoc = { version: 2, production: "Star Trek: Deep Space Nine",
   predicates: {
     portrayed: "performer wore character (episode-credited)", is_species: "character is of species (infobox/category)",
@@ -511,10 +520,10 @@ const write = async (name, doc) => {
 // so the manifest can prove the derived files match the committed nodes/edges.
 const snapshots = {};
 const hashOnly = async (name) => ({ path: "data/ds9/graph/" + name, sha256: digest(await readFile("data/ds9/graph/" + name, "utf8")) });
-if (!PROJECT_ONLY) {
+if (!PROJECT_ONLY || RECONCILE_ROSTER) {
   snapshots.nodes = await write("nodes.json", nodesDoc);
   snapshots.edges = await write("edges.json", edgesDoc);
-  snapshots.family_review = await write("family-review.json", familyReviewDoc);
+  snapshots.family_review = RECONCILE_ROSTER ? await hashOnly("family-review.json") : await write("family-review.json", familyReviewDoc);
 } else {
   snapshots.nodes = await hashOnly("nodes.json");
   snapshots.edges = await hashOnly("edges.json");

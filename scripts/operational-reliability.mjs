@@ -297,7 +297,11 @@ export async function runRepositoryRestoreDrill({
   const patchSha = sha256(patchResult.stdout);
   const changedPathsResult = git(checkoutRoot, ["diff", "--name-only", "--no-renames", `${snapshot.repository_commit}..${targetHead}`, "--", "."], { label: "list recovery paths" });
   const changedPaths = changedPathsResult.stdout.split(/\r?\n/).filter(Boolean).sort();
-  if (patchResult.stdout.trim()) run("git", ["apply", "--binary", "--whitespace=nowarn", patchPath], { cwd: restoredRoot, label: "apply forward recovery patch" });
+  if (patchResult.stdout.trim()) run("git", [
+    "-c", "core.autocrlf=false",
+    "-c", "core.eol=lf",
+    "apply", "--binary", "--whitespace=nowarn", patchPath,
+  ], { cwd: restoredRoot, label: "apply forward recovery patch" });
 
   const targetTree = await exactTrackedTree(checkoutRoot, restoredRoot, targetHead);
   let installResult = null;
