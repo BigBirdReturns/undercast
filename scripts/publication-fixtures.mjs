@@ -26,6 +26,18 @@ try {
     assert.ok(!source.files.has('data/MEDIA-REJECTIONS.json'));
     assert.ok(!source.files.has('data/review/estate-debt/UC-MEDIA-AUDIT-1-20260820.jsonl'));
   });
+  test('bounded release-media shards are exact public dependencies', () => {
+    const manifest = JSON.parse(fs.readFileSync('data/shard-manifest.json'));
+    assert.ok(manifest.shards.length > 0);
+    for (const row of manifest.shards) {
+      assert.match(row.media_file || '', /^media-shards\/\d{4}\.json$/);
+      const file = `data/${row.media_file}`;
+      assert.ok(source.files.has(file), `media shard omitted: ${file}`);
+      const bytes = source.files.get(file);
+      assert.equal(bytes.length, row.media_bytes, `media shard size mismatch: ${file}`);
+      assert.equal(sha256(bytes), row.media_sha256, `media shard hash mismatch: ${file}`);
+    }
+  });
   test('approved homepage fonts are local, complete, and custody-verified', () => {
     assert.equal(validateFontAssets(process.cwd(), source.files), true);
     const homepage = fs.readFileSync('index.html', 'utf8');
@@ -43,6 +55,14 @@ try {
     assert.equal(sha256(normalized), row.sha256);
     write(restored, row.path, normalized);
   }
+  test('missing bounded media shard fails deterministic inventory', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(restored, 'data/shard-manifest.json')));
+    const file = path.join(restored, 'data', manifest.shards[0].media_file);
+    const bytes = fs.readFileSync(file);
+    fs.unlinkSync(file);
+    try { assert.throws(() => inventory(restored), /ENOENT/); }
+    finally { fs.writeFileSync(file, bytes); }
+  });
   test('malformed private rejection registry fails deterministic inventory', () => {
     const file = path.join(restored, 'data/MEDIA-REJECTIONS.json');
     const bytes = fs.readFileSync(file); const document = JSON.parse(bytes);

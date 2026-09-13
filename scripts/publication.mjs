@@ -205,7 +205,7 @@ export function inventory(root = ROOT) {
     assert.ok(!file.startsWith('data/review/') || EVIDENCE.includes(file), `disallowed evidence: ${file}`);
     assert.ok(CONTRACT_PATHS.has(file) || EXTRA.includes(file) || EVIDENCE.includes(file) ||
       ['data/archive.json', 'robots.txt', 'sitemap.xml', 'data/dataset.jsonld', 'CRAWLERS.md'].includes(file) ||
-      /^data\/(?:shards\/\d{4}|search\/[a-z0-9_])\.json$/.test(file), `disallowed publication path: ${file}`);
+      /^data\/(?:shards\/\d{4}|media-shards\/\d{4}|search\/[a-z0-9_])\.json$/.test(file), `disallowed publication path: ${file}`);
     const bytes = read(root, file);
     if (expected) {
       assert.equal(sha256(bytes), expected.sha256, `corrupt contract dependency: ${file}`);
@@ -226,7 +226,10 @@ export function inventory(root = ROOT) {
   for (const file of CONTRACT_PATHS) assert.ok(files.has(file), `missing contract path: ${file}`);
   assert.deepEqual(archive.web_assets.filter(row => row.path.endsWith('.html')).map(row => row.path).sort(), ['404.html','constellation.html','coverage.html','index.html','recognition.html']);
   for (const file of Object.values(archive.discovery)) add(file);
-  for (const row of json(root, 'data/shard-manifest.json').shards) add(`data/${row.file}`, row);
+  for (const row of json(root, 'data/shard-manifest.json').shards) {
+    add(`data/${row.file}`, row);
+    if (row.media_file) add(`data/${row.media_file}`, { sha256: row.media_sha256, bytes: row.media_bytes });
+  }
   for (const row of json(root, 'data/search/manifest.json').shards) add(row.file, row);
   for (const file of [...EXTRA, ...EVIDENCE]) add(file);
   validateFontAssets(root, files);
