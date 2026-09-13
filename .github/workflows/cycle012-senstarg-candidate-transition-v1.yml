@@ -1,0 +1,415 @@
+name: cycle012-senstarg-candidate-transition-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/cycle012-senstarg-candidate-transition-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: cycle012-senstarg-candidate-transition-v1
+  cancel-in-progress: false
+
+jobs:
+  handoff:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'observer/cycle012-senstarg-candidate-transition-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CURRENT_MAIN: 40ae7ff0bdc96c8ccb3c9c96d1358c7de91979c2
+      CURRENT_TREE: 33b1ff1ea4f191ee42ce09afc9a88a01c7006e71
+      SELF_BRANCH: observer/cycle012-senstarg-candidate-transition-v1
+      SELF_PATH: .github/workflows/cycle012-senstarg-candidate-transition-v1.yml
+      CANDIDATE_PR: "937"
+      CANDIDATE_BRANCH: agent/doctor-who-cycle-012-senstarg-candidate-v1
+      CANDIDATE_WORKFLOW: doctor-who-cycle-012-senstarg-candidate-v1
+      CANDIDATE_ARTIFACT_PREFIX: doctor-who-cycle-012-senstarg-candidate-v1-
+      REVIEW_BRANCH: agent/doctor-who-cycle-012-senstarg-candidate-review-v1
+      REVIEW_PATH: .github/workflows/doctor-who-cycle-012-senstarg-candidate-review-v1.yml
+      AGENT_PREFIX: agent/doctor-who-cycle-012-
+      TASK_ID: ap_8965086737382df0e88366db
+      WALL_ID: UC-1357
+      STILL_SHA256: 4a1b51dc58d599b1a881ff67ac78c925f21cf0bfb2b1e55590c6723ab2798713
+      PORTRAIT_SHA256: 5aa0c1bf49bc492fdd93163dc99ccbf749201b579be6df8aabb299dad851358e
+      OUT: /tmp/cycle012-senstarg-candidate-transition-v1
+    steps:
+      - name: Wait for exact candidate, retire it, and publish independent review
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,candidate,payload}
+          SELF_HEAD="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+          SELF_PR="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
+          test "$(jq -r '.pull_request.base.sha' "$GITHUB_EVENT_PATH")" = "$CURRENT_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$SELF_PR" > "$OUT/api/self-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/compare/$CURRENT_MAIN...$SELF_HEAD" > "$OUT/api/self-compare.json"
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT'])/'api'
+          pr=json.loads((root/'self-pr.json').read_text()); cmp=json.loads((root/'self-compare.json').read_text())
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['head']['ref']==os.environ['SELF_BRANCH'] and pr['base']['sha']==os.environ['CURRENT_MAIN']
+          assert pr['commits']==1 and pr['changed_files']==1
+          assert cmp['status']=='ahead' and cmp['ahead_by']==1 and cmp['behind_by']==0 and cmp['total_commits']==1
+          assert len(cmp['files'])==1 and cmp['files'][0]['filename']==os.environ['SELF_PATH']
+          PY
+
+          terminal=false
+          for attempt in $(seq 1 180); do
+            gh api "/repos/$GITHUB_REPOSITORY/pulls/$CANDIDATE_PR" > "$OUT/api/candidate-pr.json"
+            CANDIDATE_HEAD="$(jq -r '.head.sha' "$OUT/api/candidate-pr.json")"
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs?event=pull_request&head_sha=$CANDIDATE_HEAD&per_page=100" > "$OUT/api/candidate-runs.json"
+            state="$(python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT'])/'api'
+          pr=json.loads((root/'candidate-pr.json').read_text())
+          rows=json.loads((root/'candidate-runs.json').read_text())['workflow_runs']
+          rows=[r for r in rows if r['name']==os.environ['CANDIDATE_WORKFLOW'] and r['head_sha']==pr['head']['sha']]
+          if not rows: print('pending')
+          else:
+              row=max(rows,key=lambda r:(r['run_number'],r['run_attempt'],r['id']))
+              if row['status']!='completed': print('pending')
+              elif row['conclusion']=='success':
+                  (root/'candidate-run-id.txt').write_text(str(row['id'])+'\n')
+                  (root/'candidate-run-attempt.txt').write_text(str(row['run_attempt'])+'\n')
+                  print('success')
+              else:
+                  (root/'candidate-run-id.txt').write_text(str(row['id'])+'\n')
+                  print('failure')
+          PY
+            )"
+            if [ "$state" = success ]; then terminal=true; break; fi
+            if [ "$state" = failure ]; then
+              echo "candidate reached terminal failure" >&2
+              exit 1
+            fi
+            sleep 20
+          done
+          test "$terminal" = true
+
+          CANDIDATE_RUN="$(cat "$OUT/api/candidate-run-id.txt")"
+          CANDIDATE_RUN_ATTEMPT="$(cat "$OUT/api/candidate-run-attempt.txt")"
+          CANDIDATE_HEAD="$(jq -r '.head.sha' "$OUT/api/candidate-pr.json")"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN/jobs?per_page=100" > "$OUT/api/candidate-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN/artifacts?per_page=100" > "$OUT/api/candidate-artifacts.json"
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT'])/'api'
+          pr=json.loads((root/'candidate-pr.json').read_text())
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False
+          assert pr['head']['ref']==os.environ['CANDIDATE_BRANCH']
+          assert pr['commits']==1 and pr['changed_files']==1
+          jobs=json.loads((root/'candidate-jobs.json').read_text())['jobs']
+          rows=[j for j in jobs if j['name']=='candidate']
+          assert len(rows)==1 and rows[0]['status']=='completed' and rows[0]['conclusion']=='success'
+          run=int((root/'candidate-run-id.txt').read_text()); attempt=int((root/'candidate-run-attempt.txt').read_text())
+          name=f"{os.environ['CANDIDATE_ARTIFACT_PREFIX']}{run}-attempt-{attempt}"
+          arts=json.loads((root/'candidate-artifacts.json').read_text())['artifacts']
+          rows=[a for a in arts if a['name']==name and a['expired'] is False]
+          assert len(rows)==1
+          (root/'candidate-artifact.json').write_text(json.dumps(rows[0],indent=2,sort_keys=True)+'\n')
+          PY
+          CANDIDATE_ARTIFACT="$(jq -r '.id' "$OUT/api/candidate-artifact.json")"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$CANDIDATE_ARTIFACT/zip" > "$OUT/candidate.zip"
+          test "sha256:$(sha256sum "$OUT/candidate.zip" | awk '{print $1}')" = "$(jq -r '.digest' "$OUT/api/candidate-artifact.json")"
+          unzip -q "$OUT/candidate.zip" -d "$OUT/candidate"
+
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT']); c=root/'candidate'; sha=lambda b:hashlib.sha256(b).hexdigest()
+          for p in c.rglob('*'): assert not p.is_symlink()
+          ledgers=list(c.rglob('SHA256SUMS.pre')); assert ledgers
+          for ledger in ledgers:
+              for line in ledger.read_text().splitlines():
+                  if not line.strip(): continue
+                  digest,rel=line.split(None,1); rel=rel.strip().lstrip('*'); rel=rel[2:] if rel.startswith('./') else rel
+                  p=ledger.parent/rel; assert p.is_file() and sha(p.read_bytes())==digest,(p,digest)
+          markers=list(c.rglob('CANDIDATE_COMPLETE')); assert markers
+          marker=min(markers,key=lambda p:len(p.parts)).read_text().strip()
+          assert len(marker)==64
+          receipts=[]
+          for p in c.rglob('*.json'):
+              try:v=json.loads(p.read_text())
+              except Exception:continue
+              if not isinstance(v,dict):continue
+              if marker in [v.get('identity'),v.get('receipt_sha256'),v.get('receipt_identity')]: receipts.append((p,v))
+          assert len(receipts)==1,(marker,[str(p) for p,_ in receipts])
+          receipt=receipts[0][1]
+          text=json.dumps(receipt,sort_keys=True)
+          for value in [os.environ['TASK_ID'],os.environ['WALL_ID'],os.environ['STILL_SHA256'],os.environ['PORTRAIT_SHA256']]: assert value in text
+          def find(keys,v):
+              if isinstance(v,dict):
+                  for k,x in v.items():
+                      if k in keys and isinstance(x,str): return x
+                      y=find(keys,x)
+                      if y:return y
+              elif isinstance(v,list):
+                  for x in v:
+                      y=find(keys,x)
+                      if y:return y
+              return None
+          commit=find({'candidate_commit','commit','commit_sha'},receipt)
+          tree=find({'candidate_tree','tree','tree_sha'},receipt)
+          assert commit and tree and len(commit)==40 and len(tree)==40
+          (root/'api'/'candidate-identity.txt').write_text(marker+'\n')
+          (root/'api'/'candidate-commit.txt').write_text(commit+'\n')
+          (root/'api'/'candidate-tree.txt').write_text(tree+'\n')
+          (root/'api'/'candidate-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$CANDIDATE_BRANCH" --jq '.object.sha')" = "$CANDIDATE_HEAD"
+          gh api -X PATCH "/repos/$GITHUB_REPOSITORY/pulls/$CANDIDATE_PR" -f state=closed > "$OUT/api/candidate-pr-after.json"
+          test "$(jq -r '.state' "$OUT/api/candidate-pr-after.json")" = closed
+          test "$(jq -r '.merged' "$OUT/api/candidate-pr-after.json")" = false
+          gh api -X DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$CANDIDATE_BRANCH"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$AGENT_PREFIX" --jq 'length' 2>/dev/null || printf '0')" = 0
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CURRENT_MAIN"
+
+          D='$'
+          cat > "$OUT/review.yml" <<YAML
+          name: doctor-who-cycle-012-senstarg-candidate-review-v1
+
+          "on":
+            pull_request:
+              branches: [main]
+              types: [opened, reopened, synchronize]
+              paths:
+                - ".github/workflows/doctor-who-cycle-012-senstarg-candidate-review-v1.yml"
+
+          permissions: {}
+
+          concurrency:
+            group: doctor-who-cycle-012-senstarg-candidate-review-v1
+            cancel-in-progress: true
+
+          jobs:
+            review:
+              if: >-
+                github.repository == 'BigBirdReturns/undercast' &&
+                github.event_name == 'pull_request' &&
+                github.event.pull_request.base.ref == 'main' &&
+                github.event.pull_request.head.repo.full_name == github.repository &&
+                github.event.pull_request.head.ref == 'agent/doctor-who-cycle-012-senstarg-candidate-review-v1'
+              runs-on: ubuntu-22.04
+              timeout-minutes: 180
+              permissions:
+                actions: read
+                contents: read
+                pull-requests: read
+              env:
+                GH_TOKEN: ${D}{{ github.token }}
+                CURRENT_MAIN: $CURRENT_MAIN
+                CURRENT_TREE: $CURRENT_TREE
+                CANDIDATE_PR: "$CANDIDATE_PR"
+                CANDIDATE_BRANCH: $CANDIDATE_BRANCH
+                CANDIDATE_HEAD: $CANDIDATE_HEAD
+                CANDIDATE_RUN: "$CANDIDATE_RUN"
+                CANDIDATE_ARTIFACT: "$CANDIDATE_ARTIFACT"
+                CANDIDATE_ARTIFACT_SHA256: $(jq -r '.digest' "$OUT/api/candidate-artifact.json" | sed 's/^sha256://')
+                CANDIDATE_IDENTITY: $(cat "$OUT/api/candidate-identity.txt")
+                CANDIDATE_COMMIT: $(cat "$OUT/api/candidate-commit.txt")
+                CANDIDATE_TREE: $(cat "$OUT/api/candidate-tree.txt")
+                BRANCH: $REVIEW_BRANCH
+                SELF: $REVIEW_PATH
+                AGENT_PREFIX: $AGENT_PREFIX
+                TASK_ID: $TASK_ID
+                WALL_ID: $WALL_ID
+                STILL_SHA256: $STILL_SHA256
+                PORTRAIT_SHA256: $PORTRAIT_SHA256
+                OUT: /tmp/doctor-who-cycle-012-senstarg-candidate-review-v1
+              steps:
+                - uses: actions/checkout@v4
+                  with:
+                    ref: main
+                    fetch-depth: 0
+                    filter: blob:none
+                    persist-credentials: false
+                - name: Independently reconstruct and review exact candidate
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    CURRENT_HEAD="\$(jq -r '.pull_request.head.sha' "\$GITHUB_EVENT_PATH")"
+                    CURRENT_PR="\$(jq -r '.pull_request.number' "\$GITHUB_EVENT_PATH")"
+                    rm -rf "\$OUT"
+                    mkdir -p "\$OUT"/{api,artifact,work,payload}
+                    test "\$(git rev-parse HEAD)" = "\$CURRENT_MAIN"
+                    test "\$(git show -s --format=%T HEAD)" = "\$CURRENT_TREE"
+                    gh api "/repos/\$GITHUB_REPOSITORY/pulls/\$CURRENT_PR" > "\$OUT/api/own-pr.json"
+                    gh api "/repos/\$GITHUB_REPOSITORY/compare/\$CURRENT_MAIN...\$CURRENT_HEAD" > "\$OUT/api/own-compare.json"
+                    gh api "/repos/\$GITHUB_REPOSITORY/git/matching-refs/heads/\$AGENT_PREFIX" > "\$OUT/api/refs.json"
+                    gh api "/repos/\$GITHUB_REPOSITORY/actions/artifacts/\$CANDIDATE_ARTIFACT" > "\$OUT/api/artifact.json"
+                    gh api "/repos/\$GITHUB_REPOSITORY/actions/artifacts/\$CANDIDATE_ARTIFACT/zip" > "\$OUT/candidate.zip"
+                    test "\$(sha256sum "\$OUT/candidate.zip" | awk '{print \$1}')" = "\$CANDIDATE_ARTIFACT_SHA256"
+                    unzip -q "\$OUT/candidate.zip" -d "\$OUT/artifact"
+                    python3 - <<'PY'
+                    import hashlib,json,os,shutil,tarfile
+                    from pathlib import Path
+                    root=Path(os.environ['OUT']); art=root/'artifact'; sha=lambda b:hashlib.sha256(b).hexdigest()
+                    pr=json.loads((root/'api'/'own-pr.json').read_text()); cmp=json.loads((root/'api'/'own-compare.json').read_text()); refs=json.loads((root/'api'/'refs.json').read_text())
+                    assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False and pr['commits']==1 and pr['changed_files']==1
+                    assert pr['head']['ref']==os.environ['BRANCH'] and pr['base']['sha']==os.environ['CURRENT_MAIN']
+                    assert cmp['status']=='ahead' and cmp['ahead_by']==1 and cmp['behind_by']==0 and cmp['total_commits']==1
+                    assert len(cmp['files'])==1 and cmp['files'][0]['filename']==os.environ['SELF']
+                    assert {r['ref'].removeprefix('refs/heads/'):r['object']['sha'] for r in refs}=={os.environ['BRANCH']:pr['head']['sha']}
+                    for p in art.rglob('*'): assert not p.is_symlink()
+                    for ledger in art.rglob('SHA256SUMS.pre'):
+                        for line in ledger.read_text().splitlines():
+                            if not line.strip(): continue
+                            digest,rel=line.split(None,1); rel=rel.strip().lstrip('*'); rel=rel[2:] if rel.startswith('./') else rel
+                            p=ledger.parent/rel; assert p.is_file() and sha(p.read_bytes())==digest,(p,digest)
+                    markers=list(art.rglob('CANDIDATE_COMPLETE')); assert markers
+                    marker=min(markers,key=lambda p:len(p.parts)).read_text().strip(); assert marker==os.environ['CANDIDATE_IDENTITY']
+                    receipts=[]
+                    for p in art.rglob('*.json'):
+                        try:v=json.loads(p.read_text())
+                        except Exception:continue
+                        if isinstance(v,dict) and marker in [v.get('identity'),v.get('receipt_sha256'),v.get('receipt_identity')]: receipts.append((p,v))
+                    assert len(receipts)==1
+                    receipt=receipts[0][1]; text=json.dumps(receipt,sort_keys=True)
+                    for value in [os.environ['TASK_ID'],os.environ['WALL_ID'],os.environ['STILL_SHA256'],os.environ['PORTRAIT_SHA256'],os.environ['CANDIDATE_COMMIT'],os.environ['CANDIDATE_TREE']]: assert value in text
+                    # Locate a complete product representation.
+                    candidates=[]
+                    for p in art.rglob('*'):
+                        if p.is_dir() and (p/'data/AUTOPILOT.json').is_file() and (p/'scripts/doctor-who-cycle-012.mjs').is_file(): candidates.append(p)
+                    for archive in list(art.rglob('*.tar.gz'))+list(art.rglob('*.tgz'))+list(art.rglob('*.tar')):
+                        dest=root/'work'/('x-'+sha(archive.read_bytes())[:12]); dest.mkdir(parents=True,exist_ok=True)
+                        try:
+                            with tarfile.open(archive) as tf:
+                                for m in tf.getmembers():
+                                    target=(dest/m.name).resolve(); assert str(target).startswith(str(dest.resolve())) and not (m.issym() or m.islnk())
+                                tf.extractall(dest)
+                            for p in dest.rglob('*'):
+                                if p.is_dir() and (p/'data/AUTOPILOT.json').is_file() and (p/'scripts/doctor-who-cycle-012.mjs').is_file(): candidates.append(p)
+                        except tarfile.TarError: pass
+                    assert candidates,(list(str(p) for p in art.rglob('*') if p.is_file())[:100])
+                    product=min(candidates,key=lambda p:len(p.parts))
+                    (root/'api'/'product-path.txt').write_text(str(product)+'\n')
+                    (root/'api'/'candidate-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+                    PY
+                    PRODUCT="\$(cat "\$OUT/api/product-path.txt")"
+                    cd "\$PRODUCT"
+                    if [ -d .git ]; then
+                      test "\$(git rev-parse HEAD)" = "\$CANDIDATE_COMMIT"
+                      test "\$(git show -s --format=%T HEAD)" = "\$CANDIDATE_TREE"
+                    fi
+                    node scripts/doctor-who-cycle-010.mjs
+                    node scripts/doctor-who-cycle-011.mjs
+                    node scripts/doctor-who-cycle-012.mjs
+                    node scripts/autopilot.mjs status --scope doctor-who --json > "\$OUT/api/autopilot.json"
+                    if [ -f scripts/complete-gate.mjs ]; then node scripts/complete-gate.mjs --timeout 900; fi
+                    python3 - <<'PY'
+                    import hashlib,json,os
+                    from pathlib import Path
+                    root=Path(os.environ['OUT']); product=Path((root/'api'/'product-path.txt').read_text().strip()); payload=root/'payload'
+                    state=json.loads((product/'data/AUTOPILOT.json').read_text()); jobs=[x for x in state['jobs'] if x.get('scope')=='doctor-who']
+                    active={'leased','drafted','merged'}
+                    task=next(x for x in jobs if x['id']==os.environ['TASK_ID'])
+                    assert task['status']=='resolved' and task['wall_ids']==[os.environ['WALL_ID']]
+                    assert {'total':len(jobs),'queued':sum(x['status']=='queued' for x in jobs),'resolved':sum(x['status']=='resolved' for x in jobs),'in_flight':sum(x['status'] in active for x in jobs)}=={'total':316,'queued':304,'resolved':12,'in_flight':0}
+                    receipt=json.loads((root/'api'/'candidate-receipt.json').read_text())
+                    row={'status':'cycle-012-senstarg-candidate-independently-reviewed-v1','version':1,'candidate':{'pr':int(os.environ['CANDIDATE_PR']),'head':os.environ['CANDIDATE_HEAD'],'run':int(os.environ['CANDIDATE_RUN']),'artifact':int(os.environ['CANDIDATE_ARTIFACT']),'identity':os.environ['CANDIDATE_IDENTITY'],'commit':os.environ['CANDIDATE_COMMIT'],'tree':os.environ['CANDIDATE_TREE']},'queue':{'total':316,'queued':304,'resolved':12,'in_flight':0},'boundary':{'candidate_review_only':True,'repository_write':False,'canonical_mutation':False,'cycle_receipt_written':False,'cycle_012_product_authority':False,'cycle_013_authority':False,'outside_human_dependency':False,'owner_physical_action_required':False}}
+                    row['identity']=hashlib.sha256(json.dumps(row,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+                    (payload/'review.json').write_text(json.dumps(row,indent=2,sort_keys=True)+'\n'); (payload/'REVIEW_COMPLETE').write_text(row['identity']+'\n')
+                    (payload/'candidate-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+                    rows=[]
+                    for p in sorted(payload.iterdir()):
+                        if p.is_file() and p.name not in {'SHA256SUMS.pre','SHA256SUMS'}: rows.append(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}")
+                    (payload/'SHA256SUMS.pre').write_text('\n'.join(rows)+'\n'); (payload/'SHA256SUMS').write_text(hashlib.sha256((payload/'SHA256SUMS.pre').read_bytes()).hexdigest()+'  SHA256SUMS.pre\n')
+                    PY
+                    cd "\$OUT/payload" && sha256sum -c SHA256SUMS.pre && sha256sum -c SHA256SUMS
+                - uses: actions/upload-artifact@v4
+                  with:
+                    name: doctor-who-cycle-012-senstarg-candidate-review-v1-${D}{{ github.run_id }}-attempt-${D}{{ github.run_attempt }}
+                    path: /tmp/doctor-who-cycle-012-senstarg-candidate-review-v1/payload
+                    if-no-files-found: error
+                    retention-days: 30
+                    compression-level: 0
+                - if: failure()
+                  uses: actions/upload-artifact@v4
+                  with:
+                    name: doctor-who-cycle-012-senstarg-candidate-review-v1-diagnostics-${D}{{ github.run_id }}-attempt-${D}{{ github.run_attempt }}
+                    path: /tmp/doctor-who-cycle-012-senstarg-candidate-review-v1
+                    if-no-files-found: ignore
+                    retention-days: 14
+                    compression-level: 0
+          YAML
+          sed -i 's/^          //' "$OUT/review.yml"
+
+          REVIEW_CONTENT="$(base64 -w0 "$OUT/review.yml")"
+          gh api -X POST "/repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$REVIEW_BRANCH" -f sha="$CURRENT_MAIN" > "$OUT/api/review-ref.json"
+          jq -n --arg message "Doctor Who: independently review exact Senstarg candidate" --arg content "$REVIEW_CONTENT" --arg branch "$REVIEW_BRANCH" '{message:$message,content:$content,branch:$branch}' > "$OUT/api/review-file-request.json"
+          gh api -X PUT "/repos/$GITHUB_REPOSITORY/contents/$REVIEW_PATH" --input "$OUT/api/review-file-request.json" > "$OUT/api/review-file.json"
+          REVIEW_HEAD="$(jq -r '.commit.sha' "$OUT/api/review-file.json")"
+          jq -n --arg title "Doctor Who: independently review exact Senstarg candidate" --arg head "$REVIEW_BRANCH" --arg base main --arg body "Read-only independent reconstruction of candidate identity $(cat "$OUT/api/candidate-identity.txt"), commit $(cat "$OUT/api/candidate-commit.txt"), and tree $(cat "$OUT/api/candidate-tree.txt"). No canonical, cycle-receipt, product, or cycle-013 authority." '{title:$title,head:$head,base:$base,body:$body,draft:true,maintainer_can_modify:false}' > "$OUT/api/review-pr-request.json"
+          gh api -X POST "/repos/$GITHUB_REPOSITORY/pulls" --input "$OUT/api/review-pr-request.json" > "$OUT/api/review-pr.json"
+
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT']); payload=root/'payload'; art=json.loads((root/'api'/'candidate-artifact.json').read_text()); pr=json.loads((root/'api'/'review-pr.json').read_text())
+          row={'status':'cycle-012-senstarg-candidate-transition-complete-v1','version':1,'canonical':{'main':os.environ['CURRENT_MAIN'],'tree':os.environ['CURRENT_TREE']},'candidate':{'pr':int(os.environ['CANDIDATE_PR']),'head':(root/'api'/'candidate-pr.json').read_text() and json.loads((root/'api'/'candidate-pr.json').read_text())['head']['sha'],'run':int((root/'api'/'candidate-run-id.txt').read_text()),'artifact':art['id'],'artifact_sha256':art['digest'].removeprefix('sha256:'),'identity':(root/'api'/'candidate-identity.txt').read_text().strip(),'commit':(root/'api'/'candidate-commit.txt').read_text().strip(),'tree':(root/'api'/'candidate-tree.txt').read_text().strip()},'review':{'pr':pr['number'],'branch':os.environ['REVIEW_BRANCH'],'head':pr['head']['sha']},'postcondition':{'candidate_ref_deleted':True,'agent_prefix_before_review':0},'boundary':{'repository_write_limited_to_transport':True,'canonical_mutation':False,'cycle_receipt_written':False,'cycle_012_product_authority':False,'cycle_013_authority':False,'outside_human_dependency':False,'owner_physical_action_required':False}}
+          row['identity']=hashlib.sha256(json.dumps(row,sort_keys=True,separators=(',',':')).encode()).hexdigest(); (payload/'transition.json').write_text(json.dumps(row,indent=2,sort_keys=True)+'\n'); (payload/'TRANSITION_COMPLETE').write_text(row['identity']+'\n')
+          for src,name in [(root/'api'/'candidate-receipt.json','candidate-receipt.json'),(root/'api'/'review-pr.json','review-pr.json')]: (payload/name).write_bytes(src.read_bytes())
+          rows=[]
+          for p in sorted(payload.iterdir()):
+              if p.is_file() and p.name not in {'SHA256SUMS.pre','SHA256SUMS'}: rows.append(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}")
+          (payload/'SHA256SUMS.pre').write_text('\n'.join(rows)+'\n'); (payload/'SHA256SUMS').write_text(hashlib.sha256((payload/'SHA256SUMS.pre').read_bytes()).hexdigest()+'  SHA256SUMS.pre\n')
+          PY
+          (cd "$OUT/payload" && sha256sum -c SHA256SUMS.pre && sha256sum -c SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cycle012-senstarg-candidate-transition-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/cycle012-senstarg-candidate-transition-v1/payload
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cycle012-senstarg-candidate-transition-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/cycle012-senstarg-candidate-transition-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
+
+  retire:
+    needs: handoff
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: observer/cycle012-senstarg-candidate-transition-v1
+      HEAD: ${{ github.event.pull_request.head.sha }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Close and delete exact transition carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --jq '.object.sha')" = "$HEAD"
+          gh api -X PATCH "/repos/$GITHUB_REPOSITORY/pulls/$PR" -f state=closed > /tmp/pr.json
+          test "$(jq -r '.state' /tmp/pr.json)" = closed
+          test "$(jq -r '.merged' /tmp/pr.json)" = false
+          gh api -X DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH"
