@@ -1,0 +1,142 @@
+name: observe-cycle-011-rastel-cleanup-current-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/observe-cycle-011-rastel-cleanup-current-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: observe-cycle-011-rastel-cleanup-current-v1
+  cancel-in-progress: true
+
+jobs:
+  observe:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/observe-cycle-011-rastel-cleanup-current-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      WRITER_FILE: doctor-who-cycle-011-rastel-cleanup-writer-v2.yml
+      WRITER_NAME: doctor-who-cycle-011-rastel-cleanup-writer-v2
+      SOURCE_RUN: "31358473435"
+      SOURCE_HEAD: 17ff69dbd777a59838842b952230624abe6fecb4
+      SOURCE_BRANCH: agent/doctor-who-cycle-011-rastel-cleanup-resume-verifier-v1
+      SOURCE_ARTIFACT: "9051464025"
+      SOURCE_ARTIFACT_DIGEST: "sha256:3fd203856202cc4cab4df9781728b9c0bb86b1345b6b6e41979b89a7aebe9d58"
+      INSTALLED_MAIN: f5a110909ed42a52917bd25e511610f73f5610f2
+      PREFIX: agent/doctor-who-cycle-011-rastel-
+      OUT: /tmp/observe-cycle-011-rastel-cleanup-current-v1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Enumerate writer runs after the exact resume authorization
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,jobs,artifacts,receipt}
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > "$OUT/api/source-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT" > "$OUT/api/source-artifact.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/$WRITER_FILE" > "$OUT/api/writer-workflow.json"
+          workflow_id="$(jq -r '.id' "$OUT/api/writer-workflow.json")"
+          gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs" -f event=workflow_run -f per_page=100 > "$OUT/api/writer-runs.json"
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime
+          from pathlib import Path
+          root = Path(os.environ['OUT']) / 'api'
+          source = json.loads((root / 'source-run.json').read_text())
+          artifact = json.loads((root / 'source-artifact.json').read_text())
+          workflow = json.loads((root / 'writer-workflow.json').read_text())
+          runs = json.loads((root / 'writer-runs.json').read_text())['workflow_runs']
+          assert source['id'] == int(os.environ['SOURCE_RUN']) and source['head_sha'] == os.environ['SOURCE_HEAD']
+          assert source['head_branch'] == os.environ['SOURCE_BRANCH'] and source['status'] == 'completed' and source['conclusion'] == 'success'
+          assert artifact['id'] == int(os.environ['SOURCE_ARTIFACT']) and artifact['digest'] == os.environ['SOURCE_ARTIFACT_DIGEST'] and artifact['expired'] is False
+          assert workflow['name'] == os.environ['WRITER_NAME'] and workflow['path'].endswith('/' + os.environ['WRITER_FILE'])
+          floor = datetime.fromisoformat(source['updated_at'].replace('Z', '+00:00'))
+          selected = []
+          for row in runs:
+              created = datetime.fromisoformat(row['created_at'].replace('Z', '+00:00'))
+              if created < floor:
+                  continue
+              selected.append({
+                  'id': row['id'],
+                  'run_number': row['run_number'],
+                  'run_attempt': row['run_attempt'],
+                  'event': row['event'],
+                  'status': row['status'],
+                  'conclusion': row['conclusion'],
+                  'head_branch': row['head_branch'],
+                  'head_sha': row['head_sha'],
+                  'created_at': row['created_at'],
+                  'updated_at': row['updated_at'],
+              })
+          selected.sort(key=lambda row: (row['created_at'], row['id']))
+          (Path(os.environ['OUT']) / 'selected-runs.json').write_text(json.dumps(selected, indent=2, sort_keys=True) + '\n')
+          PY
+          while read -r run; do
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?per_page=100" > "$OUT/jobs/$run.json"
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" > "$OUT/artifacts/$run.json"
+          done < <(jq -r '.[].id' "$OUT/selected-runs.json")
+          gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" > "$OUT/api/main-ref.json"
+          gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$PREFIX" > "$OUT/api/prefix-refs.json"
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path(os.environ['OUT'])
+          selected = json.loads((root / 'selected-runs.json').read_text())
+          rows = []
+          for run in selected:
+              jobs = json.loads((root / 'jobs' / f"{run['id']}.json").read_text())['jobs']
+              artifacts = json.loads((root / 'artifacts' / f"{run['id']}.json").read_text())['artifacts']
+              run['jobs'] = [{
+                  'id': job['id'],
+                  'name': job['name'],
+                  'status': job['status'],
+                  'conclusion': job['conclusion'],
+                  'steps': [{'name': step['name'], 'status': step['status'], 'conclusion': step['conclusion'], 'number': step['number']} for step in job.get('steps', [])],
+              } for job in jobs]
+              run['artifacts'] = [{'id': row['id'], 'name': row['name'], 'digest': row['digest'], 'size_in_bytes': row['size_in_bytes'], 'expired': row['expired']} for row in artifacts]
+              rows.append(run)
+          main = json.loads((root / 'api/main-ref.json').read_text())['object']['sha']
+          refs = json.loads((root / 'api/prefix-refs.json').read_text())
+          receipt = {
+              'status': 'cycle-011-rastel-cleanup-resume-writer-observed-v1',
+              'version': 1,
+              'source': {'run': int(os.environ['SOURCE_RUN']), 'head': os.environ['SOURCE_HEAD'], 'branch': os.environ['SOURCE_BRANCH'], 'artifact': int(os.environ['SOURCE_ARTIFACT']), 'artifact_digest': os.environ['SOURCE_ARTIFACT_DIGEST']},
+              'writer_runs': rows,
+              'main': {'live': main, 'installed': os.environ['INSTALLED_MAIN']},
+              'prefix_refs': [{'ref': row['ref'], 'sha': row['object']['sha']} for row in refs],
+              'boundary': {'repository_write': False, 'canonical_mutation': False, 'cycle_012_lease_issued': False, 'cycle_012_product_authority': False},
+          }
+          receipt['identity'] = hashlib.sha256(json.dumps(receipt, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+          (root / 'receipt/observation.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
+          PY
+          find "$OUT" -type f ! -name SHA256SUMS.pre ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' rel; do sha256sum "$OUT/$rel" | sed "s#  $OUT/#  #"; done > "$OUT/SHA256SUMS.pre"
+          sha256sum "$OUT/SHA256SUMS.pre" | sed "s#  $OUT/#  #" > "$OUT/SHA256SUMS"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: observe-cycle-011-rastel-cleanup-current-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/observe-cycle-011-rastel-cleanup-current-v1
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
