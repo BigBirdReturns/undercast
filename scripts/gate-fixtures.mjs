@@ -64,6 +64,24 @@ try {
   const checkoutDepth = Number(archiveWorkflow.match(/uses:\s*actions\/checkout@(?:v4|[a-f0-9]{40})[\s\S]{0,160}?fetch-depth:\s*(\d+)/)?.[1]);
   expect("canonical workflow fetches full immutable receipt history", checkoutDepth, 0);
 
+  const publisherCustodyWorkflow = await readFile(new URL("../.github/workflows/publisher-custody.yml", import.meta.url), "utf8");
+  const publisherSparseBlock = publisherCustodyWorkflow.match(/sparse-checkout:\s*\|([\s\S]*?)sparse-checkout-cone-mode:/)?.[1] || "";
+  for (const required of [
+    "scripts/gate.mjs",
+    "scripts/publication-release.mjs",
+    "scripts/publication.mjs",
+    "scripts/publication-routes.mjs",
+    "scripts/lib/preservation.mjs",
+    "scripts/lib/media-rejections.mjs",
+  ]) {
+    expect(`publisher sparse checkout includes ${required}`, publisherSparseBlock.includes(required), true);
+    const occurrences = publisherCustodyWorkflow.split(required).length - 1;
+    expect(`publisher triggers track ${required}`, occurrences >= 3, true);
+  }
+  expect("publisher checkout action is immutable", /uses:\s*actions\/checkout@[a-f0-9]{40}/.test(publisherCustodyWorkflow), true);
+  expect("publisher setup-node action is immutable", /uses:\s*actions\/setup-node@[a-f0-9]{40}/.test(publisherCustodyWorkflow), true);
+  expect("publisher verifies canonical gate import closure", publisherCustodyWorkflow.includes("await import('./scripts/gate.mjs')"), true);
+
   const autopilotWorkflow = await readFile(new URL("../.github/workflows/autopilot.yml", import.meta.url), "utf8");
   const autopilotCheckoutBlock = autopilotWorkflow.match(/uses:\s*actions\/checkout@v4([\s\S]*?)(?=\n\s*-\s+(?:uses|name):)/)?.[1] || "";
   const autopilotCheckoutDepth = Number(autopilotCheckoutBlock.match(/fetch-depth:\s*(\d+)/)?.[1]);
