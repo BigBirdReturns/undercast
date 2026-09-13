@@ -2,7 +2,10 @@
 
 Start at [`data/archive.json`](data/archive.json). It is the versioned machine
 contract and names every canonical file, schema, projection, route, checksum and
-policy. Discover public pages through `robots.txt` and `sitemap.xml`.
+policy. Discover public pages through `robots.txt` and `sitemap.xml`. The deployed
+artifact binds its exact commit, tree, inputs, media and payload at
+`/undercast/release.json`; the release gate generates that receipt rather than
+treating it as maintained source data.
 
 ## Truth and projections
 

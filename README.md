@@ -10,7 +10,7 @@ Non-commercial fan project.
 
 UNDERCAST is a non-commercial fan project and provenance-governed field index of performers who vanish under designed faces. The canonical source of truth for the roster is [`data/specimens.json`](data/specimens.json). Provenance is retained in [`data/SOURCES.json`](data/SOURCES.json), missing evidence remains explicit in [`data/GAPS.json`](data/GAPS.json), and [`data/quality.json`](data/quality.json) carries the non-regression floors.
 
-The public product is the [live wall](https://bigbirdreturns.github.io/undercast/) and its [coverage surface](https://bigbirdreturns.github.io/undercast/coverage.html). `npm run gate` is the release gate.
+The public product is the [live wall](https://bigbirdreturns.github.io/undercast/) and its [coverage surface](https://bigbirdreturns.github.io/undercast/coverage.html). The deployed artifact publishes its exact commit, tree, and payload identity in the [live release receipt](https://bigbirdreturns.github.io/undercast/release.json). `npm run gate` is the release gate.
 
 ```
 index.html            the wall — a static page; boots from the generated projections
