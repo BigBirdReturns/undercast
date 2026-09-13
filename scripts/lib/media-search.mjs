@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync,readFileSync } from "node:fs";
+import { matchMediaRejection } from "./media-rejections.mjs";
+
 export const sha256=value=>createHash("sha256").update(value).digest("hex");
 const DAY=86400000;
 export function attemptsByFacet(lines){const map=new Map();for(const line of lines||[]){if(!String(line).trim())continue;const row=JSON.parse(line);if(row.op==="media-search.attempted")map.set(`${row.wall_id}/${row.side}`,row);}return map;}
@@ -18,5 +20,12 @@ export function buildMediaPlan({specimens,sources,auditItems,attempts,now,policy
     rows.push({wall_id:record.id,side,expected_subject:side==="still"?record.character:record.actor,reason,retry_days:days,replace_existing:Boolean(image),current:image,source_receipt:sourceById.get(record.id)?.[side]||null,last_attempt_at:previous?.at||null,priority});
   }
   return rows.sort((a,b)=>b.priority-a.priority||String(a.last_attempt_at||"").localeCompare(String(b.last_attempt_at||""))||a.wall_id.localeCompare(b.wall_id,undefined,{numeric:true})||a.side.localeCompare(b.side)).slice(0,limit);
+}
+export function classifyMediaCandidate({item,old,proposed,candidateSha,baselineSha,rejectionIndex}){
+  if(!proposed?.src||!candidateSha)return {status:"not-found",rejection:null};
+  const rejected=matchMediaRejection(rejectionIndex,{wallId:item.wall_id,side:item.side,origin:proposed.origin,sha256:candidateSha});
+  if(rejected)return {status:"rejected",rejection:{rule_id:rejected.rule.rule_id,decision:rejected.rule.decision,match:rejected.match,ruling:rejected.rule.ruling}};
+  if(candidateSha!==baselineSha||proposed.origin!==old?.origin)return {status:"candidate",rejection:null};
+  return {status:"unchanged",rejection:null};
 }
 export function fileHash(path){return existsSync(path)?sha256(readFileSync(path)):null;}

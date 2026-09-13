@@ -25,6 +25,7 @@
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { normalizeCensusKey as normalize } from "./census-key.mjs";
 
 const UA = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT || "ds9-census"})`;
@@ -39,7 +40,7 @@ const CAPTURED_AT = PROJECT_ONLY ? null : new Date().toISOString();
 const wikiUrl = (title) => `https://memory-alpha.fandom.com/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`;
 
 let lastReq = 0;
-async function mw(params) {
+export async function mw(params) {
   const wait = Math.max(0, 600 - (Date.now() - lastReq)); if (wait) await sleep(wait); lastReq = Date.now();
   const url = API + "?" + new URLSearchParams({ format: "json", origin: "*", ...params });
   let lastError;
@@ -69,11 +70,12 @@ async function categoryMembers(cat) {
 // nobiliary particles (Nicole de Boer, Marc Lawrence van der Kolk) are real —
 // accept a particle mid-name but never as the leading word.
 const PARTICLES = new Set(["de","van","von","der","den","la","le","del","di","da","du","dos","ten","ter","el","al","bin","st","st."]);
-const isPerson = (name) => {
+export const isPerson = (name) => {
+  if (/^(unknown|unidentified|unnamed)\b/i.test(name.trim())) return false;
   const words = name.trim().split(/\s+/);
   if (words.length < 2 || name.length >= 40) return false;
   if (!/^[A-ZÀ-Þ][A-Za-zà-þ'.\-]*$/.test(words[0])) return false;
-  return words.slice(1).every((w) => /^[A-ZÀ-Þ][A-Za-zà-þ'.\-]*$/.test(w) || PARTICLES.has(w.toLowerCase()));
+  return words.slice(1).every((w) => /^[A-ZÀ-Þ][A-Za-zà-þ'.\-]*$/.test(w) || PARTICLES.has(w.toLowerCase()) || /^(?:de|van|von)[A-Z][A-Za-z'.-]+$/.test(w));
 };
 // rank/title words that PRECEDE a character name in a credit line and are never
 // themselves the character. If a line resolves to nothing but ranks, the last
@@ -130,30 +132,128 @@ function linksOf(text) {
 // assertions. When a segment has no link at all, its plain text is kept as an
 // unnamed, page-less character (character_page = null) so credited extras with
 // prose-only role descriptions are still counted.
-function charactersFrom(tail) {
-  // "/", "and", "&" all separate multiple roles in one credit line
-  // ("Weyoun 6 and Weyoun 7", "Odo / Odo Alien").
-  return tail.split(/\s+\/\s+|\s+&\s+|\s+and\s+/i).map((seg) => {
-    const links = linksOf(seg);
-    const named = links.filter((l) => !RANKS.has(l.target.toLowerCase()) && !RANKS.has(l.display.toLowerCase()));
-    if (named.length) return { ...named[named.length - 1], linked: true };
-    if (links.length) return { ...links[links.length - 1], linked: true };
-    const text = seg.replace(/^(a|an|the)\s+/i, "").replace(/["']/g, "").replace(/<[^>]+>/g, "").trim();
-    // page-less doubling / utility credits ("stunt double for X", "additional
-    // voice actor") are not designed roles — drop so the caller marks them unresolved.
-    if (/\b(stunt|photo)?\s*double\b|\bstand-?in\b|\bdouble for\b|additional voice|voice double|\butility\b|stunt (performer|coordinator|player)/i.test(text))
-      return null;
-    if (text && /^[A-Za-zÀ-Þ]/.test(text) && text.length < 60 && !/^and\b/i.test(text))
-      return { target: null, display: text, linked: false };
-    return null;
-  }).filter(Boolean);
+// Only separators outside wiki links, templates and annotations delimit roles.
+// Reject unbalanced markup instead of laundering fragments into prose identities.
+export function splitRoles(tail) {
+  const stack = [], parts = []; let start = 0;
+  for (let i = 0; i < tail.length; i++) {
+    const annotation = tail.slice(i).match(/^(?:<!--[^]*?-->|<(ref|small|sup)\b[^>]*>[^]*?<\/\1\s*>|<ref\b[^>]*\/\s*>)/i);
+    if (annotation) { i += annotation[0].length - 1; continue; }
+    const pair = tail.slice(i, i + 2);
+    if (pair === "[[" || pair === "{{") { stack.push(pair === "[[" ? "]]" : "}}"); i++; continue; }
+    if (pair === "]]" || pair === "}}") {
+      if (stack.pop() !== pair) return null;
+      i++; continue;
+    }
+    if (!stack.includes("]]")) {
+      if (tail[i] === "(" || tail[i] === "[") stack.push(tail[i] === "(" ? ")" : "]");
+      else if (tail[i] === ")" || tail[i] === "]") { if (stack.pop() !== tail[i]) return null; }
+    }
+    if (!stack.length) {
+      const separator = tail.slice(i).match(/^\s+(?:\/|&|and)\s+/i);
+      if (separator) { parts.push(tail.slice(start, i)); i += separator[0].length - 1; start = i + 1; }
+    }
+  }
+  if (stack.length) return null;
+  parts.push(tail.slice(start)); return parts;
+}
+
+function withoutAnnotations(text) {
+  text = text.replace(/<(ref|small|sup)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "").replace(/<!--[^]*?-->/g, "");
+  // Copy whole links/templates; suppress parenthetical or bracket annotations.
+  let out = "", depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const pair = text.slice(i, i + 2);
+    if (pair === "[[" || pair === "{{") {
+      const end = text.indexOf(pair === "[[" ? "]]" : "}}", i + 2);
+      if (end < 0) return "";
+      if (!depth) out += text.slice(i, end + 2);
+      i = end + 1; continue;
+    }
+    if (text[i] === "(" || text[i] === "[") depth++;
+    else if (text[i] === ")" || text[i] === "]") depth--;
+    else if (!depth) out += text[i];
+  }
+  return out;
+}
+const UTILITY = /\b(?:stunt|photo)?\s*double\b|\bstand[- ]?in\b|additional voice|voice double|\butility\b|stunt (performer|coordinator|player)/i;
+export function parseRoles(tail) {
+  const roles = [], rejected = [];
+  const segments = splitRoles(tail);
+  if (!segments) return { roles, rejected: [{ disposition: "malformed-credit", reason: "unbalanced role markup or annotation" }] };
+  for (const seg of segments) {
+    const roleText = withoutAnnotations(seg);
+    if (UTILITY.test(roleText)) { rejected.push({ disposition: "doubling-utility", reason: "doubling/utility credit — not a designed character role" }); continue; }
+    const links = linksOf(roleText);
+    const named = links.filter(l => !RANKS.has(l.target.toLowerCase()) && !RANKS.has(l.display.toLowerCase()));
+    const link = named.at(-1) || links.at(-1);
+    if (link) { roles.push({ ...link, linked: true }); continue; }
+    const text = roleText.replace(/^(a|an|the)\s+/i, "").replace(/["']/g, "").replace(/<[^>]+>/g, "").trim();
+    if (/[\[\]{}|]/.test(text)) { rejected.push({ disposition: "malformed-credit", reason: "unresolved wiki markup in role" }); continue; }
+    if (text && /^[A-Za-zÀ-Þ]/.test(text) && text.length < 60 && !/^and\b/i.test(text)) roles.push({ target: null, display: text, linked: false });
+  }
+  return { roles, rejected };
+}
+export const charactersFrom = tail => parseRoles(tail).roles;
+
+// A disposition is keyed by exact episode/revision/credit, not by rejection reason.
+// Multiple reasons remain history on that one observation.
+export function mergeDispositions(items) {
+  const byKey = new Map();
+  for (const item of items) {
+    const key = JSON.stringify([item.episode, item.source, item.revision, item.line]);
+    const prior = byKey.get(key);
+    const reasons = item.reason_history || [item.reason];
+    if (prior) {
+      prior.reason_history = [...new Set([...prior.reason_history, ...reasons])];
+      if (prior.disposition === "unresolved-role" && item.disposition !== "unresolved-role") {
+        prior.disposition = item.disposition; prior.reason = item.reason;
+      }
+    } else byKey.set(key, { ...item, reason_history: [...reasons] });
+  }
+  return [...byKey.values()];
+}
+
+export function parseCast(content, cite) {
+  const raw = [], unresolved = [];
+  const start = content.search(/===+\s*(Starring|Also starring)/i);
+  if (start < 0) return { raw, unresolved };
+  const after = content.slice(start), end = after.search(/\n==[^=]/);
+  const lines = (end < 0 ? after : after.slice(0, end)).split("\n");
+  let tier = null, tierNamed = false;
+  for (let li = 0; li < lines.length; li++) {
+    const rawline = lines[li], head = rawline.match(/^===+\s*(.+?)\s*=+\s*$/);
+    if (head) { const t = tierOf(head[1]); tier = t?.tier || null; tierNamed = !!t?.named; continue; }
+    const line = rawline.match(/^\*\s*\[\[([^\]|#]+)(?:\|([^\]]+))?\]\]\s+as\b(.*)$/);
+    if (!line || !tier) continue;
+    const performer = line[1].trim().replace(/\s*\((actor|actress|performer|puppeteer)\)$/i, "").replace(/,\s*(Jr\.?|Sr\.?|I{2,}|IV|V)$/i, (m,s) => " " + s);
+    const credit = { ...cite, tier, performer, performer_link: line[1].trim(), credited_as: (line[2] || line[1]).trim(), line: rawline.trim() };
+    if (!isPerson(performer)) { unresolved.push({ ...credit, disposition: "unknown-performer", reason: "performer link is not a person-like name" }); continue; }
+    let tail = line[3].trim();
+    if (!tail) {
+      const following = [];
+      while (li + 1 < lines.length && /^\*\*+\s*\S/.test(lines[li + 1])) following.push(lines[++li].replace(/^\*\*+\s*/, ""));
+      tail = following.join(" / ");
+      if (following.length) credit.line += "\n" + following.map(x => "** " + x).join("\n");
+    }
+    const parsed = parseRoles(tail);
+    for (const rejection of parsed.rejected) unresolved.push({ ...credit, ...rejection });
+    if (!parsed.roles.length && !parsed.rejected.length) unresolved.push({ ...credit, disposition: "unresolved-role", reason: "no character resolved in the credit line" });
+    for (const c of parsed.roles) raw.push({ performer, performer_link: credit.performer_link, credited_as: credit.credited_as, target: c.target || null, display: c.display, tier, tierNamed, cite, credit });
+  }
+  return { raw, unresolved: mergeDispositions(unresolved) };
+}
+
+export function doublingDispositions(row) {
+  return mergeDispositions(row.credits.map(credit => ({ ...credit, disposition: "doubling-utility",
+    reason: `doubling credit — the named role is performer "${row.character}", not a designed character` })));
 }
 
 // Resolve a set of credited link titles to Memory Alpha page identity, following
 // normalization and redirects. Returns Map(creditedTitle -> {pageid, title, missing}).
 // This is the canonicalizer: "Andrew Robinson" and "Andrew J. Robinson" both
 // resolve to pageid 6598; "Siddig El Fadil" and "Alexander Siddig" to 8798.
-async function resolveTitles(titles) {
+export async function resolveTitles(titles) {
   const resolved = new Map();
   const list = [...new Set(titles)];
   for (let i = 0; i < list.length; i += 50) {
@@ -162,16 +262,26 @@ async function resolveTitles(titles) {
     const step = new Map();                       // from -> to (one hop)
     for (const n of q.normalized || []) step.set(n.from, n.to);
     for (const r of q.redirects || []) step.set(r.from, r.to);
+    const fragments = new Map((q.redirects || []).filter(r => r.tofragment).map(r => [r.from, r.tofragment]));
     const byTitle = new Map();                     // final title -> {pageid, missing}
     for (const p of Object.values(q.pages || {}))
       byTitle.set(p.title, { pageid: p.pageid, missing: p.missing !== undefined });
     for (const t of list.slice(i, i + 50)) {
-      let cur = t; for (let hop = 0; hop < 6 && step.has(cur); hop++) cur = step.get(cur);
+      let cur = t, fragment = null;
+      for (let hop = 0; hop < 6 && step.has(cur); hop++) { fragment = fragments.get(cur) || fragment; cur = step.get(cur); }
       const info = byTitle.get(cur) || { missing: true };
-      resolved.set(t, { title: cur, pageid: info.pageid ?? null, missing: !!info.missing });
+      resolved.set(t, { title: cur, pageid: info.pageid ?? null, missing: !!info.missing, ...(fragment ? { fragment } : {}) });
     }
   }
   return resolved;
+}
+
+// A redirected section is an exact role locator, not the identity of every role
+// on its aggregate page. Keep the credited target until an individual ID exists.
+export function characterIdentity(target, resolved) {
+  if (resolved?.fragment) return { title: target, pageid: null, fragment: resolved.fragment,
+    aggregate_pageid: resolved.pageid, aggregate_title: resolved.title };
+  return resolved || {};
 }
 
 async function crawl() {
@@ -198,48 +308,9 @@ async function crawl() {
       const cite = { episode: page.title, source: obs.source, pageid: obs.pageid,
         revision: obs.revision, timestamp: obs.timestamp, observed_at: obs.observed_at };
 
-      // the credits live between the first cast header and the next level-2 (==) header
-      const castStart = content.search(/===+\s*(Starring|Also starring)/i);
-      if (castStart < 0) continue;
-      const after = content.slice(castStart);
-      const castEnd = after.search(/\n==[^=]/);
-      const cast = castEnd < 0 ? after : after.slice(0, castEnd);
-
-      let tier = null, tierNamed = false;
-      const lines = cast.split("\n");
-      for (let li = 0; li < lines.length; li++) {
-        const rawline = lines[li];
-        const head = rawline.match(/^===+\s*(.+?)\s*=+\s*$/);
-        if (head) { const t = tierOf(head[1]); tier = t?.tier || null; tierNamed = !!t?.named; continue; }
-        const line = rawline.match(/^\*\s*\[\[([^\]|#]+)(?:\|[^\]]+)?\]\]\s+as\b(.*)$/);
-        if (!line || !tier) continue;
-        lineNo++;
-        const performer = line[1].trim()
-          .replace(/\s*\((actor|actress|performer|puppeteer)\)$/i, "")
-          .replace(/,\s*(Jr\.?|Sr\.?|I{2,}|IV|V)$/i, (m, s) => " " + s);
-        if (!isPerson(performer)) {
-          unresolved.push({ episode: page.title, source: obs.source, tier, line: rawline.trim(),
-            reason: "performer link is not a person-like name" });
-          continue;
-        }
-        let chars = charactersFrom(line[2].trim());
-        if (!chars.length && !line[2].trim()) {   // roles on following ** sub-bullets
-          while (li + 1 < lines.length && /^\*\*+\s*\S/.test(lines[li + 1]))
-            chars.push(...charactersFrom(lines[++li].replace(/^\*\*+\s*/, "")));
-        }
-        chars = chars.filter((c) => {             // a "stunt double"/"stand-in" role is a doubling, not a face
-          if (!/\b(stunt|photo)?\s*double\b|\bstand-?in\b|additional voice|voice double|\butility\b|stunt (performer|coordinator|player)/i.test(c.display)) return true;
-          unresolved.push({ episode: page.title, source: obs.source, tier, performer, line: rawline.trim(),
-            reason: "doubling/utility credit — not a designed character role" });
-          return false;
-        });
-        if (!chars.length) {
-          unresolved.push({ episode: page.title, source: obs.source, tier, performer, line: rawline.trim(),
-            reason: "no character resolved in the credit line" });
-          continue;
-        }
-        for (const c of chars) raw.push({ performer, target: c.target || null, display: c.display, tier, tierNamed, cite });
-      }
+      const parsed = parseCast(content, { ...cite, content_sha256: obs.content_sha256 });
+      raw.push(...parsed.raw); unresolved.push(...parsed.unresolved);
+      lineNo += parsed.raw.length + parsed.unresolved.length;
     }
     console.log(`  episodes ${i + 1}-${Math.min(i + 20, episodes.length)} scanned; ${raw.length} raw credits`);
   }
@@ -247,7 +318,7 @@ async function crawl() {
   // ---- canonicalize by Memory Alpha page identity ----
   console.log(`\nresolving ${new Set(raw.map((r) => r.performer)).size} performer + ${new Set(raw.filter((r) => r.target).map((r) => r.target)).size} character titles to page identity...`);
   const performerId = await resolveTitles(raw.map((r) => r.performer));
-  const characterId = await resolveTitles(raw.filter((r) => r.target).map((r) => r.target));
+  const characterId = new Map([...(await resolveTitles(raw.filter((r) => r.target).map((r) => r.target)))].map(([t, info]) => [t, characterIdentity(t, info)]));
 
   const idOfPerformer = (t) => { const r = performerId.get(t); return r?.pageid ? "p" + r.pageid : "p:" + normalize(t); };
   const idOfCharacter = (c) => {
@@ -257,6 +328,10 @@ async function crawl() {
 
   const assertions = new Map();
   for (const r of raw) {
+    if (!performerId.get(r.performer)?.pageid || performerId.get(r.performer)?.missing || performerId.get(r.performer)?.fragment) {
+      unresolved.push({ ...r.credit, disposition: "unresolved-performer-identity", reason: "person-like credit lacks an individual resolved source page identity" });
+      continue;
+    }
     const pid = idOfPerformer(r.performer), cid = idOfCharacter(r);
     const key = pid + "|" + cid;
     let row = assertions.get(key);
@@ -271,15 +346,18 @@ async function crawl() {
         character_pageid: cInfo.pageid ?? null,
         character_source: r.target ? wikiUrl(cInfo.title || r.target) : null, character_aliases: new Set(),
         character_named: r.target ? !isUnnamed(cInfo.title || r.target) : false,
-        background: true, credit_tiers: new Set(), duplicate_key: key, episodes: [],
+        background: true, credit_tiers: new Set(), duplicate_key: key, episodes: [], credits: [],
       };
       assertions.set(key, row);
     }
     row.performer_aliases.add(r.performer);
+    row.performer_aliases.add(r.performer_link);
+    row.performer_aliases.add(r.credited_as);
+    row.credits.push(r.credit);
     if (r.target) row.character_aliases.add(r.display); else row.character_aliases.add(r.display);
     row.credit_tiers.add(r.tier);
     if (!BACKGROUND_TIERS.has(r.tier)) row.background = false;
-    if (!row.episodes.some((e) => e.episode === r.cite.episode)) row.episodes.push(r.cite);
+    if (!row.episodes.some((e) => e.episode === r.cite.episode && e.revision === r.cite.revision)) row.episodes.push(r.cite);
   }
 
   // doubling post-pass on canonical identity: if a "character" resolves to the
@@ -289,21 +367,18 @@ async function crawl() {
   for (const [key, row] of assertions) {
     if (performerPages.has(row.character_id.replace(/^c/, "p"))) {
       assertions.delete(key); doublings++;
-      unresolved.push({ episode: row.episodes[0]?.episode || null, source: row.episodes[0]?.source || null,
-        tier: [...row.credit_tiers][0] || null, performer: row.performer,
-        line: `${row.performer} as ${row.character}`,
-        reason: `doubling credit across ${row.episodes.length} episode(s) — the named role is performer "${row.character}", not a designed character` });
+      unresolved.push(...doublingDispositions(row));
     }
   }
   console.log(`cast lines parsed: ${lineNo}; doublings reclassified: ${doublings}; unresolved: ${unresolved.length}`);
-  return { observations, assertions, unresolved, episodeCount: episodes.length };
+  return { observations, assertions, unresolved: mergeDispositions(unresolved), episodeCount: episodes.length };
 }
 
 // credit tiers that are, by themselves, background/extra performances
 const BACKGROUND_TIERS = new Set(["uncredited", "stunt", "stand-in", "photo-double"]);
 
 // -------- wall match (on canonical identity + every credited alias) --------
-function matchWall(rows, specimens) {
+export function matchWall(rows, specimens) {
   for (const row of rows) {
     const performerNames = [row.performer, ...row.performer_aliases].map(normalize);
     const characterNames = [row.character, row.character_page, ...row.character_aliases].filter(Boolean).map(normalize);
@@ -320,6 +395,7 @@ function matchWall(rows, specimens) {
 }
 
 // ================= run =================
+async function main() {
 await mkdir("data/ds9", { recursive: true });
 let roster, observations, unresolved, manifest;
 
@@ -348,6 +424,7 @@ if (PROJECT_ONLY) {
     duplicate_key: row.duplicate_key,
     episode_count: row.episodes.length,
     episodes: row.episodes.sort((a, b) => a.episode.localeCompare(b.episode)),
+    source_credits: row.credits,
   })).sort((a, b) => a.performer.localeCompare(b.performer) || a.character.localeCompare(b.character));
   manifest = {
     version: 2, generator: "scripts/ds9-census.mjs", production: PRODUCTION,
@@ -412,3 +489,6 @@ await writeFile("data/ds9/summary.json", JSON.stringify(summary, null, 1) + "\n"
 console.log(`\nroster: ${roster.length} assertions, ${distinctPerformers} performers, ${distinctCharacters} characters`);
 console.log(`named-character roles: ${namedRoles.length}  extras/unnamed: ${extras.length}  on wall: ${onWall.length}`);
 console.log(`unresolved cast lines: ${unresolved.length}  ->  data/ds9/`);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

@@ -19,3 +19,12 @@ const crossScopeNext=nextOperation({registry:twoEstateRegistry,jobs:[{scope:"sta
 assert.equal(crossScopeNext.kind,"close-cycle");
 assert.equal(crossScopeNext.estate,"doctor-who");
 console.log("corpus operations fixtures: PASS");
+// Null is the CLI subprocess-failure result; optional access then yields undefined.
+for (const state of [false, undefined, null, "true", 1, {}, [], { error: "EPERM" }]) {
+  const next = nextOperation({registry,jobs:[{scope:"star-trek",status:"queued"}],audit:[],claimAllowed:state});
+  assert.equal(next.kind,"inspect-waterline");
+  assert(next.reason.length > 0);
+}
+const failedSubprocess = null;
+assert.equal(nextOperation({registry,jobs:[{scope:"star-trek",status:"queued"}],audit:[],claimAllowed:failedSubprocess?.claim_allowed}).kind,"inspect-waterline");
+console.log("corpus fail-closed fixtures: PASS (17 assertions; true control covered above)");

@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { extname, resolve, sep } from "node:path";
 
 const root=resolve(process.cwd());
-const types={".css":"text/css; charset=utf-8",".html":"text/html; charset=utf-8",".ico":"image/x-icon",".jpg":"image/jpeg",".jpeg":"image/jpeg",".js":"text/javascript; charset=utf-8",".json":"application/json; charset=utf-8",".mjs":"text/javascript; charset=utf-8",".png":"image/png",".svg":"image/svg+xml; charset=utf-8",".txt":"text/plain; charset=utf-8",".webp":"image/webp",".xml":"application/xml; charset=utf-8"};
+const types={".css":"text/css; charset=utf-8",".html":"text/html; charset=utf-8",".ico":"image/x-icon",".jpg":"image/jpeg",".jpeg":"image/jpeg",".js":"text/javascript; charset=utf-8",".json":"application/json; charset=utf-8",".mjs":"text/javascript; charset=utf-8",".png":"image/png",".svg":"image/svg+xml; charset=utf-8",".txt":"text/plain; charset=utf-8",".webp":"image/webp",".woff2":"font/woff2",".xml":"application/xml; charset=utf-8"};
 
 createServer((request,response)=>{
   try{

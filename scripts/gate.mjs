@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { beginRelease, finishRelease, verifyRelease } from "./publication-release.mjs";
+import { assertRoutes } from "./publication-routes.mjs";
 const ROOT = process.cwd();
 const npmCommand = process.platform === "win32" ? process.execPath : "npm";
 const npmPrefixArgs = process.platform === "win32" ? [path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")] : [];
@@ -36,9 +38,7 @@ export function expectedRouteCount(specimensPath = path.join(ROOT, "data/specime
   return specimens.length + (Array.isArray(tombstones.records) ? tombstones.records.length : 0);
 }
 export function assertRouteCount({ recordsRoot = path.join(ROOT, "records"), specimensPath = path.join(ROOT, "data/specimens.json"), tombstonesPath = path.join(ROOT, "data/tombstones.json") } = {}) {
-  const actual = countRecordRouteDirs(recordsRoot);
-  const expected = expectedRouteCount(specimensPath, tombstonesPath);
-  if (actual !== expected) throw new Error(`route-count check failed: expected ${expected} route folders, found ${actual}`);
+  return assertRoutes({ recordsRoot, specimensPath, tombstonesPath });
 }
 export function assertCleanWorkingTree(label, repoRoot = ROOT, paths = ["--", "."]) {
   const result = runCommand(label, "git", ["diff", "--exit-code", ...paths], { cwd: repoRoot, allowFail: true, stdio: "pipe" });
@@ -62,7 +62,7 @@ async function writeProjectionDiagnostics() {
   }
 }
 async function runProjectedSteps() {
-  try { runNodeScript("Rebuild deterministic projection", "scripts/shard.mjs"); assertCleanWorkingTree("Refuse generated drift", ROOT); }
+  try { runNodeScript("Rebuild deterministic projection", "scripts/shard.mjs"); assertCleanWorkingTree("Refuse generated drift", ROOT, ["--", "data", ":(exclude)data/review", "sitemap.xml", "robots.txt"]); }
   catch (error) { await writeProjectionDiagnostics(); throw error; }
 }
 async function runAutopilotSyncAssertion() {
@@ -85,6 +85,7 @@ async function runAutopilotSyncAssertion() {
 
 const stepDefinitions = [
   { id: "gate-fixtures", label: "Validate canonical gate fixtures", action: () => runNpmScript("Gate fixtures", "gate:fixtures") },
+  { id: "publication-fixtures", label: "Validate isolated publication boundary", action: () => runNpmScript("Publication fixtures", "publication:fixtures") },
   { id: "lockfile", label: "Verify package-lock consistency", action: () => runCommand("Lockfile consistency", npmCommand, [...npmPrefixArgs, "ci", "--dry-run"], { cwd: ROOT }) },
   { id: "projections", label: "Rebuild projection and refuse drift", action: runProjectedSteps },
   { id: "quality-baseline", label: "Validate truth-correction quality baseline custody", action: () => { runNodeScript("Quality baseline fixtures", "scripts/estate-quality-baseline-fixtures.mjs"); runNodeScript("Quality baseline custody", "scripts/estate-quality-baseline.mjs", ["--validate"]); } },
@@ -102,7 +103,7 @@ const stepDefinitions = [
   { id: "site-sweep", label: "Validate full-site role integrity and fallback design", action: () => { runNpmScript("Site sweep fixtures", "site:sweep:fixtures"); runNpmScript("Site sweep", "site:sweep"); } },
   { id: "routes-build", label: "Build permanent routes", action: () => runNodeScript("Permanent routes", "scripts/build-record-pages.mjs") },
   { id: "rendered", label: "Exercise rendered interactions", rendered: true, action: () => runNpmScript("Rendered interactions", "test:rendered") },
-  { id: "route-count", label: "Verify route count", action: () => assertRouteCount() },
+  { id: "route-count", label: "Verify exact specimen and tombstone routes", action: () => assertRouteCount() },
   { id: "ds9-project", label: "Rebuild offline DS9 projections", action: () => { runNodeScript("DS9 census", "scripts/ds9-census.mjs", ["--project-only"]); runNodeScript("DS9 graph", "scripts/ds9-graph.mjs", ["--project-only"]); runNodeScript("DS9 eligibility queue", "scripts/ds9-eligibility-queue.mjs"); runNodeScript("DS9 maker queue", "scripts/ds9-maker-queue.mjs"); } },
   { id: "ds9-drift", label: "Refuse DS9 projection drift", action: () => assertCleanWorkingTree("DS9 projection drift", ROOT, ["--", "data/ds9"]) },
   { id: "ds9-census-fixtures", label: "Validate DS9 census fixtures", action: () => runNpmScript("DS9 census fixtures", "ds9:fixtures") },
@@ -124,15 +125,24 @@ export function selectSteps({ from = null, skipRendered = false } = {}) {
   return selected;
 }
 export function listSteps() { return stepDefinitions.map(({ id, label, rendered = false }) => ({ id, label, rendered })); }
-export async function runGate({ from = null, skipRendered = false } = {}) {
+export async function runGate({ from = null, skipRendered = false, release = false } = {}) {
+  const releaseStart = release ? beginRelease(ROOT, { from, skipRendered }) : null;
   const steps = selectSteps({ from, skipRendered });
   const started = Date.now();
   for (const step of steps) { const at = Date.now(); console.log(`\n>>> ${step.label} [${step.id}]`); await step.action(); console.log(`<<< PASS ${step.id} (${((Date.now() - at) / 1000).toFixed(1)}s)`); }
-  console.log(`\ngate: PASS — ${steps.length} step(s) in ${((Date.now() - started) / 1000).toFixed(0)}s${skipRendered ? " (rendered skipped by explicit request)" : ""}`);
+  if (release) finishRelease(ROOT, releaseStart, steps.map(step => step.id));
+  console.log(`\n${from || skipRendered ? "diagnostic partial gate" : "gate"}: PASS — ${steps.length} step(s) in ${((Date.now() - started) / 1000).toFixed(0)}s${skipRendered ? " (rendered skipped by explicit request)" : ""}`);
 }
 function cliOption(args, name) { const index = args.indexOf(name); if (index < 0) return null; const value = args[index + 1]; if (!value || value.startsWith("--")) throw new Error(`${name} requires a value`); return value; }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const argv = process.argv.slice(2);
-  if (argv.includes("--list")) for (const step of listSteps()) console.log(`${step.id.padEnd(28)} ${step.rendered ? "[rendered] " : "           "}${step.label}`);
-  else runGate({ from: cliOption(argv, "--from"), skipRendered: argv.includes("--skip-rendered") }).catch((error) => { console.error(`gate: ${error instanceof Error ? error.message : String(error)}`); process.exit(1); });
+  const allowed = new Set(["--list", "--skip-rendered", "--release", "--from", "--verify-release"]);
+  for (let i = 0; i < argv.length; i++) { if (!allowed.has(argv[i])) throw new Error(`unknown gate argument: ${argv[i]}`); if (argv[i] === "--from") i++; }
+  if (argv.includes("--verify-release")) {
+    if (argv.length !== 1) throw new Error("--verify-release cannot be combined with other flags");
+    try { const receipt = verifyRelease(ROOT, listSteps().map(step => step.id)); console.log(`release verification: PASS ${receipt.commit} ${receipt.payload_sha256}`); }
+    catch (error) { console.error(`release verification: ${error.message}`); process.exitCode = 1; }
+  }
+  else if (argv.includes("--list")) for (const step of listSteps()) console.log(`${step.id.padEnd(28)} ${step.rendered ? "[rendered] " : "           "}${step.label}`);
+  else runGate({ from: cliOption(argv, "--from"), skipRendered: argv.includes("--skip-rendered"), release: argv.includes("--release") }).catch((error) => { console.error(`gate: ${error instanceof Error ? error.message : String(error)}`); process.exit(1); });
 }

@@ -2,8 +2,10 @@
 /** Assemble the offline maker-credit review queue. No network. */
 import { readFile, writeFile } from "node:fs/promises";
 import { normalizeBasis, validateDecisions } from "./lib/maker.mjs";
+import { coverageByKey } from "./lib/ds9-coverage.mjs";
 
 const roster = JSON.parse(await readFile("data/ds9/roster.json", "utf8"));
+const coverage = coverageByKey(JSON.parse(await readFile("data/ds9/coverage.json", "utf8")).coverage, roster);
 const evidence = JSON.parse(await readFile("data/ds9/maker-evidence.json", "utf8"));
 const decisions = JSON.parse(await readFile("data/ds9/maker-decisions.json", "utf8"));
 const observations = JSON.parse(await readFile("data/ds9/observations.json", "utf8")).observations || [];
@@ -28,8 +30,8 @@ const queue = roster.map((row) => {
     grow_md_version: decision?.grow_md_version || null,
     signal_receipt_ids: signals,
     signal_count: signals.length,
-    on_wall: row.role_on_wall,
-    wall_ids: row.wall_ids,
+    on_wall: coverage.get(row.duplicate_key).role_on_wall,
+    wall_ids: coverage.get(row.duplicate_key).wall_ids,
   };
 }).sort((a, b) => a.performer.localeCompare(b.performer) || a.character.localeCompare(b.character));
 

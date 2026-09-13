@@ -23,7 +23,7 @@ constellation.html    sourced paths beyond the wall — people, roles, episodes,
 coverage.html         source-scoped franchise/species census and filed gaps
 records/UC-…/         generated permanent, no-JavaScript record routes; built for
                       deployment by scripts/build-record-pages.mjs
-assets/               light/dark topology marks for explicitly missing evidence
+assets/               shared CSS, explicit-absence artwork, and pinned font custody
 og.png                social-share preview card (1200×630)
 GROW.md               how any model grows the roster (keyless) · AGENTS.md points here
 data/
@@ -71,7 +71,7 @@ npm run serve          # http://localhost:8000
 Grow the image library (no key, no signup):
 
 ```bash
-npm run build          # retrieve images + rebuild credits
+npm run retrieve       # explicit networked image intake
 # or the pieces:
 node scripts/retrieve.mjs
 node scripts/credits.mjs
@@ -92,9 +92,11 @@ npm run test:rendered                # Chromium interactions, failure injection,
 ```
 
 Deploy: Settings -> Pages -> Source: **GitHub Actions**. The `pages.yml` workflow
-builds the permanent record routes and publishes the site on every push to `main`
-(so it republishes automatically after the nightly bots commit new cards and
-images). Done.
+runs the complete canonical gate, builds an allowlisted artifact bound to the
+exact checkout and input/media identities, then deploys that artifact in a separate
+job. Acquisition workflow completion wakes this same full validation boundary.
+`npm run build` produces an offline local artifact in `.ci/site`; it performs no
+retrieval and grants no publication authority. See [release/build details](docs/RELEASE-PATH.md).
 
 ## Share it
 

@@ -7,10 +7,10 @@
      is NOT the primary XSS control (that's the esc()/safeUrl()/safeId() helpers that
      sanitise every value written into innerHTML). What it DOES buy: no external or
      injected <script src>, no plugins, no <base> hijack, no form posts, and fetch
-     limited to same-origin. Fonts are allow-listed to Google's hosts. (Clickjacking
+     limited to same-origin. Approved brand fonts are pinned and served locally. (Clickjacking
      protection would need a frame-ancestors HTTP header — a <meta> CSP can't carry
      it, and GitHub Pages can't set headers — so it's out of scope here.) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <script>document.documentElement.classList.add("js")</script>
 <title>UNDERCAST — a field index of the performers who vanish under the design</title>
@@ -39,9 +39,7 @@
 <!-- Favicon: a bare life-cast head, inline so there's no extra request -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23E4DFD5'/%3E%3Cpath d='M9 12c0-5 3-8 7-8s7 3 7 8c0 6-3 10-7 13-4-3-7-7-7-13z' fill='%23D6D0C4' stroke='%231C1A16' stroke-width='1.4'/%3E%3Cpath d='M16 5c1 6 1 13 0 20' fill='none' stroke='%237C918D' stroke-width='1' stroke-dasharray='1 2'/%3E%3Cellipse cx='13' cy='14' rx='1.6' ry='1' fill='none' stroke='%231C1A16' stroke-width='1'/%3E%3Cellipse cx='19' cy='14' rx='1.6' ry='1' fill='none' stroke='%231C1A16' stroke-width='1'/%3E%3C/svg%3E" />
 
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="./assets/site-fonts.css" />
 <script src="./assets/site-theme.js"></script>
 <link rel="stylesheet" href="./assets/site-tokens.css" />
 <link rel="stylesheet" href="./assets/site-shell.css" />
@@ -628,6 +626,8 @@ let INDEX = [];               // lean entries: {id,sh,u,y,d,a,c,p,tf,k?,kw?,_hay
 let MANIFEST = null;          // data/shard-manifest.json — the shard load map
 let MEDIA = {};               // localSrc -> {url,location}: images living on GitHub Releases
 let SPECIES_PROJECTION = {taxa:[]}; // complete source-backed role ledger + exact wall-role facets
+let SPECIES_PROMISE = null;  // fetched only for an active species context or legacy index
+let LEGACY_MEDIA_PROMISE = null; // compatibility only; v2 manifests use bounded media shards
 const RECORDS = new Map();    // id -> full record (populated lazily from shards)
 const SHARDS = new Map();     // shard# -> in-flight/settled load promise (dedupe)
 let renderSeq = 0;            // guards against a stale async render clobbering a newer one
@@ -772,13 +772,37 @@ function buildFilters(){
   updateFilterSummary();
 }
 
-function setSpecies(label){
+async function ensureSpeciesProjection(){
+  if((SPECIES_PROJECTION.taxa||[]).length) return SPECIES_PROJECTION;
+  if(!SPECIES_PROMISE){
+    const hash=MANIFEST&&MANIFEST.species_sha256||"";
+    SPECIES_PROMISE=fetch("./data/species.json"+(hash?"?v="+encodeURIComponent(hash):""),{cache:hash?"default":"no-store"})
+      .then(r=>{if(!r.ok)throw new Error("species projection");return r.json();})
+      .then(projection=>{
+        if(!projection||!Array.isArray(projection.taxa)) throw new Error("invalid species projection");
+        SPECIES_PROJECTION=projection;
+        const byId=new Map(INDEX.map(entry=>[entry.id,entry]));
+        for(const taxon of projection.taxa){
+          if(!Array.isArray(taxon.wall_records)) throw new Error("species projection lacks exact wall records");
+          for(const record of taxon.wall_records){
+            const entry=byId.get(record.id);if(!entry)continue;
+            entry.sp=[...new Set([...(entry.sp||[]),taxon.label])].sort();hydrate(entry);
+          }
+        }
+        return projection;
+      })
+      .catch(()=>{SPECIES_PROMISE=null;return SPECIES_PROJECTION;});
+  }
+  return SPECIES_PROMISE;
+}
+async function setSpecies(label){
   speciesFilter=label||"All";
   [...speciesChipsEl.children].forEach(c=>c.setAttribute("aria-pressed",c.textContent===speciesFilter));
-  render();
+  if(speciesFilter!=="All") await ensureSpeciesProjection();
+  await render();
 }
 function speciesClick(event,el){
-  event.preventDefault();event.stopPropagation();setSpecies(el.dataset.species||"All");
+  event.preventDefault();event.stopPropagation();void setSpecies(el.dataset.species||"All");
   (document.getElementById("grid")||document.body).scrollIntoView({behavior:reducedMotion()?"auto":"smooth",block:"start"});
   return false;
 }
@@ -972,11 +996,27 @@ function loadShard(sh){
   if(SHARDS.has(sh)) return SHARDS.get(sh);
   const meta=MANIFEST&&MANIFEST.shards&&MANIFEST.shards[sh];
   if(!meta){ const p=Promise.resolve([]); SHARDS.set(sh,p); return p; }
-  const p=fetch("./data/"+meta.file+"?v="+encodeURIComponent(meta.sha256||"")).then(r=>{if(!r.ok)throw new Error("shard "+sh);return r.json();})
-    .then(recs=>{ for(const rec of recs) RECORDS.set(rec.id,rec); return recs; })
+  const records=fetch("./data/"+meta.file+"?v="+encodeURIComponent(meta.sha256||"")).then(r=>{if(!r.ok)throw new Error("shard "+sh);return r.json();});
+  const media=meta.media_file
+    ? fetch("./data/"+meta.media_file+"?v="+encodeURIComponent(meta.media_sha256||"")).then(r=>{if(!r.ok)throw new Error("media shard "+sh);return r.json();})
+    : Promise.resolve(null);
+  const p=Promise.all([records,media])
+    .then(([recs,mediaMap])=>{
+      if(mediaMap&&mediaMap.urls) for(const src in mediaMap.urls) MEDIA[src]={url:mediaMap.urls[src],location:"release"};
+      for(const rec of recs) RECORDS.set(rec.id,rec);
+      return recs;
+    })
     .catch(err=>{ SHARDS.delete(sh); throw err; }); // let a later render retry
   SHARDS.set(sh,p);
   return p;
+}
+async function loadLegacyMedia(){
+  if(LEGACY_MEDIA_PROMISE) return LEGACY_MEDIA_PROMISE;
+  LEGACY_MEDIA_PROMISE=fetch("./data/media-live.json?v="+encodeURIComponent(MANIFEST&&MANIFEST.media_live_sha256||""))
+    .then(r=>r.ok?r.json():null)
+    .then(live=>{if(live&&live.urls)for(const src in live.urls)MEDIA[src]={url:live.urls[src],location:"release"};return live;})
+    .catch(()=>null);
+  return LEGACY_MEDIA_PROMISE;
 }
 // Make sure every entry in the list has its full record in memory before we render it.
 async function ensureRecords(entries){
@@ -999,10 +1039,12 @@ function computeRows(){
     return inU && inD && inS && inM && inK && (q===""||terms.some(t=>e._hay.includes(t)));
   });
   const mode=sortEl.value;
+  const catalogNumber=entry=>{const match=String(entry.id).match(/\d+/);return match?Number(match[0]):Number.MAX_SAFE_INTEGER;};
+  const catalogCompare=(a,b)=>catalogNumber(a)-catalogNumber(b)||(String(a.id)<String(b.id)?-1:String(a.id)>String(b.id)?1:0);
   rows.sort((a,b)=>{
-    if(mode==="transform") return b.tf-a.tf || String(a.id).localeCompare(String(b.id));
-    if(mode==="actor") return String(a.a).localeCompare(String(b.a));
-    return String(a.id).localeCompare(String(b.id));
+    if(mode==="transform") return b.tf-a.tf || catalogCompare(a,b);
+    if(mode==="actor") return String(a.a).localeCompare(String(b.a)) || catalogCompare(a,b);
+    return catalogCompare(a,b);
   });
   return rows;
 }
@@ -1249,27 +1291,12 @@ async function boot(){
     MANIFEST={shards:[]};
     INDEX=specs.map(function(s){ RECORDS.set(s.id,s); return asEntry(s); }); // every record already resident
   }
-  // The lean index normally carries exact species labels. Rehydrate them from
-  // the dedicated projection when running from an old/mid-build index or the
-  // canonical fallback; never infer a species from character or reveal prose.
-  try{
-    const projection=await fetch("./data/species.json",{cache:"no-store"}).then(function(r){return r.ok?r.json():null;});
-    if(projection&&Array.isArray(projection.taxa)) SPECIES_PROJECTION=projection;
-    const byId=new Map(INDEX.map(function(entry){return [entry.id,entry];}));
-    for(const taxon of SPECIES_PROJECTION.taxa||[]){
-      if(!Array.isArray(taxon.wall_records)) throw new Error("species projection lacks exact wall records");
-      for(const record of taxon.wall_records){
-        const entry=byId.get(record.id);if(!entry) continue;
-        entry.sp=[...new Set([...(entry.sp||[]),taxon.label])].sort();hydrate(entry);
-      }
-    }
-  }catch(_){SPECIES_PROJECTION={taxa:[]};}
-  // lean media map: only images actually on a Release (src -> url). The full durability
-  // manifest (data/media-manifest.json) is a CI artifact and is deliberately NOT fetched.
-  try{
-    const live=await fetch("./data/media-live.json?v="+encodeURIComponent(MANIFEST.media_live_sha256||"")).then(function(r){return r.ok?r.json():null;});
-    if(live&&live.urls) for(const src in live.urls){ MEDIA[src]={url:live.urls[src],location:"release"}; }
-  }catch(_){}
+  // Current indexes carry exact species labels. The full sourced ledger is fetched
+  // only for an active species context; legacy projections are rehydrated here.
+  if(MANIFEST.species_indexed!==true||speciesFilter!=="All") await ensureSpeciesProjection();
+  // Version 2 record shards carry a bounded release-media map. Preserve the global
+  // media projection only as a compatibility fallback for older manifests.
+  if(!Array.isArray(MANIFEST.shards)||!MANIFEST.shards.length||MANIFEST.shards.some(meta=>!meta.media_file)) await loadLegacyMedia();
   restoreWallPosition();
   buildFilters();
   buildMakers();
@@ -1279,10 +1306,10 @@ async function boot(){
   const specimenId=specimenHashId();
   if(specimenId) await focusSpecimen(specimenId);
   else { applyRestoredWallPosition();scrollToNamedHash(); }
-  // living pipeline: show how many harvested leads are queued for triage (optional file)
-  fetch("./data/CANDIDATES.json").then(function(r){return r.ok?r.json():[];}).then(function(c){
-    if(Array.isArray(c)&&c.length) document.getElementById("queue").textContent=" · "+c.length+" leads in the ingest queue";
-  }).catch(function(){});
+  // The generator records this count in the tiny shard manifest; never download the
+  // full candidate corpus merely to paint one footer number.
+  if(Number.isInteger(MANIFEST.candidate_count)&&MANIFEST.candidate_count>0)
+    document.getElementById("queue").textContent=" · "+MANIFEST.candidate_count+" leads in the ingest queue";
 }
 window.addEventListener("pagehide",()=>rememberWallPosition());
 if(location.search||location.hash) document.body.classList.add("is-directed");
@@ -1291,7 +1318,7 @@ function showBootFailure(){
   resultStatusEl.textContent="The roster could not be loaded. Retry is available.";
   grid.setAttribute("aria-busy","false");
   document.getElementById("retryBoot").addEventListener("click",function(){
-    MANIFEST=null; INDEX=[]; RECORDS.clear(); SHARDS.clear();
+    MANIFEST=null; INDEX=[]; MEDIA={}; SPECIES_PROJECTION={taxa:[]}; SPECIES_PROMISE=null; LEGACY_MEDIA_PROMISE=null; RECORDS.clear(); SHARDS.clear();
     grid.innerHTML="";
     grid.setAttribute("aria-busy","true");
     startBoot();

@@ -360,9 +360,18 @@ function loadShard(number){
   if(SHARDS.has(number)) return SHARDS.get(number);
   const meta=MANIFEST&&MANIFEST.shards&&MANIFEST.shards[number];
   if(!meta) return Promise.resolve([]);
-  const promise=fetch("./data/"+meta.file+"?v="+encodeURIComponent(meta.sha256||""))
-    .then((response)=>{ if(!response.ok) throw new Error("Could not load shard "+number); return response.json(); })
-    .then((records)=>{ for(const record of records) RECORDS.set(record.id,record); return records; })
+  const records=fetch("./data/"+meta.file+"?v="+encodeURIComponent(meta.sha256||""))
+    .then((response)=>{ if(!response.ok) throw new Error("Could not load shard "+number); return response.json(); });
+  const media=meta.media_file
+    ? fetch("./data/"+meta.media_file+"?v="+encodeURIComponent(meta.media_sha256||""))
+      .then((response)=>{ if(!response.ok) throw new Error("Could not load media shard "+number); return response.json(); })
+    : Promise.resolve(null);
+  const promise=Promise.all([records,media])
+    .then(([rows,mediaMap])=>{
+      if(mediaMap&&mediaMap.urls) for(const src in mediaMap.urls) MEDIA[src]={url:mediaMap.urls[src],location:"release"};
+      for(const record of rows) RECORDS.set(record.id,record);
+      return rows;
+    })
     .catch((error)=>{ SHARDS.delete(number); throw error; });
   SHARDS.set(number,promise);
   return promise;
@@ -797,7 +806,7 @@ async function boot(){
   for(const taxon of SPECIES?.taxa||[]) for(const record of taxon.wall_records||[]){
     const entry=byId.get(record.id);if(entry) entry.sp=[...new Set([...(entry.sp||[]),taxon.label])].sort();
   }
-  await loadMedia();
+  if(!Array.isArray(MANIFEST.shards)||!MANIFEST.shards.length||MANIFEST.shards.some((meta)=>!meta.media_file)) await loadMedia();
   let id=requestedId();
   if(!id){
     id=INDEX.some((entry)=>entry.id==="UC-025")?"UC-025":INDEX[0]?.id;

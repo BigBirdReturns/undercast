@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Offline contract fixtures for the owner-controlled maker-credit queue. */
 import { readFile } from "node:fs/promises";
+import { resolveDS9Key } from "./lib/ds9-coverage.mjs";
 import {
   ENTITY_TYPES, ROLE_CATEGORIES, normalizeBasis, receiptId,
   validateDecision, validateDecisions,
@@ -17,6 +18,8 @@ const episodeTitles = [...new Set(observations
   .map((title) => normalizeBasis(title.replace(/\s*\(episode\)$/, ""))))];
 const receipts = Object.values(evidence.receipts || {});
 const queue = queueDoc.queue;
+const aliases = JSON.parse(await readFile("data/ds9/key-aliases.json", "utf8")).aliases;
+const coverage = JSON.parse(await readFile("data/ds9/coverage.json", "utf8")).coverage;
 
 let failures = 0;
 const check = (name, condition, detail = "") => {
@@ -51,13 +54,15 @@ const rosterKeys = new Set(roster.map((row) => row.duplicate_key));
 const evidenceKeys = new Set(Object.keys(evidence.performances || {}));
 const queueKeys = new Set(queue.map((item) => item.duplicate_key));
 const setEqual = (a, b) => a.size === b.size && [...a].every((key) => b.has(key));
-check("roster, performance-signal projection, and queue keys are exact sets",
-  setEqual(rosterKeys, evidenceKeys) && setEqual(evidenceKeys, queueKeys));
+check("current roster and queue keys match exactly; historical signal keys remain resolvable",
+  setEqual(rosterKeys, queueKeys) && [...evidenceKeys].every(key => rosterKeys.has(resolveDS9Key(key, aliases))));
+check("every maker wall join equals current coverage by duplicate_key",
+  queue.every(q => { const c = coverage.find(c => c.duplicate_key === q.duplicate_key); return c && q.on_wall === c.role_on_wall && setEqual(new Set(q.wall_ids), new Set(c.wall_ids)); }));
 
 const validation = validateDecisions(decisions, evidence, roster, episodeTitles);
 check("committed owner decisions are valid", validation.errors.length === 0, validation.errors.slice(0, 3).join("; "));
-check("empty owner file leaves all 557 performances in review",
-  validation.applied.size === 0 && queue.length === 557 && queue.every((item) => item.status === "review" && item.credits === null));
+check("empty owner file leaves every current performance in review",
+  validation.applied.size === 0 && queue.length === roster.length && queue.every((item) => item.status === "review" && item.credits === null));
 check("signals never change review status", queue.every((item) => item.status === "review"));
 check("v2 decision documents fail closed", validateDecisions({ version: 2, decisions: [] }, evidence, roster, episodeTitles).errors.length > 0);
 

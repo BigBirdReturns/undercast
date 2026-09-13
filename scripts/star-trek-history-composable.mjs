@@ -4,6 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const replayEnv = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require ${JSON.stringify(fileURLToPath(new URL('./historical-temp.cjs', import.meta.url)))}` };
 
 const BASELINE_COMMIT = '38116aaf55371fd267db4733bba17a5fcb39d9fd';
 const BASELINE_TOTAL = 2228;
@@ -119,7 +122,7 @@ function run(label, executable, args, { cwd = process.cwd(), quiet = false } = {
     cwd,
     encoding: 'utf8',
     maxBuffer: 256 * 1024 * 1024,
-    env: process.env,
+    env: replayEnv,
   });
   if (result.error) fail(`${label} could not start: ${result.error.message}`);
   if (result.status !== 0) {
@@ -413,7 +416,7 @@ try {
       cwd: currentRoot,
       encoding: 'utf8',
       maxBuffer: 256 * 1024 * 1024,
-      env: process.env,
+      env: replayEnv,
     });
   }
   fs.rmSync(parent, { recursive: true, force: true });

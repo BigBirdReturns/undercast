@@ -1,50 +1,85 @@
 name: pages
 
-# Deploys the static wall to GitHub Pages. Matches Settings -> Pages ->
-# Source: "GitHub Actions".
-#
-# NOTE: a `push` from the bot workflows uses the default GITHUB_TOKEN, and GitHub
-# deliberately does NOT start new runs from GITHUB_TOKEN pushes (recursion guard).
-# So `on: push` alone would never republish after the nightly/media bots commit —
-# the `workflow_run` trigger below is what actually redeploys after each bot commit.
-
+# Acquisition completion is a wake-up signal only. Always gate trusted main anew.
 on:
   push:
     branches: [main]
   workflow_run:
     workflows: ["retrieve-images", "grow-cards", "ingest-leads", "media-upload"]
     types: [completed]
+    branches: [main]
   workflow_dispatch: {}
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# let a running deploy finish; don't cancel it mid-publish
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
+  build:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name == 'BigBirdReturns/undercast' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.event != 'pull_request' &&
+        github.event.workflow_run.event != 'pull_request_target'))
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Bots may have pushed after their workflow's original head SHA.
+          # Resolve main once; all subsequent validation/upload uses this checkout.
+          ref: ${{ github.event_name == 'workflow_run' && 'refs/heads/main' || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install exact dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Complete canonical gate and bind publication artifact
+        run: npm run gate -- --release
+      - name: Verify exact release bytes immediately before upload
+        run: node scripts/gate.mjs --verify-release
+      - name: Upload exact gated site
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        with:
+          path: .ci/pages
+          name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Retain release identity separately from public payload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-identity-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .ci/release-identity.json
+            .ci/release-run.json
+          include-hidden-files: true
+          if-no-files-found: error
+
   deploy:
-    # on a workflow_run trigger, only deploy if the upstream bot run actually succeeded
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    needs: build
+    if: github.repository == 'BigBirdReturns/undercast' && github.ref == 'refs/heads/main'
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Build permanent record routes
-        run: npm run build:site
-      - uses: actions/configure-pages@v5
-      - name: Upload the site (whole repo root — index.html + data/ + images/)
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: "."
+      # No checkout and no repository code runs with publication permissions.
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+        with:
+          artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}

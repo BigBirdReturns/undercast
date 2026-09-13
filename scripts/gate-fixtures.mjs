@@ -29,6 +29,8 @@ try {
   const tombstonesPath = path.join(fixtureRoot, "tombstones.json");
   await writeFile(specimensPath, JSON.stringify([{ id: "UC-001" }, { id: "UC-002" }]));
   await writeFile(tombstonesPath, JSON.stringify({ records: [] }));
+  await writeFile(path.join(recordsRoot, "UC-001/index.html"), "UC-001");
+  await writeFile(path.join(recordsRoot, "UC-002/index.html"), "UC-002");
   assertRouteCount({ recordsRoot, specimensPath, tombstonesPath });
   pass("route count works across paths containing spaces");
   expect("expectedRouteCount is deterministic", expectedRouteCount(specimensPath, tombstonesPath), 2);
@@ -59,7 +61,7 @@ try {
   expectThrows("unknown --from fails closed", () => selectSteps({ from: "does-not-exist" }), /matched no gate step/);
 
   const archiveWorkflow = await readFile(new URL("../.github/workflows/validate.yml", import.meta.url), "utf8");
-  const checkoutDepth = Number(archiveWorkflow.match(/uses:\s*actions\/checkout@v4[\s\S]{0,160}?fetch-depth:\s*(\d+)/)?.[1]);
+  const checkoutDepth = Number(archiveWorkflow.match(/uses:\s*actions\/checkout@(?:v4|[a-f0-9]{40})[\s\S]{0,160}?fetch-depth:\s*(\d+)/)?.[1]);
   expect("canonical workflow fetches full immutable receipt history", checkoutDepth, 0);
 
   const autopilotWorkflow = await readFile(new URL("../.github/workflows/autopilot.yml", import.meta.url), "utf8");

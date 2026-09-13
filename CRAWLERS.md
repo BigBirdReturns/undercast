@@ -75,6 +75,15 @@ policy. Discover public pages through `robots.txt` and `sitemap.xml`.
 - `still.focus` and `portrait.focus` are curated display coordinates, not claims
   about image content. They use semantic horizontal/vertical positions so every
   surface can preserve the same intended subject through responsive crops.
+- `data/MEDIA-REJECTIONS.json` is the fail-closed projection of reviewed invalid
+  media objects. An exact rejected SHA-256 is denied globally; a rejected source
+  locator is denied only for the same durable record side. A different locator and
+  different byte hash remains eligible for ordinary exact-subject review.
+- Both the detached retriever and canonical candidate reporter enforce the same
+  rejection projection. A rejected rediscovery writes a rule-bound attempt receipt
+  to `data/journal/media-search.jsonl` and its bytes do not enter the candidate
+  artifact. The explicit retry cadence remains the failure history; no crawler may
+  repeatedly hammer a rejected or recently attempted gap.
 
 ## Durable identifiers
 
