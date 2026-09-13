@@ -7,7 +7,8 @@
  *
  *   node scripts/census-fixtures.mjs    (exit 0 = all pass)
  */
-import { performerFieldValues, namesFrom, loadScope } from "./lib/census-core.mjs";
+import { performerFieldValues, namesFrom, loadScope, demoteCharacterTitledRows } from "./lib/census-core.mjs";
+import { readFileSync, existsSync } from "node:fs";
 
 let failures = 0;
 function expect(label, got, want) {
@@ -76,6 +77,52 @@ expect("malformed JSON aborts the crawl", malformed, true);
 let emptyScope = false;
 try { await loadScope(async () => JSON.stringify({ included: [] }), "x.json"); } catch { emptyScope = true; }
 expect("empty included[] refuses to narrow the hand list", emptyScope, true);
+
+// 7. Parenthetical role/disguise annotations after a performer are not
+//    performers; a wholly parenthesized list segment keeps its performer.
+expect("(as Character) annotation is dropped",
+  extract(`|actor=[[Kate Mulgrew]] (as [[Kathryn Janeway]])`),
+  ["Kate Mulgrew"]);
+
+expect("disguise annotation with nested detail is dropped",
+  extract(`|actor=[[Scott Bakula]] (disguised as [[Charles Tucker III]] ([[mirror universe]]))`),
+  ["Scott Bakula"]);
+
+expect("wholly parenthesized list segment keeps its performer",
+  extract(`|performer=[[Dave Goelz]], ([[Frank Welker]])`),
+  ["Dave Goelz", "Frank Welker"]);
+
+expect("annotations drop per segment, later segments keep their performers",
+  extract(`|actor=[[Brett Gray]] (as [[Dal R'El]]), [[Kate Mulgrew]]`),
+  ["Brett Gray", "Kate Mulgrew"]);
+
+// 8. Fail-closed demotion: a performer that is a crawled character page title
+//    is a fictional identity — only-characters and mixed cases both demote.
+{
+  const titles = new Set(["Cookie Monster", "Kathryn Janeway"]);
+  const unresolved = [];
+  const kept = demoteCharacterTitledRows([
+    { franchise: "Muppets & Henson", category: "c", character: "Alistair Cookie", performers: ["Cookie Monster"], source: "s" },
+    { franchise: "Star Trek", category: "c", character: "X", performers: ["Kathryn Janeway", "Real Person"], source: "s" },
+    { franchise: "Star Trek", category: "c", character: "Y", performers: ["Kate Mulgrew"], source: "s" },
+  ], unresolved, titles);
+  expect("character-as-performer rows demote, clean rows survive",
+    { kept: kept.map((r) => r.character), demoted: unresolved.map((r) => r.character) },
+    { kept: ["Y"], demoted: ["Alistair Cookie", "X"] });
+}
+
+// 9. Committed-corpus assertions: the exact reviewed defects must never
+//    quietly return to data/CENSUS.json.
+if (existsSync("data/CENSUS.json")) {
+  const corpus = JSON.parse(readFileSync("data/CENSUS.json", "utf8"));
+  const performerSet = new Set(corpus.flatMap((row) => row.performers));
+  const banned = ["Fourth Cyber Legion", "New Dalek Paradigm", "Reality Virus", "Papal Mainframe",
+    "Rutan Host", "Space Security Service", "Large Lavender Live Hand", "Orange Gold", "Fat Blue",
+    "Kathryn Janeway", "B'Elanna Torres", "The Face", "Jack Crusher", "Ocam Sadal",
+    "Renée Picard", "Charles Tucker III", "Cookie Monster"];
+  expect("committed corpus carries none of the reviewed false performers",
+    banned.filter((name) => performerSet.has(name)), []);
+}
 
 console.log(failures ? `\n${failures} fixture(s) FAILED` : "\nall census fixtures pass");
 process.exit(failures ? 1 : 0);

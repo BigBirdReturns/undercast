@@ -28,7 +28,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { normalizeCensusKey as normalize } from "./census-key.mjs";
-import { performerFieldValues, namesFrom, PERSONISH, loadScope } from "./lib/census-core.mjs";
+import { performerFieldValues, namesFrom, PERSONISH, loadScope, demoteCharacterTitledRows } from "./lib/census-core.mjs";
 
 const UA = `undercast/0.1 (+https://github.com/BigBirdReturns/undercast; ${process.env.CONTACT || "census"})`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -151,6 +151,8 @@ async function categoryMembers(api, cat, depth = 0, subcategoryMode = "all") {
 
 async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
   console.log(`\n== ${cfg.label} (${cfg.api}) ==`);
+  const characterTitles = new Set();
+  const franchiseRowStart = rows.length;
   // A declared scope file widens the hand list; a missing file falls back to
   // the hand list alone (loudly), but a present-yet-unreadable one stops the
   // run — a silently narrowed scope would publish false zeros for every
@@ -210,6 +212,7 @@ async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
           observePage({ cfg, cat, page: p, revision, source, content: fullWikitext, disposition: "out-of-scope" });
           continue;
         }
+        characterTitles.add(p.title);
         const performers = new Set();
         for (const value of performerFieldValues(wt)) for (const n of namesFrom(value)) performers.add(n);
         observePage({ cfg, cat, page: p, revision, source, content: fullWikitext,
@@ -228,6 +231,13 @@ async function censusFranchise(key, cfg, rows, unresolvedRows, onlyCategory) {
     }
     console.log(`  ${cat}: ${pages.length} pages, ${found} with credited performers`);
   }
+  // Fail-closed post-pass: a performer that is itself a crawled character page
+  // title is a fictional identity — demote the row to unresolved.
+  const mine = rows.splice(franchiseRowStart);
+  const kept = demoteCharacterTitledRows(mine, unresolvedRows, characterTitles);
+  rows.push(...kept);
+  if (kept.length !== mine.length)
+    console.log(`  [semantic] ${mine.length - kept.length} row(s) demoted to unresolved: performer resolves to a character page`);
 }
 
 const categoryAt = args.indexOf("--category");

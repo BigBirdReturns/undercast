@@ -44,13 +44,60 @@ export function performerFieldValues(wikitext) {
 // name.
 export const PERSONISH = /^[A-ZÀ-Þ][A-Za-zà-þ'.\-]*(?: [A-ZÀ-Þ][A-Za-zà-þ'.\-]*)+$/;
 
+// Split a field value into list segments at top-level commas / <br> / newlines
+// (separators inside [[links]] and {{templates}} do not split).
+function listSegments(value) {
+  const parts = [];
+  let depth = 0, link = 0, start = 0, i = 0;
+  const text = value.replace(/<br\s*\/?\s*>/gi, "\n");
+  while (i < text.length) {
+    if (text.startsWith("{{", i)) { depth++; i += 2; continue; }
+    if (text.startsWith("}}", i)) { if (depth > 0) depth--; i += 2; continue; }
+    if (text.startsWith("[[", i)) { link++; i += 2; continue; }
+    if (text.startsWith("]]", i)) { if (link > 0) link--; i += 2; continue; }
+    if ((text[i] === "," || text[i] === "\n") && depth === 0 && link === 0) { parts.push(text.slice(start, i)); start = i + 1; }
+    i++;
+  }
+  parts.push(text.slice(start));
+  return parts.map((p) => p.trim()).filter(Boolean);
+}
+
 export function namesFrom(value) {
-  const links = [...value.matchAll(/\[\[([^\]|#]+)(?:[^\]]*)?\]\]/g)]
+  const cleaned = listSegments(value).map((segment) => {
+    // "[[Kate Mulgrew]] (as [[Kathryn Janeway]])": a parenthetical AFTER a link
+    // is a role/disguise annotation — its links are not performers. A segment
+    // that is wholly parenthesized ("([[Frank Welker]])") keeps its links.
+    const firstLink = segment.indexOf("[[");
+    const firstParen = segment.indexOf("(");
+    if (firstParen >= 0 && firstLink >= 0 && firstLink < firstParen)
+      return segment.replace(/\([^()]*(\([^()]*\)[^()]*)*\)/g, " ");
+    return segment;
+  }).join(", ");
+  const links = [...cleaned.matchAll(/\[\[([^\]|#]+)(?:[^\]]*)?\]\]/g)]
     .map((m) => m[1].trim().replace(/\s*\((actor|actress|performer|puppeteer|Dalek operator)\)$/i, ""));
   return links.filter((n) => n && !/^(File|Image|Category|w:c:|Template):/i.test(n)
     && !/[()\d]/.test(n) && n !== n.toUpperCase()
     && !/uncredited|unknown|various|see below/i.test(n)
     && PERSONISH.test(n) && n.length < 40);
+}
+
+/**
+ * Post-pass, fail-closed: a "performer" whose name is a crawled CHARACTER page
+ * title in the same franchise is a fictional identity, not a human (Cookie
+ * Monster "performing" Alistair Cookie; bare [[Kathryn Janeway]] in an actor
+ * field). Any row still carrying one after parse-time cleanup is demoted to
+ * unresolved — both the only-characters case and the ambiguous mixed case.
+ * Returns the rows that remain credited.
+ */
+export function demoteCharacterTitledRows(rows, unresolvedRows, characterTitles) {
+  return rows.filter((row) => {
+    const fictional = row.performers.filter((p) => characterTitles.has(p));
+    if (!fictional.length) return true;
+    unresolvedRows.push({ franchise: row.franchise, category: row.category, character: row.character,
+      performance_mode: row.performance_mode || "unresolved", source: row.source,
+      reason: `performer field resolves to fictional-character page(s): ${fictional.join(", ")}` });
+    return false;
+  });
 }
 
 /**
