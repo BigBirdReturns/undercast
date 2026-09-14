@@ -69,7 +69,9 @@ output bytes, so post-build CRLF conversion also fails.
 commit, tree and deterministic inputs before the **complete** canonical gate,
 checks them again, and produces `.ci/pages` only after every step passes.
 It writes public `release.json` with commit/tree, input/media/payload digests and
-the complete step list. The payload digest covers every payload file except this
+the complete step list. The source-controlled `release-1.0.json` fixes the
+accepted UnderCast 1.0 boundary; later stewardship deployments leave it unchanged
+while `release.json` advances with the current artifact. The payload digest covers every payload file except this
 self-referential receipt. `.ci/release-identity.json` retains the full manifests
 and receipt digest; `.ci/release-run.json` separately records volatile run time
 and workflow identity. Existing output directories are not silently reused.

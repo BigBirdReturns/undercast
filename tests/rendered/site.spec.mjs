@@ -663,7 +663,13 @@ test("full-site sweep uses canonical absence plates and connects every public su
   if(missing.missingStill){await expect(card.locator('.face.front picture.absence-plate img[src$="assets/placeholder-light-clean.png"]')).toHaveCount(1);await expect(card.locator('.face.front picture.absence-plate source[srcset$="assets/placeholder-dark-clean.png"]')).toHaveCount(1);}
   if(missing.missingPortrait){await expect(card.locator('.face.back picture.absence-plate img[src$="assets/placeholder-light-clean.png"]')).toHaveCount(1);await expect(card.locator('.face.back picture.absence-plate source[srcset$="assets/placeholder-dark-clean.png"]')).toHaveCount(1);}
   await expect(card.locator('svg.portrait')).toHaveCount(0);
-  for(const route of ["index.html","recognition.html","coverage.html","constellation.html","404.html","records/UC-019/"]){await open(page,route);await expect(page.locator(".archive-map")).toHaveCount(1);await expect(page.locator(".archive-map a")).toHaveCount(5);}
+  for(const route of ["index.html","recognition.html","coverage.html","constellation.html","404.html","records/UC-019/"]){
+    await open(page,route);
+    await expect(page.locator(".archive-map")).toHaveCount(1);
+    await expect(page.locator(".archive-map > a")).toHaveCount(5);
+    await expect(page.locator('.archive-map__status a[href$="release-1.0.json"]')).toHaveCount(1);
+    await expect(page.locator(".archive-map__status")).toContainText("current deployment: release.json");
+  }
 });
 
 test("homepage purpose and theme are explicit across the archive",async({page})=>{

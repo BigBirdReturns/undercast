@@ -4,12 +4,24 @@ import { readFileSync } from "node:fs";
 
 const read = path => readFileSync(path, "utf8");
 const files = Object.fromEntries([
-  "index.html","recognition.html","coverage.html","constellation.html","404.html",
+  "index.html","recognition.html","coverage.html","constellation.html","404.html","release-1.0.json",
   "assets/site-shell.css","assets/site-theme.js","assets/site-navigation.js","assets/constellation.css","assets/record-page.css","scripts/build-record-pages.mjs",
   "schema/specimen.schema.json","schema/source.schema.json"
 ].map(path => [path, read(path)]));
 const errors = [];
 const expect = (condition, message) => { if (!condition) errors.push(message); };
+const releaseBaseline = JSON.parse(files["release-1.0.json"]);
+expect(releaseBaseline.schema === "undercast/release-baseline@1", "release baseline: unsupported schema");
+expect(releaseBaseline.release === "UnderCast 1.0" && releaseBaseline.status === "settled", "release baseline: accepted disposition drifted");
+expect(releaseBaseline.source?.commit === "a084e934587e6153e0773571d5d4432c094dce0c", "release baseline: commit drifted");
+expect(releaseBaseline.source?.tree === "5861ea02dc51de8a66afc7b873bdbaa1be358863", "release baseline: tree drifted");
+expect(releaseBaseline.source?.semantic_tag === null && releaseBaseline.source?.package_version === "0.1.0", "release baseline: authority disposition drifted");
+expect(releaseBaseline.artifact?.payload_files === 1721 && releaseBaseline.artifact?.permanent_record_routes === 1370 && releaseBaseline.artifact?.media_references === 2039 && releaseBaseline.artifact?.media_shards === 12, "release baseline: boundary counts drifted");
+expect(releaseBaseline.artifact?.payload_sha256 === "1f1a3105d121c798f546be0acf6057e47a6988041449bfe5c72018c4d8f10120", "release baseline: payload identity drifted");
+expect(releaseBaseline.artifact?.canonical_receipt_sha256 === "3d601df970edb670dec3ab9da1f05af940311ae4f4172e4acd1f0bf99e026d8e", "release baseline: canonical receipt drifted");
+expect(releaseBaseline.artifact?.release_json_file_sha256 === "9385f235fce2d2181113379c27bde8aaaf558f6e3f4afcfcd89d6c1e29284e74", "release baseline: public receipt bytes drifted");
+expect(releaseBaseline.deployment?.id === 6417622984 && releaseBaseline.deployment?.pages_run_id === 34737141359 && releaseBaseline.deployment?.state === "success", "release baseline: deployment identity drifted");
+expect(releaseBaseline.disposition?.current_deployment_receipt === "release.json", "release baseline: mutable receipt boundary drifted");
 const has = (path, pattern) => pattern.test(files[path]);
 
 for (const path of ["index.html","recognition.html","coverage.html"]) {
@@ -50,6 +62,10 @@ for (const [path, current] of Object.entries(archiveCurrent)) {
   const maps = [...staticDocumentMarkup(files[path]).matchAll(/<nav[^>]*class="[^"]*\barchive-map\b[^"]*"[^>]*>[\s\S]*?<\/nav>/g)].map(match => match[0]);
   expect(maps.length === 1, `${path}: secondary archive map must appear exactly once in static document markup`);
   const map = maps[0] || "";
+  const baselineHref = path === "404.html" ? "/undercast/release-1.0.json" : "./release-1.0.json";
+  expect(map.includes(`href="${baselineHref}">UnderCast 1.0 baseline</a>`), `${path}: immutable 1.0 receipt is missing`);
+  expect(map.includes("current deployment: release.json"), `${path}: current deployment receipt is missing`);
+  expect(!map.includes("UnderCast 1.0 live"), `${path}: mutable deployment is mislabeled as the immutable 1.0 release`);
   if (current) expect(map.includes(`aria-current="${current.value}">${current.label}</a>`), `${path}: archive map does not identify ${current.label} as current ${current.value}`);
   else expect(!/aria-current=/.test(map), `${path}: recovery map invents a current archive section`);
 }
@@ -123,6 +139,8 @@ expect(has("scripts/build-record-pages.mjs", /aria-current="page">Permanent reco
 expect(!has("scripts/build-record-pages.mjs", /interactive view adds comparison/i), "records: retired comparison promise returned");
 expect((files["scripts/build-record-pages.mjs"].match(/site-navigation\.js/g) || []).length === 3, "records: every live and retired template must load the shared navigation controller");
 expect((files["scripts/build-record-pages.mjs"].match(/aria-current="location">Recognition records/g) || []).length === 3, "records: every live and retired template must identify its archive section");
+expect(files["scripts/build-record-pages.mjs"].split('href="../../release-1.0.json">UnderCast 1.0 baseline').length - 1 === 3, "records: every live and retired template must link the immutable 1.0 receipt");
+expect((files["scripts/build-record-pages.mjs"].match(/current deployment: release\.json/g) || []).length === 3, "records: every live and retired template must distinguish the current deployment receipt");
 expect(has("assets/record-page.css", /@media\(max-width:420px\)\{\.record-pair\{grid-template-columns:1fr/), "records: narrow comparison breakpoint missing");
 
 for (const path of ["index.html","recognition.html","coverage.html","constellation.html"]) {

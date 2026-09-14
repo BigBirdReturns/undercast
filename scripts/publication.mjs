@@ -47,6 +47,7 @@ const CONTRACT_PATHS = new Set([
   "data/vocabularies/species.json",
   "index.html",
   "recognition.html",
+  "release-1.0.json",
   "schema/archive.schema.json",
   "schema/census-manifest.schema.json",
   "schema/census-test.schema.json",
