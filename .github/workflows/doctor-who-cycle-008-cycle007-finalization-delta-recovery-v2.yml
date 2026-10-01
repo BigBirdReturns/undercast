@@ -1,0 +1,228 @@
+name: doctor-who-cycle-008-cycle007-finalization-delta-recovery-v2
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/doctor-who-cycle-008-cycle007-finalization-delta-recovery-v2.yml"
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: doctor-who-cycle-008-cycle007-finalization-delta-recovery-v2
+  cancel-in-progress: false
+
+env:
+  SELF: .github/workflows/doctor-who-cycle-008-cycle007-finalization-delta-recovery-v2.yml
+  AUTHORIZED_BRANCH: agent/doctor-who-cycle-008-cycle007-finalization-delta-recovery-v2
+  CANDIDATE_RUN: "31059092270"
+  CANDIDATE_JOB: "92483234495"
+  CANDIDATE_ARTIFACT: "8951443904"
+  CANDIDATE_ARTIFACT_SHA256: 510e301e63cdf668f2ce3742366b32e84009b685534c9e5be587f494a9f88a76
+  CANDIDATE_COMMIT: 1bac55a7cd06e64840c79d42924472a0e0c6910e
+  CANDIDATE_TREE: 121ecef1c981e6da2048450902721e336c051138
+  CANDIDATE_PARENT: 014dbd3a4d9d4e82c0832d4c14f08cfff5138a58
+  FINAL_COMMIT: e00b03436e354f3543cf4ed67a0c5b9f6ba4f97b
+  FINAL_PARENT: c57a1f28b3f1998349fb2f87f847f6d240a43a3d
+  OUT: /tmp/doctor-who-cycle-008-cycle007-finalization-delta-recovery-v2
+
+jobs:
+  recover:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/doctor-who-cycle-008-cycle007-finalization-delta-recovery-v2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Bind exact one-path recovery carrier
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT/artifact" "$OUT/finalization-files" "$OUT/candidate-versions" "$OUT/diffs"
+          test "$GITHUB_HEAD_REF" = "$AUTHORIZED_BRANCH"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = "1"
+          printf '%s\n' "$SELF" > "$OUT/expected-carrier-paths.txt"
+          git diff --name-only "$BASE_SHA"...HEAD | LC_ALL=C sort > "$OUT/actual-carrier-paths.txt"
+          diff -u "$OUT/expected-carrier-paths.txt" "$OUT/actual-carrier-paths.txt"
+          git fetch --no-tags --filter=blob:none origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+${FINAL_COMMIT}:refs/remotes/cycle007/final" \
+            "+${FINAL_PARENT}:refs/remotes/cycle007/final-parent" \
+            "+${CANDIDATE_PARENT}:refs/remotes/cycle007/candidate-parent"
+          test "$(git show -s --format=%P "$FINAL_COMMIT")" = "$FINAL_PARENT"
+          start_main="$(git rev-parse refs/remotes/origin/main)"
+          git merge-base --is-ancestor "$FINAL_COMMIT" "$start_main"
+          printf '%s\n' "$start_main" > "$OUT/start-main.txt"
+          printf 'head=%s\nbase=%s\nstart_main=%s\nfinal_commit=%s\nfinal_parent=%s\nfinal_tree=%s\n' \
+            "$HEAD_SHA" "$BASE_SHA" "$start_main" "$FINAL_COMMIT" "$FINAL_PARENT" "$(git rev-parse "$FINAL_COMMIT^{tree}")" \
+            > "$OUT/custody.txt"
+          test -z "$(git status --porcelain)"
+
+      - name: Download exact cycle-007 candidate artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN}" > "$OUT/candidate-run.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/jobs/${CANDIDATE_JOB}" > "$OUT/candidate-job.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${CANDIDATE_ARTIFACT}" > "$OUT/candidate-artifact.json"
+          jq -e --argjson id "$CANDIDATE_RUN" '.id == $id and .status == "completed" and .conclusion == "success"' "$OUT/candidate-run.json" >/dev/null
+          jq -e --argjson id "$CANDIDATE_JOB" --argjson run "$CANDIDATE_RUN" '.id == $id and .run_id == $run and .status == "completed" and .conclusion == "success"' "$OUT/candidate-job.json" >/dev/null
+          jq -e --argjson id "$CANDIDATE_ARTIFACT" --arg digest "sha256:${CANDIDATE_ARTIFACT_SHA256}" '.id == $id and .expired == false and .digest == $digest' "$OUT/candidate-artifact.json" >/dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${CANDIDATE_ARTIFACT}/zip" > "$OUT/candidate-artifact.zip"
+          test "$(sha256sum "$OUT/candidate-artifact.zip" | awk '{print $1}')" = "$CANDIDATE_ARTIFACT_SHA256"
+
+      - name: Extract and import exact candidate bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$OUT/candidate-artifact.zip" TARGET="$OUT/artifact" OUT="$OUT" python3 - <<'PY'
+          import json, os, pathlib, stat, zipfile
+          archive=pathlib.Path(os.environ['ZIP']); target=pathlib.Path(os.environ['TARGET'])
+          seen=set(); expanded=0
+          with zipfile.ZipFile(archive) as zf:
+              infos=zf.infolist()
+              if not infos or len(infos)>2048: raise SystemExit(f'unsafe artifact denominator: {len(infos)}')
+              for info in infos:
+                  path=pathlib.PurePosixPath(info.filename); mode=(info.external_attr>>16)&0o170000
+                  if path.is_absolute() or '..' in path.parts or info.filename in seen or mode==stat.S_IFLNK:
+                      raise SystemExit(f'unsafe artifact member: {info.filename!r}')
+                  seen.add(info.filename)
+                  if info.is_dir(): continue
+                  expanded += info.file_size
+                  if expanded>3_000_000_000: raise SystemExit('artifact expansion ceiling exceeded')
+                  destination=target.joinpath(*path.parts); destination.parent.mkdir(parents=True,exist_ok=True)
+                  with zf.open(info) as src, destination.open('wb') as dst:
+                      while True:
+                          chunk=src.read(1024*1024)
+                          if not chunk: break
+                          dst.write(chunk)
+          bundles=[p for p in target.rglob('*.bundle') if p.is_file()]
+          if len(bundles)!=1: raise SystemExit(f'bundle denominator: {len(bundles)}')
+          pathlib.Path(os.environ['OUT']).joinpath('bundle-path.txt').write_text(str(bundles[0])+'\n')
+          PY
+          bundle="$(cat "$OUT/bundle-path.txt")"
+          git bundle verify "$bundle" > "$OUT/bundle-verify.txt"
+          candidate_ref="$(git bundle list-heads "$bundle" | awk '$1 == "'"$CANDIDATE_COMMIT"'" {print $2; exit}')"
+          test -n "$candidate_ref"
+          git fetch "$bundle" "${candidate_ref}:refs/remotes/cycle007/candidate"
+          test "$(git rev-parse refs/remotes/cycle007/candidate)" = "$CANDIDATE_COMMIT"
+          test "$(git show -s --format=%P "$CANDIDATE_COMMIT")" = "$CANDIDATE_PARENT"
+          test "$(git rev-parse "$CANDIDATE_COMMIT^{tree}")" = "$CANDIDATE_TREE"
+          git diff --name-only "$CANDIDATE_PARENT"..."$CANDIDATE_COMMIT" | LC_ALL=C sort > "$OUT/candidate-paths.txt"
+          git diff --name-only "$FINAL_PARENT"..."$FINAL_COMMIT" | LC_ALL=C sort > "$OUT/final-paths.txt"
+          test "$(wc -l < "$OUT/candidate-paths.txt")" -ge 35
+          test "$(wc -l < "$OUT/candidate-paths.txt")" -le 50
+          test "$(wc -l < "$OUT/final-paths.txt")" = "49"
+
+      - name: Classify exact candidate-to-final path and blob delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          CANDIDATE="$CANDIDATE_COMMIT" FINAL="$FINAL_COMMIT" OUT="$OUT" python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          out=pathlib.Path(os.environ['OUT']); candidate=os.environ['CANDIDATE']; final=os.environ['FINAL']
+          candidate_paths=set((out/'candidate-paths.txt').read_text().splitlines())
+          final_paths=(out/'final-paths.txt').read_text().splitlines()
+          def blob(commit,path):
+              run=subprocess.run(['git','rev-parse',f'{commit}:{path}'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
+              return run.stdout.strip() if run.returncode==0 else None
+          def data(commit,path): return subprocess.check_output(['git','show',f'{commit}:{path}'])
+          categories={'finalization_only':[],'revised_from_candidate':[],'identical_candidate':[]}; rows=[]
+          for path in final_paths:
+              cb=blob(candidate,path); fb=blob(final,path)
+              if fb is None: raise SystemExit(f'final path missing: {path}')
+              category='finalization_only' if path not in candidate_paths or cb is None else ('identical_candidate' if cb==fb else 'revised_from_candidate')
+              categories[category].append(path)
+              final_data=data(final,path)
+              row={'path':path,'category':category,'candidate_blob':cb,'final_blob':fb,'final_bytes':len(final_data),'final_sha256':hashlib.sha256(final_data).hexdigest()}
+              if cb:
+                  candidate_data=data(candidate,path); row['candidate_bytes']=len(candidate_data); row['candidate_sha256']=hashlib.sha256(candidate_data).hexdigest()
+              rows.append(row)
+              if category!='identical_candidate':
+                  target=out/'finalization-files'/path; target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes(final_data)
+                  if cb:
+                      old=out/'candidate-versions'/path; old.parent.mkdir(parents=True,exist_ok=True); old.write_bytes(data(candidate,path))
+                      diff=subprocess.check_output(['git','diff','--binary',candidate,final,'--',path])
+                      (out/'diffs'/(path.replace('/','__')+'.patch')).write_bytes(diff)
+          summary={'candidate_commit':candidate,'candidate_tree':subprocess.check_output(['git','rev-parse',candidate+'^{tree}'],text=True).strip(),'candidate_path_count':len(candidate_paths),'final_commit':final,'final_tree':subprocess.check_output(['git','rev-parse',final+'^{tree}'],text=True).strip(),'final_path_count':len(final_paths),'categories':categories,'rows':rows}
+          (out/'cycle007-finalization-delta.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n')
+          for category,paths in categories.items(): (out/(category+'.txt')).write_text('\n'.join(paths)+'\n')
+          PY
+          test "$(jq '.categories.finalization_only | length' "$OUT/cycle007-finalization-delta.json")" -ge 1
+          test "$(jq '(.categories.finalization_only | length) + (.categories.revised_from_candidate | length)' "$OUT/cycle007-finalization-delta.json")" -le 20
+
+      - name: Seal exact recovery receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_main="$(cat "$OUT/start-main.txt")"
+          git fetch --no-tags --filter=blob:none origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$start_main"
+          START="$start_main" OUT="$OUT" python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          out=pathlib.Path(os.environ['OUT']); delta=json.loads((out/'cycle007-finalization-delta.json').read_text())
+          receipt={'schema_version':1,'transaction':'DOCTOR-WHO-CYCLE-008-CYCLE007-FINALIZATION-DELTA-RECOVERY-V2','status':'complete','start_main':os.environ['START'],'candidate_artifact':8951443904,'candidate_artifact_sha256':'510e301e63cdf668f2ce3742366b32e84009b685534c9e5be587f494a9f88a76','candidate_commit':delta['candidate_commit'],'candidate_tree':delta['candidate_tree'],'final_commit':delta['final_commit'],'final_tree':delta['final_tree'],'candidate_path_count':delta['candidate_path_count'],'final_path_count':delta['final_path_count'],'finalization_only_count':len(delta['categories']['finalization_only']),'revised_from_candidate_count':len(delta['categories']['revised_from_candidate']),'repository_write':False,'executed_cycle008':False}
+          receipt['receipt_sha256']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          (out/'recovery-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+          (
+            cd "$OUT"
+            find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
+          )
+          test -z "$(git status --porcelain)"
+
+      - name: Upload immutable finalization-delta packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-who-cycle-008-cycle007-finalization-delta-recovery-v2-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Report exact recovered denominator
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status='failed'; only='unavailable'; revised='unavailable'; receipt='unavailable'; paths='unavailable'
+          if test -f "$OUT/recovery-receipt.json"; then
+            status="$(jq -r .status "$OUT/recovery-receipt.json")"
+            only="$(jq -r .finalization_only_count "$OUT/recovery-receipt.json")"
+            revised="$(jq -r .revised_from_candidate_count "$OUT/recovery-receipt.json")"
+            receipt="$(jq -r .receipt_sha256 "$OUT/recovery-receipt.json")"
+          fi
+          if test -f "$OUT/cycle007-finalization-delta.json"; then paths="$(jq -r '.categories | to_entries[] | .key as $k | .value[] | "\($k)  \(.)"' "$OUT/cycle007-finalization-delta.json")"; fi
+          body="$RUNNER_TEMP/finalization-delta.md"
+          {
+            printf 'CYCLE007_FINALIZATION_DELTA_RECOVERY_V2\n\n'
+            printf '```text\nstatus:                  %s\nfinalization-only paths: %s\nrevised candidate paths: %s\nreceipt:                 %s\nrun:                     %s\n```\n\n' "$status" "$only" "$revised" "$receipt" "$GITHUB_RUN_ID"
+            printf '```text\n%s\n```\n' "$paths"
+          } > "$body"
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --raw-field body="$(cat "$body")" >/dev/null
