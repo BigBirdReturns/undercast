@@ -1,0 +1,353 @@
+name: cycle012-senstarg-review-transition-v1
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/cycle012-senstarg-review-transition-v1.yml"
+
+permissions: {}
+
+concurrency:
+  group: cycle012-senstarg-review-transition-v1
+  cancel-in-progress: false
+
+jobs:
+  handoff:
+    if: >-
+      github.repository == 'BigBirdReturns/undercast' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'observer/cycle012-senstarg-review-transition-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CURRENT_MAIN: 40ae7ff0bdc96c8ccb3c9c96d1358c7de91979c2
+      CURRENT_TREE: 33b1ff1ea4f191ee42ce09afc9a88a01c7006e71
+      SELF_BRANCH: observer/cycle012-senstarg-review-transition-v1
+      SELF_PATH: .github/workflows/cycle012-senstarg-review-transition-v1.yml
+      REVIEW_BRANCH: agent/doctor-who-cycle-012-senstarg-candidate-review-v1
+      REVIEW_WORKFLOW: doctor-who-cycle-012-senstarg-candidate-review-v1
+      REVIEW_ARTIFACT_PREFIX: doctor-who-cycle-012-senstarg-candidate-review-v1-
+      CENSUS_BRANCH: agent/doctor-who-cycle-012-senstarg-finalizer-census-v1
+      CENSUS_PATH: .github/workflows/doctor-who-cycle-012-senstarg-finalizer-census-v1.yml
+      AGENT_PREFIX: agent/doctor-who-cycle-012-
+      TASK_ID: ap_8965086737382df0e88366db
+      WALL_ID: UC-1357
+      OUT: /tmp/cycle012-senstarg-review-transition-v1
+    steps:
+      - name: Wait for exact independent review and publish finalizer census
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$OUT"
+          mkdir -p "$OUT"/{api,review,payload}
+          SELF_HEAD="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+          SELF_PR="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
+          test "$(jq -r '.pull_request.base.sha' "$GITHUB_EVENT_PATH")" = "$CURRENT_MAIN"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$SELF_PR" > "$OUT/api/self-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/compare/$CURRENT_MAIN...$SELF_HEAD" > "$OUT/api/self-compare.json"
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT'])/'api'; pr=json.loads((root/'self-pr.json').read_text()); cmp=json.loads((root/'self-compare.json').read_text())
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False and pr['commits']==1 and pr['changed_files']==1
+          assert pr['head']['ref']==os.environ['SELF_BRANCH'] and pr['base']['sha']==os.environ['CURRENT_MAIN']
+          assert cmp['status']=='ahead' and cmp['ahead_by']==1 and cmp['behind_by']==0 and cmp['total_commits']==1
+          assert len(cmp['files'])==1 and cmp['files'][0]['filename']==os.environ['SELF_PATH']
+          PY
+
+          terminal=false
+          for attempt in $(seq 1 360); do
+            gh api "/repos/$GITHUB_REPOSITORY/pulls?state=all&head=BigBirdReturns%3Aagent%2Fdoctor-who-cycle-012-senstarg-candidate-review-v1&per_page=100" > "$OUT/api/review-prs.json"
+            state="$(python3 - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          root=Path(os.environ['OUT'])/'api'; prs=json.loads((root/'review-prs.json').read_text())
+          if len(prs)!=1: print('pending')
+          else:
+              pr=prs[0]; (root/'review-pr-number.txt').write_text(str(pr['number'])+'\n'); (root/'review-head.txt').write_text(pr['head']['sha']+'\n')
+              raw=subprocess.check_output(['gh','api',f'/repos/{os.environ["GITHUB_REPOSITORY"]}/actions/runs?event=pull_request&head_sha={pr["head"]["sha"]}&per_page=100'],text=True)
+              rows=json.loads(raw)['workflow_runs']; rows=[r for r in rows if r['name']==os.environ['REVIEW_WORKFLOW'] and r['head_sha']==pr['head']['sha']]
+              if not rows: print('pending')
+              else:
+                  row=max(rows,key=lambda r:(r['run_number'],r['run_attempt'],r['id']))
+                  if row['status']!='completed': print('pending')
+                  elif row['conclusion']=='success':
+                      (root/'review-run-id.txt').write_text(str(row['id'])+'\n'); (root/'review-attempt.txt').write_text(str(row['run_attempt'])+'\n'); print('success')
+                  else: (root/'review-run-id.txt').write_text(str(row['id'])+'\n'); print('failure')
+          PY
+            )"
+            if [ "$state" = success ]; then terminal=true; break; fi
+            if [ "$state" = failure ]; then echo "independent candidate review failed" >&2; exit 1; fi
+            sleep 20
+          done
+          test "$terminal" = true
+
+          REVIEW_PR="$(cat "$OUT/api/review-pr-number.txt")"
+          REVIEW_HEAD="$(cat "$OUT/api/review-head.txt")"
+          REVIEW_RUN="$(cat "$OUT/api/review-run-id.txt")"
+          REVIEW_ATTEMPT="$(cat "$OUT/api/review-attempt.txt")"
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$REVIEW_PR" > "$OUT/api/review-pr.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$REVIEW_RUN/jobs?per_page=100" > "$OUT/api/review-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$REVIEW_RUN/artifacts?per_page=100" > "$OUT/api/review-artifacts.json"
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT'])/'api'; pr=json.loads((root/'review-pr.json').read_text()); jobs=json.loads((root/'review-jobs.json').read_text())['jobs']
+          assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False and pr['head']['ref']==os.environ['REVIEW_BRANCH'] and pr['head']['sha']==root.joinpath('review-head.txt').read_text().strip()
+          assert pr['commits']==1 and pr['changed_files']==1
+          rows=[j for j in jobs if j['name']=='review']; assert len(rows)==1 and rows[0]['status']=='completed' and rows[0]['conclusion']=='success'
+          run=int((root/'review-run-id.txt').read_text()); attempt=int((root/'review-attempt.txt').read_text()); name=f"{os.environ['REVIEW_ARTIFACT_PREFIX']}{run}-attempt-{attempt}"
+          arts=json.loads((root/'review-artifacts.json').read_text())['artifacts']; rows=[a for a in arts if a['name']==name and a['expired'] is False]; assert len(rows)==1
+          (root/'review-artifact.json').write_text(json.dumps(rows[0],indent=2,sort_keys=True)+'\n')
+          PY
+          REVIEW_ARTIFACT="$(jq -r '.id' "$OUT/api/review-artifact.json")"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$REVIEW_ARTIFACT/zip" > "$OUT/review.zip"
+          test "sha256:$(sha256sum "$OUT/review.zip" | awk '{print $1}')" = "$(jq -r '.digest' "$OUT/api/review-artifact.json")"
+          unzip -q "$OUT/review.zip" -d "$OUT/review"
+
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT']); review=root/'review'; sha=lambda b:hashlib.sha256(b).hexdigest()
+          for p in review.rglob('*'): assert not p.is_symlink()
+          for ledger in review.rglob('SHA256SUMS.pre'):
+              for line in ledger.read_text().splitlines():
+                  if not line.strip(): continue
+                  digest,rel=line.split(None,1); rel=rel.strip().lstrip('*'); rel=rel[2:] if rel.startswith('./') else rel
+                  p=ledger.parent/rel; assert p.is_file() and sha(p.read_bytes())==digest,(p,digest)
+          markers=list(review.rglob('REVIEW_COMPLETE')); assert markers
+          marker=min(markers,key=lambda p:len(p.parts)).read_text().strip(); assert len(marker)==64
+          rows=[]
+          for p in review.rglob('*.json'):
+              try:v=json.loads(p.read_text())
+              except Exception:continue
+              if isinstance(v,dict) and marker in [v.get('identity'),v.get('receipt_sha256'),v.get('receipt_identity')]: rows.append((p,v))
+          assert len(rows)==1,(marker,[str(p) for p,_ in rows])
+          receipt=rows[0][1]; text=json.dumps(receipt,sort_keys=True)
+          for value in [os.environ['TASK_ID'],os.environ['WALL_ID']]: assert value in text
+          def find(keys,v):
+              if isinstance(v,dict):
+                  for k,x in v.items():
+                      if k in keys and isinstance(x,(str,int)): return str(x)
+                      y=find(keys,x)
+                      if y:return y
+              elif isinstance(v,list):
+                  for x in v:
+                      y=find(keys,x)
+                      if y:return y
+              return None
+          values={
+            'candidate_pr':find({'pr','candidate_pr'},receipt),
+            'candidate_head':find({'head','candidate_head'},receipt),
+            'candidate_run':find({'run','candidate_run'},receipt),
+            'candidate_artifact':find({'artifact','candidate_artifact'},receipt),
+            'candidate_identity':find({'candidate_identity','identity'},receipt.get('candidate',{})),
+            'candidate_commit':find({'commit','candidate_commit'},receipt),
+            'candidate_tree':find({'tree','candidate_tree'},receipt),
+          }
+          assert all(values.values()),values
+          (root/'api'/'review-identity.txt').write_text(marker+'\n'); (root/'api'/'review-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n'); (root/'api'/'candidate-values.json').write_text(json.dumps(values,indent=2,sort_keys=True)+'\n')
+          PY
+
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$REVIEW_BRANCH" --jq '.object.sha')" = "$REVIEW_HEAD"
+          gh api -X PATCH "/repos/$GITHUB_REPOSITORY/pulls/$REVIEW_PR" -f state=closed > "$OUT/api/review-pr-after.json"
+          test "$(jq -r '.state' "$OUT/api/review-pr-after.json")" = closed
+          test "$(jq -r '.merged' "$OUT/api/review-pr-after.json")" = false
+          gh api -X DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$REVIEW_BRANCH"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$AGENT_PREFIX" --jq 'length' 2>/dev/null || printf '0')" = 0
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$CURRENT_MAIN"
+
+          D='$'
+          CANDIDATE_PR="$(jq -r '.candidate_pr' "$OUT/api/candidate-values.json")"
+          CANDIDATE_HEAD="$(jq -r '.candidate_head' "$OUT/api/candidate-values.json")"
+          CANDIDATE_RUN="$(jq -r '.candidate_run' "$OUT/api/candidate-values.json")"
+          CANDIDATE_ARTIFACT="$(jq -r '.candidate_artifact' "$OUT/api/candidate-values.json")"
+          CANDIDATE_IDENTITY="$(jq -r '.candidate_identity' "$OUT/api/candidate-values.json")"
+          CANDIDATE_COMMIT="$(jq -r '.candidate_commit' "$OUT/api/candidate-values.json")"
+          CANDIDATE_TREE="$(jq -r '.candidate_tree' "$OUT/api/candidate-values.json")"
+          REVIEW_IDENTITY="$(cat "$OUT/api/review-identity.txt")"
+          REVIEW_ARTIFACT_SHA="$(jq -r '.digest' "$OUT/api/review-artifact.json" | sed 's/^sha256://')"
+
+          cat > "$OUT/census.yml" <<YAML
+          name: doctor-who-cycle-012-senstarg-finalizer-census-v1
+
+          "on":
+            pull_request:
+              branches: [main]
+              types: [opened, reopened, synchronize]
+              paths:
+                - ".github/workflows/doctor-who-cycle-012-senstarg-finalizer-census-v1.yml"
+
+          permissions: {}
+
+          jobs:
+            census:
+              if: >-
+                github.repository == 'BigBirdReturns/undercast' &&
+                github.event_name == 'pull_request' &&
+                github.event.pull_request.base.ref == 'main' &&
+                github.event.pull_request.head.repo.full_name == github.repository &&
+                github.event.pull_request.head.ref == 'agent/doctor-who-cycle-012-senstarg-finalizer-census-v1'
+              runs-on: ubuntu-24.04
+              timeout-minutes: 120
+              permissions:
+                actions: read
+                contents: read
+                pull-requests: read
+              env:
+                GH_TOKEN: ${D}{{ github.token }}
+                CURRENT_MAIN: $CURRENT_MAIN
+                CURRENT_TREE: $CURRENT_TREE
+                BRANCH: $CENSUS_BRANCH
+                SELF: $CENSUS_PATH
+                AGENT_PREFIX: $AGENT_PREFIX
+                CANDIDATE_PR: "$CANDIDATE_PR"
+                CANDIDATE_HEAD: $CANDIDATE_HEAD
+                CANDIDATE_RUN: "$CANDIDATE_RUN"
+                CANDIDATE_ARTIFACT: "$CANDIDATE_ARTIFACT"
+                CANDIDATE_IDENTITY: $CANDIDATE_IDENTITY
+                CANDIDATE_COMMIT: $CANDIDATE_COMMIT
+                CANDIDATE_TREE: $CANDIDATE_TREE
+                REVIEW_PR: "$REVIEW_PR"
+                REVIEW_HEAD: $REVIEW_HEAD
+                REVIEW_RUN: "$REVIEW_RUN"
+                REVIEW_ARTIFACT: "$REVIEW_ARTIFACT"
+                REVIEW_ARTIFACT_SHA256: $REVIEW_ARTIFACT_SHA
+                REVIEW_IDENTITY: $REVIEW_IDENTITY
+                TASK_ID: $TASK_ID
+                WALL_ID: $WALL_ID
+                OUT: /tmp/doctor-who-cycle-012-senstarg-finalizer-census-v1
+              steps:
+                - uses: actions/checkout@v4
+                  with:
+                    ref: main
+                    fetch-depth: 0
+                    filter: blob:none
+                    persist-credentials: false
+                - name: Census exact candidate product and finalization surface
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    CURRENT_HEAD="\$(jq -r '.pull_request.head.sha' "\$GITHUB_EVENT_PATH")"; CURRENT_PR="\$(jq -r '.pull_request.number' "\$GITHUB_EVENT_PATH")"
+                    rm -rf "\$OUT"; mkdir -p "\$OUT"/{api,candidate,review,payload}
+                    test "\$(git rev-parse HEAD)" = "\$CURRENT_MAIN"; test "\$(git show -s --format=%T HEAD)" = "\$CURRENT_TREE"
+                    gh api "/repos/\$GITHUB_REPOSITORY/pulls/\$CURRENT_PR" > "\$OUT/api/own-pr.json"
+                    gh api "/repos/\$GITHUB_REPOSITORY/compare/\$CURRENT_MAIN...\$CURRENT_HEAD" > "\$OUT/api/own-compare.json"
+                    gh api "/repos/\$GITHUB_REPOSITORY/git/matching-refs/heads/\$AGENT_PREFIX" > "\$OUT/api/refs.json"
+                    for id in "\$CANDIDATE_ARTIFACT" "\$REVIEW_ARTIFACT"; do gh api "/repos/\$GITHUB_REPOSITORY/actions/artifacts/\$id" > "\$OUT/api/artifact-\$id.json"; gh api "/repos/\$GITHUB_REPOSITORY/actions/artifacts/\$id/zip" > "\$OUT/artifact-\$id.zip"; test "sha256:\$(sha256sum "\$OUT/artifact-\$id.zip" | awk '{print \$1}')" = "\$(jq -r '.digest' "\$OUT/api/artifact-\$id.json")"; done
+                    test "\$(sha256sum "\$OUT/artifact-\$REVIEW_ARTIFACT.zip" | awk '{print \$1}')" = "\$REVIEW_ARTIFACT_SHA256"
+                    unzip -q "\$OUT/artifact-\$CANDIDATE_ARTIFACT.zip" -d "\$OUT/candidate"; unzip -q "\$OUT/artifact-\$REVIEW_ARTIFACT.zip" -d "\$OUT/review"
+                    python3 - <<'PY'
+                    import hashlib,json,os,tarfile
+                    from pathlib import Path
+                    root=Path(os.environ['OUT']); sha=lambda b:hashlib.sha256(b).hexdigest()
+                    pr=json.loads((root/'api'/'own-pr.json').read_text()); cmp=json.loads((root/'api'/'own-compare.json').read_text()); refs=json.loads((root/'api'/'refs.json').read_text())
+                    assert pr['state']=='open' and pr['draft'] is True and pr['merged'] is False and pr['commits']==1 and pr['changed_files']==1 and pr['head']['ref']==os.environ['BRANCH']
+                    assert cmp['status']=='ahead' and cmp['ahead_by']==1 and cmp['behind_by']==0 and cmp['total_commits']==1 and len(cmp['files'])==1 and cmp['files'][0]['filename']==os.environ['SELF']
+                    assert {r['ref'].removeprefix('refs/heads/'):r['object']['sha'] for r in refs}=={os.environ['BRANCH']:pr['head']['sha']}
+                    for name in ['candidate','review']:
+                        base=root/name
+                        for p in base.rglob('*'): assert not p.is_symlink()
+                        for ledger in base.rglob('SHA256SUMS.pre'):
+                            for line in ledger.read_text().splitlines():
+                                if not line.strip(): continue
+                                digest,rel=line.split(None,1); rel=rel.strip().lstrip('*'); rel=rel[2:] if rel.startswith('./') else rel; p=ledger.parent/rel; assert p.is_file() and sha(p.read_bytes())==digest
+                    inventory=[]
+                    for p in sorted((root/'candidate').rglob('*')):
+                        if p.is_file(): inventory.append({'path':str(p.relative_to(root/'candidate')),'bytes':p.stat().st_size,'sha256':sha(p.read_bytes())})
+                    archives=[]
+                    for p in (root/'candidate').rglob('*'):
+                        if p.is_file() and (p.name.endswith('.tar.gz') or p.suffix in {'.tgz','.tar','.bundle'}): archives.append({'path':str(p.relative_to(root/'candidate')),'bytes':p.stat().st_size,'sha256':sha(p.read_bytes())})
+                    prior_receipt=Path('data/review/adapter-sdk/doctor-who-cycle-011-rastel.json'); prior_checker=Path('scripts/doctor-who-cycle-011.mjs')
+                    assert prior_receipt.is_file() and prior_checker.is_file()
+                    blueprint={'status':'cycle-012-senstarg-finalizer-census-complete-v1','version':1,'canonical':{'main':os.environ['CURRENT_MAIN'],'tree':os.environ['CURRENT_TREE']},'candidate':{'pr':int(os.environ['CANDIDATE_PR']),'head':os.environ['CANDIDATE_HEAD'],'run':int(os.environ['CANDIDATE_RUN']),'artifact':int(os.environ['CANDIDATE_ARTIFACT']),'identity':os.environ['CANDIDATE_IDENTITY'],'commit':os.environ['CANDIDATE_COMMIT'],'tree':os.environ['CANDIDATE_TREE']},'review':{'pr':int(os.environ['REVIEW_PR']),'head':os.environ['REVIEW_HEAD'],'run':int(os.environ['REVIEW_RUN']),'artifact':int(os.environ['REVIEW_ARTIFACT']),'identity':os.environ['REVIEW_IDENTITY']},'prior':{'receipt_path':str(prior_receipt),'receipt_sha256':sha(prior_receipt.read_bytes()),'checker_path':str(prior_checker),'checker_sha256':sha(prior_checker.read_bytes())},'proposed':{'receipt_path':'data/review/adapter-sdk/doctor-who-cycle-012-senstarg.json','checker_path':'scripts/doctor-who-cycle-012.mjs','wall_id':os.environ['WALL_ID'],'task_id':os.environ['TASK_ID']},'candidate_archives':archives,'candidate_inventory':inventory,'boundary':{'census_only':True,'finalizer_derived':False,'finalizer_executed':False,'repository_write':False,'canonical_mutation':False,'cycle_receipt_written':False,'cycle_012_product_authority':False,'cycle_013_authority':False,'outside_human_dependency':False,'owner_physical_action_required':False}}
+                    blueprint['identity']=sha(json.dumps(blueprint,sort_keys=True,separators=(',',':')).encode()); payload=root/'payload'; (payload/'blueprint.json').write_text(json.dumps(blueprint,indent=2,sort_keys=True)+'\n'); (payload/'CENSUS_COMPLETE').write_text(blueprint['identity']+'\n')
+                    rows=[]
+                    for p in sorted(payload.iterdir()):
+                        if p.is_file() and p.name not in {'SHA256SUMS.pre','SHA256SUMS'}: rows.append(f"{sha(p.read_bytes())}  {p.name}")
+                    (payload/'SHA256SUMS.pre').write_text('\n'.join(rows)+'\n'); (payload/'SHA256SUMS').write_text(sha((payload/'SHA256SUMS.pre').read_bytes())+'  SHA256SUMS.pre\n')
+                    PY
+                    cd "\$OUT/payload" && sha256sum -c SHA256SUMS.pre && sha256sum -c SHA256SUMS
+                - uses: actions/upload-artifact@v4
+                  with:
+                    name: doctor-who-cycle-012-senstarg-finalizer-census-v1-${D}{{ github.run_id }}-attempt-${D}{{ github.run_attempt }}
+                    path: /tmp/doctor-who-cycle-012-senstarg-finalizer-census-v1/payload
+                    if-no-files-found: error
+                    retention-days: 30
+                    compression-level: 0
+                - if: failure()
+                  uses: actions/upload-artifact@v4
+                  with:
+                    name: doctor-who-cycle-012-senstarg-finalizer-census-v1-diagnostics-${D}{{ github.run_id }}-attempt-${D}{{ github.run_attempt }}
+                    path: /tmp/doctor-who-cycle-012-senstarg-finalizer-census-v1
+                    if-no-files-found: ignore
+                    retention-days: 14
+                    compression-level: 0
+          YAML
+          sed -i 's/^          //' "$OUT/census.yml"
+          CENSUS_CONTENT="$(base64 -w0 "$OUT/census.yml")"
+          gh api -X POST "/repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$CENSUS_BRANCH" -f sha="$CURRENT_MAIN" > "$OUT/api/census-ref.json"
+          jq -n --arg message "Doctor Who: census exact Senstarg finalizer surface" --arg content "$CENSUS_CONTENT" --arg branch "$CENSUS_BRANCH" '{message:$message,content:$content,branch:$branch}' > "$OUT/api/census-file-request.json"
+          gh api -X PUT "/repos/$GITHUB_REPOSITORY/contents/$CENSUS_PATH" --input "$OUT/api/census-file-request.json" > "$OUT/api/census-file.json"
+          jq -n --arg title "Doctor Who: census exact Senstarg finalizer surface" --arg head "$CENSUS_BRANCH" --arg base main --arg body "Read-only census of candidate $CANDIDATE_IDENTITY and independent review $REVIEW_IDENTITY. No finalizer execution, cycle receipt, publication, or canonical authority." '{title:$title,head:$head,base:$base,body:$body,draft:true,maintainer_can_modify:false}' > "$OUT/api/census-pr-request.json"
+          gh api -X POST "/repos/$GITHUB_REPOSITORY/pulls" --input "$OUT/api/census-pr-request.json" > "$OUT/api/census-pr.json"
+
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['OUT']); payload=root/'payload'; pr=json.loads((root/'api'/'census-pr.json').read_text()); review_art=json.loads((root/'api'/'review-artifact.json').read_text())
+          row={'status':'cycle-012-senstarg-review-transition-complete-v1','version':1,'canonical':{'main':os.environ['CURRENT_MAIN'],'tree':os.environ['CURRENT_TREE']},'review':{'pr':int((root/'api'/'review-pr-number.txt').read_text()),'head':(root/'api'/'review-head.txt').read_text().strip(),'run':int((root/'api'/'review-run-id.txt').read_text()),'artifact':review_art['id'],'artifact_sha256':review_art['digest'].removeprefix('sha256:'),'identity':(root/'api'/'review-identity.txt').read_text().strip()},'census':{'pr':pr['number'],'branch':os.environ['CENSUS_BRANCH'],'head':pr['head']['sha']},'boundary':{'transport_write_only':True,'canonical_mutation':False,'cycle_receipt_written':False,'cycle_012_product_authority':False,'cycle_013_authority':False,'outside_human_dependency':False,'owner_physical_action_required':False}}
+          row['identity']=hashlib.sha256(json.dumps(row,sort_keys=True,separators=(',',':')).encode()).hexdigest(); (payload/'transition.json').write_text(json.dumps(row,indent=2,sort_keys=True)+'\n'); (payload/'TRANSITION_COMPLETE').write_text(row['identity']+'\n'); (payload/'review-receipt.json').write_bytes((root/'api'/'review-receipt.json').read_bytes()); (payload/'census-pr.json').write_bytes((root/'api'/'census-pr.json').read_bytes())
+          rows=[]
+          for p in sorted(payload.iterdir()):
+              if p.is_file() and p.name not in {'SHA256SUMS.pre','SHA256SUMS'}: rows.append(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}")
+          (payload/'SHA256SUMS.pre').write_text('\n'.join(rows)+'\n'); (payload/'SHA256SUMS').write_text(hashlib.sha256((payload/'SHA256SUMS.pre').read_bytes()).hexdigest()+'  SHA256SUMS.pre\n')
+          PY
+          (cd "$OUT/payload" && sha256sum -c SHA256SUMS.pre && sha256sum -c SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cycle012-senstarg-review-transition-v1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/cycle012-senstarg-review-transition-v1/payload
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cycle012-senstarg-review-transition-v1-diagnostics-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: /tmp/cycle012-senstarg-review-transition-v1
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
+
+  retire:
+    needs: handoff
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: observer/cycle012-senstarg-review-transition-v1
+      HEAD: ${{ github.event.pull_request.head.sha }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Close and delete exact transition carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --jq '.object.sha')" = "$HEAD"
+          gh api -X PATCH "/repos/$GITHUB_REPOSITORY/pulls/$PR" -f state=closed > /tmp/pr.json
+          test "$(jq -r '.state' /tmp/pr.json)" = closed
+          test "$(jq -r '.merged' /tmp/pr.json)" = false
+          gh api -X DELETE "/repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH"
