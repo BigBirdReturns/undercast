@@ -187,7 +187,11 @@ then committed as one rollback-capable file transaction.
 merged work; executes the adapter's declared steps without a shell; rebuilds the
 deterministic projections; runs the archive gate; re-checks the resulting snapshot;
 and atomically reconciles queue plus refresh receipts. `refresh --due` selects at
-most one active due scope by priority, keeping a single scheduled run bounded.
+most one active due scope by priority, keeping a single scheduled run bounded. A due
+scope whose only blocker is `source_snapshot_missing` is skipped with the operator
+action named (dispatch `preservation-export` against the current commit); when
+nothing else is due the run exits 3 exactly like an idle run. An explicit `--scope`
+still fails closed.
 
 `next` is the safe worker operation after the current roadmap playbook authorizes
 roster growth: it runs `scripts/validate.mjs`, re-checks scope certification and
