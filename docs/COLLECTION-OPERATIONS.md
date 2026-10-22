@@ -71,7 +71,12 @@ and, where available, source locators. The detached retriever and the canonical
 reporter both enforce it. Rejected bytes are omitted from the 90-day artifact and the
 attempt journal names the blocking rule; a genuinely different replacement remains
 eligible for exact-subject review. The projection currently reconciles the 71
-COLLECT-001 obligations with 73 non-superseded UC-MEDIA-AUDIT-1 findings.
+COLLECT-001 obligations, 73 non-superseded UC-MEDIA-AUDIT-1 findings and 96
+UC-MEDIA-AUDIT-2 wrong-subject findings. A later reviewed correction ledger is
+appended with `node scripts/media-rejections-project.mjs` (deterministic rule ids,
+hash-pinned evidence, one denominator key per decision); a rule may carry
+`hash_scope: "record-side"` only when independent hash-bound review has verified the
+identical bytes for another record side.
 
 ## Estate induction
 

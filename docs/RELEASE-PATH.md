@@ -28,7 +28,9 @@ second corpus schema or projection index.
 The artifact includes the five existing root HTML surfaces, live and retired
 permanent records, crawler resources, referenced styles/scripts/placeholders,
 17 publicly cited card-backfill manifests, UC-116's cited Granny source text,
-and the quality-baseline receipt's five-file receipt/ledger closure. Static links
+the COLLECT-001 quality-baseline receipt's five-file receipt/ledger closure, and the
+UC-MEDIA-AUDIT-2 chained reset's three-file closure (reset receipt, apply report,
+correction ledger). Static links
 and sitemap identities are checked. The sitemap preserves the existing rule:
 live and removed IDs are listed; merged aliases still have permanent routes.
 Embedded historical `artifact_path`, `original.path`, and `preserved_path` values

@@ -10,6 +10,11 @@ const DEFAULT_CORRECTION_REPORT = "data/review/estate-debt/COLLECT-001-KNOWN-MED
 const DEFAULT_RESET_RECEIPT = "data/review/estate-debt/COLLECT-001-QUALITY-BASELINE-RESET.json";
 const DEFAULT_SPECIMENS = "data/specimens.json";
 const DEFAULT_SOURCES = "data/SOURCES.json";
+const DEFAULT_TRANSACTION = "COLLECT-001";
+const RESET_OPERATION = "truth-correction-quality-rebaseline";
+const CORRECTION_OPERATION = "known-invalid-media-binding-nullification";
+const TRANSACTION_RE = /^[A-Z0-9][A-Z0-9-]{2,63}$/;
+const MAX_LINEAGE_DEPTH = 32;
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const jsonBytes = (value) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -46,6 +51,9 @@ function metrics(value, label) {
 
 function sameJson(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
 function exactRatio(count, total) { return Number((count / total).toFixed(6)); }
+function resetReason(count) {
+  return `Exact reset to the truth-corrected state after ${count} proven-wrong current-main media bindings were nulled; no regression margin was added.`;
+}
 
 async function exists(absolute) {
   try { await access(absolute); return true; }
@@ -86,6 +94,43 @@ function validateNumericBaseline(baseline) {
   }
 }
 
+// Every receipted baseline (version >= 2) is the exact truth-corrected state after one
+// named nullification transaction, and its receipt names the baseline it replaced. The
+// lineage is verified link by link down to the legacy version-1 floor, so a later reset
+// can never hide an earlier receipt or widen a floor beyond a corrected state.
+async function verifyResetLineage(resolvedRoot, baselineValue, depth = 0) {
+  if (depth > MAX_LINEAGE_DEPTH) throw new Error("quality baseline reset lineage is too deep");
+  validateNumericBaseline(baselineValue);
+  if (!Number.isInteger(baselineValue.version) || baselineValue.version < 2) throw new Error(`unsupported quality baseline version ${baselineValue.version}`);
+  const receiptPath = safeRelative(baselineValue.reset_receipt, "quality baseline reset_receipt");
+  const receipt = await readRepoJson(resolvedRoot, receiptPath, "quality baseline reset receipt");
+  const transaction = String(receipt.value.transaction || "");
+  if (receipt.value.version !== 1 || !TRANSACTION_RE.test(transaction) || receipt.value.operation !== RESET_OPERATION) {
+    throw new Error("quality baseline reset receipt has an unsupported identity");
+  }
+  if (!sameJson(receipt.value.new_baseline, baselineValue)) throw new Error("quality baseline differs from its reset receipt");
+  const correctionPath = safeRelative(receipt.value.correction_report?.path, "correction report path");
+  const correction = await readRepoJson(resolvedRoot, correctionPath, "known-media correction report");
+  if (correction.sha256 !== receipt.value.correction_report.sha256) throw new Error("known-media correction report hash differs from the quality reset receipt");
+  if (correction.value.transaction !== transaction || correction.value.operation !== CORRECTION_OPERATION) throw new Error("quality reset cites the wrong correction transaction");
+  const delta = receipt.value.authorized_delta || {};
+  const corrected = delta.corrected_bindings;
+  if (!Number.isInteger(corrected) || corrected < 1) throw new Error("quality reset receipt lacks a positive corrected-binding count");
+  if (correction.value.denominator?.obligations !== corrected || correction.value.denominator?.collected !== corrected) throw new Error(`quality reset requires exactly ${corrected} collected current-main corrections`);
+  if (!Number.isInteger(delta.complete_pairs_removed) || !Number.isInteger(delta.missing_both_added) || delta.complete_pairs_removed + delta.missing_both_added !== corrected) {
+    throw new Error(`quality reset delta does not reconcile to ${corrected} corrected bindings`);
+  }
+  const previous = receipt.value.previous_baseline;
+  validateNumericBaseline(previous);
+  if (previous.version !== baselineValue.version - 1) throw new Error("quality baseline reset lineage skipped a version");
+  if (baselineValue.minimum_complete_pair_ratio !== receipt.value.after_metrics?.complete_pair_ratio) throw new Error("complete-pair floor is not exact corrected truth");
+  if (baselineValue.maximum_missing_both_ratio !== receipt.value.after_metrics?.missing_both_ratio) throw new Error("missing-both ceiling is not exact corrected truth");
+  if (baselineValue.minimum_known_maker_ratio !== previous.minimum_known_maker_ratio) throw new Error("quality reset changed the maker floor");
+  if (baselineValue.minimum_claim_evidence_ratio !== previous.minimum_claim_evidence_ratio) throw new Error("quality reset changed the claim-evidence floor");
+  const earlier = previous.version >= 2 ? await verifyResetLineage(resolvedRoot, previous, depth + 1) : { transactions: [] };
+  return { receipt: receipt.value, transactions: [...earlier.transactions, transaction] };
+}
+
 export async function validateQualityBaselineCustody({
   root = process.cwd(),
   baselinePath = DEFAULT_BASELINE,
@@ -105,27 +150,8 @@ export async function validateQualityBaselineCustody({
   if (baseline.value.version === 1) {
     return { mode: "legacy-v1", baseline: baseline.value, metrics: currentMetrics };
   }
-  if (baseline.value.version !== 2) throw new Error(`unsupported quality baseline version ${baseline.value.version}`);
-  const receiptPath = safeRelative(baseline.value.reset_receipt, "quality baseline reset_receipt");
-  const receipt = await readRepoJson(resolvedRoot, receiptPath, "quality baseline reset receipt");
-  if (receipt.value.version !== 1 || receipt.value.transaction !== "COLLECT-001" || receipt.value.operation !== "truth-correction-quality-rebaseline") {
-    throw new Error("quality baseline reset receipt has an unsupported identity");
-  }
-  if (!sameJson(receipt.value.new_baseline, baseline.value)) throw new Error("quality baseline differs from its reset receipt");
-  const correctionPath = safeRelative(receipt.value.correction_report?.path, "correction report path");
-  const correction = await readRepoJson(resolvedRoot, correctionPath, "known-media correction report");
-  if (correction.sha256 !== receipt.value.correction_report.sha256) throw new Error("known-media correction report hash differs from the quality reset receipt");
-  if (correction.value.transaction !== "COLLECT-001" || correction.value.operation !== "known-invalid-media-binding-nullification") throw new Error("quality reset cites the wrong correction transaction");
-  if (correction.value.denominator?.obligations !== 61 || correction.value.denominator?.collected !== 61) throw new Error("quality reset requires exactly 61 collected current-main corrections");
-  const delta = receipt.value.authorized_delta || {};
-  if (!Number.isInteger(delta.complete_pairs_removed) || !Number.isInteger(delta.missing_both_added) || delta.complete_pairs_removed + delta.missing_both_added !== 61) {
-    throw new Error("quality reset delta does not reconcile to 61 corrected bindings");
-  }
-  if (baseline.value.minimum_complete_pair_ratio !== receipt.value.after_metrics.complete_pair_ratio) throw new Error("complete-pair floor is not exact corrected truth");
-  if (baseline.value.maximum_missing_both_ratio !== receipt.value.after_metrics.missing_both_ratio) throw new Error("missing-both ceiling is not exact corrected truth");
-  if (baseline.value.minimum_known_maker_ratio !== receipt.value.previous_baseline.minimum_known_maker_ratio) throw new Error("quality reset changed the maker floor");
-  if (baseline.value.minimum_claim_evidence_ratio !== receipt.value.previous_baseline.minimum_claim_evidence_ratio) throw new Error("quality reset changed the claim-evidence floor");
-  return { mode: "receipted-v2", baseline: baseline.value, metrics: currentMetrics, receipt: receipt.value };
+  const lineage = await verifyResetLineage(resolvedRoot, baseline.value);
+  return { mode: `receipted-v${baseline.value.version}`, baseline: baseline.value, metrics: currentMetrics, receipt: lineage.receipt, lineage: lineage.transactions };
 }
 
 export async function rebaseQualityAfterKnownCorrections({
@@ -137,14 +163,22 @@ export async function rebaseQualityAfterKnownCorrections({
   receiptPath = DEFAULT_RESET_RECEIPT,
   specimensPath = DEFAULT_SPECIMENS,
   sourcesPath = DEFAULT_SOURCES,
+  transaction = DEFAULT_TRANSACTION,
+  chain = false,
   write = false,
   now = new Date().toISOString(),
 } = {}) {
   const resolvedRoot = path.resolve(root);
   const baseline = await readRepoJson(resolvedRoot, baselinePath, "quality baseline");
-  if (baseline.value.version === 2) return validateQualityBaselineCustody({ root: resolvedRoot, baselinePath, qualityPath });
-  if (baseline.value.version !== 1) throw new Error(`quality baseline must begin at version 1, found ${baseline.value.version}`);
+  if (baseline.value.version >= 2 && !chain) return validateQualityBaselineCustody({ root: resolvedRoot, baselinePath, qualityPath });
+  if (baseline.value.version !== 1 && !chain) throw new Error(`quality baseline must begin at version 1, found ${baseline.value.version}`);
   validateNumericBaseline(baseline.value);
+  if (!TRANSACTION_RE.test(String(transaction || ""))) throw new Error("quality rebaseline requires a safe transaction id");
+  if (chain) {
+    if (!Number.isInteger(baseline.value.version) || baseline.value.version < 2) throw new Error("a chained quality rebaseline requires an already receipted baseline");
+    const lineage = await verifyResetLineage(resolvedRoot, baseline.value);
+    if (lineage.transactions.includes(transaction)) throw new Error(`quality baseline already carries a reset for ${transaction}`);
+  }
   if (!beforeQualityPath) throw new Error("quality rebaseline requires --before-quality");
   const beforeAbsolute = path.isAbsolute(beforeQualityPath) ? beforeQualityPath : path.join(resolvedRoot, safeRelative(beforeQualityPath, "before quality path"));
   const before = await readJsonFile(beforeAbsolute, "pre-correction quality projection");
@@ -153,8 +187,11 @@ export async function rebaseQualityAfterKnownCorrections({
   const specimensBytes = await readFile(path.join(resolvedRoot, safeRelative(specimensPath, "specimens path")));
   const sourcesBytes = await readFile(path.join(resolvedRoot, safeRelative(sourcesPath, "sources path")));
 
-  if (correction.value.transaction !== "COLLECT-001" || correction.value.operation !== "known-invalid-media-binding-nullification" || correction.value.mode !== "write") throw new Error("quality rebaseline requires the written COLLECT-001 correction report");
-  if (correction.value.denominator?.obligations !== 61 || correction.value.denominator?.collected !== 61 || correction.value.denominator?.already_collected !== 0) throw new Error("quality rebaseline requires exactly 61 freshly collected corrections");
+  if (correction.value.transaction !== transaction || correction.value.operation !== CORRECTION_OPERATION || correction.value.mode !== "write") throw new Error(`quality rebaseline requires the written ${transaction} correction report`);
+  const corrected = correction.value.denominator?.collected;
+  if (!Number.isInteger(corrected) || corrected < 1 || correction.value.denominator?.obligations !== corrected || correction.value.denominator?.already_collected !== 0) {
+    throw new Error(`quality rebaseline requires exactly ${Number.isInteger(corrected) ? corrected : "the declared"} freshly collected corrections`);
+  }
   if (sha256(specimensBytes) !== correction.value.source?.specimens?.after_sha256) throw new Error("current specimens bytes differ from the correction report");
   if (sha256(sourcesBytes) !== correction.value.source?.sources?.after_sha256) throw new Error("current SOURCES bytes differ from the correction report");
   if (before.value.total !== after.value.total || after.value.total < 1) throw new Error("quality rebaseline changed the catalog denominator");
@@ -164,24 +201,24 @@ export async function rebaseQualityAfterKnownCorrections({
   const missingBothAdded = afterMetrics.missing_both - beforeMetrics.missing_both;
   const missingSidesAdded = (afterMetrics.missing_still - beforeMetrics.missing_still) + (afterMetrics.missing_portrait - beforeMetrics.missing_portrait);
   if (!Number.isInteger(completePairsRemoved) || !Number.isInteger(missingBothAdded) || completePairsRemoved < 0 || missingBothAdded < 0) throw new Error("quality correction deltas are not monotonic nullifications");
-  if (completePairsRemoved + missingBothAdded !== 61 || missingSidesAdded !== 61) throw new Error(`quality correction deltas do not reconcile to 61 bindings: pairs=${completePairsRemoved}, both=${missingBothAdded}, sides=${missingSidesAdded}`);
+  if (completePairsRemoved + missingBothAdded !== corrected || missingSidesAdded !== corrected) throw new Error(`quality correction deltas do not reconcile to ${corrected} bindings: pairs=${completePairsRemoved}, both=${missingBothAdded}, sides=${missingSidesAdded}`);
   if (beforeMetrics.known_makers !== afterMetrics.known_makers || beforeMetrics.records_with_claim_evidence !== afterMetrics.records_with_claim_evidence) throw new Error("media corrections changed non-media quality counts");
   if (afterMetrics.complete_pair_ratio !== exactRatio(afterMetrics.complete_pairs, after.value.total) || afterMetrics.missing_both_ratio !== exactRatio(afterMetrics.missing_both, after.value.total)) throw new Error("corrected quality ratios are not deterministic");
 
   const receiptSafe = safeRelative(receiptPath, "quality reset receipt path");
   const newBaseline = {
-    version: 2,
+    version: baseline.value.version + 1,
     minimum_complete_pair_ratio: afterMetrics.complete_pair_ratio,
     maximum_missing_both_ratio: afterMetrics.missing_both_ratio,
     minimum_known_maker_ratio: baseline.value.minimum_known_maker_ratio,
     minimum_claim_evidence_ratio: baseline.value.minimum_claim_evidence_ratio,
     reset_receipt: receiptSafe,
-    reset_reason: "Exact reset to the truth-corrected state after 61 proven-wrong current-main media bindings were nulled; no regression margin was added.",
+    reset_reason: resetReason(corrected),
   };
   const receipt = {
     version: 1,
-    transaction: "COLLECT-001",
-    operation: "truth-correction-quality-rebaseline",
+    transaction,
+    operation: RESET_OPERATION,
     generated_at: now,
     correction_report: { path: correction.path, sha256: correction.sha256 },
     previous_quality: { sha256: before.sha256, total: before.value.total },
@@ -191,7 +228,7 @@ export async function rebaseQualityAfterKnownCorrections({
     before_metrics: beforeMetrics,
     after_metrics: afterMetrics,
     authorized_delta: {
-      corrected_bindings: 61,
+      corrected_bindings: corrected,
       complete_pairs_removed: completePairsRemoved,
       missing_both_added: missingBothAdded,
       missing_sides_added: missingSidesAdded,
@@ -231,6 +268,10 @@ export async function main(argv = process.argv.slice(2)) {
     : await rebaseQualityAfterKnownCorrections({
       root,
       beforeQualityPath: option(argv, "--before-quality"),
+      transaction: option(argv, "--transaction", DEFAULT_TRANSACTION),
+      correctionReportPath: option(argv, "--correction-report", DEFAULT_CORRECTION_REPORT),
+      receiptPath: option(argv, "--receipt", DEFAULT_RESET_RECEIPT),
+      chain: argv.includes("--chain"),
       write,
       now: option(argv, "--now", new Date().toISOString()),
     });
