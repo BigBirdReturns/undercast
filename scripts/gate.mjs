@@ -61,6 +61,17 @@ async function writeProjectionDiagnostics() {
     writeFileSync(destination, readFileSync(path.join(ROOT, source), "utf8"));
   }
 }
+// npm 9.2.0 demonstrably removes node_modules even for ci --dry-run.
+// Validate the exact manifests in a disposable directory, never the running gate's dependencies.
+export async function runLockfileCheck(repoRoot = ROOT) {
+  const workRoot = await mkdtemp(path.join(tmpdir(), "undercast-gate-lockfile-"));
+  try {
+    for (const file of ["package.json", "package-lock.json"]) {
+      await writeFile(path.join(workRoot, file), readFileSync(path.join(repoRoot, file)));
+    }
+    runCommand("Lockfile consistency", npmCommand, [...npmPrefixArgs, "ci", "--dry-run", "--ignore-scripts"], { cwd: workRoot });
+  } finally { await rm(workRoot, { recursive: true, force: true }); }
+}
 async function runProjectedSteps() {
   try { runNodeScript("Rebuild deterministic projection", "scripts/shard.mjs"); assertCleanWorkingTree("Refuse generated drift", ROOT, ["--", "data", ":(exclude)data/review", "sitemap.xml", "robots.txt"]); }
   catch (error) { await writeProjectionDiagnostics(); throw error; }
@@ -86,7 +97,7 @@ async function runAutopilotSyncAssertion() {
 const stepDefinitions = [
   { id: "gate-fixtures", label: "Validate canonical gate fixtures", action: () => runNpmScript("Gate fixtures", "gate:fixtures") },
   { id: "publication-fixtures", label: "Validate isolated publication boundary", action: () => runNpmScript("Publication fixtures", "publication:fixtures") },
-  { id: "lockfile", label: "Verify package-lock consistency", action: () => runCommand("Lockfile consistency", npmCommand, [...npmPrefixArgs, "ci", "--dry-run"], { cwd: ROOT }) },
+  { id: "lockfile", label: "Verify package-lock consistency", action: runLockfileCheck },
   { id: "projections", label: "Rebuild projection and refuse drift", action: runProjectedSteps },
   { id: "quality-baseline", label: "Validate truth-correction quality baseline custody", action: () => { runNodeScript("Quality baseline fixtures", "scripts/estate-quality-baseline-fixtures.mjs"); runNodeScript("Quality baseline custody", "scripts/estate-quality-baseline.mjs", ["--validate"]); } },
   { id: "archive", label: "Validate archive invariants", action: () => runNodeScript("Archive invariants", "scripts/validate.mjs") },

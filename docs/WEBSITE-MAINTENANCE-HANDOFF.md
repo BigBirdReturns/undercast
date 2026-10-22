@@ -19,6 +19,17 @@ acceptance boundary. No specimen, claim, image binding or historical cycle recei
 is deleted or re-adjudicated. Actual performers and characters named Clifford
 remain in the corpus. Nothing in the separate Clifford Number project is changed.
 
+The first cleanup gate exposed a separate local runtime defect: npm 9.2.0
+`ci --dry-run` deleted the installed browser-test dependencies. The same real
+command reproduced the deletion in a disposable probe. The existing lockfile
+step now checks exact copied manifests in a temporary directory; real-npm
+fixtures cover dependency preservation and invalid-lock refusal. No gate step is
+skipped and no package version is changed.
+
+Seven consumed execution PRs (#965, #964, #956, #955, #954, #953, #948) were
+closed without merge on 2026-10-22 with per-PR successor/rejection proof. Their
+branches remain retained pending reachability review.
+
 All removed bytes remain recoverable in Git at
 `f4d3fd1f4149dfc0f65156531afd870c895dad8a`. Retained cycle receipts are historical
 evidence, not authority to restart an old workflow. Current CI, media rejection,
