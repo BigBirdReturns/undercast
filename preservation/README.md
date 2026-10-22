@@ -232,3 +232,21 @@ restore drill must:
 The first external-provider upload closes the immediate single-provider rescue.
 Recurring restore drills and additional institutional copies remain part of the
 `operational-reliability` and later preservation milestones.
+
+
+## Reuse verified source bytes (2026-10-22)
+
+The 2026-10-22 export failed on 50 Wikizilla revisions after HTTP 403/429.
+The retained September source archive contains all 262 required Wikizilla
+revisions with matching identities and SHA-256 bytes. Source capture accepts
+`--reuse-bag PATH`: verify the complete prior BagIt payload, its indexed
+metadata and rights, then match API, page, revision, timestamp, canonical path
+and current expected content hash before reuse. Retrieve only the residual.
+Keep source authors/history links and original retrieval class; record retained
+provenance separately as `preserved-hash-match`, never as a fresh network fetch.
+
+The existing export workflow restores the latest receipted source archive only
+after verifying its pinned package size and hash. Reuse does not certify an
+independent copy, refresh a historical page to latest content, change any
+canonical fact, waive a missing revision, or authorize a history rewrite.
+A corrupt package, unbound index or changed bytes stops the run.
