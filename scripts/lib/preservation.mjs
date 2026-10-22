@@ -189,6 +189,50 @@ export async function verifyBag(root) {
   };
 }
 
+// Reuse retained evidence only after the complete bag and its index/rights metadata
+// verify. Current API, page, revision, timestamp, path and content hash must agree.
+export async function loadReusableSourceBag(root) {
+  const absolute = resolve(root);
+  await verifyBag(absolute);
+  const tagBytes = await readFile(join(absolute, 'tagmanifest-sha256.txt'));
+  const tags = new Set(parseManifest(tagBytes.toString()).map(row => row.path));
+  for (const name of ['source-index.jsonl', 'source-sites.json', 'source-snapshot.json']) {
+    if (!tags.has(name)) throw new Error(`reusable source bag must hash ${name}`);
+  }
+  const payload = new Map(parseManifest(await readFile(join(absolute, 'manifest-sha256.txt'), 'utf8')).map(row => [row.path, row.sha256]));
+  const rows = new Map();
+  for (const line of (await readFile(join(absolute, 'source-index.jsonl'), 'utf8')).split(/\r?\n/).filter(Boolean)) {
+    const row = JSON.parse(line);
+    if (rows.has(row.archive_id)) throw new Error(`duplicate reusable source identity ${row.archive_id}`);
+    if (!payload.has(row.path) || payload.get(row.path) !== row.content_sha256) throw new Error(`unbound reusable source ${row.archive_id}`);
+    rows.set(row.archive_id, row);
+  }
+  const sites = JSON.parse(await readFile(join(absolute, 'source-sites.json'), 'utf8'));
+  const snapshot = JSON.parse(await readFile(join(absolute, 'source-snapshot.json'), 'utf8'));
+  const tagHash = sha256(tagBytes);
+  return {
+    sites,
+    async read(record) {
+      const row = rows.get(record.archive_id);
+      if (!row || ['api', 'pageid', 'revision', 'timestamp', 'path', 'content_sha256'].some(key => row[key] !== record[key])) return null;
+      const bytes = await readFile(join(absolute, row.path));
+      if (sha256(bytes) !== record.content_sha256) throw new Error(`reusable source changed after verification: ${record.archive_id}`);
+      return {
+        content: bytes.toString('utf8'), parentid: row.parentid ?? null,
+        user: row.revision_user ?? null, userid: row.revision_userid ?? null,
+        comment: row.revision_comment || '', mediawiki_sha1: row.mediawiki_sha1 ?? null,
+        retrieval: 'preserved-hash-match',
+        preserved_from: {
+          tagmanifest_sha256: tagHash,
+          repository_commit: snapshot.repository_commit || null,
+          original_retrieval: row.retrieval || 'unspecified',
+          previous: row.preserved_from || null,
+        },
+      };
+    },
+  };
+}
+
 export function validateSnapshotRegistry(doc) {
   if (!doc || doc.version !== PRESERVATION_REGISTRY_VERSION || !Array.isArray(doc.snapshots)) {
     throw new Error(`preservation/SNAPSHOTS.json must be version ${PRESERVATION_REGISTRY_VERSION} with snapshots[]`);

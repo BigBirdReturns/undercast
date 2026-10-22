@@ -2,12 +2,14 @@
 /**
  * Capture the exact MediaWiki revisions named by data/CENSUS-MANIFEST.json.
  * The resulting BagIt bag is self-contained evidence: every wikitext byte is
- * re-fetched by revision id and must match the producer's recorded sha256.
+ * re-fetched by revision id or reused from a verified prior bag, always matching
+ * the exact identity and the producer's recorded sha256.
  */
 import { mkdir, readFile, rm, writeFile, stat } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import {
   collapseSourceObservations,
+  loadReusableSourceBag,
   scopeReceiptRows,
   sha256,
   stableJson,
@@ -33,6 +35,7 @@ const batchSize = Number(option('batch-size', '50'));
 const retries = Number(option('retries', '4'));
 const timeoutMs = Number(option('timeout-ms', '45000'));
 const franchise = option('franchise');
+const reusePath = option('reuse-bag');
 if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 50) throw new Error('--batch-size must be 1..50');
 if (!Number.isInteger(retries) || retries < 1 || retries > 10) throw new Error('--retries must be 1..10');
 
@@ -44,6 +47,18 @@ const scopes = Array.isArray(scopesDoc) ? scopesDoc : scopesDoc.scopes;
 const records = collapseSourceObservations(manifest, { franchise });
 if (!records.length) throw new Error('selected census manifest contains no exact revisions');
 
+let reusable = null;
+if (reusePath) {
+  const sourceRoot = resolve(reusePath), outputRoot = resolve(out);
+  if (sourceRoot === outputRoot || sourceRoot.startsWith(outputRoot + sep) || outputRoot.startsWith(sourceRoot + sep)) throw new Error('reuse bag and output must be disjoint');
+  reusable = await loadReusableSourceBag(sourceRoot);
+}
+const reused = new Map();
+if (reusable) for (const record of records) {
+  const value = await reusable.read(record);
+  if (value && reusable.sites[record.api]) reused.set(record.archive_id, value);
+}
+console.log(`verified retained sources: ${reused.size}/${records.length}; network retrieval required: ${records.length - reused.size}`);
 if (!flag('resume')) await rm(out, { recursive: true, force: true });
 await mkdir(join(out, 'data', 'sources'), { recursive: true });
 
@@ -246,11 +261,12 @@ for (const record of records) {
   byApi.get(record.api).push(record);
 }
 
-const sourceSites = Object.fromEntries(await Promise.all([...byApi.keys()].map(async (api) => [api, await fetchSiteInfo(api)])));
+const sourceSites = Object.fromEntries(await Promise.all([...byApi.keys()].map(async (api) => [api, reusable?.sites[api] || await fetchSiteInfo(api)])));
 
 let payloadBytes = 0;
 let exact = 0;
 let currentHashMatches = 0;
+let preservedHashMatches = 0;
 const failures = [];
 const indexRows = [];
 const payloadLines = [];
@@ -259,9 +275,10 @@ async function processApi(api, rows) {
   console.log(`source snapshot: ${new URL(api).hostname} — ${rows.length} exact revisions`);
   for (let offset = 0; offset < rows.length; offset += batchSize) {
     const batch = rows.slice(offset, offset + batchSize);
-    const found = await fetchExactBatch(api, batch);
+    const pending = batch.filter(record => !reused.has(record.archive_id));
+    const found = pending.length ? await fetchExactBatch(api, pending) : new Map();
     for (const record of batch) {
-      const value = found.get(record.revision);
+      const value = reused.get(record.archive_id) || found.get(record.revision);
       if (!value) {
         failures.push({ api, pageid: record.pageid, revision: record.revision, content_sha256: record.content_sha256, reason: 'exact revision unavailable and current page hash differs' });
         continue;
@@ -277,7 +294,8 @@ async function processApi(api, rows) {
       await writeFile(target, bytes);
       payloadLines.push(`${got}  ${record.path}`);
       payloadBytes += bytes.length;
-      if (value.retrieval === 'current-hash-match') currentHashMatches++;
+      if (value.retrieval === 'preserved-hash-match') preservedHashMatches++;
+      else if (value.retrieval === 'current-hash-match') currentHashMatches++;
       else exact++;
       indexRows.push({
         archive_id: record.archive_id,
@@ -294,6 +312,7 @@ async function processApi(api, rows) {
         mediawiki_sha1: value.mediawiki_sha1,
         content_sha256: record.content_sha256,
         retrieval: value.retrieval || 'exact-revision',
+        ...(value.preserved_from ? { preserved_from: value.preserved_from } : {}),
         oldid_urls: [...new Set(record.facets.map((facet) => `${sourceKey(facet.source)}?oldid=${record.revision}`))],
         history_urls: [...new Set(record.facets.map((facet) => `${sourceKey(facet.source)}?action=history`))],
         facets: record.facets,
@@ -355,7 +374,7 @@ const snapshot = {
   exact_revisions: records.length,
   unique_source_urls: new Set(records.flatMap((row) => row.facets.map((facet) => sourceKey(facet.source)))).size,
   payload_bytes: payloadBytes,
-  retrieval: { exact_revision: exact, current_hash_match: currentHashMatches },
+  retrieval: { exact_revision: exact, current_hash_match: currentHashMatches, preserved_hash_match: preservedHashMatches },
   source_apis: Object.fromEntries([...byApi].map(([api, rows]) => [api, rows.length])),
   source_sites: sourceSites,
   scopes: scopeReceipts,

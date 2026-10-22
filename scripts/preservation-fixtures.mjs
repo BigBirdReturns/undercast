@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
   collapseSourceObservations,
+  loadReusableSourceBag,
   scopePreservationReceipt,
   sha256,
   validateSnapshotRegistry,
@@ -61,6 +62,60 @@ try {
   await rm(root, { recursive: true, force: true });
 }
 
+// Real source-capture CLI with network disabled: retained bytes must suffice,
+// while a changed identity, unbound index or corruption never becomes evidence.
+const reuseRoot = await mkdtemp(join(tmpdir(), 'undercast-preserved-source-'));
+try {
+  const bag = join(reuseRoot, 'prior');
+  const record = collapsed[0];
+  await mkdir(dirname(join(bag, record.path)), { recursive: true });
+  await writeFile(join(bag, record.path), 'brunt source');
+  await writeFile(join(bag, 'manifest-sha256.txt'), `${record.content_sha256}  ${record.path}\n`);
+  await writeFile(join(bag, 'bagit.txt'), 'BagIt-Version: 1.0\nTag-File-Character-Encoding: UTF-8\n');
+  const original = {...record, retrieval: 'current-hash-match', revision_user: 'source-author', revision_comment: 'retained attribution'};
+  await writeFile(join(bag, 'source-index.jsonl'), JSON.stringify(original)+'\n');
+  await writeFile(join(bag, 'source-sites.json'), JSON.stringify({[record.api]:{api:record.api, rights_text:'CC BY-SA'}}));
+  await writeFile(join(bag, 'source-snapshot.json'), JSON.stringify({exact_revisions:1, repository_commit:'a'.repeat(40)}));
+  const tagNames = ['bagit.txt','manifest-sha256.txt','source-index.jsonl','source-sites.json','source-snapshot.json'];
+  const seal = async (names=tagNames) => {
+    const lines=[];
+    for(const name of names) lines.push(`${sha256(await readFile(join(bag,name)))}  ${name}`);
+    await writeFile(join(bag,'tagmanifest-sha256.txt'),lines.join('\n')+'\n');
+  };
+  await seal();
+  const reusable = await loadReusableSourceBag(bag);
+  const value = await reusable.read(record);
+  expect('retained exact bytes preserve source authorship',value.user,'source-author');
+  expect('reuse never upgrades current-hash provenance to a fresh exact retrieval',value.preserved_from.original_retrieval,'current-hash-match');
+  expect('reuse is labelled separately from network retrieval',value.retrieval,'preserved-hash-match');
+  for(const key of ['api','pageid','revision','timestamp','path','content_sha256']) {
+    const altered={...record,[key]:typeof record[key]==='number'?record[key]+1:record[key]+'-changed'};
+    expect(`retained evidence refuses changed ${key}`,await reusable.read(altered),null);
+  }
+  const manifest=join(reuseRoot,'manifest.json'),coverage=join(reuseRoot,'coverage.json'),scopes=join(reuseRoot,'scopes.json');
+  await writeFile(manifest,JSON.stringify({observations:[observation]}));
+  await writeFile(coverage,'[]');await writeFile(scopes,'[]');
+  const preload=join(reuseRoot,'network-disabled.mjs');
+  await writeFile(preload,'globalThis.fetch=()=>{throw new Error("unexpected network request in retained-source replay");};');
+  const output=join(reuseRoot,'output');
+  const script=fileURLToPath(new URL('./preserve-sources.mjs',import.meta.url));
+  const replay=spawnSync(process.execPath,['--import',preload,script,output,'--manifest',manifest,'--coverage',coverage,'--scopes',scopes,'--reuse-bag',bag],{encoding:'utf8'});
+  expect('real source-capture CLI succeeds with all networking disabled',replay.status,0);
+  if(replay.status!==0)console.error(replay.stderr);
+  else {
+    expect('offline replay emits a complete verified bag',(await verifyBag(output)).payload_files,1);
+    const captured=JSON.parse(await readFile(join(output,'source-snapshot.json'),'utf8'));
+    expect('offline replay records retained, not fresh, retrieval',{...captured.retrieval},{exact_revision:0,current_hash_match:0,preserved_hash_match:1});
+  }
+  await writeFile(join(bag,record.path),'corrupt');
+  await rejects('changed retained payload stops reuse',()=>loadReusableSourceBag(bag),/hash mismatch/);
+  await writeFile(join(bag,record.path),'brunt source');
+  await seal(tagNames.filter(name=>name!=='source-index.jsonl'));
+  await rejects('unhashed retained index cannot confer provenance',()=>loadReusableSourceBag(bag),/must hash source-index/);
+  await writeFile(join(bag,'source-index.jsonl'),JSON.stringify({...original,path:'../../outside'})+'\n');await seal();
+  await rejects('retained index cannot point outside the verified payload',()=>loadReusableSourceBag(bag),/unbound/);
+} finally {await rm(reuseRoot,{recursive:true,force:true});}
+
 const baseRegistry = {
   version: 1,
   updated_at: '',
@@ -110,6 +165,8 @@ try {
 const workflowPath = fileURLToPath(new URL('../.github/workflows/preserve.yml', import.meta.url));
 const workflow = await readFile(workflowPath, 'utf8');
 expect('preservation workflow does not swallow required receipt staging errors', /git add preservation\/SNAPSHOTS\.json[\s\S]*data\/journal\/autopilot\.jsonl\n\s*if \[ -e preservation\/BOOTSTRAP-PENDING \]; then/.test(workflow), true);
+expect('source export binds retained package hash and size', workflow.includes("digest.hexdigest() != asset['sha256']") && workflow.includes("package.stat().st_size != asset['bytes']"), true);
+expect('source export reuses the verified bag through the existing collector', workflow.includes('--reuse-bag /tmp/undercast-preservation/reuse/source-bag') && workflow.includes('\"${reuse_args[@]}\"'), true);
 expect('optional bootstrap marker is staged conditionally', workflow.includes('if [ -e preservation/BOOTSTRAP-PENDING ]; then\n            git add preservation/BOOTSTRAP-PENDING\n          fi'), true);
 expect('preservation workflow has no broad git-add error suppression', /git add preservation\/SNAPSHOTS\.json[\s\S]{0,400}\|\| true/.test(workflow), false);
 

@@ -136,9 +136,43 @@ jobs:
         run: |
           rm -rf /tmp/undercast-preservation
           mkdir -p /tmp/undercast-preservation/public /tmp/undercast-preservation/private
+          # Restore retained immutable evidence before contacting its original hosts.
+          # The package remains untrusted until its receipted hash/size match.
+          python3 - <<'PYTHON'
+          import hashlib, json, pathlib, tarfile, urllib.request
+          registry = json.loads(pathlib.Path('preservation/SNAPSHOTS.json').read_text())
+          choices = [(s, a) for s in registry['snapshots']
+                     if s.get('verification', {}).get('source_bag_verified')
+                     for a in s.get('public_release', {}).get('assets', []) if a.get('kind') == 'source-bag']
+          if choices:
+              snapshot, asset = max(choices, key=lambda pair: pair[0]['created_at'])
+              prefix = 'https://github.com/BigBirdReturns/undercast/releases/download/'
+              if not asset['url'].startswith(prefix):
+                  raise RuntimeError('prior source archive is outside the declared repository')
+              package = pathlib.Path('/tmp/undercast-preservation/prior-sources.tar.gz')
+              request = urllib.request.Request(asset['url'], headers={'User-Agent': 'undercast-preservation'})
+              digest = hashlib.sha256()
+              with urllib.request.urlopen(request, timeout=120) as response, package.open('wb') as output:
+                  while chunk := response.read(1024 * 1024):
+                      digest.update(chunk)
+                      output.write(chunk)
+              if package.stat().st_size != asset['bytes'] or digest.hexdigest() != asset['sha256']:
+                  raise RuntimeError('prior source archive hash or size mismatch')
+              with tarfile.open(package, 'r:gz') as archive:
+                  for member in archive.getmembers():
+                      parts = pathlib.PurePosixPath(member.name).parts
+                      if not parts or parts[0] != 'source-bag' or '..' in parts or not (member.isfile() or member.isdir()):
+                          raise RuntimeError('unsafe prior source archive member')
+                  archive.extractall('/tmp/undercast-preservation/reuse', filter='data')
+              print('Verified prior source archive:', snapshot['id'], asset['sha256'])
+          PYTHON
+          reuse_args=()
+          if [ -d /tmp/undercast-preservation/reuse/source-bag ]; then
+            reuse_args=(--reuse-bag /tmp/undercast-preservation/reuse/source-bag)
+          fi
           set +e
           set -o pipefail
-          node scripts/preserve-sources.mjs /tmp/undercast-preservation/source-bag 2>&1 \
+          node scripts/preserve-sources.mjs /tmp/undercast-preservation/source-bag "${reuse_args[@]}" 2>&1 \
             | tee /tmp/undercast-preservation/source-capture.log
           status=${PIPESTATUS[0]}
           set +o pipefail
