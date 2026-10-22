@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
+import {projectEvidence, describeEvidence, evidenceMarkup} from '../assets/evidence-status.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { build, inventory, safePath, externalMedia, verifyArtifact, verifyLinks, payloadManifest, validateFontAssets, FONT_ASSETS, PRIVATE_RELEASE_INPUTS } from './publication.mjs';
@@ -18,6 +19,54 @@ const temp = fs.mkdtempSync(path.resolve('.ci/publication-fixture-'));
 const write = (root, file, value) => { fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true }); fs.writeFileSync(path.join(root, file), value); };
 try {
   const source = inventory();
+  test('public evidence display and advertised social image are shipped byte for byte',()=>{
+    assert.ok(source.files.has('assets/evidence-status.mjs'));
+    assert.ok(source.files.has('og.png'));
+    const png=source.files.get('og.png');
+    assert.equal(png.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
+    assert.equal(png.readUInt32BE(16),1200);assert.equal(png.readUInt32BE(20),630);
+  });
+  test('evidence labels bind subject, role, source, exact bytes and positive review claims',()=>{
+    const rows=JSON.parse(fs.readFileSync('data/specimens.json'));
+    const record=rows.find(row=>row.id==='UC-001');
+    const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json'));
+    const byFacet=new Map(audit.items.map(item=>[`${item.wall_id}/${item.side}`,item]));
+    const hashes=new Map(audit.items.filter(item=>item.asset).map(item=>[item.asset.src,item.asset.sha256]));
+    const project=(r=record,a=byFacet,h=hashes)=>projectEvidence(r,a,h);
+    assert.equal(project().images.still.state,'verified');
+    assert.equal(project().images.portrait.state,'verified');
+    const wrongHash=new Map(hashes);wrongHash.set(record.still.src,'0'.repeat(64));
+    assert.equal(project(record,byFacet,wrongHash).images.still.state,'unverified');
+    for(const patch of [{actor:'Different performer'},{character:'Different role'},{still:{...record.still,origin:'https://example.org/unrelated'}},{still:{...record.still,kind:'free'}}]){
+      assert.equal(project({...record,...patch}).images.still.state,'unverified');
+    }
+    const disputed=new Map(byFacet),row=structuredClone(byFacet.get('UC-001/still'));
+    row.claims.identity.value='ambiguous';disputed.set('UC-001/still',row);
+    assert.equal(project(record,disputed).images.still.state,'unverified');
+    const missing={...record,still:null};assert.equal(project(missing).images.still.state,'absent');
+    assert.equal(describeEvidence(record,null).still.state,'unavailable');
+    assert.equal(describeEvidence({...record,actor:'Different performer'},project()).still.state,'unverified');
+    assert.equal(describeEvidence({...record,still:{...record.still,kind:'free'}},project()).still.state,'unverified');
+    assert.equal(describeEvidence({...record,references:[],link:'https://example.org/profile'},project()).references,0);
+    assert.equal(describeEvidence({...record,references:[{claim:'performance',source:'javascript:alert(1)'}]},project()).references,0);
+    assert.ok(!evidenceMarkup({...record,character:'<script>bad</script>'},project()).includes('<script>'));
+    for(const [id,side] of [['UC-1281','still'],['UC-1389','portrait']]){
+      const normalized=rows.find(row=>row.id===id);
+      assert.equal(projectEvidence(normalized,byFacet,hashes).images[side].state,'verified','audit source-key normalization retained');
+    }
+  });
+  test('daily receipt loops and the obsolete privileged materializer are retired',()=>{
+    for(const name of ['autopilot','ingest','nightly','retrieve','waterline']){
+      const workflow=parse(fs.readFileSync(`.github/workflows/${name}.yml`,'utf8'));
+      assert.equal(workflow.on.schedule,undefined,name);
+      assert.ok(Object.hasOwn(workflow.on,'workflow_dispatch'),`${name} remains manually callable`);
+    }
+    const policy=parse(fs.readFileSync('.github/workflows/collection-policy.yml','utf8'));
+    assert.equal(policy.on.pull_request_target,undefined);
+    assert.ok(policy.jobs['collection-mode']);
+    assert.equal(policy.jobs['dec0016-navigation-transaction'],undefined);
+  });
+
   test('media rejection mechanics and evidence are private release inputs, not payload paths', () => {
     const inputPaths = new Set(source.inputs.map(row => row.path));
     const rejectionDocument = JSON.parse(fs.readFileSync('data/MEDIA-REJECTIONS.json'));

@@ -666,7 +666,8 @@ test("full-site sweep uses canonical absence plates and connects every public su
   for(const route of ["index.html","recognition.html","coverage.html","constellation.html","404.html","records/UC-019/"]){
     await open(page,route);
     await expect(page.locator(".archive-map")).toHaveCount(1);
-    await expect(page.locator(".archive-map > a")).toHaveCount(5);
+    await expect(page.locator(".archive-map > a")).toHaveCount(6);
+    await expect(page.locator('.archive-map > a[href$="index.html#corrections"]')).toHaveText("Corrections & takedowns");
     await expect(page.locator('.archive-map__status a[href$="release-1.0.json"]')).toHaveCount(1);
     await expect(page.locator(".archive-map__status")).toContainText("current deployment: release.json");
   }
@@ -706,4 +707,110 @@ test("homepage purpose and theme are explicit across the archive",async({page})=
     await expect(page.locator("html")).toHaveAttribute("data-theme","dark");
     await expect(page.locator("[data-theme-toggle]")).toHaveText(/Light/);
   }
+});
+
+
+test("image review and claim-reference scope are visible before the reveal",async({page})=>{
+  const requests=[];page.on('request',request=>requests.push(request.url()));
+  await open(page,'index.html?q=Morn');await waitForWall(page);
+  const card=page.locator('[data-uid="UC-001"]');
+  const shell=page.locator('.cast-shell').filter({has:card});
+  await expect(shell.locator('[data-evidence-side="still"]')).toHaveText('Character imageVerified');
+  await expect(shell.locator('[data-evidence-side="portrait"]')).toHaveText('Performer portraitVerified');
+  await expect(shell.locator('.evidence-references')).toHaveText('1 claim reference on file');
+  await expect(shell.locator('.evidence-references')).toHaveAttribute('href','./records/UC-001/#evidence');
+  await expect(card).toHaveAttribute('data-flipped','false');
+  await expect(card).not.toHaveAttribute('aria-label',/Mark Allen Shepherd/);
+  await expect(card.locator('.back')).toHaveAttribute('aria-hidden','true');
+  expect(requests.some(url=>url.includes('MEDIA-AUDIT.json'))).toBeFalsy();
+  await open(page,'index.html?q=Darkness');await waitForWall(page);
+  const darkness=page.locator('.cast-shell').filter({has:page.locator('[data-uid="UC-049"]')});
+  await expect(darkness.locator('[data-evidence-side="still"]')).toHaveAttribute('data-evidence-state','absent');
+  await expect(darkness.locator('[data-evidence-side="portrait"]')).toHaveAttribute('data-evidence-state','unverified');
+  await expect(darkness.locator('.evidence-references')).toHaveText('Claim references: not on file');
+  for(const theme of ['light','dark']){
+    if(await page.locator('html').getAttribute('data-theme')!==theme) await page.locator('[data-theme-toggle]').click();
+    await expectContrast(page,'.evidence-facet strong');
+    await expectContrast(page,'.evidence-references');
+  }
+});
+
+test("missing or stale review projections never inherit a verification badge",async({page})=>{
+  await page.route('**/data/media-shards/*.json*',async route=>{
+    const response=await route.fetch();const data=await response.json();
+    if(data.reviews?.['UC-001'])data.reviews['UC-001'].images.still.src='images/another-subject.jpg';
+    await route.fulfill({response,json:data});
+  });
+  await open(page,'index.html?q=Morn');await waitForWall(page);
+  const shell=page.locator('.cast-shell').filter({has:page.locator('[data-uid="UC-001"]')});
+  await expect(shell.locator('[data-evidence-side="still"]')).toHaveAttribute('data-evidence-state','unverified');
+  await expect(shell.locator('[data-evidence-side="portrait"]')).toHaveAttribute('data-evidence-state','verified');
+  await page.unroute('**/data/media-shards/*.json*');
+  await page.route('**/data/media-shards/*.json*',async route=>{
+    const response=await route.fetch();const data=await response.json();delete data.reviews;
+    await route.fulfill({response,json:data});
+  });
+  await page.reload();await waitForWall(page);
+  await expect(page.locator('[data-evidence-state="verified"]')).toHaveCount(0);
+  await expect(shell.locator('[data-evidence-state="unavailable"]')).toHaveCount(2);
+});
+
+test("optional review-display failure leaves an honest usable wall",async({page})=>{
+  await page.route('**/assets/evidence-status.mjs',route=>route.abort());
+  await open(page,'index.html?q=Morn');await waitForWall(page);
+  const shell=page.locator('.cast-shell').filter({has:page.locator('[data-uid="UC-001"]')});
+  await expect(shell.locator('.evidence-status')).toContainText('Image review unavailable');
+  await expect(page.locator('[data-evidence-state="verified"]')).toHaveCount(0);
+  await shell.locator('.front [data-flip]').click();
+  await expect(page.locator('[data-uid="UC-001"]')).toHaveAttribute('data-flipped','true');
+});
+
+test("all shown card fronts fit their content and the performer survives back scrolling",async({page})=>{
+  for(const width of [320,390,768,1280,1440]){
+    await page.setViewportSize({width,height:1000});await open(page,'index.html');await waitForWall(page);
+    await page.evaluate(()=>document.fonts.ready);
+    const clipped=await page.locator('#grid .face.front').evaluateAll(nodes=>nodes.flatMap(front=>{
+      const bounds=front.getBoundingClientRect();
+      const targets=[...front.querySelectorAll('.charname,.designed,.turnhint')];
+      return targets.filter(node=>{const r=node.getBoundingClientRect();return r.bottom>bounds.bottom+1||r.right>bounds.right+1||r.left<bounds.left-1;}).map(node=>({id:front.closest('.cast').dataset.uid,text:node.textContent.trim()}));
+    }));
+    expect(clipped,`unclipped fronts at ${width}px`).toEqual([]);
+  }
+  await open(page,'index.html?q=Morn');await waitForWall(page);
+  const card=page.locator('[data-uid="UC-001"]');
+  await card.locator('.front [data-flip]').focus();await page.keyboard.press('Enter');
+  await expect(card.locator('.back [data-flip]')).toBeFocused();
+  expect(await card.locator('.back-body').evaluate(node=>node.scrollTop)).toBe(0);
+  const before=await card.locator('.actor').boundingBox();
+  await card.locator('.back-body').evaluate(node=>node.scrollTop=node.scrollHeight);
+  const after=await card.locator('.actor').boundingBox();
+  expect(Math.abs(before.y-after.y)).toBeLessThan(1);
+  await page.keyboard.press('Enter');await page.keyboard.press('Enter');
+  expect(await card.locator('.back-body').evaluate(node=>node.scrollTop)).toBe(0);
+});
+
+test("first visit stays light under a dark system preference and saved choice persists",async({page})=>{
+  await page.emulateMedia({colorScheme:'dark'});
+  for(const route of ['index.html','recognition.html#UC-001','coverage.html','constellation.html','404.html','records/UC-001/']){
+    await open(page,route);await expect(page.locator('html')).toHaveAttribute('data-theme','light');
+  }
+  await open(page,'index.html');await page.locator('[data-theme-toggle]').click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
+  await open(page,'recognition.html#UC-001');await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
+  await expect(page.locator('.evidence-status')).toContainText('Character imageVerified');
+});
+
+test.describe('evidence without JavaScript',()=>{
+  test.use({javaScriptEnabled:false,colorScheme:'dark'});
+  test('permanent evidence and rights intake remain readable with a light first-load theme',async({page})=>{
+    await open(page,'records/UC-001/');
+    await expect(page.locator('#evidence [data-evidence-state="verified"]')).toHaveCount(2);
+    await expect(page.locator('#evidence .evidence-references')).toHaveText('1 claim reference on file');
+    const background=await page.locator('body').evaluate(node=>getComputedStyle(node).backgroundColor);
+    expect(luminance(background)).toBeGreaterThan(.5);
+    await page.locator('.archive-map a[href$="index.html#corrections"]').click();
+    await expect(page.locator('#corrections')).toBeVisible();
+    await expect(page.locator('#corrections a[href^="mailto:"]')).toHaveCount(1);
+    await expect(page.locator('#corrections a[href*="template=correction.yml"]')).toHaveCount(1);
+  });
 });

@@ -75,6 +75,7 @@ export const FONT_ASSETS = [
   'assets/fonts/spacemono-OFL.txt',
 ];
 const EXTRA = [
+  'og.png', 'assets/evidence-status.mjs',
   'assets/site-theme.js', 'assets/site-tokens.css', 'assets/home-entrypoints.css',
   'assets/absence-offline.svg', 'assets/placeholder-dark-clean.png', 'assets/placeholder-light-clean.png',
   ...FONT_ASSETS,

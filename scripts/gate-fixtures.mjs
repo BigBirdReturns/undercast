@@ -107,7 +107,9 @@ expect("waterline upload remains fail-closed when evidence is missing", /if-no-f
 
 const collectionPolicyWorkflow = await readFile(new URL("../.github/workflows/collection-policy.yml", import.meta.url), "utf8");
 const collectionEvidencePaths = collectionPolicyWorkflow.match(/\/tmp\/ux-02a-dec0016-evidence/g) || [];
-expect("collection policy uses one runner-independent evidence path for production and upload", collectionEvidencePaths.length, 2);
+expect("retired privileged collection transaction leaves no materialization evidence path", collectionEvidencePaths.length, 0);
+expect("collection policy no longer executes a pull-request-target transaction", /pull_request_target|dec0016-navigation-transaction|ux02a-materialize/.test(collectionPolicyWorkflow), false);
+expect("collection policy retains read-only pull request validation", /pull_request:[\s\S]*contents: read[\s\S]*collection-mode:/.test(collectionPolicyWorkflow), true);
 expect("collection policy job environment does not bind the unavailable runner context", /EVIDENCE:\s*.*runner\.temp/.test(collectionPolicyWorkflow), false);
 
   runCommand("Publisher custody fixtures", process.execPath, ["test/publisher-custody-fixtures.mjs"], { stdio: "pipe" });

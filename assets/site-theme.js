@@ -2,7 +2,6 @@
   "use strict";
   const root = document.documentElement;
   const storageKey = "uc-theme";
-  const media = matchMedia("(prefers-color-scheme: dark)");
   root.classList.add("js");
 
   const storedTheme = () => {
@@ -31,15 +30,8 @@
     }
   };
 
-  const preferredTheme = () => media.matches ? "dark" : "light";
-  const initial = storedTheme() || preferredTheme();
+  const initial = storedTheme() || "light";
   applyTheme(initial, false);
-
-  const followSystemPreference = event => {
-    if (!storedTheme()) applyTheme(event.matches ? "dark" : "light", false);
-  };
-  if (typeof media.addEventListener === "function") media.addEventListener("change", followSystemPreference);
-  else if (typeof media.addListener === "function") media.addListener(followSystemPreference);
 
   const wire = () => {
     applyTheme(root.dataset.theme || initial, false);

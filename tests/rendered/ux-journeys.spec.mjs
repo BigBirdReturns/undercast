@@ -115,15 +115,15 @@ test("root surfaces orient, expose recovery paths, and avoid viewport overflow",
   expect(errors).toEqual([]);
 });
 
-test("dark preference, theme persistence, and reduced motion compose",async({page})=>{
+test("light-first theme, explicit preference persistence, and reduced motion compose",async({page})=>{
   await page.emulateMedia({colorScheme:"dark",reducedMotion:"reduce"});
   await open(page,"index.html");
   await waitForWall(page);
-  await expect(page.locator("html")).toHaveAttribute("data-theme","dark");
+  await expect(page.locator("html")).toHaveAttribute("data-theme","light");
   await expect(page.locator("#mornCard .hero-inner")).toHaveCSS("transition-duration","0s");
 
   const toggle=page.locator("[data-theme-toggle]");
-  await expect(toggle).toContainText("Light");
+  await expect(toggle).toContainText("Dark");
   if(await page.evaluate(()=>matchMedia("(max-width: 700px)").matches)){
     const menu=page.locator(".site-nav-toggle");
     await expect(menu).toBeVisible();
@@ -131,12 +131,14 @@ test("dark preference, theme persistence, and reduced motion compose",async({pag
   }
   await expect(toggle).toBeVisible();
   await toggle.click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme","light");
+  await expect(page.locator("html")).toHaveAttribute("data-theme","dark");
+  await page.emulateMedia({colorScheme:"light",reducedMotion:"reduce"});
+  await expect(page.locator("html")).toHaveAttribute("data-theme","dark");
 
   await open(page,"coverage.html");
   await expect(page.locator("#rows tr").first()).toBeVisible();
-  await expect(page.locator("html")).toHaveAttribute("data-theme","light");
-  await expect(page.locator("[data-theme-toggle]")).toContainText("Dark");
+  await expect(page.locator("html")).toHaveAttribute("data-theme","dark");
+  await expect(page.locator("[data-theme-toggle]")).toContainText("Light");
 });
 
 test("mobile archive navigation is compact and keyboard recoverable",async({page})=>{

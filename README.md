@@ -298,3 +298,25 @@ frontier; `npm run corpus -- next` returns the next authorized corpus operation.
 Scheduled lead harvesting and rolling media search are candidate-only. Canonical
 growth still passes Autopilot, preservation, exact-subject review, waterline receipts
 and `npm run gate`. See `docs/COLLECTION-OPERATIONS.md`.
+
+
+## Visible evidence and bounded maintenance (2026-10-22)
+
+The wall, Recognition and permanent records distinguish exact-image verification
+from claim references. Verification follows the current record-side, source and
+asset hash in `data/MEDIA-AUDIT.json`; a franchise name or a performer-profile link
+confers no verified status. The small review summaries in existing media shards
+are disposable projections, not a second review ledger. Missing or unavailable
+review data remains explicit. The public About section links correction intake
+and private rights contact.
+
+The five daily harvest/search/queue/health schedules are paused. Their manual
+entrypoints remain available; CI, Pages and preservation remain enabled. Resume
+collection only with a named driver, a bounded batch and retained evidence review.
+The obsolete privileged DEC-0016 pull-request-target materialization transaction
+is removed; ordinary read-only pull-request policy validation remains.
+
+This is a narrow correctness, accessibility and rights-intake correction under
+DEC-0012 and DEC-0013. It changes no canonical specimen, credit, claim, image
+binding, reveal primitive or release-1.0 receipt. Return to collection mode after
+qualification; historical receipts and broader code pruning remain separate work.
