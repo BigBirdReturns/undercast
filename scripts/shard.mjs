@@ -24,6 +24,7 @@
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { projectEvidence } from "../assets/evidence-status.mjs";
 
 // Census coverage, its constellation slice and the executable benchmark are
 // projections of committed snapshots. Refresh them without network access
@@ -57,6 +58,17 @@ const speciesProjectionBytes = await readFile("data/species.json");
 const speciesProjectionData = JSON.parse(speciesProjectionBytes);
 const candidates = JSON.parse(await readFile("data/CANDIDATES.json", "utf8").catch(() => "[]"));
 const mediaData = JSON.parse(await readFile("data/media-manifest.json", "utf8").catch(() => '{"assets":{}}'));
+// Derive review labels from exact current bindings; never infer verification from a franchise.
+const audit = JSON.parse(await readFile('data/MEDIA-AUDIT.json', 'utf8'));
+const auditByFacet = new Map(audit.items.map(item => [`${item.wall_id}/${item.side}`, item]));
+const assetHashes = new Map();
+for (const record of specimens) for (const side of ['still', 'portrait']) {
+  const src = record[side]?.src;
+  if (!src || assetHashes.has(src)) continue;
+  const entry = mediaData.assets?.[src];
+  const digest = entry?.location === 'release' ? entry.sha256 : await readFile(src).then(sha256).catch(() => null);
+  assetHashes.set(src, digest);
+}
 const releaseUrls = Object.fromEntries(Object.entries(mediaData.assets || {})
   .filter(([, entry]) => entry.location === "release")
   .map(([src, entry]) => [src, entry.url]));
@@ -107,7 +119,8 @@ for (let i = 0, sh = 0; i < ordered.length; i += SHARD_SIZE, sh++) {
     if (src && releaseUrls[src]) urls[src] = releaseUrls[src];
   }
   const mediaFile = `media-shards/${suffix}.json`;
-  const mediaBytes = jsonBytes({ version: 1, urls });
+  const reviews = Object.fromEntries(slice.map(record => [record.id, projectEvidence(record, auditByFacet, assetHashes)]));
+  const mediaBytes = jsonBytes({ version: 1, urls, reviews });
   await writeFile("data/" + mediaFile, mediaBytes);
   shardMeta.push({
     file, n: slice.length, bytes: bytes.length, sha256: sha256(bytes),

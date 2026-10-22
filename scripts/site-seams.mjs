@@ -101,14 +101,14 @@ expect(has("recognition.html", /<main id="record-view"/), "recognition: persiste
 expect(has("recognition.html", /connections-nav[\s\S]{0,220}prefers-reduced-motion/), "recognition: Connections ignores reduced motion");
 expect(has("recognition.html", /data\/archive\.json",\{cache:"no-store"\}/), "recognition: archive snapshot is not fresh");
 expect(has("recognition.html", /graphMeta\?\.sha256/), "recognition: constellation graph is not snapshot-versioned");
-expect(has("assets/site-theme.js", /storedTheme\(\) \|\| preferredTheme\(\)/), "theme: system color preference is ignored when no explicit choice exists");
+expect(has("assets/site-theme.js", /storedTheme\(\) \|\| "light"/), "theme: DEC-0013 requires deterministic light first load and saved explicit choice");
 expect(has("assets/site-navigation.js", /aria-expanded/), "navigation: compact disclosure state is missing");
 expect(has("assets/site-navigation.js", /event\.key === "Escape"/), "navigation: Escape recovery is missing");
 expect(has("assets/site-navigation.js", /dataset\.navOpen/), "navigation: shell open-state custody is missing");
 expect(has("assets/site-shell.css", /data-nav-enhanced/), "navigation: progressive-enhancement CSS is missing");
 expect(has("assets/site-shell.css", /min-height:44px/), "navigation: compact targets are below the required size");
 expect(has("assets/site-shell.css", /\.archive-map \[aria-current\][\s\S]{0,260}text-decoration:underline/), "navigation: archive-map current location is not visibly styled");
-expect(has("assets/site-theme.js", /if \(!storedTheme\(\)\) applyTheme/), "theme: system changes do not compose with explicit preference custody");
+expect(!has("assets/site-theme.js", /prefers-color-scheme/), "theme: operating-system changes must not override DEC-0013 default or visitor choice");
 expect(has("index.html", /function recognitionHref\(id\)/), "index: recognition links do not carry exact wall context");
 expect(has("index.html", /loop\.href=recognitionHref\(s\.id\)/), "index: card record links bypass wall-context custody");
 expect(has("recognition.html", /function returnWallHref\(\)/), "recognition: safe wall return resolver is missing");

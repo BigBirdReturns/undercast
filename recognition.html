@@ -230,7 +230,7 @@ button{font:inherit;color:inherit}
     </main>
     <nav class="archive-map" aria-label="Archive paths">
       <span class="archive-map__label"><span>Archive paths</span><span class="archive-map__status">Receipts: <a href="./release-1.0.json">UnderCast 1.0 baseline</a> &middot; current deployment: release.json</span></span>
-      <a href="./index.html">The wall</a><a href="./recognition.html" aria-current="location">Recognition records</a><a href="./coverage.html">Coverage &amp; gaps</a><a href="./constellation.html">Evidence paths</a><a href="./data/archive.json">Machine archive</a>
+      <a href="./index.html">The wall</a><a href="./recognition.html" aria-current="location">Recognition records</a><a href="./coverage.html">Coverage &amp; gaps</a><a href="./constellation.html">Evidence paths</a><a href="./data/archive.json">Machine archive</a><a href="./index.html#corrections">Corrections &amp; takedowns</a>
     </nav>
   </div>
 </div>
@@ -240,6 +240,8 @@ button{font:inherit;color:inherit}
 let INDEX=[];
 let MANIFEST=null;
 let MEDIA={};
+let MEDIA_REVIEWS={};
+let evidenceHelpers=null;
 let CONSTELLATIONS=null;
 let SPECIES=null;
 let ARCHIVE_SNAPSHOT=null;
@@ -369,7 +371,7 @@ function loadShard(number){
   const promise=Promise.all([records,media])
     .then(([rows,mediaMap])=>{
       if(mediaMap&&mediaMap.urls) for(const src in mediaMap.urls) MEDIA[src]={url:mediaMap.urls[src],location:"release"};
-      for(const record of rows) RECORDS.set(record.id,record);
+      for(const record of rows){RECORDS.set(record.id,record);MEDIA_REVIEWS[record.id]=mediaMap?.reviews?.[record.id]||null;}
       return rows;
     })
     .catch((error)=>{ SHARDS.delete(number); throw error; });
@@ -516,6 +518,7 @@ function renderRecord(record,entry,position){
   const methodRow=method?`<div class="uc-spec-row"><div class="uc-spec-k">Method signal</div><div class="uc-spec-v">${esc(method.label)} · inferred from the filed record copy</div></div>`:"";
   const conditionRows=Array.isArray(record.conditions)?record.conditions.map((condition)=>`<div class="uc-spec-row"><div class="uc-spec-k">Condition</div><div class="uc-spec-v"><b>${esc(CONDITION_LABELS[condition.type]||condition.type)}</b>${condition.episode?` · ${esc(condition.episode)}`:""}<br>${esc(condition.note)} · <a href="${esc(safeUrl(condition.source))}" target="_blank" rel="noopener">source</a></div></div>`).join(""):"";
   const referenceRows=Array.isArray(record.references)?record.references.map((item)=>`<div class="uc-spec-row"><div class="uc-spec-k">Evidence · ${esc(item.claim.replace(/-/g," "))}</div><div class="uc-spec-v"><a href="${esc(safeUrl(item.source))}" target="_blank" rel="noopener">${esc(item.label)}</a>${item.publisher?`<br>${esc(item.publisher)}`:""}</div></div>`).join(""):"";
+  const evidence=evidenceHelpers ? evidenceHelpers.evidenceMarkup(record,MEDIA_REVIEWS[record.id],`./records/${encodeURIComponent(record.id)}/#evidence`) : '<p class="evidence-status">Image review unavailable.</p>';
   const filedPerformances=performanceRows(record);
   const filedSpecies=speciesRows(record);
   const memoryVisual=record.still&&record.still.src?imageNode(record.still,record.character,"uc-memory-image"):absenceGraphic(record.character+" still is not on file");
@@ -548,6 +551,7 @@ function renderRecord(record,entry,position){
         <div class="uc-role">${record.kind==="voice"?"Voice performance":"Character performance"}</div>
         <div class="uc-pair" id="pair">${imagePlate(record,"still","01")}${imagePlate(record,"portrait","02")}</div>
         ${compare?`<div class="uc-compare">${compare}</div>`:""}
+        ${evidence}<p class="evidence-note">Image review covers the depicted subject, not every statement in the record. <a href="./index.html#evidence-key">Read the evidence key</a>.</p>
       </section>
       <aside class="uc-dossier" aria-label="Record dossier">
         <section class="uc-section" id="record-hands"><div class="uc-section-head"><span class="uc-section-no">03</span><span class="uc-section-title">The hands</span></div>${handsMarkup(record,makers)}</section>
@@ -743,7 +747,7 @@ function renderLoading(){
 }
 function restart(){
   ++renderSequence;
-  INDEX=[];MANIFEST=null;MEDIA={};canonicalPromise=null;firstRecord=true;
+  INDEX=[];MANIFEST=null;MEDIA={};MEDIA_REVIEWS={};canonicalPromise=null;firstRecord=true;
   RECORDS.clear();SHARDS.clear();
   renderLoading();
   boot().catch((error)=>renderLoadError(requestedId(),error));
@@ -773,7 +777,7 @@ function initialTheme(){
     const stored=localStorage.getItem("uc-theme");
     if(stored==="light"||stored==="dark") return stored;
   }catch(_){}
-  return matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";
+  return "light";
 }
 themeButton.addEventListener("click",()=>setTheme(document.documentElement.dataset.theme==="dark"?"light":"dark"));
 document.getElementById("connections-nav").addEventListener("click",()=>document.getElementById("connections")?.scrollIntoView({behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth",block:"start"}));
@@ -791,6 +795,7 @@ window.addEventListener("keydown",(event)=>{
 });
 
 async function boot(){
+  evidenceHelpers=await import("./assets/evidence-status.mjs").catch(()=>null);
   setTheme(initialTheme(),false);
   ARCHIVE_SNAPSHOT=await fetch("data/archive.json",{cache:"no-store"}).then((response)=>{if(!response.ok)throw new Error("archive snapshot");return response.json();});
   const graphMeta=ARCHIVE_SNAPSHOT?.canonical?.constellations;

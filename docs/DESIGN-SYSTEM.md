@@ -25,7 +25,7 @@ shared stylesheet rather than re-extracting or duplicating it.
 | `--ink` | `#1C1A16` | primary ink |
 | `--ink-soft` | `#5B564C` | body / secondary |
 | `--ink-faint` | `#635E53` | small archival labels — target ≥4.5:1 on plaster (AA) |
-| `--seam` | `#7C918D` | teal mold-line accent |
+| `--seam` | `#465D59` | teal mold-line accent |
 | `--grease` | `#A83E30` | grease-pencil red — annotation only, used sparingly |
 | `--line` | `#C3BCAD` | hairlines / rules |
 
