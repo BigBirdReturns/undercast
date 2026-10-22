@@ -268,6 +268,14 @@ function readyScope(inputs, scopeId, { requireActive = true } = {}) {
   return row;
 }
 
+// A certified, snapshot-ready scope held back only because no preservation snapshot
+// matches its current census manifest. Nothing the queue does can clear that; only a
+// preservation export receipted against this exact manifest can.
+function awaitingSourceSnapshot(row) {
+  return row.effective_status === "active" && !row.lease_token && row.lease_status === "blocked"
+    && Array.isArray(row.reasons) && row.reasons.length === 1 && row.reasons[0] === "source_snapshot_missing";
+}
+
 function renderPrompt(batch) {
   const taskBlocks = batch.tasks.map((task, index) => `### ${index + 1}. ${task.performer} — ${task.character}\n- Task: \`${task.id}\`\n- Scope: ${task.scope} / ${task.franchise}\n- Categories: ${task.category.join(", ") || "unclassified"}\n- Mode hints: ${task.performance_modes.join(", ") || "unresolved"}\n- Required capabilities: ${task.required_capabilities.join(", ") || "none beyond the baseline text/image contract"}\n- Performer already represented: ${task.performer_on_wall ? "yes" : "no"}\n- Sources:\n${task.sources.map((source) => `  - ${source}`).join("\n")}`).join("\n\n");
   return `# UNDERCAST Luna batch\n\nLease \`${batch.lease_id}\` expires ${batch.expires_at}. Read \`AGENTS.md\`, \`GROW.md\`, \`LUNA.md\`, \`docs/AUTOPILOT.md\`, and \`docs/AUTOPILOT-CAPABILITIES.md\` before acting. This packet is bound to readiness token \`${batch.readiness.lease_token}\` and capability policy \`${batch.selection.policy_sha256}\`.\n\nCapability profile: \`${batch.selection.profile_id}\` (${batch.selection.profile_capabilities.join(", ") || "no optional capabilities"}). Selection strategy: \`${batch.selection.strategy}\`. Basis: ${batch.selection.basis}\n\nFor every task return exactly one evidence-backed decision: \`draft\`, \`reject\`, or \`blocked\`. Do not infer missing facts and do not substitute a different performer or role. The result file must cover every task exactly once. Drafted tasks are not complete until canonical merge, retrieval, the archive gate, and a separate media review verify the exact still and portrait subjects or explicit absence. A missing runtime capability is not an eligibility rejection; incompatible work should never have entered this packet.\n\n${taskBlocks}\n`;
@@ -519,11 +527,20 @@ async function refreshCommand() {
     const beforeInputs = await loadQueueInputs();
     let scopeId = option("scope");
     if (!scopeId && flag("due")) {
-      const candidate = beforeInputs.readiness
+      const due = beforeInputs.readiness
         .filter((row) => row.effective_status === "active" && row.refresh?.due)
-        .sort((a, b) => b.priority - a.priority || a.scope_id.localeCompare(b.scope_id))[0];
+        .sort((a, b) => b.priority - a.priority || a.scope_id.localeCompare(b.scope_id));
+      // A certified scope whose only blocker is a missing preservation receipt for its
+      // current census cannot be refreshed into readiness: a refresh rotates the manifest,
+      // so it would need yet another snapshot. Name the operator action and report
+      // "nothing due" (exit 3) instead of failing the scheduled run every day.
+      const awaiting = due.filter(awaitingSourceSnapshot);
+      for (const row of awaiting) {
+        console.log(`scope ${row.scope_id} is due but its current census manifest ${row.snapshot_details?.manifest_sha256 || "<unknown>"} has no preservation receipt; run the preservation-export workflow on this commit, then refresh`);
+      }
+      const candidate = due.find((row) => !awaitingSourceSnapshot(row));
       if (!candidate) {
-        console.log("no certified scope is due for refresh");
+        console.log(awaiting.length ? "no certified scope is refreshable until its source snapshot is receipted" : "no certified scope is due for refresh");
         process.exitCode = 3;
         return;
       }
