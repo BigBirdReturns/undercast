@@ -184,7 +184,7 @@ Autopilot, exact-subject review, the rolling waterline and reviewed cycle receip
 
 ## DEC-0013 — Missing evidence and archive paths must be legible
 
-**Status:** Accepted; implementation pending (#976) · Ratified by owner direction, 2026-07-24
+**Status:** Active · Ratified by owner direction, 2026-07-24 · Implemented by #976, merged 2026-10-22
 
 The frozen v1 product receives this bounded owner-approved correction:
 
