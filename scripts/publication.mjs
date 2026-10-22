@@ -333,16 +333,15 @@ export function payloadManifest(root) {
   walk('');
   return rows.sort((a,b) => a.path < b.path ? -1 : 1);
 }
-export function verifyLinks(root, payload, ids) {
+export function verifyLinks(root, payload, ids, base = 'https://bigbirdreturns.github.io/undercast/', externalRefs = []) {
   const paths = new Set(payload.map(row => row.path));
-  const base = 'https://bigbirdreturns.github.io/undercast/';
   for (const row of payload.filter(row => /\.(?:html|css)$/.test(row.path))) {
     // Script-generated links are checked by the rendered gate. This check covers
     // the actual static document, including the no-JavaScript hero and records.
     const text = read(root, row.path).toString().replace(/(<script\b[^>]*>)[\s\S]*?<\/script>/gi, '$1</script>');
     const refs = [...text.matchAll(/\b(?:href|src)=["']([^"']+)["']|url\(\s*["']?([^\s)"']+)["']?\s*\)/g)].map(match => match[1] || match[2]);
     for (const ref of refs) {
-      if (/^(?:#|data:|mailto:)/i.test(ref)) continue;
+      if (/^(?:#|data:|mailto:)/i.test(ref) || externalRefs.includes(ref)) continue;
       const url = new URL(ref.replace(/&amp;/g, '&'), base + row.path);
       if (url.origin !== new URL(base).origin) continue;
       assert.ok(url.href.startsWith(base), `public link escapes site: ${row.path}: ${ref}`);
@@ -352,7 +351,9 @@ export function verifyLinks(root, payload, ids) {
     }
   }
   const sitemap = read(root, 'sitemap.xml').toString();
-  const routes = [...sitemap.matchAll(/<loc>https:\/\/bigbirdreturns\.github\.io\/undercast\/records\/([^/]+)\/<\/loc>/g)].map(match => match[1]).sort();
+  const locations = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map(match => match[1]);
+  for (const url of locations) assert.ok(url.startsWith(base), 'sitemap URL escapes configured site');
+  const routes = locations.map(url => url.slice(base.length).match(/^records\/([^/]+)\/$/)?.[1]).filter(Boolean).sort();
   const merged = new Set(json(root, 'data/tombstones.json').records.filter(row => row.status === 'merged').map(row => row.id));
   assert.deepEqual(routes, ids.filter(id => !merged.has(id)), 'sitemap must list live and removed records; merged aliases retain routes');
 }

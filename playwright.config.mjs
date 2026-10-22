@@ -20,6 +20,7 @@ export default defineConfig({
     trace: "retain-on-failure"
   },
   projects: [
+    { name: "website-profiles-chromium", testMatch: /website-profiles\.spec\.mjs/, use: { ...devices["Desktop Chrome"], reducedMotion: "reduce" } },
     { name: "chromium-desktop", testMatch: /site\.spec\.mjs/, use: { ...devices["Desktop Chrome"] } },
     { name: "ux-chromium-desktop", ...uxDesktopJourney, use: { ...devices["Desktop Chrome"] } },
     { name: "ux-firefox-desktop", ...uxDesktopJourney, use: { ...devices["Desktop Firefox"] } },
