@@ -192,7 +192,7 @@ try {
   }
   test('contract cannot grant publication to a private review path', () => {
     const file = path.join(restored, 'data/archive.json'); const bytes = fs.readFileSync(file); const archive = JSON.parse(bytes);
-    archive.canonical.extra = { path: 'data/review/clifford-number/private.json', bytes: 2, sha256: sha256('{}') }; fs.writeFileSync(file, JSON.stringify(archive));
+    archive.canonical.extra = { path: 'data/review/nonpublic-fixture/private.json', bytes: 2, sha256: sha256('{}') }; fs.writeFileSync(file, JSON.stringify(archive));
     try { assert.throws(() => inventory(restored), /disallowed evidence/); } finally { fs.writeFileSync(file, bytes); }
   });
   test('static homepage dependency may not disappear', () => {

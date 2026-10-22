@@ -50,7 +50,7 @@ release mirrors are checked if present and otherwise omitted. The existing
 homepage directly references two local Morn hero images, including its no-JS
 fallback: these already-public static dependencies remain local, checked against
 their media-manifest hashes. No external media is fetched or newly rehosted.
-The rest of `data/review`, `data/review/clifford-number`, raw chats, private paths,
+The rest of `data/review`, research-only material, raw chats, private paths,
 tests, dependencies, transient evidence and unreferenced assets are excluded.
 
 Networked media intake separately enforces `data/MEDIA-REJECTIONS.json`. That
