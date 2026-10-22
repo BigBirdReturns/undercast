@@ -80,9 +80,11 @@ maintained source data.
   about image content. They use semantic horizontal/vertical positions so every
   surface can preserve the same intended subject through responsive crops.
 - `data/MEDIA-REJECTIONS.json` is the fail-closed projection of reviewed invalid
-  media objects. An exact rejected SHA-256 is denied globally; a rejected source
-  locator is denied only for the same durable record side. A different locator and
-  different byte hash remains eligible for ordinary exact-subject review.
+  media objects. An exact rejected SHA-256 is denied globally unless the rule carries
+  `hash_scope: "record-side"`, which confines the byte denial to that record side
+  because independent hash-bound review verified the same bytes elsewhere; a rejected
+  source locator is denied only for the same durable record side. A different locator
+  and different byte hash remains eligible for ordinary exact-subject review.
 - Both the detached retriever and canonical candidate reporter enforce the same
   rejection projection. A rejected rediscovery writes a rule-bound attempt receipt
   to `data/journal/media-search.jsonl` and its bytes do not enter the candidate

@@ -19,11 +19,12 @@ const deferred=buildMediaPlan({specimens,sources:[],auditItems:[],attempts,now:"
 
 const document=JSON.parse(readFileSync("data/MEDIA-REJECTIONS.json","utf8"));
 validateMediaRejections(document);
-assert.equal(document.rules.length,144);
-assert.deepEqual(document.denominator,{rules:144,collect_001:71,uc_media_audit_1:73});
+assert.equal(document.rules.length,240);
+assert.deepEqual(document.denominator,{rules:240,collect_001:71,uc_media_audit_1:73,uc_media_audit_2:96});
+assert.equal(document.rules.filter(row=>row.decision==="UC-MEDIA-AUDIT-2").length,96);
 for(const ledger of document.source_ledgers)assert.equal(digest(ledger.path),ledger.sha256,`${ledger.path} evidence hash drift`);
 const rejectionIndex=indexMediaRejections(document);
-const campaignRule=document.rules.find(row=>row.decision==="UC-MEDIA-AUDIT-1"&&row.source_locator);
+const campaignRule=document.rules.find(row=>row.decision==="UC-MEDIA-AUDIT-1"&&row.source_locator&&row.hash_scope!=="record-side");
 assert(campaignRule);
 const byHash=matchMediaRejection(rejectionIndex,{wallId:"UC-999999",side:"still",sha256:campaignRule.asset_sha256});
 assert.equal(byHash?.match,"asset_sha256");
@@ -37,7 +38,17 @@ assert.equal(replacement.status,"candidate");
 for(const id of ["UC-1211","UC-833","UC-872","UC-883"])assert(!document.rules.some(row=>row.wall_id===id&&row.side==="portrait"&&row.decision==="UC-MEDIA-AUDIT-1"),`${id} verified exception was incorrectly blocked`);
 const reconciliation=JSON.parse(readFileSync("data/review/estate-debt/UC-MEDIA-AUDIT-1-RECONCILIATION.json","utf8"));
 assert.deepEqual(reconciliation.dispositions,{reviewed_attention_rows:77,remains_unpublished:72,verified_replacement:1,same_asset_verified:4,blocked_rules_written:73});
-assert.throws(()=>validateMediaRejections({...document,denominator:{...document.denominator,rules:143}}),/denominator\.rules/);
+assert.throws(()=>validateMediaRejections({...document,denominator:{...document.denominator,rules:239}}),/denominator\.rules/);
+assert.throws(()=>validateMediaRejections({...document,denominator:{...document.denominator,uc_media_audit_2:95}}),/source denominators/);
+// A record-side hash scope keeps the UC-102 performer-page rejection without banning the
+// identical bytes that hash-bound review verified as UC-1279's Tosk still.
+const scopedRule=document.rules.find(row=>row.hash_scope==="record-side");
+assert(scopedRule,"record-side hash scope rule missing");
+assert.equal(scopedRule.wall_id,"UC-102");assert.equal(scopedRule.side,"portrait");
+assert.equal(matchMediaRejection(rejectionIndex,{wallId:scopedRule.wall_id,side:scopedRule.side,sha256:scopedRule.asset_sha256})?.rule.rule_id,scopedRule.rule_id);
+assert.equal(matchMediaRejection(rejectionIndex,{wallId:"UC-1279",side:"still",sha256:scopedRule.asset_sha256}),null,"record-side hash scope leaked onto the verified Tosk still");
+assert.throws(()=>validateMediaRejections({...document,rules:document.rules.map((row,i)=>i===0?{...row,hash_scope:"everywhere"}:row)}),/hash_scope/);
+assert.throws(()=>validateMediaRejections({...document,rules:document.rules.map((row,i)=>i===0?{...row,hash_scope:"record-side"}:row)}),/scope_note/);
 
 const fixtureRoot=await mkdtemp(path.join(tmpdir(),"undercast-media-rejection-"));
 try{
@@ -59,4 +70,4 @@ try{
   assert.equal(existsSync(path.join(out,"images/candidate.jpg")),false,"rejected bytes entered candidate artifact");
   const event=JSON.parse(readFileSync(journal,"utf8").trim());assert.equal(event.result,"rejected");assert.equal(event.rejection_rule_id,campaignRule.rule_id);
 }finally{await rm(fixtureRoot,{recursive:true,force:true});}
-console.log("media search fixtures: PASS — cadence, 144 exact rejections, artifact exclusion and journal receipts are fail-closed");
+console.log(`media search fixtures: PASS — cadence, ${document.rules.length} exact rejections, record-side hash scope, artifact exclusion and journal receipts are fail-closed`);

@@ -102,6 +102,33 @@ export async function loadKnownMediaCorrectionPlan({ root = process.cwd() } = {}
   return rows.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }) || a.side.localeCompare(b.side));
 }
 
+// A later reviewed correction ledger uses the same items[] shape as the 2026-07-25
+// sitewide ledgers: exact id, side, preserved path, byte hash and ruling per obligation.
+export async function loadMediaCorrectionLedgerPlan({ root = process.cwd(), ledgerPath } = {}) {
+  const resolvedRoot = path.resolve(root);
+  const ledgerSafe = assertSafeRelativePath(ledgerPath, "correction ledger path");
+  const ledger = await readJson(resolvedRoot, ledgerSafe);
+  if (!Array.isArray(ledger.value.items) || !ledger.value.items.length) throw new Error(`${ledgerSafe} lacks items[]`);
+  const rows = ledger.value.items.map((item) => validatePlanEntry({
+    id: item.id,
+    side: item.side,
+    preserved_path: item.preserved_path,
+    sha256: item.sha256,
+    ruling: item.ruling || ledger.value.action,
+    ledger: ledgerSafe,
+  }));
+  const seen = new Set();
+  for (const row of rows) {
+    const key = keyFor(row);
+    if (seen.has(key)) throw new Error(`duplicate correction obligation ${key}`);
+    seen.add(key);
+  }
+  if (Number.isInteger(ledger.value.bindings_nulled) && ledger.value.bindings_nulled !== rows.length) {
+    throw new Error(`${ledgerSafe} declares ${ledger.value.bindings_nulled} bindings but lists ${rows.length} items`);
+  }
+  return rows.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }) || a.side.localeCompare(b.side));
+}
+
 function collectRecords(value, rows = []) {
   if (Array.isArray(value)) {
     for (const item of value) collectRecords(item, rows);
@@ -219,9 +246,11 @@ export async function applyKnownMediaCorrectionPlan({
   specimensPath = DEFAULT_PATHS.specimens,
   sourcesPath = DEFAULT_PATHS.sources,
   reportPath = DEFAULT_PATHS.report,
+  transaction = "COLLECT-001",
   now = new Date().toISOString(),
 } = {}) {
   const resolvedRoot = path.resolve(root);
+  if (!/^[A-Z0-9][A-Z0-9-]{2,63}$/.test(String(transaction || ""))) throw new Error("correction transaction id must be a safe upper-case identifier");
   if (!Array.isArray(plan) || !plan.length) throw new Error("correction plan must be a non-empty array");
   const normalizedPlan = plan.map((row) => validatePlanEntry({ ...row }));
   const unique = new Set(normalizedPlan.map(keyFor));
@@ -253,7 +282,7 @@ export async function applyKnownMediaCorrectionPlan({
   const alreadyCollected = obligations.length - collected;
   const report = {
     version: 1,
-    transaction: "COLLECT-001",
+    transaction,
     operation: "known-invalid-media-binding-nullification",
     generated_at: now,
     mode: write ? "write" : "dry-run",

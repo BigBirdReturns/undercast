@@ -101,6 +101,11 @@ const EVIDENCE = [
   'data/review/sitewide-actor-origin-vlm-correction-2026-07-25.json',
   'data/review/sitewide-media-correction-2026-07-25.json',
   'data/review/sitewide-near-duplicate-correction-2026-07-25.json',
+  // UC-MEDIA-AUDIT-2 (2026-10-22): the chained quality reset cited by data/quality.json,
+  // its apply report, and the correction ledger the report cites. Three-file closure.
+  'data/review/estate-debt/UC-MEDIA-AUDIT-2-QUALITY-BASELINE-RESET.json',
+  'data/review/estate-debt/UC-MEDIA-AUDIT-2-KNOWN-MEDIA-CORRECTIONS-APPLY.json',
+  'data/review/estate-debt/UC-MEDIA-AUDIT-2-CORRECTION-LEDGER.json',
 ];
 export function safePath(file) {
   assert.equal(typeof file, 'string', 'path must be a string');

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
   applyKnownMediaCorrectionPlan,
   loadKnownMediaCorrectionPlan,
+  loadMediaCorrectionLedgerPlan,
 } from "./lib/estate-known-media-corrections.mjs";
 
 const FERENGI_ROOT_LEDGER = "data/review/ferengi-gold/final-portraits-correction-2026-07-25.json";
@@ -19,6 +20,38 @@ function option(args, name, fallback = null) {
 export async function main(argv = process.argv.slice(2)) {
   const root = path.resolve(option(argv, "--root", "."));
   const write = argv.includes("--write");
+  const ledgerPath = option(argv, "--ledger");
+  if (ledgerPath) {
+    // A later reviewed correction ledger: same exact-binding nullification, its own
+    // transaction id and apply report, no COLLECT-001 denominators implied.
+    const transaction = option(argv, "--transaction");
+    const reportPath = option(argv, "--report");
+    if (!transaction || !reportPath) throw new Error("--ledger requires --transaction and --report");
+    const plan = await loadMediaCorrectionLedgerPlan({ root, ledgerPath });
+    const report = await applyKnownMediaCorrectionPlan({
+      root,
+      plan,
+      write,
+      transaction,
+      specimensPath: option(argv, "--specimens", "data/specimens.json"),
+      sourcesPath: option(argv, "--sources", "data/SOURCES.json"),
+      reportPath,
+      now: option(argv, "--now", new Date().toISOString()),
+    });
+    console.log(JSON.stringify({
+      transaction: report.transaction,
+      operation: report.operation,
+      mode: report.mode,
+      ledger: ledgerPath,
+      denominator: report.denominator,
+      specimens: report.source.specimens,
+      sources: report.source.sources,
+      next: write
+        ? ["npm run media:audit -- sync", "node scripts/media-rejections-project.mjs ...", "node scripts/shard.mjs", "node scripts/estate-quality-baseline.mjs --chain ...", "npm run gate"]
+        : ["re-run with --write on the exact intended branch"],
+    }, null, 2));
+    return;
+  }
   const declaredPlan = await loadKnownMediaCorrectionPlan({ root });
   const rootOnly = declaredPlan.filter((row) => row.ledger === FERENGI_ROOT_LEDGER);
   const activePlan = declaredPlan.filter((row) => row.ledger !== FERENGI_ROOT_LEDGER);

@@ -1,14 +1,22 @@
 #!/usr/bin/env node
+// Reconciles the cumulative card-backfill adoption ledger against its paid receipts, the
+// adopted bytes on disk, and the live bindings. Adoption history is immutable, but a later
+// reviewed correction may prove an adopted image wrong: an adopted obligation whose binding
+// is now null on both canonical mirrors is accepted only when data/MEDIA-REJECTIONS.json
+// rejects the exact adopted bytes for that same record side (UC-MEDIA-AUDIT-2 precedent,
+// 2026-10-22). Any other null or drifted binding still fails closed.
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { indexMediaRejections, matchMediaRejection } from "./lib/media-rejections.mjs";
 
 const DEFAULTS = Object.freeze({
   ledger: "data/review/estate-debt/CANONICAL-ADOPTION-LEDGER.json",
   importReceipt: "data/review/estate-debt/COLLECT-002-CARD-BACKFILL-PACKET-IMPORT.json",
   specimens: "data/specimens.json",
   sources: "data/SOURCES.json",
+  rejections: "data/MEDIA-REJECTIONS.json",
 });
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -45,14 +53,18 @@ export async function validateCanonicalAdoptionLedger({
   importReceiptPath = DEFAULTS.importReceipt,
   specimensPath = DEFAULTS.specimens,
   sourcesPath = DEFAULTS.sources,
+  rejectionsPath = DEFAULTS.rejections,
 } = {}) {
   const resolvedRoot = path.resolve(root);
-  const [ledgerDoc, importDoc, specimensDoc, sourcesDoc] = await Promise.all([
+  const [ledgerDoc, importDoc, specimensDoc, sourcesDoc, rejectionsDoc] = await Promise.all([
     readJson(resolvedRoot, ledgerPath, "canonical adoption ledger"),
     readJson(resolvedRoot, importReceiptPath, "packet import receipt"),
     readJson(resolvedRoot, specimensPath, "specimens"),
     readJson(resolvedRoot, sourcesPath, "SOURCES"),
+    readJson(resolvedRoot, rejectionsPath, "media rejections"),
   ]);
+  const rejections = indexMediaRejections(rejectionsDoc.value);
+  const supersededByCorrection = [];
   const ledger = ledgerDoc.value;
   const imported = importDoc.value;
   assert(ledger.version === 1 && ledger.operation === "cumulative-canonical-adoption-ledger", "unsupported canonical adoption ledger");
@@ -134,6 +146,15 @@ export async function validateCanonicalAdoptionLedger({
     const [recordId, side] = obligationId.split("/");
     const specimen = exactRow(specimensDoc.value, recordId, "specimens");
     const source = exactRow(sourcesDoc.value, recordId, "SOURCES");
+    if (specimen[side] == null && source[side] == null) {
+      // The adoption was later proven wrong: both mirrors are null and the exact adopted
+      // bytes carry a reviewed rejection for this very record side. Bytes stay on disk.
+      const rejected = matchMediaRejection(rejections, { wallId: recordId, side, sha256: row.canonical_sha256 });
+      assert(rejected?.match === "asset_sha256" && rejected.rule.wall_id === recordId && rejected.rule.side === side,
+        `${obligationId} specimen does not bind its versioned canonical path and no reviewed rejection supersedes the adopted bytes`);
+      supersededByCorrection.push({ obligation_id: obligationId, canonical_path: canonicalPath, rule_id: rejected.rule.rule_id, decision: rejected.rule.decision, evidence: rejected.rule.evidence });
+      continue;
+    }
     assert(specimen[side]?.src === canonicalPath, `${obligationId} specimen does not bind its versioned canonical path`);
     assert(source[side]?.src === canonicalPath, `${obligationId} source ledger does not bind its versioned canonical path`);
     assert(sameJson(specimen[side], source[side]), `${obligationId} specimen and source bindings differ`);
@@ -162,6 +183,8 @@ export async function validateCanonicalAdoptionLedger({
     stills: batchStills,
     portraits: batchPortraits,
     visitor_visible_media_improvements: visitorImprovements,
+    live_adoptions: adoptedKeys.size - supersededByCorrection.length,
+    superseded_by_correction: supersededByCorrection,
     batches: batchSummaries,
   };
 }
@@ -173,6 +196,7 @@ export async function main(argv = process.argv.slice(2)) {
     importReceiptPath: option(argv, "--packet-import-receipt", DEFAULTS.importReceipt),
     specimensPath: option(argv, "--specimens", DEFAULTS.specimens),
     sourcesPath: option(argv, "--sources", DEFAULTS.sources),
+    rejectionsPath: option(argv, "--rejections", DEFAULTS.rejections),
   });
   console.log(JSON.stringify(result, null, 2));
 }

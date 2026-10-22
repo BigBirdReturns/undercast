@@ -111,8 +111,81 @@ try {
   correction.denominator.collected = 60;
   await writeFile(correctionPath, json(correction));
   await assert.rejects(() => validateQualityBaselineCustody({ root }), /report hash differs/);
+  correction.denominator.collected = 61;
+  await writeFile(correctionPath, json(correction));
+  await validateQualityBaselineCustody({ root });
 
-  console.log("PASS — zero-margin quality reset, exact 61-binding delta, unchanged non-media floors, future improvement, future regression, and receipt tamper rejection");
+  // A later audit nulls five more bindings on top of the receipted v2 floor. The regressed
+  // projection fails closed until a chained, receipted reset names the new transaction.
+  const specimensV3 = Buffer.from('[{"id":"UC-1"},{"id":"UC-2"}]\n');
+  await writeFile(path.join(root, "data", "specimens.json"), specimensV3);
+  const correctionV3 = {
+    version: 1,
+    transaction: "UC-MEDIA-AUDIT-2",
+    operation: "known-invalid-media-binding-nullification",
+    mode: "write",
+    source: {
+      specimens: { after_sha256: sha256(specimensV3) },
+      sources: { after_sha256: sha256(sources) },
+    },
+    denominator: { obligations: 5, collected: 5, already_collected: 0 },
+  };
+  const correctionV3Relative = "data/review/estate-debt/UC-MEDIA-AUDIT-2-KNOWN-MEDIA-CORRECTIONS-APPLY.json";
+  const receiptV3Relative = "data/review/estate-debt/UC-MEDIA-AUDIT-2-QUALITY-BASELINE-RESET.json";
+  await writeFile(path.join(root, correctionV3Relative), json(correctionV3));
+  const chainedMetrics = {
+    complete_pairs: 17,
+    complete_pair_ratio: 0.17,
+    missing_still: 53,
+    missing_portrait: 53,
+    missing_both: 33,
+    missing_both_ratio: 0.33,
+    known_makers: 70,
+    known_maker_ratio: 0.7,
+    records_with_claim_evidence: 50,
+    claim_evidence_ratio: 0.5,
+  };
+  const beforeV3Path = path.join(root, "before-v3-quality.json");
+  await writeFile(beforeV3Path, json(afterQuality));
+  const chainedQuality = { version: 1, generated_from: "c".repeat(64), total: 100, metrics: chainedMetrics, baseline: baselineV2 };
+  await writeFile(path.join(root, "data", "quality.json"), json(chainedQuality));
+  await assert.rejects(() => validateQualityBaselineCustody({ root }), /fell below the receipted corrected floor/);
+  await assert.rejects(() => rebaseQualityAfterKnownCorrections({ root, beforeQualityPath: beforeV3Path, write: false }), /fell below the receipted corrected floor/, "an unchained call on a receipted baseline only validates");
+  const chainArgs = { root, beforeQualityPath: beforeV3Path, chain: true, correctionReportPath: correctionV3Relative, receiptPath: receiptV3Relative, now: "2026-10-22T00:00:00.000Z" };
+  await assert.rejects(() => rebaseQualityAfterKnownCorrections({ ...chainArgs, transaction: "COLLECT-001", write: false }), /already carries a reset for COLLECT-001/);
+  await assert.rejects(() => rebaseQualityAfterKnownCorrections({ ...chainArgs, transaction: "UC-MEDIA-AUDIT-3", write: false }), /requires the written UC-MEDIA-AUDIT-3 correction report/);
+  const chained = await rebaseQualityAfterKnownCorrections({ ...chainArgs, transaction: "UC-MEDIA-AUDIT-2", write: true });
+  assert.equal(chained.baseline.version, 3);
+  assert.equal(chained.receipt.transaction, "UC-MEDIA-AUDIT-2");
+  assert.equal(chained.receipt.authorized_delta.corrected_bindings, 5);
+  assert.equal(chained.receipt.authorized_delta.complete_pairs_removed, 3);
+  assert.equal(chained.receipt.authorized_delta.missing_both_added, 2);
+  assert.equal(chained.receipt.authorized_delta.missing_sides_added, 5);
+  assert.deepEqual(chained.receipt.previous_baseline, baselineV2);
+  assert.equal(chained.baseline.minimum_complete_pair_ratio, 0.17);
+  assert.equal(chained.baseline.maximum_missing_both_ratio, 0.33);
+  assert.equal(chained.baseline.minimum_known_maker_ratio, baselineV1.minimum_known_maker_ratio);
+  assert.equal(chained.baseline.minimum_claim_evidence_ratio, baselineV1.minimum_claim_evidence_ratio);
+  assert.match(chained.baseline.reset_reason, /after 5 proven-wrong/);
+  const baselineV3 = JSON.parse(await readFile(path.join(root, "data", "quality-baseline.json"), "utf8"));
+  assert.deepEqual(baselineV3, chained.baseline);
+  chainedQuality.baseline = baselineV3;
+  await writeFile(path.join(root, "data", "quality.json"), json(chainedQuality));
+  const validatedV3 = await validateQualityBaselineCustody({ root });
+  assert.equal(validatedV3.mode, "receipted-v3");
+  assert.deepEqual(validatedV3.lineage, ["COLLECT-001", "UC-MEDIA-AUDIT-2"]);
+
+  // The earlier link stays load-bearing: tampering with the v2 receipt breaks the v3 chain.
+  const receiptV2Path = path.join(root, "data", "review", "estate-debt", "COLLECT-001-QUALITY-BASELINE-RESET.json");
+  const receiptV2Bytes = await readFile(receiptV2Path);
+  const receiptV2 = JSON.parse(receiptV2Bytes.toString("utf8"));
+  receiptV2.authorized_delta.corrected_bindings = 60;
+  await writeFile(receiptV2Path, json(receiptV2));
+  await assert.rejects(() => validateQualityBaselineCustody({ root }), /requires exactly 60 collected|does not reconcile to 60/);
+  await writeFile(receiptV2Path, receiptV2Bytes);
+  await validateQualityBaselineCustody({ root });
+
+  console.log("PASS — zero-margin quality reset, exact 61-binding delta, unchanged non-media floors, future improvement, future regression, receipt tamper rejection, and a chained second reset with verified lineage");
 } finally {
   await rm(root, { recursive: true, force: true });
 }
