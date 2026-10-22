@@ -37,7 +37,7 @@ data/
   search/             prefix-sharded inverted token index for future-scale clients
   dataset.jsonld      Schema.org Dataset discovery metadata
   quality.json        generated completeness/evidence metrics with non-regression floors
-  specimens.json      the CANONICAL roster (verified cards and counting) — edit this
+  specimens.json      the CANONICAL roster; image reviews and claim references vary — edit this
   index.json + shards/ generated serving projections, rebuilt by scripts/shard.mjs
   media-manifest.json / media-live.json  images on GitHub Releases (see MEDIA.md)
   SOURCES.json        the provenance ledger — every asset, its origin and kind

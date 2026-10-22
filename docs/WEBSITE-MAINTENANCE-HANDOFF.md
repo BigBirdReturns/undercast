@@ -1,51 +1,50 @@
 # Website maintenance handoff
 
-## 2026-10-22: visible evidence and first retirement batch
+## 2026-10-22: published repairs, reviewed retirement and preservation
 
-The current product correction is PR #976, based on merged media correction
-#975. It exposes exact-image review separately from claim references, repairs
-card clipping and focus, restores DEC-0013 light-first theme behavior, publishes
-`og.png`, supplies correction/rights intake, pauses five daily schedules and
-removes the obsolete privileged DEC-0016 transaction. Product commit:
-`3b649191d689a835df8ba744187438285639b799`; attached visual review:
-`data/review/visible-evidence-20261022/README.md`.
+The evidence/UX correction shipped in #976; the first removal batch shipped in
+#977. Real-network desktop/mobile and no-JavaScript checks accepted the public
+product: separate image-review states and claim-reference counts, unclipped
+fronts, a stable performer header, working correction/rights intake, the public
+1200×630 preview and DEC-0013 light-first behavior. The tested website payload is
+`dc20165c108fa45460cbcea1d589df3a9314d5c39c1ee71cfc597ae8c92852d6`.
+Screenshots: `data/review/visible-evidence-20261022/README.md`.
 
-The first reviewed retirement batch removes 331 Clifford Number research,
-schema, script and fixture files, plus nine workflows explicitly named retired.
-The dependency scan found no live website or gate dependency on those files;
-the only live textual reference was a publication-denial fixture, whose synthetic
-private path is now project-neutral. The whole canonical gate remains the
-acceptance boundary. No specimen, claim, image binding or historical cycle receipt
-is deleted or re-adjudicated. Actual performers and characters named Clifford
-remain in the corpus. Nothing in the separate Clifford Number project is changed.
+The reviewed retirement removed 331 unrelated Clifford Number files and nine
+explicitly retired workflows. Five daily schedules and the obsolete privileged
+DEC-0016 trigger are gone. Eleven consumed execution PRs (#965, #964, #956, #955,
+#954, #953, #948, #940, #939, #848, #562) were closed against their retained
+successor or rejection evidence. Six surviving heads were removed with exact
+expected-head checks; five were already absent. All eleven heads remain in
+`refs/archive/20261022/pr-NNN` and verified incremental recovery bundles on W03
+and N01. Their canonical-history prerequisites remain retained. Other research
+PRs/branches and historical cycle receipts remain outside this removal batch.
+The separate Clifford project and genuine performers named Clifford are untouched.
 
-The first cleanup gate exposed a separate local runtime defect: npm 9.2.0
-`ci --dry-run` deleted the installed browser-test dependencies. The same real
-command reproduced the deletion in a disposable probe. The existing lockfile
-step now checks exact copied manifests in a temporary directory; real-npm
-fixtures cover dependency preservation and invalid-lock refusal. No gate step is
-skipped and no package version is changed.
+The full 27-step gate passed for the product and cleanup. The cleanup exposed
+npm 9.2.0 deleting installed dependencies during `ci --dry-run`; the existing
+lockfile check now runs against copied manifests in a temporary directory, with
+real-npm preservation/refusal fixtures. No gate category was skipped.
 
-Seven consumed execution PRs (#965, #964, #956, #955, #954, #953, #948) were
-closed without merge on 2026-10-22 with per-PR successor/rejection proof. Their
-branches remain retained pending reachability review.
+The requested preservation export first failed in run 39845087585 on 50 blocked
+Wikizilla revisions. #979 repaired the existing collector to reuse exact verified
+prior bytes. Run 39847678813 then completed: 15,475 source revisions, 15,176
+retained hash matches and 299 fresh exact revisions, plus a restorable repository
+snapshot. Release `preservation-20261022-871d2fa58404` was downloaded back and all
+published assets matched their SHA-256 and byte counts. Its 413,911,040-byte public
+bundle is also independently stored and read-back verified on N01 at
+`/srv/backup/undercast/preservation-20261022/`; the provider is explicitly
+`estate-n01-local`. This protects the current snapshot against GitHub loss; it is
+a same-site estate copy, not a claim of a second geographically offsite provider.
+The historical Google Drive originals receipt and no-history-rewrite guard remain
+unchanged. The current provider receipt lives in `preservation/SNAPSHOTS.json`.
 
-All removed bytes remain recoverable in Git at
-`f4d3fd1f4149dfc0f65156531afd870c895dad8a`. Retained cycle receipts are historical
-evidence, not authority to restart an old workflow. Current CI, media rejection,
-publication and preservation machinery remain. Broader cycle-checker retirement
-and unmerged research branches require their own dependency/custody review.
+All 1,368 canonical records, SOURCES.json, MEDIA-AUDIT.json and release-1.0.json
+remain unchanged from merged #975. Image and prose verification debt remains
+visible and unresolved where evidence is missing. No growth cycle was started;
+any resumption requires a real named driver and one bounded reviewed cycle.
 
-Merge, CI, preservation and live deployment are observed separately; inspect the
-current repository and `release.json` instead of treating this handoff as proof.
-The older checkpoints below explain lineage, not present operating state.
-
-
-**Original checkpoint:** 2026-07-25 on `agent/sitewide-truth-maintenance-handoff`
-
-**Current successor:** `agent/estate-consolidation-001` / PR #132
-
-**Replay status:** The ownership boundary and integration law are retained. The original checkpoint counts, generated data, and implementation bytes are historical evidence and must not be treated as current state. Surviving changes are replayed semantically onto current `main` and revalidated there.
+The older checkpoints below explain lineage, not current operating state.
 
 ## Ownership split
 

@@ -64,6 +64,22 @@ source. Wayback or another web archive may be added as a secondary location.
 - `.github/workflows/preserve.yml` — bounded export, verification, release,
   artifact, certification, and receipt workflow.
 
+## Current independently replicated snapshot (2026-10-22)
+
+`preservation-20261022-871d2fa58404` contains 15,475 exact source revisions and a
+restorable repository snapshot. Export run 39847678813 completed, and a separate
+release readback verified every published asset. The 413,911,040-byte public
+bundle has SHA-256
+`5a561357e7b7c9cf05a67c771ec733a8e1f7e3d8e5d44eaf72b1d60c5991d8b4`.
+
+The independently verified copy outside GitHub is receipted as
+`estate-n01-local`, at
+`OCTO-N01:/srv/backup/undercast/preservation-20261022/undercast-public-preservation-20261022-871d2fa58404.tar`.
+N01 verified the transferred bundle and each enclosed release asset. This is a
+same-site estate copy that addresses GitHub loss, not an assertion of geographic
+offsite separation. The previously verified Google Drive originals copy below
+remains unchanged. No originals or history were rewritten.
+
 ## Completed rescue snapshot
 
 Snapshot `preservation-20260721-3bbec746c478` closes the immediate supplier and
