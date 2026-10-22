@@ -2,7 +2,7 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
   collapseSourceObservations,
@@ -99,7 +99,7 @@ try {
   await writeFile(preload,'globalThis.fetch=()=>{throw new Error("unexpected network request in retained-source replay");};');
   const output=join(reuseRoot,'output');
   const script=fileURLToPath(new URL('./preserve-sources.mjs',import.meta.url));
-  const replay=spawnSync(process.execPath,['--import',preload,script,output,'--manifest',manifest,'--coverage',coverage,'--scopes',scopes,'--reuse-bag',bag],{encoding:'utf8'});
+  const replay=spawnSync(process.execPath,['--import',pathToFileURL(preload).href,script,output,'--manifest',manifest,'--coverage',coverage,'--scopes',scopes,'--reuse-bag',bag],{encoding:'utf8'});
   expect('real source-capture CLI succeeds with all networking disabled',replay.status,0);
   if(replay.status!==0)console.error(replay.stderr);
   else {
