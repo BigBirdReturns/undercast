@@ -1,5 +1,46 @@
 # Website maintenance handoff
 
+## 2026-10-22: visible evidence and first retirement batch
+
+The current product correction is PR #976, based on merged media correction
+#975. It exposes exact-image review separately from claim references, repairs
+card clipping and focus, restores DEC-0013 light-first theme behavior, publishes
+`og.png`, supplies correction/rights intake, pauses five daily schedules and
+removes the obsolete privileged DEC-0016 transaction. Product commit:
+`3b649191d689a835df8ba744187438285639b799`; attached visual review:
+`data/review/visible-evidence-20261022/README.md`.
+
+The first reviewed retirement batch removes 331 Clifford Number research,
+schema, script and fixture files, plus nine workflows explicitly named retired.
+The dependency scan found no live website or gate dependency on those files;
+the only live textual reference was a publication-denial fixture, whose synthetic
+private path is now project-neutral. The whole canonical gate remains the
+acceptance boundary. No specimen, claim, image binding or historical cycle receipt
+is deleted or re-adjudicated. Actual performers and characters named Clifford
+remain in the corpus. Nothing in the separate Clifford Number project is changed.
+
+The first cleanup gate exposed a separate local runtime defect: npm 9.2.0
+`ci --dry-run` deleted the installed browser-test dependencies. The same real
+command reproduced the deletion in a disposable probe. The existing lockfile
+step now checks exact copied manifests in a temporary directory; real-npm
+fixtures cover dependency preservation and invalid-lock refusal. No gate step is
+skipped and no package version is changed.
+
+Seven consumed execution PRs (#965, #964, #956, #955, #954, #953, #948) were
+closed without merge on 2026-10-22 with per-PR successor/rejection proof. Their
+branches remain retained pending reachability review.
+
+All removed bytes remain recoverable in Git at
+`f4d3fd1f4149dfc0f65156531afd870c895dad8a`. Retained cycle receipts are historical
+evidence, not authority to restart an old workflow. Current CI, media rejection,
+publication and preservation machinery remain. Broader cycle-checker retirement
+and unmerged research branches require their own dependency/custody review.
+
+Merge, CI, preservation and live deployment are observed separately; inspect the
+current repository and `release.json` instead of treating this handoff as proof.
+The older checkpoints below explain lineage, not present operating state.
+
+
 **Original checkpoint:** 2026-07-25 on `agent/sitewide-truth-maintenance-handoff`
 
 **Current successor:** `agent/estate-consolidation-001` / PR #132

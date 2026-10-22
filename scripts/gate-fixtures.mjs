@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { runCommand, assertRouteCount, expectedRouteCount, listSteps, selectSteps } from "./gate.mjs";
+import { runLockfileCheck, runCommand, assertRouteCount, expectedRouteCount, listSteps, selectSteps } from "./gate.mjs";
 
 let failures = 0;
 function pass(label) { console.log(`PASS ${label}`); }
@@ -52,6 +52,23 @@ try {
   runGit(["commit", "-m", "base"]);
   await writeFile(fixture, "changed\n");
   expectThrows("dirty working tree is observable", () => runCommand("drift", "git", ["diff", "--exit-code"], { cwd: driftRoot, stdio: "pipe" }), /failed with code/);
+
+  const lockRoot = path.join(temp, "lockfile check with spaces");
+  await mkdir(path.join(lockRoot, "node_modules"), { recursive: true });
+  const lockPackage = { name: "undercast-lockfile-fixture", version: "1.0.0", private: true };
+  await writeFile(path.join(lockRoot, "package.json"), JSON.stringify(lockPackage));
+  await writeFile(path.join(lockRoot, "package-lock.json"), JSON.stringify({
+    name: lockPackage.name, version: lockPackage.version, lockfileVersion: 3,
+    packages: { "": { name: lockPackage.name, version: lockPackage.version } },
+  }));
+  const dependencySentinel = path.join(lockRoot, "node_modules", "keep.txt");
+  await writeFile(dependencySentinel, "installed dependency stays intact");
+  await runLockfileCheck(lockRoot);
+  expect("real npm lockfile dry run preserves installed dependencies", await readFile(dependencySentinel, "utf8"), "installed dependency stays intact");
+  await writeFile(path.join(lockRoot, "package-lock.json"), "{");
+  let invalidLockRefused = false;
+  try { await runLockfileCheck(lockRoot); } catch { invalidLockRefused = true; }
+  expect("isolated lockfile check still rejects an invalid lock", invalidLockRefused, true);
 
   const steps = listSteps();
   expect("canonical gate has one media-audit step", steps.filter((step) => step.id === "media-audit").length, 1);
