@@ -372,3 +372,24 @@ This is an implementation record, not a quotation or invented human approval.
 
 Synthetic portraits, generative restoration and new roster entries are outside this
 release. DEC-0001/0005, no-JavaScript records, attribution and paused schedules remain.
+
+
+## DEC-0020 — Catalog-wide source-photo quality maintenance
+
+**Status:** Implemented on this branch; effective on merge.
+**Authority:** owner direction on 2026-10-23: “do it for every listing in the database.”
+
+Extend DEC-0019's existing source-acquisition, conventional preparation, framing,
+and explicit agent-review process across the 1,368 current records. Preserve the
+character-first reveal, record identities, credits and prose; keep unresolved
+source gaps explicit. Image resemblance and matching names alone confer no identity.
+Documentary source corrections retain previous assets and rejection rules.
+
+The all-record assessment distinguishes source acquisition, reviewed presentation
+changes, retained images, removed invalid bindings and unresolved source review.
+It is not a whole-catalog identity certificate or a claim of exhaustive source search.
+Preparation custody and offline replay cover both the existing Klingon batch and
+the new catalog batch. Identical source bytes may be copied unchanged without
+calling them restored or upscaled. No new scheduler, service, roster growth or
+generative reconstruction is introduced. Complete release gates and real-photo
+desktop/mobile readback remain required before delivery.

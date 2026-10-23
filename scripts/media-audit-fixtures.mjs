@@ -139,3 +139,18 @@ console.log("PASS — media audit consensus, authority, staleness, absence, trac
   records.get('B').actor='Other Performer';assert.equal(documentedPortraitReuse(['A:portrait','B:portrait'],records),false);
   records.get('B').actor='Same Performer';records.get('B').portrait.origin='https://example.test/other';assert.equal(documentedPortraitReuse(['A:portrait','B:portrait'],records),false);
 }
+
+// A shared romanized name cannot override an explicit source disambiguation.
+{
+ const {readFileSync}=await import('node:fs');
+ const rejected=JSON.parse(readFileSync('data/review/catalog-photo-quality/rejected-candidates.json','utf8'));
+ assert(rejected.some(row=>row.id==='UC-912'&&row.reason.includes('高橋洋樹')));
+ const records=JSON.parse(readFileSync('data/specimens.json','utf8'));
+ assert.equal(records.find(row=>row.id==='UC-912').portrait,null);
+ const assessment=JSON.parse(readFileSync('data/review/catalog-photo-quality/assessment.json','utf8'));
+ assert.equal(assessment.records,records.length);
+ assert.equal(assessment.records_reviewed.length,records.length);
+ assert.equal(new Set(assessment.records_reviewed.map(row=>row.id)).size,records.length);
+ assert.equal(assessment.available_images_visually_triaged,1952);
+ for(const row of assessment.records_reviewed)assert.deepEqual(Object.keys(row.sides).sort(),['portrait','still']);
+}
