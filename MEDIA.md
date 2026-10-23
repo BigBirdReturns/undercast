@@ -234,7 +234,9 @@ alternative public reveal or a substitute for actual-site acceptance.
 ### Interrupted staging
 
 Staging now prepares and validates the complete candidate in a disposable Git
-worktree before changing the requested checkout. A failed acquisition, audit or
+worktree beside the explicit run directory before changing the requested checkout.
+Temporary promotion objects are removed after successful validation; retained
+source originals and recipes stay in canonical custody. A failed acquisition, audit or
 projection leaves that checkout untouched. Promotion retains an exact per-file
 predecessor/successor journal under the checkout-specific Git directory before
 writing any canonical file. An interrupted promotion resumes only when HEAD,

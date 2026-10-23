@@ -63,7 +63,7 @@ export async function promotePhotoStage({root,run,prepare,validate,hooks={}}){
  }else{
   assert.equal(git(root,'status','--porcelain','--untracked-files=all'),'','stage requires a clean isolated checkout');
   const head=git(root,'rev-parse','HEAD');
-  const parent=fs.mkdtempSync(path.join(os.tmpdir(),'undercast-photo-stage-')),tree=path.join(parent,'tree');
+  const parent=fs.mkdtempSync(path.join(path.dirname(run),'undercast-photo-stage-')),tree=path.join(parent,'tree');
   const requestedInputs=inputs(run);
   let added=false;
   try{
@@ -123,6 +123,7 @@ export async function promotePhotoStage({root,run,prepare,validate,hooks={}}){
  // Success is recorded only after current-tree audit and projection validation.
  save(photoPath(run,'staged.json'),txn.result);
  fs.unlinkSync(journal);
+ fs.rmSync(gitPath(root,'photo-maintenance-objects'),{recursive:true,force:true});
  return txn.result;
 }
 
