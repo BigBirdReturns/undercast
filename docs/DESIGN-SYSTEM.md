@@ -65,6 +65,10 @@ Release builds use the verified local WOFF2 subsets declared by
 - Do not re-introduce the retired `comparison` field or any `--compare-*` /
   `transform: scale()` alignment hack. The flip needs no per-pair matching.
 
+- Under DEC-0019, optional `image.fit=contain` preserves a complete sourced photograph
+  when cover would cut through its subject. Prepared assets expose an image-preparation
+  disclosure and retain their original source; synthetic detail is never inferred.
+
 ## 4. Character vs performer presentation — DEC-0005 / DEC-0006 / DEC-0007
 
 - **The default opening is not dominated by performer imagery**; character imagery

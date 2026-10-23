@@ -58,6 +58,7 @@ export function roleWeight(role) {
 export function validateVote(vote, item = null) {
   if (!vote || typeof vote !== "object" || Array.isArray(vote)) throw new Error("media-audit vote must be an object");
   if (!/^[a-zA-Z0-9._-]{2,64}$/.test(vote.reviewer || "")) throw new Error("media-audit vote needs a safe reviewer id");
+  if (vote.reviewer_kind !== undefined && !["agent", "human", "machine"].includes(vote.reviewer_kind)) throw new Error("unsupported reviewer kind");
   if (!REVIEWER_ROLES[vote.role]) throw new Error(`media-audit vote has unknown role ${vote.role}`);
   if (!["identity", "presentation"].includes(vote.namespace)) throw new Error(`media-audit vote has unknown namespace ${vote.namespace}`);
   const allowed = vote.namespace === "presentation" && item ? CLAIM_VALUES[item.side] : CLAIM_VALUES[vote.namespace];
@@ -90,7 +91,7 @@ export function consensus(votes, namespace, side) {
     const group = groups.get(vote.value);
     group.support += roleWeight(vote.role);
     group.reviewers.add(vote.reviewer);
-    if (vote.role !== "machine") group.human.add(vote.reviewer);
+    if (vote.reviewer_kind === "human" || (vote.reviewer_kind === undefined && vote.role !== "machine")) group.human.add(vote.reviewer);
     if (vote.enforced === true) group.enforced.push(vote);
   }
   const rows = [...groups.values()].sort((a, b) => b.support - a.support || b.reviewers.size - a.reviewers.size || a.value.localeCompare(b.value));
@@ -205,6 +206,7 @@ export function applyVotes(state, votes, { now = new Date().toISOString() } = {}
     const vote = {
       reviewer: input.reviewer,
       role: input.role,
+      ...(input.reviewer_kind ? { reviewer_kind: input.reviewer_kind } : {}),
       namespace: input.namespace,
       value: input.value,
       note: String(input.note || "").trim(),
@@ -229,6 +231,7 @@ export function applyVotes(state, votes, { now = new Date().toISOString() } = {}
       asset_sha256: item.asset.sha256,
       reviewer: vote.reviewer,
       role: vote.role,
+      ...(vote.reviewer_kind ? { reviewer_kind: vote.reviewer_kind } : {}),
       namespace: vote.namespace,
       value: vote.value,
       note: vote.note,

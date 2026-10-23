@@ -112,3 +112,14 @@ the prior history.
 ## Reviewed baseline campaigns
 
 A full-scope campaign may apply many rulings only through `npm run media:audit:campaign -- --input data/review/<campaign>.json`. The campaign must cover every current open facet exactly once, bind every ruling to the current asset and item-set hashes, cite a retained source receipt, and carry second-desk or owner authority. Wrong or ambiguous media is nulled from both canonical mirrors while immutable bytes and former objects remain in `data/journal/media-remediation.jsonl`. Positive identity decisions require revision-bound source metadata and may never be inferred from appearance. All canonical mirrors and journals commit as one rollback-capable transaction.
+
+## Explicit review actor type
+
+New delegated agent rulings carry `reviewer_kind: "agent"` through the existing
+resolution command and journal. They contribute zero to `human_reviewers`; an
+explicit source-supported ruling remains distinguishable as `enforced`, not a
+human quorum. DEC-0019 authorizes the bounded Klingon source-file rulings, whose
+identity evidence is retained metadata and whose presentation review is separate.
+Do not derive a person's identity from facial resemblance. Legacy untyped votes
+retain their historical calculation and are not retroactively described as human
+inspection by this change.

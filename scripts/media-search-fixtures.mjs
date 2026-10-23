@@ -19,8 +19,8 @@ const deferred=buildMediaPlan({specimens,sources:[],auditItems:[],attempts,now:"
 
 const document=JSON.parse(readFileSync("data/MEDIA-REJECTIONS.json","utf8"));
 validateMediaRejections(document);
-assert.equal(document.rules.length,240);
-assert.deepEqual(document.denominator,{rules:240,collect_001:71,uc_media_audit_1:73,uc_media_audit_2:96});
+assert.equal(document.rules.length,242);
+assert.deepEqual(document.denominator,{rules:242,collect_001:71,uc_media_audit_1:73,uc_media_audit_2:96,klingon_photo_quality:2});
 assert.equal(document.rules.filter(row=>row.decision==="UC-MEDIA-AUDIT-2").length,96);
 for(const ledger of document.source_ledgers)assert.equal(digest(ledger.path),ledger.sha256,`${ledger.path} evidence hash drift`);
 const rejectionIndex=indexMediaRejections(document);
