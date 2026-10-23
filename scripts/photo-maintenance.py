@@ -237,7 +237,7 @@ def collect(args):
                 names += [x['title'] for x in page.get('images',[])]
                 for name in dict.fromkeys(names):
                     if re.search(r'\.(?:jpe?g|png|webp|gif)$',name,re.I) and not re.search(r'(?:logo|signature|flag_of|icon)',name,re.I):pool.append((api,'File:'+name.strip().removeprefix('[[File:').removeprefix('File:'),doc))
-            except (ValueError,RuntimeError,ue.URLError) as e: errors.append({'api':api,'title':title,'error':str(e)})
+            except (ValueError,RuntimeError,ue.URLError,OSError) as e: errors.append({'api':api,'title':title,'error':str(e)})
         seen=set(); accepted=[]
         for api,title,parent_doc in pool:
             if len(accepted)>=p['max_candidates']:break

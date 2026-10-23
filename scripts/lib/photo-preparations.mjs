@@ -25,6 +25,19 @@ export function preparationRows(root){
   return doc.changes.map(row=>({...row,ledger}));
  });
 }
+export function validateBatchReviews(document,source,display){
+ assert.equal(source.run_id,document.run_id);assert.equal(display.run_id,document.run_id);
+ for(const review of [source,display]){assert.equal(review.reviewer_kind,'agent');assert(review.reviewer?.trim().length>=3,'explicit retained reviewer required');}
+ for(const row of document.changes){
+  const chosen=source.selections.filter(s=>s.candidate_key===row.candidate_key&&s.action==='select');
+  assert.equal(chosen.length,1,'prepared image lacks one exact source selection');assert.equal(chosen[0].id,row.id);assert.equal(chosen[0].side,row.side);
+  assert.deepEqual(row.source_review,chosen[0],'retained source decision differs from prepared image');
+  assert.equal(row.candidate_key,fingerprint(Object.fromEntries(['id','side','record_sha256','source_sha256','origin'].map(k=>[k,row[k]]))),'prepared source identity drift');
+  const approved=display.decisions.filter(d=>d.candidate_key===row.candidate_key&&d.decision==='approve');
+  assert.equal(approved.length,1,'prepared image lacks one exact display approval');assert.equal(approved[0].display_sha256,row.display_sha256);assert.equal(approved[0].recipe_sha256,fingerprint(row.operations),'approved recipe changed');
+  assert(approved[0].note?.trim().length>=12,'display judgment missing');
+ }
+}
 export function preparationInputs(root){
  const index=preparationIndex(root),files=new Set([PHOTO_INDEX,...index.ledgers]);
  for(const ledger of index.ledgers){
@@ -36,6 +49,7 @@ export function preparationInputs(root){
    const r=doc[key];assert(r&&r.path&&r.sha256,'review binding missing');
    assert.equal(textDigest(fs.readFileSync(photoPath(root,r.path))),r.sha256,'review bytes changed');files.add(r.path);
   }
+  validateBatchReviews(doc,JSON.parse(fs.readFileSync(photoPath(root,doc.source_review.path))),JSON.parse(fs.readFileSync(photoPath(root,doc.display_review.path))));
   const prefix=path.posix.dirname(ledger)+'/';
   for(const row of doc.changes){
    assert(row.source_path.startsWith(prefix+'source-bytes/'),'parent outside owned batch');files.add(row.source_path);

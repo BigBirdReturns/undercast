@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import {digest,fingerprint,photoPath,preparationIndex} from './lib/photo-preparations.mjs';
+import {digest,fingerprint,photoPath,preparationIndex,validateBatchReviews} from './lib/photo-preparations.mjs';
 import {validateReview,stage} from './lib/photo-maintenance.mjs';
 import {execFileSync} from 'node:child_process';
 import {indexMediaRejections} from './lib/media-rejections.mjs';
@@ -55,5 +55,13 @@ try{
  const lock=path.join(locked,'.git','photo-maintenance.lock');fs.writeFileSync(lock,'active fixture writer');
  await assert.rejects(()=>stage(['--root',locked,'--run',temp]),/writer already holds/);count++;console.log('PASS competing staging writer is refused');
  fs.unlinkSync(lock);await assert.rejects(()=>stage(['--root',locked,'--run',temp]));assert.equal(fs.existsSync(lock),false);count++;console.log('PASS failed staging releases its own writer lock');
+ const registry=JSON.parse(fs.readFileSync('data/PHOTO-PREPARATIONS.json'));
+ const batch=registry.ledgers.map(p=>JSON.parse(fs.readFileSync(p))).find(d=>d.version===2);
+ assert(batch,'real retained batch required');
+ const retainedSource=JSON.parse(fs.readFileSync(batch.source_review.path)),retainedDisplay=JSON.parse(fs.readFileSync(batch.display_review.path));
+ test('real retained batch has exact source and display approvals',()=>validateBatchReviews(batch,retainedSource,retainedDisplay));
+ test('publication refuses an unapproved prepared display',()=>{const bad=structuredClone(retainedDisplay);bad.decisions[0].decision='pending';assert.throws(()=>validateBatchReviews(batch,retainedSource,bad));});
+ test('publication refuses a changed recipe even if source bytes remain intact',()=>{const bad=structuredClone(batch);bad.changes[0].operations=[{operation:'identity-copy'}];assert.throws(()=>validateBatchReviews(bad,retainedSource,retainedDisplay));});
+ test('publication refuses a prepared row whose source selection was removed',()=>{const bad=structuredClone(retainedSource);bad.selections=bad.selections.filter(s=>s.action!=='select');assert.throws(()=>validateBatchReviews(batch,bad,retainedDisplay));});
  console.log(`photo workflow fixtures: PASS ${count}; no network, model calls or canonical writes`);
 }finally{fs.rmSync(temp,{recursive:true,force:true});}
