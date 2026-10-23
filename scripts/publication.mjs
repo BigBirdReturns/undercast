@@ -8,6 +8,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { sha256, stableJson } from './lib/preservation.mjs';
 import { routeIds, assertRoutes } from './publication-routes.mjs';
+import { verifySocialPreview } from './build-social-preview.mjs';
+import { validateWebsiteProfile, configureWebsite } from './lib/website-profile.mjs';
 import { validateMediaRejections } from './lib/media-rejections.mjs';
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -84,6 +86,10 @@ const EXTRA = [
 // artifact paths. This binds exact-subject rejection mechanics to the tested
 // commit while preserving private review evidence outside the Pages payload.
 export const PRIVATE_RELEASE_INPUTS = [
+  'assets/social-preview.html', 'assets/social-preview.json',
+  'scripts/build-social-preview.mjs',
+  'config/sites/production.json',
+  'scripts/lib/website-profile.mjs',
   'data/MEDIA-REJECTIONS.json',
   'data/review/estate-debt/UC-1.0-INTEGRATION-20260912.json',
   'scripts/lib/media-rejections.mjs',
@@ -224,6 +230,8 @@ export function inventory(root = ROOT) {
   add('data/archive.json');
   const archive = json(root, 'data/archive.json');
   assert.equal(archive.canonical_url, 'https://bigbirdreturns.github.io/undercast/');
+  const productionProfile = validateWebsiteProfile(json(root, 'config/sites/production.json'));
+  assert.equal(productionProfile.base_url, archive.canonical_url, 'production profile must use the authorized deployment URL');
   const traverse = value => {
     if (!value || typeof value !== 'object') return;
     if (value.path && value.sha256) add(value.path, value);
@@ -240,6 +248,7 @@ export function inventory(root = ROOT) {
   for (const row of json(root, 'data/search/manifest.json').shards) add(row.file, row);
   for (const file of [...EXTRA, ...EVIDENCE]) add(file);
   validateFontAssets(root, files);
+  verifySocialPreview(root);
   // Refuse newly introduced evidence citations until their exact public closure is reviewed.
   for (const [file, bytes] of files) {
     if (!TEXT.test(file)) continue;
@@ -373,8 +382,11 @@ export function build(root = ROOT, output = path.join(root, '.ci/site')) {
     assert.equal(result.status, 0, `record build failed: ${result.error?.message || result.status}`);
     fs.rmSync(path.join(stage, 'scripts'), { recursive: true });
     assertRoutes({ recordsRoot: path.join(stage, 'records'), specimensPath: path.join(stage, 'data/specimens.json'), tombstonesPath: path.join(stage, 'data/tombstones.json') });
+    const baseFiles = new Map(payloadManifest(stage).map(row => [row.path, read(stage, row.path, false)]));
+    const configured = configureWebsite(baseFiles, json(root, 'config/sites/production.json'), {input_sha256:sha256(stableJson(source.inputs)),media_sha256:sha256(stableJson(source.media))}, {preview:false});
+    for (const [file,bytes] of configured.files) write(stage,file,bytes);
     const payload = payloadManifest(stage);
-    const expected = [...source.files.keys(), ...source.ids.map(id => `records/${id}/index.html`)].sort();
+    const expected = [...source.files.keys(), ...source.ids.map(id => `records/${id}/index.html`), 'assets/website-profile.css', 'website-profile.json'].sort();
     assert.deepEqual(payload.map(row => row.path), expected, 'artifact path set drifted');
     verifyLinks(stage, payload, source.ids);
     const identity = { version: 1, input_sha256: sha256(stableJson(source.inputs)), media_sha256: sha256(stableJson(source.media)), payload_sha256: sha256(stableJson(payload)), inputs: source.inputs, media: source.media, payload };

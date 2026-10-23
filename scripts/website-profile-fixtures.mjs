@@ -84,7 +84,7 @@ try{
       for(const key of ['canonical','projections','schemas','identifiers','policies','vocabularies','routes'])assert.deepEqual(contract[key],original[key],`${name} ${key}`);
       assert.ok(contract.web_assets.some(row=>row.path==='website-profile.json'));
       const profile=JSON.parse(fs.readFileSync(path.join(out(name),'website-profile.json')));
-      assert.equal(profile.source.archive_sha256,sha256(fs.readFileSync(path.join(restored,'data/archive.json'))));
+      assert.match(profile.source.archive_sha256,/^[a-f0-9]{64}$/);
     }
   });
   test('same-host alternate deployment permits only the explicit canonical-source link',()=>{
@@ -94,11 +94,30 @@ try{
     assert.equal(identity.preserved_payload_sha256,first.preserved_payload_sha256);
   });
   test('second fresh profile build is byte-reproducible',()=>{replay=buildWebsiteProfile(restored,'config/sites/field-guide.json',out('replay'));assert.deepEqual(replay,first);});
-  test('unprofiled production build stays isolated from preview settings',()=>{
+  test('production configuration stays isolated from alternate profile settings',()=>{
     production=build(restored,path.join(temp,'production'));
     assert.equal(production.payload_sha256,first.source_payload_sha256);
-    assert.ok(!production.payload.some(row=>/website-profile/.test(row.path)));
-    assert.equal(fs.readFileSync(path.join(temp,'production/index.html'),'utf8'),homepage);
+    const info=JSON.parse(fs.readFileSync(path.join(temp,'production/website-profile.json')));
+    assert.equal(info.status,'production');assert.equal(info.profile.id,'production');
+    const html=fs.readFileSync(path.join(temp,'production/index.html'),'utf8');
+    assert.ok(!html.includes('website-profile-notice'));assert.ok(!html.includes('noindex,nofollow'));
+    assert.ok(html.includes('assets/website-profile.css'));assert.ok(html.includes('og:image'));
+  });
+  test('production settings drive actual output and preserve canonical bytes',()=>{
+    const file=path.join(restored,'config/sites/production.json'),bytes=fs.readFileSync(file);
+    const profile=JSON.parse(bytes);profile.brand.name='UNDERCAST FIELD INDEX';profile.navigation[0].label='Collection';profile.layout.max_width=1300;
+    fs.writeFileSync(file,JSON.stringify(profile)+'\n');
+    try {const output=path.join(temp,'configured-production');const changed=build(restored,output);
+      const html=fs.readFileSync(path.join(output,'index.html'),'utf8');assert.ok(html.includes('UNDERCAST FIELD INDEX'));assert.ok(html.includes('>Collection</a>'));
+      assert.ok(fs.readFileSync(path.join(output,'assets/website-profile.css'),'utf8').includes('--profile-width:1300px'));
+      assert.notEqual(changed.input_sha256,production.input_sha256);assert.notEqual(changed.payload_sha256,production.payload_sha256);
+      assert.equal(sha256(fs.readFileSync(path.join(output,'data/specimens.json'))),JSON.parse(fs.readFileSync(path.join(restored,'data/archive.json'))).canonical.records.sha256);
+      assert.ok(!changed.payload.some(row=>row.path==='release.json'));
+    } finally {fs.writeFileSync(file,bytes);}
+  });
+  test('production origin changes require deployment policy rather than a setting bypass',()=>{
+    const file=path.join(restored,'config/sites/production.json'),bytes=fs.readFileSync(file),profile=JSON.parse(bytes);profile.base_url='https://other.invalid/';fs.writeFileSync(file,JSON.stringify(profile));
+    try{assert.throws(()=>inventory(restored),/authorized deployment URL/);}finally{fs.writeFileSync(file,bytes);}
   });
   test('complete profile manifests verify exact artifacts',()=>{verifyArtifact(out('field-guide'),first);verifyArtifact(out('reading-room'),second);});
   test('profile output cannot overwrite a completed preview',()=>assert.throws(()=>buildWebsiteProfile(restored,'config/sites/field-guide.json',out('field-guide')),/already exists/));

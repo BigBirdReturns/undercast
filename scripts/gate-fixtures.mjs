@@ -71,6 +71,7 @@ try {
   expect("isolated lockfile check still rejects an invalid lock", invalidLockRefused, true);
 
   const steps = listSteps();
+  expect("canonical gate includes configuration parity", steps.filter(step=>step.id==="website-profiles").length, 1);
   expect("canonical gate has one media-audit step", steps.filter((step) => step.id === "media-audit").length, 1);
   expect("canonical gate keeps rendered step explicit", steps.filter((step) => step.rendered).length, 1);
   expect("--from starts at exact step id", selectSteps({ from: "media-audit" })[0].id, "media-audit");
@@ -87,6 +88,8 @@ try {
     "scripts/gate.mjs",
     "scripts/publication-release.mjs",
     "scripts/publication.mjs",
+    "scripts/build-social-preview.mjs",
+    "scripts/lib/website-profile.mjs",
     "scripts/publication-routes.mjs",
     "scripts/lib/preservation.mjs",
     "scripts/lib/media-rejections.mjs",

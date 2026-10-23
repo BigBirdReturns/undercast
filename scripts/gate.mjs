@@ -97,6 +97,7 @@ async function runAutopilotSyncAssertion() {
 const stepDefinitions = [
   { id: "gate-fixtures", label: "Validate canonical gate fixtures", action: () => runNpmScript("Gate fixtures", "gate:fixtures") },
   { id: "publication-fixtures", label: "Validate isolated publication boundary", action: () => runNpmScript("Publication fixtures", "publication:fixtures") },
+  { id: "website-profiles", label: "Validate configuration and protected archive parity", action: () => runNpmScript("Website profiles", "profiles:fixtures") },
   { id: "lockfile", label: "Verify package-lock consistency", action: runLockfileCheck },
   { id: "projections", label: "Rebuild projection and refuse drift", action: runProjectedSteps },
   { id: "quality-baseline", label: "Validate truth-correction quality baseline custody", action: () => { runNodeScript("Quality baseline fixtures", "scripts/estate-quality-baseline-fixtures.mjs"); runNodeScript("Quality baseline custody", "scripts/estate-quality-baseline.mjs", ["--validate"]); } },

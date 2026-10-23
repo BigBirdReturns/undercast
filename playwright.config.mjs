@@ -33,6 +33,6 @@ export default defineConfig({
     command: "node scripts/build-record-pages.mjs && node scripts/serve-test.mjs",
     url: "http://127.0.0.1:4173/undercast/index.html",
     reuseExistingServer: !process.env.CI,
-    timeout: 15_000
+    timeout: 60_000
   }
 });

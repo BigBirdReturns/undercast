@@ -1,6 +1,10 @@
 # Deterministic build and Pages release
 
 `npm run build` verifies the admitted archive snapshot and compiles `.ci/site`.
+It applies `config/sites/production.json` through the shared website-profile
+renderer. Source HTML supplies base templates; artifact web hashes describe the
+configured output. Configuration and renderer are bound private release inputs.
+The rendered gate serves this compiled artifact, not the source templates.
 It reads the current contract, owning media declarations and canonical records;
 it does not retrieve, consult a model, use credentials, or rewrite source data.
 The existing record generator runs in a disposable isolated staging directory.

@@ -1,113 +1,116 @@
-# Website profiles: first presentation boundary
+# Website configuration
 
-## Status and authority
+## Production
 
-This is an isolated, reversible implementation of the owner's 2026-10-22 request
-to start the website-configuration work following the headless-readiness audit.
-It is a preview compiler over the existing archive, not a promoted redesign,
-new reveal, write API, new database, or completed public-interface milestone.
-DEC-0001, DEC-0005, DEC-0008, DEC-0010 and DEC-0012 remain in force. No canonical
-record/schema, roadmap state, review state, collection lease, schedule or Pages
-workflow is changed. The normal `build` and release commands remain unchanged.
+`config/sites/production.json` controls the released website's shared name,
+tagline, order and labels of its five existing primary destinations, maximum
+page width, minimum card width and spacing. `npm run build` applies that profile
+through the existing offline publication compiler. Source HTML is the retained
+base template, not an assertion that its unconfigured bytes are the deployment.
+The browser test server builds and serves the configured artifact.
 
-## Working entrypoints
+```sh
+npm ci
+npm run build
+# Output: .ci/site (must be absent before the command).
+npm run gate -- --release
+# Full release acceptance, clean checkout required; output: .ci/pages.
+```
 
-From a clean checkout with the existing exact dependencies installed:
+The production base must remain the admitted canonical GitHub Pages URL.
+An altered origin cannot silently take over the existing deployment. Only the
+complete release gate issues a `release.json`; `website-profile.json` documents
+configuration and input identity but grants no release authority.
+
+## Alternate views
 
 ```sh
 npm run build:profile -- --profile config/sites/field-guide.json
 npm run build:profile -- --profile config/sites/reading-room.json
 ```
 
-The outputs are `.ci/profiles/field-guide` and `.ci/profiles/reading-room`.
-Each output must be absent. `--out .ci/profiles/another-name` selects another
-fresh preview; output outside `.ci/profiles` is refused. The example domains
-end in `.invalid` and are not deployments. Serve each generated directory at the
-path in its profile: `/` for field-guide and `/research/collection/` for
-reading-room. The latter is deliberately nested to exercise relocation.
+Outputs are `.ci/profiles/field-guide` and `.ci/profiles/reading-room`. Each must
+be absent; `--out .ci/profiles/another-name` selects a fresh isolated location.
+The examples use `.invalid` origins and are not public deployments. Mount the
+first at `/` and the second at `/research/collection/`, as their profiles specify.
+Both retain all 1,368 records and the two retired routes. Source changes never
+occur during either compilation. The same pure renderer configures production
+and these alternates; no forked application or duplicated archive is maintained.
 
-The compiler does not require a browser, model, credentials or network access.
-It first runs the existing exact-input publication compiler, then applies a
-closed set of settings to a disposable stage. It retains the existing card flip,
-record generator, absence artwork, navigation controller and evidence renderer.
-It publishes the output directory only after its checks pass.
+Alternates explicitly display a preview notice, request no indexing and carry no
+release receipt. Their static discovery URLs and recovery paths follow the chosen
+base. Their social metadata does not impersonate the canonical site. The normal
+production deployment remains independently gated.
 
-## What a profile controls
+## Closed settings
 
-`config/sites/*.json` uses a closed version-1 document:
-
-| Setting | Boundary |
+| Setting | Contract |
 | --- | --- |
-| `id` | A short lowercase profile identifier. |
-| `base_url` | Normalized HTTPS origin plus trailing-slash directory; no credentials, port, query, fragment or encoded traversal. |
-| `brand.name`, `brand.tagline` | Escaped plain text for the shared wordmark/tagline and page title. Canonical catalog identity and editorial record prose stay intact. |
-| `navigation` | Labels and ordering for the same five existing destinations. Every destination remains present exactly once; record-context controls remain intact. |
-| `layout.max_width` | 960–1600 pixels. |
-| `layout.card_min_width` | 268–420 pixels, with a one-column small-screen fallback. |
-| `layout.gap` | 16–32 pixels. |
+| `version`, `id` | Version 1; short lowercase identifier. |
+| `base_url` | Normalized HTTPS directory, trailing slash, no credentials, port, query, fragment or encoded traversal. |
+| `brand.name`, `brand.tagline` | Escaped plain text, maximum 40/120 characters. Editorial record prose and canonical catalog identity stay intact. |
+| `navigation` | Labels/order of browse, recognition, coverage, makers and about; all exactly once. Existing record-context controls remain. |
+| `layout.max_width` | Integer 960–1600 pixels. |
+| `layout.card_min_width` | Integer 268–420 pixels, with small-screen reflow. |
+| `layout.gap` | Integer 16–32 pixels. |
 
-Arbitrary HTML, JavaScript, CSS, URLs in navigation, alternative evidence policy,
-verification overrides, hidden evidence, corpus filters and new destinations are
-not settings. The approved Fraunces and Space Mono files are reused locally.
-The preview stylesheet applies them across the existing surfaces while retaining
-the shared palette. Light-first and saved-theme behavior remain unchanged.
+Unknown keys, injected markup, custom code, arbitrary navigation URLs, evidence
+policy overrides and hidden destinations are rejected. Shared palette and approved
+local fonts remain in their existing assets. Light-first and saved-choice behavior
+remain unchanged. The format configures this frontend; it is not a general-purpose
+template engine, write API or permission to change corpus membership.
 
-The reading-room example changes branding, base path, navigation order/labels,
-page width and card density using JSON alone. It deliberately presents larger
-cards; it is not a second character-to-performer interaction.
+## Evidence boundary
 
-## Evidence versus deployment metadata
+Canonical records, sources, claims, census, shards, image-review states, image
+bytes, schemas, tombstones and historical release receipts remain byte-identical.
+The complete `<main>` of every generated permanent record remains identical before
+and after applying a profile. Runtime scripts are shielded from text replacement.
 
-Canonical records, source ledgers, citations, census, shards, media-review states,
-media bytes, schema files, tombstones and historical receipts retain their exact
-published bytes. The complete `<main>` of every generated permanent record also
-retains its exact bytes. Compilation checks both properties.
+`data/archive.json` contains web hashes and is regenerated to describe actual
+configured HTML. Its canonical, projection, schema, identifier, policy, vocabulary
+and route entries retain their original meaning and bytes. Sitemap/dataset URLs
+follow the deployment base. The compiled `website-profile.json` binds settings,
+source archive digest, input/media digests and the preserved-payload digest.
 
-`data/archive.json` is itself a generated descriptor and includes website hashes.
-A profile therefore regenerates its deployment URL and web-asset hashes instead
-of copying a descriptor that would falsely hash the old HTML. Its canonical,
-projection, schema, identifier, policy and vocabulary entries remain identical.
-The sitemap, dataset deployment URLs and static recovery paths follow the selected
-base. Scripts and record evidence are not subjected to a global string replacement.
+The release manifest includes the production configuration and shared renderer as
+private build inputs. They do not grant new public filesystem paths. Preview
+compilation cannot overwrite source files, production build directories or any
+existing output. Build repetition is byte-exact and needs no browser, model,
+network, credentials or running database.
 
-`website-profile.json` identifies the profile, original canonical archive URL,
-source contract digest, source input/media/payload digests and preserved-payload
-digest. It explicitly says `status: preview` and `release_authority: false`.
-The output has no `release.json`, displays a preview notice, and requests no
-indexing. Historical `release-1.0.json` remains source evidence, not a new release.
-The production `og.png` is retained byte-for-byte but not advertised by preview
-social metadata: its old embedded count requires a separate production correction.
+## Artwork and typography
 
-The ordinary publication allowlist excludes profile code, configuration,
-review captures and generated preview outputs. The normal production payload
-must remain unchanged by this work. No profile can bypass the release gate.
+The configured stylesheet applies Fraunces to display headings and Space Mono to
+shared archival labels/wordmark across every page. It consumes canonical palette
+tokens and the retained, verified font subsets; builds retrieve no fonts.
 
-## Verification
+`og.png` is a count-independent 1200×630 rendering of
+`assets/social-preview.html`. Its retained source/output identity is checked by
+`assets/social-preview.json`. The template uses the same generic casting relief
+as the missing-image plate, not a fabricated specimen photograph.
 
-`npm run profiles:fixtures` checks closed configuration, injection and path
-refusals, navigation completeness, template-slot drift, source immutability,
-contract coherence, build repetition, root/nested/same-host bases, release-output
-isolation and default-build parity. It restores declared inputs into a disposable
-snapshot and disables networking in both the fixture process and child builds.
+```sh
+node scripts/build-social-preview.mjs --check
+# Explicit artwork editing only, using installed Playwright Chromium, offline:
+node scripts/build-social-preview.mjs --write
+```
 
-`npm run test:profiles` exercises both compiled profiles in Chromium on desktop
-and mobile: settings, grid density, shared fonts, keyboard flip and menu recovery,
-image review/absence/offline distinctions, saved themes, voice records,
-no-JavaScript permanent records, retired identifiers and deep-path recovery.
-External image requests are stubbed in those behavior tests; that is not a media
-identity or upstream-availability test. Separate visual-review captures use real
-network requests and report failures rather than substituting images.
+Ordinary compilation verifies the retained artwork and its source dependencies;
+it does not launch a browser or rewrite it. A new renderer run requires visual
+review and a committed updated receipt.
 
-These two suites qualify the isolated preview explicitly. Under DEC-0008 they do
-not become production gate invariants before promotion. The unchanged canonical
-`npm run gate` separately checks production regressions. No release gate,
-scheduled task or workflow is added.
+## Acceptance and authority
 
-## Remaining promotion boundary
+DEC-0017 records the owner's completion instruction and its boundaries. The
+canonical gate includes `profiles:fixtures` and `test:profiles`: offline restored
+builds; root, nested and same-host bases; deterministic repeats; source/evidence
+parity; malformed configuration and template drift; symlink/overwrite refusal;
+production isolation; desktop/mobile fonts, keyboard flip/menu behavior, stable
+performer name, themes, missing/unverified/offline states, voice records,
+no-JavaScript records, tombstones and deep-path recovery.
 
-The profile format configures the existing frontend. It does not yet select
-arbitrary templates, languages, collection subsets, media hosts, public services
-or independently managed sites. Production typography reconciliation, the stale
-social card, a reviewed deployment policy for additional origins and broader
-frontend configuration remain separate work. Profiles remain previews until the
-actual renders and complete acceptance evidence support promotion under DEC-0008.
+Behavior tests substitute remote images and therefore do not prove upstream
+availability. Separate real-network captures verify the actual displayed site.
+Visual baselines reflect reviewed configured output. Public deployment remains a
+separate observed state after local tests, hosted CI and merge.
