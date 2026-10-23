@@ -43,8 +43,10 @@ themselves*, they don't belong here.
    ```bash
    node scripts/grow.mjs --drafts        # or: npm run grow -- --drafts
    ```
-4. **Fill their faces**: `IMAGE_MODE=loose node scripts/retrieve.mjs`
-   then `node scripts/credits.mjs && node scripts/needs.mjs`.
+4. **Fill their faces** through the retained attention queue in `MEDIA.md`: scan the
+   newly admitted IDs, run bounded photo workers, review exact source/display
+   decisions, and stage through the existing recoverable integration. Legacy
+   retrieval heuristics do not approve publication.
 5. **Rebuild and validate every contract**: `node scripts/shard.mjs && node scripts/validate.mjs`.
 6. **Commit** on a branch and open a PR.
 
@@ -97,8 +99,9 @@ reveal (same framing, mask → face).
 **One-off pin** (when you already know the file): `node scripts/pin.mjs UC-001
 --wiki <api> --still "Morn.jpg" --portrait "Mark Allen Shepherd.jpg"`.
 
-Pinned assets carry `"pin": true` in `data/specimens.json`. Do a curate pass over
-the marquee cards first; the crawler's heuristics are fine for the long tail.
+Pinned assets carry `"pin": true` in `data/specimens.json`. The legacy helpers above
+are candidate utilities; new photographic maintenance follows the queue and review
+path in `MEDIA.md`. Long-tail images retain the same review requirements.
 
 Portraits default to an upper-center focal crop on the wall, Recognition Loop and
 permanent records. When that still misses the intended face, add `focus` to the
