@@ -232,15 +232,15 @@ if (presentRefs.length === 0) {
 
 mark("image.preparation_custody");
 if (specimens.some(record=>[record.still,record.portrait].some(image=>image?.processing))) {
-  const preparation=load("data/review/klingon-photo-quality/changes.json");
-  const entries=new Map(preparation.changes.filter(row=>row.after).map(row=>[`${row.id}/${row.side}`,row]));
+  const preparationRoots=["data/review/klingon-photo-quality/", "data/review/catalog-photo-quality/"];
+  const entries=new Map(preparationRoots.flatMap(root=>load(root+"changes.json").changes).filter(row=>row.after).map(row=>[`${row.id}/${row.side}`,row]));
   const hash=path=>createHash('sha256').update(readFileSync(path)).digest('hex');
   for(const record of specimens)for(const side of ['still','portrait'])if(record[side]?.processing){
     const row=entries.get(`${record.id}/${side}`);
     if(!row||JSON.stringify(record[side])!==JSON.stringify(row.after)){fail('image.preparation_custody',`${record.id}/${side}: missing or mismatched preparation receipt`);continue;}
-    if(!row.source_path.startsWith('data/review/klingon-photo-quality/source-bytes/')||row.source_path.split('/').includes('..')){fail('image.preparation_custody','unsafe parent path');continue;}
+    if(!preparationRoots.some(root=>row.source_path.startsWith(root+'source-bytes/'))||row.source_path.split('/').includes('..')){fail('image.preparation_custody','unsafe parent path');continue;}
     try{if(hash(row.source_path)!==row.source_sha256||hash(record[side].src)!==row.display_sha256)fail('image.preparation_custody',`${record.id}/${side}: parent or display bytes changed`);}catch(e){fail('image.preparation_custody',e.message);}
-    if(!row.operations.length||row.operations.some(op=>!['crop','opencv-fastNlMeansDenoisingColored','lanczos-resize','jpeg-encode'].includes(op.operation)))fail('image.preparation_custody','unreviewed image operation');
+    if(!row.operations.length||row.operations.some(op=>!['crop','opencv-fastNlMeansDenoisingColored','lanczos-resize','jpeg-encode','identity-copy'].includes(op.operation)))fail('image.preparation_custody','unreviewed image operation');
   }
 }
 

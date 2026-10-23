@@ -5,6 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { deriveItem } from './lib/media-audit.mjs';
 
 const replayEnv = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require ${JSON.stringify(fileURLToPath(new URL('./historical-temp.cjs', import.meta.url)))}` };
 
@@ -225,15 +226,40 @@ function assertSealedCanonicalProjections(baselineRoot, currentRoot) {
   const currentAudit = readJson(currentRoot, 'data/MEDIA-AUDIT.json').items;
   const sitemap = fs.readFileSync(path.join(currentRoot, 'sitemap.xml'), 'utf8');
 
+  const maybeJson = relative => fs.existsSync(path.join(currentRoot, relative)) ? readJson(currentRoot, relative) : null;
+  const preparation = maybeJson('data/review/catalog-photo-quality/changes.json')?.changes || [];
+  const framing = maybeJson('data/review/catalog-photo-quality/presentation.json')?.changes || [];
+  const removals = maybeJson('data/review/catalog-photo-quality/removed-bindings.json') || [];
+  const stripMedia = row => Object.fromEntries(Object.entries(row).filter(([key]) => !['still','portrait'].includes(key)));
+  const stripSourceMedia = row => Object.fromEntries(Object.entries(row).filter(([key]) => !['still','portrait','fetched_at'].includes(key)));
+  const equal = (a,b) => JSON.stringify(stable(a)) === JSON.stringify(stable(b));
+  const reviewedSuccessor = (wallId, side, before, after) => {
+    if (equal(before, after)) return null;
+    const found = [...preparation.map(row=>({...row,maintenance:'source'})), ...framing.map(row=>({...row,maintenance:'framing'})), ...removals.map(row=>({...row,maintenance:'removal'}))]
+      .find(row=>row.id===wallId && row.side===side && equal(row.before ?? null,before ?? null) && equal(row.after ?? null,after ?? null));
+    ok(found, `${wallId} ${side} changed without an exact reviewed media successor`);
+    if(found.maintenance==='source') {
+      ok(fileSha256(currentRoot,found.source_path)===found.source_sha256,`${wallId} successor source bytes changed`);
+      ok(fileSha256(currentRoot,after.src)===found.display_sha256,`${wallId} successor display bytes changed`);
+    } else {
+      ok(fileSha256(currentRoot,before.src)===found.source_sha256,`${wallId} retained source bytes changed`);
+      if(found.maintenance==='framing') same(Object.fromEntries(Object.entries(after).filter(([key])=>!['focus','fit'].includes(key))),Object.fromEntries(Object.entries(before).filter(([key])=>!['focus','fit'].includes(key))),`${wallId} framing changed source evidence`);
+    }
+    return found.maintenance;
+  };
   let assets = 0;
   for (const wallId of SEALED_WALL_IDS) {
     const baselineRecord = oneById(baselineRecords, wallId, 'baseline record');
     const currentRecord = oneById(currentRecords, wallId, 'current record');
-    same(currentRecord, baselineRecord, `${wallId} canonical record drifted`);
+    same(stripMedia(currentRecord), stripMedia(baselineRecord), `${wallId} canonical record drifted`);
+    const changed = new Map(['still','portrait'].map(side=>[side,reviewedSuccessor(wallId,side,baselineRecord[side],currentRecord[side])]));
+    const newSource = [...changed.values()].includes('source');
 
     const baselineSource = oneById(baselineSources, wallId, 'baseline source');
     const currentSource = oneById(currentSources, wallId, 'current source');
-    same(currentSource, baselineSource, `${wallId} source ledger drifted`);
+    same(stripSourceMedia(currentSource), stripSourceMedia(baselineSource), `${wallId} source ledger drifted`);
+    for(const side of ['still','portrait']) same(currentSource[side] ?? null,currentRecord[side] ?? null,`${wallId} source mirror changed`);
+    if(!newSource) same(currentSource.fetched_at,baselineSource.fetched_at,`${wallId} source date changed without acquisition`);
 
     const baselineFacets = baselineAudit
       .filter((row) => row.wall_id === wallId)
@@ -241,7 +267,25 @@ function assertSealedCanonicalProjections(baselineRoot, currentRoot) {
     const currentFacets = currentAudit
       .filter((row) => row.wall_id === wallId)
       .sort((a, b) => a.id.localeCompare(b.id));
-    same(currentFacets, baselineFacets, `${wallId} media audit drifted`);
+    same(currentFacets.map(row=>row.id),baselineFacets.map(row=>row.id),`${wallId} media facet identities drifted`);
+    for(const previous of baselineFacets){
+      const current=oneById(currentFacets,previous.id,'current media facet');
+      const kind=changed.get(previous.side);
+      if(!kind || kind==='framing') {
+        const expected={...previous,...(newSource?{source_fetched_at:currentSource.fetched_at}:{})};
+        same(current,expected,`${wallId} unchanged media audit drifted`);
+      } else if(kind==='removal') {
+        ok(current.status==='absent'&&current.asset===null,`${wallId} removed source retained a public verification`);
+      } else {
+        const image=currentRecord[previous.side];
+        ok(current.actor===currentRecord.actor&&current.character===currentRecord.character,`${wallId} successor audit identity changed`);
+        ok(current.expected_subject===(previous.side==='portrait'?currentRecord.actor:currentRecord.character),`${wallId} successor subject changed`);
+        ok(current.asset?.src===image.src&&current.asset.origin===image.origin&&current.asset.sha256===fileSha256(currentRoot,image.src),`${wallId} successor audit binding changed`);
+        const derived=deriveItem(current);same(current.claims,derived.claims,`${wallId} successor claims not derived`);
+        ok(current.status==='verified'&&derived.status==='verified',`${wallId} successor lacks accepted exact-subject review`);
+        ok(current.votes.every(vote=>vote.asset_sha256===current.asset.sha256),`${wallId} successor carries stale votes`);
+      }
+    }
     ok(sitemap.includes(`records/${wallId}/`), `${wallId} permanent route is absent`);
 
     const localAssets = new Set();

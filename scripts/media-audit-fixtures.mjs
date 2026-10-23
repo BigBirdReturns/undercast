@@ -139,3 +139,24 @@ console.log("PASS — media audit consensus, authority, staleness, absence, trac
   records.get('B').actor='Other Performer';assert.equal(documentedPortraitReuse(['A:portrait','B:portrait'],records),false);
   records.get('B').actor='Same Performer';records.get('B').portrait.origin='https://example.test/other';assert.equal(documentedPortraitReuse(['A:portrait','B:portrait'],records),false);
 }
+
+// Historical review is tied to its base population, not a permanent cap on growth.
+{
+ const {readFileSync}=await import('node:fs');
+ const {execFileSync}=await import('node:child_process');
+ const {indexMediaRejections,matchMediaRejection}=await import('./lib/media-rejections.mjs');
+ const rejected=JSON.parse(readFileSync('data/review/catalog-photo-quality/rejected-candidates.json','utf8'));
+ assert(rejected.some(row=>row.id==='UC-912'&&row.reason.includes('高橋洋樹')));
+ const records=JSON.parse(readFileSync('data/specimens.json','utf8'));
+ const portrait=records.find(row=>row.id==='UC-912')?.portrait;
+ const rejectionIndex=indexMediaRejections(JSON.parse(readFileSync('data/MEDIA-REJECTIONS.json','utf8')));
+ assert(rejectionIndex.document.rules.some(row=>row.wall_id==='UC-912'&&row.side==='portrait'));
+ if(portrait)assert.equal(matchMediaRejection(rejectionIndex,{wallId:'UC-912',side:'portrait',origin:portrait.origin,sha256:sha256(readFileSync(portrait.src))}),null,'a corrected future source is permitted; the known wrong source stays rejected');
+ const assessment=JSON.parse(readFileSync('data/review/catalog-photo-quality/assessment.json','utf8'));
+ const baseline=JSON.parse(execFileSync('git',['show',assessment.base_commit+':data/specimens.json'],{maxBuffer:64*1024*1024}));
+ assert.equal(assessment.records,baseline.length);
+ assert.equal(assessment.records_reviewed.length,baseline.length);
+ assert.deepEqual(assessment.records_reviewed.map(row=>row.id).sort(),baseline.map(row=>row.id).sort());
+ assert.equal(assessment.available_images_visually_triaged,baseline.reduce((n,row)=>n+!!row.still+!!row.portrait,0));
+ for(const row of assessment.records_reviewed)assert.deepEqual(Object.keys(row.sides).sort(),['portrait','still']);
+}
