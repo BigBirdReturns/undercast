@@ -230,6 +230,11 @@ and uses real network requests without replacement images. Historical source
 and release URLs are followed from their declared manifests, never guessed from
 local image paths. The lightweight gallery is a private review tool, not an
 alternative public reveal or a substitute for actual-site acceptance.
+A successful load and valid crop box do not establish good composition. Review the
+actual character-to-performer flip for headroom, apparent head size and shoulders.
+When the original is already an extreme close-up, acquire a wider source rather
+than repeatedly adjusting focal position. Retain an actual-image regression for
+an owner-reported composition defect; generic image fixtures cannot prove it fixed.
 
 ### Interrupted staging
 
