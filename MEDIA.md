@@ -356,3 +356,9 @@ the retained recipe; a different output hash or changed binding refuses this pat
 This avoids re-encoding good photographs merely to record a better review. A
 concurrently published correction invalidates the old queued snapshot; rescan and
 review its actual successor rather than overwrite another worker's accepted work.
+
+Featured images in the homepage use `data-uc-media="UC-…/still|portrait"` bindings.
+The normal publication compiler derives their source, fit and explicit focus from
+the same canonical record as the wall and permanent pages. Replacing a featured
+photograph therefore requires no second HTML edit. A missing source becomes the
+existing absence plate; unknown IDs and unsafe bindings refuse publication.

@@ -284,7 +284,7 @@ export function inventory(root = ROOT) {
   }
   const staticImages = new Set();
   for (const row of archive.web_assets.filter(row => row.path.endsWith('.html'))) {
-    for (const match of files.get(row.path).toString().matchAll(/<img\b[^>]*\bsrc=["'](?:\.\/)?(images\/[^"']+)["']/g)) staticImages.add(match[1]);
+    for (const match of projectFeaturedMedia(files.get(row.path).toString(),specimens).matchAll(/<img\b[^>]*\bsrc=["'](?:\.\/)?(images\/[^"']+)["']/g)) staticImages.add(match[1]);
   }
   const media = new Map();
   for (const record of specimens) for (const side of ['still', 'portrait']) {
@@ -378,6 +378,27 @@ export function verifyLinks(root, payload, ids, base = 'https://bigbirdreturns.g
   const merged = new Set(json(root, 'data/tombstones.json').records.filter(row => row.status === 'merged').map(row => row.id));
   assert.deepEqual(routes, ids.filter(id => !merged.has(id)), 'sitemap must list live and removed records; merged aliases retain routes');
 }
+// Featured images are projections of canonical records, never separately curated files.
+// Markers are explicit image-side bindings; a missing asset keeps the honest blank.
+export function projectFeaturedMedia(document, specimens) {
+  const byId=new Map(specimens.map(r=>[r.id,r]));
+  const escape=value=>String(value).replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+  return document.replace(/<img\b[^>]*\bdata-uc-media="(UC-G?\d+)\/(still|portrait)"[^>]*>/g,(tag,id,side)=>{
+    const record=byId.get(id);assert(record,`featured image record missing: ${id}`);
+    const image=record[side];
+    const source=image?.src?`./${image.src}`:'./assets/placeholder-light-clean.png';
+    assert(!image?.src||/^images\/[a-zA-Z0-9_.-]+\.(?:jpe?g|png|webp)$/.test(image.src),'unsafe featured source');
+    const focus=image?.focus||{};const attrs=Object.entries(focus).map(([axis,value])=>{
+      assert(['x','y'].includes(axis));assert(['left','right','top','upper','center','lower','bottom'].includes(value)||(Number.isInteger(value)&&value>=0&&value<=100),'unsafe featured focus');
+      return ` data-focus-${axis}="${escape(value)}"`;
+    }).join('');
+    assert(!image?.fit||['cover','contain'].includes(image.fit),'unsafe featured fit');
+    const name=side==='portrait'?record.actor:record.character;
+    const description=image?`${name}, ${side==='portrait'?'the performer':'the character'}`:`${side==='portrait'?'Performer portrait':'Character image'} not on file`;
+    return `<img data-uc-media="${id}/${side}" src="${escape(source)}" alt="${escape(description)}" data-image-fit="${image?.fit||'cover'}"${attrs}>`;
+  });
+}
+
 export function build(root = ROOT, output = path.join(root, '.ci/site')) {
   root = path.resolve(root);
   output = path.resolve(output);
@@ -389,6 +410,7 @@ export function build(root = ROOT, output = path.join(root, '.ci/site')) {
   const stage = fs.mkdtempSync(path.join(parent, 'publication-'));
   try {
     for (const [file, bytes] of source.files) write(stage, file, bytes);
+    for(const file of ['index.html','recognition.html','coverage.html','constellation.html','404.html']) write(stage,file,Buffer.from(projectFeaturedMedia(read(stage,file).toString(),json(root,'data/specimens.json'))));
     write(stage, 'scripts/build-record-pages.mjs', read(root, 'scripts/build-record-pages.mjs'));
     const result = spawnSync(process.execPath, [path.join(stage, 'scripts/build-record-pages.mjs')], { cwd: stage, stdio: 'inherit' });
     assert.equal(result.status, 0, `record build failed: ${result.error?.message || result.status}`);

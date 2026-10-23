@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
+import {projectFeaturedMedia} from './publication.mjs';
 import {validateComposition,frameComposition,fingerprint} from './lib/photo-preparations.mjs';
 let count=0;const test=(n,f)=>{f();count++;console.log('PASS '+n);};
 const row={source_dimensions:[1000,1000],display_dimensions:[1000,1000],source_review:{composition:{protected_region_px:[250,170,750,720],max_height_fraction:.80,min_margin_fraction:.02}},composition:{version:1,display_region_px:[250,170,750,720],max_height_fraction:.80,min_margin_fraction:.02},composition_required:true,operations:[{operation:'identity-copy'}],after:{fit:'contain',focus:{x:50,y:50}}};
@@ -16,4 +17,11 @@ test('source-region transform cannot be silently changed',()=>{const r=structure
 test('legacy preparation remains explicitly outside new composition assessment',()=>assert.deepEqual(validateComposition({}),[]));
 test('nonfinite and inverted protected regions fail',()=>{for(const box of [[NaN,0,100,100],[0,500,100,100]]){const r=structuredClone(row);r.source_review.composition.protected_region_px=box;assert.throws(()=>validateComposition(r));}});
 test('same percentage contract holds at both real viewport image sizes',()=>{for(const [w,h]of[[273,204.75],[342,256.5],[342,427.5]])assert(frameComposition(row,w,h).pass);});
+const markup='<img data-uc-media="UC-001/portrait" src="images/stale.jpg" alt="old">';
+const featured={id:'UC-001',actor:'Name & credit',character:'Character',portrait:{src:'images/accepted.jpg',fit:'contain',focus:{x:50,y:50}}};
+test('featured images follow canonical replacement without editing HTML',()=>{const output=projectFeaturedMedia(markup,[featured]);assert(output.includes('./images/accepted.jpg'));assert(!output.includes('stale.jpg'));assert(output.includes('Name &amp; credit'));assert(output.includes('data-image-fit="contain"'));});
+test('featured absence stays an honest blank',()=>{const output=projectFeaturedMedia(markup,[{...featured,portrait:null}]);assert(output.includes('placeholder-light-clean.png'));assert(output.includes('not on file'));});
+test('unknown featured record fails closed',()=>assert.throws(()=>projectFeaturedMedia(markup,[])));
+test('unsafe featured path fails closed',()=>assert.throws(()=>projectFeaturedMedia(markup,[{...featured,portrait:{src:'../secret.jpg'}}])));
+test('featured projection is idempotent',()=>{const first=projectFeaturedMedia(markup,[featured]);assert.equal(projectFeaturedMedia(first,[featured]),first);});
 console.log(`photo composition fixtures: PASS ${count}; no source identity claims`);
