@@ -401,3 +401,10 @@ current portrait, original source/display hashes, explicit agent review, retaine
 character source, unchanged sealed task and historical events. Negative controls
 refuse changed identity, absent approval, different portrait and character media.
 The normal current-tree queue, corpus, audit and publication gates still run.
+
+Star Trek's existing successor projection likewise accepts only the exact before/after
+media changes in the retained review ledgers, checks new source/display bytes and
+derived current review, and continues to require unchanged non-media record fields,
+sealed checker/receipt files, tasks, events and all historical source bytes. The
+assessment test binds the reviewed base population instead of limiting future growth;
+a later valid portrait may replace an absence while rejected source objects stay denied.

@@ -39,6 +39,8 @@ const productionManifest = JSON.parse(await readFile(
 validateGitObjectManifest(productionManifest);
 const starTrekHistoryChecker = await readFile(new URL("./star-trek-history-composable.mjs", import.meta.url), "utf8");
 const starTrekBaseline = assertFullTreeBaselineCustody(productionManifest, starTrekHistoryChecker, "Star Trek history");
+const photoHistoryChecker = await readFile(new URL("./photo-maintenance-history.mjs", import.meta.url), "utf8");
+assertFullTreeBaselineCustody(productionManifest, photoHistoryChecker, "Reviewed photo maintenance");
 assert.throws(() => assertFullTreeBaselineCustody({
   ...productionManifest,
   entries: productionManifest.entries.filter((entry) => entry.commit !== starTrekBaseline),

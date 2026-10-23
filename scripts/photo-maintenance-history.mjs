@@ -8,7 +8,8 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {execFileSync,spawnSync} from 'node:child_process';
-const BASE='962ab3cd71483310e7d93da5e95f0c83fafeb78f';
+const BASELINE_COMMIT = '962ab3cd71483310e7d93da5e95f0c83fafeb78f';
+const BASE=BASELINE_COMMIT;
 const LEDGER='data/review/catalog-photo-quality/changes.json';
 const CONFIG={
  '005':{id:'UC-1350',checker:'scripts/doctor-who-cycle-005.mjs',receipt:'data/review/adapter-sdk/doctor-who-cycle-005-kaarsh.json'},
