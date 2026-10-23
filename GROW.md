@@ -104,3 +104,12 @@ Portraits default to an upper-center focal crop on the wall, Recognition Loop an
 permanent records. When that still misses the intended face, add `focus` to the
 specific image object. `npm run audit:focus` lists unusually tall source images
 in descending crop-risk order so a vision pass can review the smallest useful set.
+## Reuse photographic maintenance after admission
+
+New canons and new records use the same estate photo path in `MEDIA.md`:
+`npm run photos -- plan --canon CANON --limit 16 --run RUN`, then cached collection,
+explicit source review, preparation, explicit display review, staging, the normal
+gate and actual-site acceptance. `--records FILE` supports pre-admission candidate
+research, while photo staging still requires already-admitted canonical IDs.
+Source-host registration is inventory, not adapter certification; unresolved
+performer/production relationships remain under this document's existing rules.

@@ -408,3 +408,20 @@ derived current review, and continues to require unchanged non-media record fiel
 sealed checker/receipt files, tasks, events and all historical source bytes. The
 assessment test binds the reviewed base population instead of limiting future growth;
 a later valid portrait may replace an absence while rejected source objects stay denied.
+
+---
+
+## DEC-0021 — Retain reusable estate photographic maintenance
+
+**Status:** Effective on merge. **Authority:** owner direction on 2026-10-23 to
+retain the working machinery for every new canon pursued and added.
+
+Extract the exercised catalog acquisition/preparation/review path into bounded,
+configurable repository commands over the existing estate registry and archive.
+Keep the original source/photo ledgers immutable and index subsequent preparations
+without editing a list of batch names in the validator or replay script. Registering
+a source host does not certify a canon, grant roster growth or turn candidate images
+into evidence. Exact documentary source decisions and exact display-byte decisions
+remain explicit, agent-typed judgments. The ordinary release gate and actual live
+readback retain publication authority. No scheduler, new public surface, fabricated
+portrait, automatic approval, subscription or autonomous growth is introduced.
