@@ -23,7 +23,7 @@ export function verifySocialPreview(root=ROOT) {
 async function render() {
   const { chromium }=await import('@playwright/test');
   const paths=['assets/social-preview.html','assets/site-fonts.css','assets/fonts/SOURCES.json','assets/placeholder-light-clean.png',...JSON.parse(fs.readFileSync(path.join(ROOT,'assets/fonts/SOURCES.json'))).fonts.map(row=>row.path)].sort();
-  const input=new Map(paths.map(file=>[file,fs.readFileSync(path.join(ROOT,file))]));
+  const input=new Map(paths.map(file=>{const bytes=fs.readFileSync(path.join(ROOT,file));return [file,/\.(?:html|css|json)$/.test(file)?Buffer.from(bytes.toString("utf8").replace(/\r\n/g,"\n")):bytes];}));
   const server=createServer((req,res)=>{const file=new URL(req.url,'http://localhost').pathname.slice(1);const bytes=input.get(file);if(!bytes){res.writeHead(404);res.end();return;}const type=file.endsWith('.html')?'text/html':file.endsWith('.css')?'text/css':file.endsWith('.woff2')?'font/woff2':file.endsWith('.png')?'image/png':'application/json';res.writeHead(200,{'content-type':type});res.end(bytes);});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const browser=await chromium.launch({headless:true});

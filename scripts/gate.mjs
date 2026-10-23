@@ -63,13 +63,13 @@ async function writeProjectionDiagnostics() {
 }
 // npm 9.2.0 demonstrably removes node_modules even for ci --dry-run.
 // Validate the exact manifests in a disposable directory, never the running gate's dependencies.
-export async function runLockfileCheck(repoRoot = ROOT) {
+export async function runLockfileCheck(repoRoot = ROOT, { stdio = "inherit" } = {}) {
   const workRoot = await mkdtemp(path.join(tmpdir(), "undercast-gate-lockfile-"));
   try {
     for (const file of ["package.json", "package-lock.json"]) {
       await writeFile(path.join(workRoot, file), readFileSync(path.join(repoRoot, file)));
     }
-    runCommand("Lockfile consistency", npmCommand, [...npmPrefixArgs, "ci", "--dry-run", "--ignore-scripts"], { cwd: workRoot });
+    runCommand("Lockfile consistency", npmCommand, [...npmPrefixArgs, "ci", "--dry-run", "--ignore-scripts"], { cwd: workRoot, stdio });
   } finally { await rm(workRoot, { recursive: true, force: true }); }
 }
 async function runProjectedSteps() {
