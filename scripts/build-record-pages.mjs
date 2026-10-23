@@ -26,7 +26,14 @@ const ORIGIN="https://bigbirdreturns.github.io/undercast";
 const RELEASE=/^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\/[^/]+\/[^/?#]+$/;
 
 const esc=value=>String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[ch]);
-const focusAttrs=image=>image?.focus&&typeof image.focus==="object"?` data-focus-x="${esc(image.focus.x)}" data-focus-y="${esc(image.focus.y)}"`:"";
+function focusAttrs(image){
+  if(!image||!image.focus||typeof image.focus!=="object") return "";
+  const numeric=["x","y"].flatMap(axis=>{
+    const value=image.focus[axis];
+    return typeof value==="number"&&Number.isFinite(value)&&value>=0&&value<=100?[`--focus-${axis}:${value}%`]:[];
+  }).join(";");
+  return ` data-focus-x="${esc(image.focus.x)}" data-focus-y="${esc(image.focus.y)}"${numeric?` style="${numeric}"`:""}`;
+}
 const url=value=>{ try{ const parsed=new URL(value); return /^https?:$/.test(parsed.protocol)?parsed.href:"#"; }catch{return "#";} };
 const imageUrl=image=>{
   if(!image?.src) return "../../assets/placeholder-light-clean.png";
