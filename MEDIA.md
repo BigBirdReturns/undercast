@@ -110,3 +110,23 @@ GitHub recommends keeping repos under ~1 GB, and shrinking `.git` requires rewri
 history. Do **not** rewrite history until the Release-backed store is stable and a
 verified BagIt backup exists (see `preservation/README.md` — the HISTORY GUARD). This
 pass does none of that; it is purely additive.
+
+## Estate preparation and visual approval
+
+Use the existing estate for source retrieval, caching, decoding, deduplication,
+resizing, crop proposals, contact sheets and browser rendering. A capable visual
+reviewer selects the actual source and presentation; local inference is optional
+proposal assistance, never a prerequisite or an automatic approval authority.
+Record agent review as agent review, rather than relabelling it as human review.
+
+Retain the acquired image and source metadata. Prefer the existing `focus` controls
+for framing-only corrections. Resampling or other image processing creates a
+separate derivative with its source and operation retained. Generative cleanup,
+upscaling or portrait reconstruction requires explicit derivative labelling and
+visual comparison: synthesized detail is not source evidence. An illustrated or
+reconstructed portrait must remain distinguishable from a sourced photograph and
+must not inherit its verification state. Missing source evidence remains missing.
+
+The Klingon proof is a framing run, not a new identity review: its ten reviewed
+focus changes preserve the original image bytes and their existing review claims.
+The experimental source crops remain outside that change.
