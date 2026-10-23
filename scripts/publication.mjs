@@ -86,6 +86,8 @@ const EXTRA = [
 // artifact paths. This binds exact-subject rejection mechanics to the tested
 // commit while preserving private review evidence outside the Pages payload.
 export const PRIVATE_RELEASE_INPUTS = [
+  'data/review/klingon-photo-quality/changes.json',
+  'data/review/klingon-photo-quality/remediations.json',
   'assets/social-preview.html', 'assets/social-preview.json',
   'scripts/build-social-preview.mjs',
   'config/sites/production.json',

@@ -121,3 +121,21 @@ const enforcedEvidence = [{ type: "second-desk-review", value: "Exact hash-bound
 }
 
 console.log("PASS — media audit consensus, authority, staleness, absence, tracker, and fail-closed state fixtures");
+
+{
+  const doc=state(), id=doc.items[0].id;
+  const result=applyVotes(doc,[vote(id,"identity","expected","session-agent","second-desk",{reviewer_kind:"agent",enforced:true,evidence:enforcedEvidence})]).state;
+  assert.equal(result.items[0].votes[0].reviewer_kind,"agent");
+  assert.equal(result.items[0].claims.identity.human_reviewers,0,"agent authority is not human participation");
+  assert.equal(result.items[0].claims.identity.state,"enforced");
+  assert.throws(()=>applyVotes(doc,[vote(id,"identity","expected","bad-agent","second-desk",{reviewer_kind:"invented"})]),/reviewer kind/);
+}
+
+{
+  const {documentedPortraitReuse}=await import('./lib/media-sharing.mjs');
+  const records=new Map([['A',{actor:'Same Performer',portrait:{origin:'https://example.test/photo'}}],['B',{actor:'Same Performer',portrait:{origin:'https://example.test/photo'}}]]);
+  assert.equal(documentedPortraitReuse(['A:portrait','B:portrait'],records),true);
+  assert.equal(documentedPortraitReuse(['A:still','B:portrait'],records),false);
+  records.get('B').actor='Other Performer';assert.equal(documentedPortraitReuse(['A:portrait','B:portrait'],records),false);
+  records.get('B').actor='Same Performer';records.get('B').portrait.origin='https://example.test/other';assert.equal(documentedPortraitReuse(['A:portrait','B:portrait'],records),false);
+}

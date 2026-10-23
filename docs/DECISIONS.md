@@ -343,3 +343,32 @@ The flip, unsplit frame, character-first opening, source photographs, provenance
 review votes, and record identities remain intact. No scale alignment, synthesized
 face, new reveal, local-model approval, or autonomous collection is introduced.
 Framing review is explicitly assistant review, not a new human identity attestation.
+
+---
+
+## DEC-0019 — Source-acquired Klingon photo quality and faithful display preparation
+
+**Status:** Active on merge. **Authority:** the owner's repeated instruction to complete
+Klingon photography using estate acquisition/processing and capable assistant review.
+This is an implementation record, not a quotation or invented human approval.
+
+- Acquire exact source photographs, retain file-page revisions and delivered bytes,
+  preserve prior images and record IDs, and disclose conventional display processing.
+- Existing fixed frames may use optional `image.fit=contain` when cover would remove
+  part of a sourced head. `cover` remains the default. No new reveal is introduced.
+- Optional `image.processing` discloses cropping, resampling and mild denoising.
+  Each display asset is bound to retained parent bytes and an exact operation recipe.
+  Ordinary interpolation does not claim recovered or generated detail.
+- One documented portrait may serve multiple roles of the same named performer.
+  Byte equality is permitted only for portrait sides with the same performer and source
+  locator. Different performers, sources or image-side meanings still fail.
+- Delegated source rulings use the existing second-desk resolution path with explicit
+  `reviewer_kind=agent`, retained documentary identity evidence and separate presentation
+  observations. These reviews do not count as human participation. Historical untyped
+  reviews remain unchanged; role names alone provide no new human-review claim.
+- The exact file-page attribution takes precedence over a generic page thumbnail when
+  a page depicts multiple appearances. Rejected infant/adult or role/portrait substitutions
+  become persistent rejection rules. Missing evidence remains explicit.
+
+Synthetic portraits, generative restoration and new roster entries are outside this
+release. DEC-0001/0005, no-JavaScript records, attribution and paused schedules remain.

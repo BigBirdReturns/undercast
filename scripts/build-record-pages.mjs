@@ -26,7 +26,7 @@ const ORIGIN="https://bigbirdreturns.github.io/undercast";
 const RELEASE=/^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\/[^/]+\/[^/?#]+$/;
 
 const esc=value=>String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[ch]);
-const focusAttrs=image=>image?.focus&&typeof image.focus==="object"?` data-focus-x="${esc(image.focus.x)}" data-focus-y="${esc(image.focus.y)}"`:"";
+const focusAttrs=image=>(image?.focus&&typeof image.focus==="object"?` data-focus-x="${esc(image.focus.x)}" data-focus-y="${esc(image.focus.y)}"`:"")+(image?.fit==="contain"?' data-image-fit="contain"':"");
 const url=value=>{ try{ const parsed=new URL(value); return /^https?:$/.test(parsed.protocol)?parsed.href:"#"; }catch{return "#";} };
 const imageUrl=image=>{
   if(!image?.src) return "../../assets/placeholder-light-clean.png";

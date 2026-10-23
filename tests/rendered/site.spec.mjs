@@ -843,13 +843,13 @@ test("Klingon framing uses named and precise focus on the wall, interactive and 
   await expect(page.locator("article.cast")).toHaveCount(ids.size);
   const actual=await page.locator("article.cast").evaluateAll(cards=>Object.fromEntries(cards.map(card=>[card.dataset.uid,Object.fromEntries([['still','.front .shot'],['portrait','.back .shot']].map(([side,selector])=>[side,card.querySelector(selector)?getComputedStyle(card.querySelector(selector)).objectPosition:null]))])));
   for(const record of specimens.filter(r=>ids.has(r.id))) for(const side of ['still','portrait']) if(record[side]) expect(actual[record.id][side],`${record.id}/${side}`).toBe(expected(record[side]));
-  const record=specimens.find(r=>r.id==="UC-1368");expect(record.portrait.focus.y).toBe(10);
-  await open(page,"recognition.html#UC-1368");
+  const record=specimens.find(r=>r.id==="UC-829");expect(record.portrait.focus.y).toBe(25);
+  await open(page,"recognition.html#UC-829");
   await expect(page.locator('.uc-image-node.is-portrait .uc-photo').first()).toHaveCSS('object-position',expected(record.portrait));
-  await open(page,"records/UC-1368/");
+  await open(page,"records/UC-829/");
   await expect(page.locator('.record-image.is-portrait .record-media')).toHaveCSS('object-position',expected(record.portrait));
   const context=await browser.newContext({javaScriptEnabled:false});const nojs=await context.newPage();
-  try{await nojs.goto(new URL(sitePath('records/UC-1368/'),page.url()).href);await expect(nojs.locator('.record-image.is-portrait .record-media')).toHaveCSS('object-position',expected(record.portrait));}finally{await context.close();}
+  try{await nojs.goto(new URL(sitePath('records/UC-829/'),page.url()).href);await expect(nojs.locator('.record-image.is-portrait .record-media')).toHaveCSS('object-position',expected(record.portrait));}finally{await context.close();}
 });
 
 test("precise focus uses only the closed external stylesheet positions",async({page})=>{
@@ -860,4 +860,22 @@ test("precise focus uses only the closed external stylesheet positions",async({p
   }));
   expect(results.slice(0,3)).toEqual(['0%','13%','100%']);
   for(const value of results.slice(3))expect(value).toBe('');
+});
+
+
+test("prepared Klingon photographs retain fit and source disclosure without JavaScript",async({page,browser})=>{
+  await open(page,"index.html?species=Klingon");await waitForWall(page);
+  const record=specimens.find(r=>r.id==="UC-1188");
+  const card=page.locator('article.cast[data-uid="UC-1188"]');
+  await expect(card.locator('.front .shot')).toHaveAttribute('src',record.still.src);
+  await expect(card.locator('.front .shot')).toHaveCSS('object-fit','contain');
+  await expect(card.locator('.image-preparation')).toHaveCount(1);
+  await card.locator('.image-preparation summary').click();
+  await expect(card.locator('.image-preparation')).toContainText('No generated detail');
+  const context=await browser.newContext({javaScriptEnabled:false});const nojs=await context.newPage();
+  try{
+    await nojs.goto(new URL(sitePath('records/UC-1188/'),page.url()).href);
+    await expect(nojs.locator('.record-image .record-media').first()).toHaveCSS('object-fit','contain');
+    await expect(nojs.locator('.image-preparation summary')).toBeVisible();
+  }finally{await context.close();}
 });

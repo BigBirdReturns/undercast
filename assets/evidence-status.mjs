@@ -57,5 +57,7 @@ export function evidenceMarkup(record, projection, href = null) {
   const evidence = describeEvidence(record, projection);
   const facets = SIDES.map(side => `<span class="evidence-facet" data-evidence-side="${side}" data-evidence-state="${evidence[side].state}"><span>${side === 'still' ? 'Character image' : 'Performer portrait'}</span><strong>${evidence[side].label}</strong></span>`).join('');
   const references = href ? `<a class="evidence-references" href="${esc(href)}">${esc(evidence.referenceLabel)}</a>` : `<span class="evidence-references">${esc(evidence.referenceLabel)}</span>`;
-  return `<div class="evidence-status" role="group" aria-label="Evidence status for ${esc(record.character)}">${facets}${references}</div>`;
+  const prepared=SIDES.filter(side=>record[side]?.processing).map(side=>`<p><b>${side==='still'?'Character':'Performer'}:</b> ${esc(record[side].processing)} <a href="${esc(sourceKey(record[side].origin))}" rel="noopener">Original source</a></p>`).join('');
+  const preparation=prepared?`<details class="image-preparation"><summary>Image preparation</summary>${prepared}</details>`:'';
+  return `<div class="evidence-status" role="group" aria-label="Evidence status for ${esc(record.character)}">${facets}${references}${preparation}</div>`;
 }
