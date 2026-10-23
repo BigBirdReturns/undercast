@@ -5,7 +5,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import {execFileSync,spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {digest,fingerprint,photoPath,preparationIndex,validateActivePreparations,PHOTO_INDEX} from './photo-preparations.mjs';
+import {digest,textDigest,fingerprint,photoPath,preparationIndex,validateActivePreparations,PHOTO_INDEX} from './photo-preparations.mjs';
 import {indexMediaRejections,matchMediaRejection} from './media-rejections.mjs';
 const ownRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const read=p=>JSON.parse(fs.readFileSync(p));
@@ -17,8 +17,8 @@ export function validateReview({plan,source,prepared,display,run,records,rejecti
  assert.equal(source.run_id,plan.run_id);assert.equal(prepared.run_id,plan.run_id);assert.equal(display.run_id,plan.run_id);
  assert.equal(source.reviewer_kind,'agent');assert.equal(display.reviewer_kind,'agent');
  for(const r of [source,display])assert(typeof r.reviewer==='string'&&r.reviewer.trim().length>=3,'explicit agent reviewer required');
- assert.equal(prepared.source_review_sha256,digest(fs.readFileSync(photoPath(run,'source-review.json'))),'source review changed after preparation');
- assert.equal(display.prepared_sha256,digest(fs.readFileSync(photoPath(run,'prepared.json'))),'display review is stale');
+ assert.equal(prepared.source_review_sha256,textDigest(fs.readFileSync(photoPath(run,'source-review.json'))),'source review changed after preparation');
+ assert.equal(display.prepared_sha256,textDigest(fs.readFileSync(photoPath(run,'prepared.json'))),'display review is stale');
  const facets=new Map(plan.facets.map(f=>[`${f.id}/${f.side}`,f]));
  assert.equal(source.selections.length,facets.size);assert.equal(new Set(source.selections.map(s=>`${s.id}/${s.side}`)).size,facets.size,'duplicate source review');
  for(const s of source.selections){assert(facets.has(`${s.id}/${s.side}`));assert(['select','keep','defer','reject'].includes(s.action),'unresolved source decision');assert(s.reason?.trim().length>=12,'source decision rationale required');}
@@ -56,7 +56,7 @@ export function validateReview({plan,source,prepared,display,run,records,rejecti
  }
  return changes;
 }
-export async function stage(argv){
+async function stageLocked(argv){
  const option=(k,defaultValue)=>{const i=argv.indexOf(k);return i<0?defaultValue:argv[i+1];};
  const root=path.resolve(option('--root',ownRoot)),run=path.resolve(option('--run',''));
  assert(root!==run&&!run.startsWith(root+path.sep),'run must be outside checkout');
@@ -67,7 +67,7 @@ export async function stage(argv){
  const index=preparationIndex(root);
  if(index.ledgers.includes(ledgerPath)){
   const prior=read(photoPath(root,ledgerPath));
-  assert.equal(prior.source_review.sha256,digest(fs.readFileSync(photoPath(run,'source-review.json'))));assert.equal(prior.display_review.sha256,digest(fs.readFileSync(photoPath(run,'display-review.json'))));
+  assert.equal(prior.source_review.sha256,textDigest(fs.readFileSync(photoPath(run,'source-review.json'))));assert.equal(prior.display_review.sha256,textDigest(fs.readFileSync(photoPath(run,'display-review.json'))));
   for(const row of prior.changes)assert.deepEqual(records.find(r=>r.id===row.id)?.[row.side],row.after,'staged batch was superseded; do not reapply it');
   validateActivePreparations(root,records);return {state:'already-staged',run_id:plan.run_id,changes:0,canonical_writes:0};
  }
@@ -86,14 +86,14 @@ export async function stage(argv){
  for(const row of changes){
   const sourcePath=directory+'/source-bytes/'+path.basename(row.source_path);retain(sourcePath,fs.readFileSync(photoPath(run,row.source_path)));
   retain(row.after.src,fs.readFileSync(photoPath(run,row.display_path)));row.source_path=sourcePath;
-  for(const doc of row.documents){const next=directory+'/documents/'+doc.sha256+'.json';retain(next,fs.readFileSync(photoPath(run,doc.path)));doc.path=next;delete doc.text;}
+  for(const doc of row.documents){const next=directory+'/documents/'+doc.sha256+'.capture';retain(next,fs.readFileSync(photoPath(run,doc.path)));doc.path=next;delete doc.text;}
   row.identity_basis='Explicit documentary source/file/production review; visual review addresses presentation, not facial identity.';
   row.reviewed_by=source.reviewer;row.reviewer_kind='agent';
   records.find(r=>r.id===row.id)[row.side]=structuredClone(row.after);
   const s=sources.find(r=>r.id===row.id);assert(s,'missing canonical source ledger');s[row.side]=structuredClone(row.after);s.fetched_at=new Date().toISOString().slice(0,10);
  }
- for(const name of ['plan.json','source-review.json','display-review.json'])retain(directory+'/'+name,fs.readFileSync(photoPath(run,name)));
- const ledger={version:2,run_id:plan.run_id,base_commit:plan.base_commit,reviewer_kind:'agent',source_review:{path:directory+'/source-review.json',sha256:digest(fs.readFileSync(photoPath(run,'source-review.json')))},display_review:{path:directory+'/display-review.json',sha256:digest(fs.readFileSync(photoPath(run,'display-review.json')))},changes};
+ for(const name of ['plan.json','source-review.json','display-review.json'])retain(directory+'/'+name,Buffer.from(fs.readFileSync(photoPath(run,name),'utf8').replace(/\r\n/g,'\n')));
+ const ledger={version:2,run_id:plan.run_id,base_commit:plan.base_commit,reviewer_kind:'agent',source_review:{path:directory+'/source-review.json',sha256:textDigest(fs.readFileSync(photoPath(run,'source-review.json')))},display_review:{path:directory+'/display-review.json',sha256:textDigest(fs.readFileSync(photoPath(run,'display-review.json')))},changes};
  write(photoPath(root,ledgerPath),ledger);index.ledgers.push(ledgerPath);write(photoPath(root,PHOTO_INDEX),index);
  const nonMedia=r=>Object.fromEntries(Object.entries(r).filter(([key])=>!['still','portrait'].includes(key)));
  assert.deepEqual(records.map(nonMedia),original.map(nonMedia),'photo work changed non-media fields');
@@ -110,4 +110,13 @@ export async function stage(argv){
  execute('scripts/shard.mjs');execute('scripts/validate.mjs');
  const result={state:'staged-not-published',run_id:plan.run_id,changes:changes.length,ledger:ledgerPath,originals_retained:true,non_media_parity:true,required_next:'Full canonical gate, actual-photo browser acceptance, reviewed merge and public readback'};
  write(photoPath(run,'staged.json'),result);return result;
+}
+
+export async function stage(argv){
+ const i=argv.indexOf('--root'),root=path.resolve(i<0?ownRoot:argv[i+1]);
+ assert.equal(path.resolve(git(root,'rev-parse','--show-toplevel')),root,'stage root must be the checkout root');
+ const lock=path.resolve(root,git(root,'rev-parse','--git-path','photo-maintenance.lock'));
+ let fd;try{fd=fs.openSync(lock,'wx');}catch(error){if(error.code==='EEXIST')throw new Error('Photo staging writer already holds this checkout; inspect the retained lock before retrying');throw error;}
+ try{fs.writeFileSync(fd,JSON.stringify({pid:process.pid,started_at:new Date().toISOString()}));return await stageLocked(argv);}
+ finally{fs.closeSync(fd);fs.unlinkSync(lock);}
 }

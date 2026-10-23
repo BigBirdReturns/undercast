@@ -20,7 +20,8 @@ const hashes=new Map(read('data/MEDIA-AUDIT.json').items.filter(i=>i.asset).map(
 const types={'.html':'text/html','.json':'application/json','.mjs':'text/javascript','.js':'text/javascript','.css':'text/css','.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.webp':'image/webp','.svg':'image/svg+xml','.woff2':'font/woff2'};
 const external=new Map(Object.entries(manifests).filter(([,m])=>m.location==='release').map(([p,m])=>[m.url,{p,m}]));
 const supplied=option('--base-url',null);let server,base,identity,browser;
-const output=path.join(run,'actual-site');
+const buildParent=fs.mkdtempSync(path.join(run,'acceptance-build-'));
+const output=path.join(buildParent,'site');
 try{
  identity=build(root,output);
  if(supplied){
@@ -37,7 +38,7 @@ try{
   const context=await browser.newContext({viewport:{width,height:1000},reducedMotion:'reduce'});await routing(context);const page=await context.newPage();let decoded=0,reveals=0;
   page.on('requestfailed',r=>errors.push({url:r.url(),failure:r.failure()?.errorText}));
   for(const record of scope){
-   await page.goto(base+'index.html?q='+encodeURIComponent(record.id),{waitUntil:'domcontentloaded'});
+   await page.goto(base+'index.html?q='+encodeURIComponent(record.actor)+'#'+record.id,{waitUntil:'domcontentloaded'});
    const card=page.locator(`article.cast[data-uid="${record.id}"]`);await card.waitFor();
    for(const side of ['still','portrait']){
     const asset=record[side],face=card.locator(side==='still'?'.front':'.back');

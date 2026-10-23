@@ -186,8 +186,8 @@ budgets, timeouts and per-host pacing shared across workers. 401/403 are recorde
 not bypassed. `collect --offline` must reproduce candidates without requests;
 `collect --refresh` deliberately reacquires current source snapshots. Reusing
 cached evidence does not claim that its upstream revision is still current.
-Parallel jobs use distinct run directories and may share the cache. An identical
-performer/source is fetched once; publication still uses the existing documented
+Parallel jobs use distinct run directories and may share the cache. Previously fetched
+performer/source bytes are reused across batches; publication still uses the existing documented
 same-performer reuse rule, rather than treating a matching name as identity proof.
 
 The two review files separate documentary subject/production selection from
@@ -205,7 +205,8 @@ reviewed frame operation. Conventional resampling never claims recovered detail.
 Generative restoration and new source types need explicit retained operations
 and disclosure before admission; this command does not silently synthesize faces.
 
-Staging requires a clean named branch, checks that the selected canonical records
+Staging takes an exclusive per-checkout writer lock, requires a clean named branch,
+and checks that the selected canonical records
 have not changed, retains the source/display reviews and originals, updates the
 existing specimen/source/audit projections and runs their native validators.
 Running **stage** again is an exact no-op; a superseded batch refuses reapplication.
@@ -217,7 +218,9 @@ media gate) and `$PHOTO_PYTHON scripts/photo-pixel-tests.py`. Independent recipe
 replay is `$PHOTO_PYTHON scripts/replay-photo-preparations.py --run "$RUN"` before
 staging, or `--ledger data/review/photo-…/changes.json` afterward. Replay of the
 older explicitly denoised Klingon images additionally needs their retained
-OpenCV/Numpy runtime. A codec/version mismatch fails byte replay rather than
+OpenCV/Numpy runtime. Review JSON uses canonical LF text across Windows/Linux; exact upstream API
+response bodies use byte-preserving `.capture` files. A codec/version mismatch
+fails byte replay rather than
 upgrading a receipt or silently blessing different output.
 
 `photos:acceptance` checks the real compiled site, actual images and constrained

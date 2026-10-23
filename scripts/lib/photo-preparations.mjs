@@ -4,6 +4,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 export const PHOTO_INDEX='data/PHOTO-PREPARATIONS.json';
+export const textDigest=b=>digest(Buffer.from(b.toString('utf8').replace(/\r\n/g,'\n')));
 export const digest=b=>createHash('sha256').update(b).digest('hex');
 export const stable=v=>Array.isArray(v)?v.map(stable):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,stable(v[k])])):v;
 export const fingerprint=v=>digest(Buffer.from(JSON.stringify(stable(v))));
@@ -33,7 +34,7 @@ export function preparationInputs(root){
   if(doc.version!==2)continue;
   for(const key of ['source_review','display_review']){
    const r=doc[key];assert(r&&r.path&&r.sha256,'review binding missing');
-   assert.equal(digest(fs.readFileSync(photoPath(root,r.path))),r.sha256,'review bytes changed');files.add(r.path);
+   assert.equal(textDigest(fs.readFileSync(photoPath(root,r.path))),r.sha256,'review bytes changed');files.add(r.path);
   }
   const prefix=path.posix.dirname(ledger)+'/';
   for(const row of doc.changes){

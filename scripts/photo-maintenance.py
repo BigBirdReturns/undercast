@@ -341,8 +341,8 @@ def prepare(args):
         if c['side']=='portrait' or author:asset['author']=author
         if c['side']=='portrait' or license:asset['license']=license or 'Copyright; source attribution retained'
         out.append({**c,'after':asset,'operations':ops,'recipe_sha256':fingerprint(ops),'display_path':relative,'display_sha256':digest,'display_dimensions':list(Image.open(io.BytesIO(display)).size),'source_review':s,'reviewer_kind':'agent'})
-    prepared={'version':1,'run_id':p['run_id'],'source_review_sha256':sha((run/'source-review.json').read_bytes()),'pillow_version':pillow_version,'changes':out};write(run/'prepared.json',prepared)
-    expected={'version':1,'run_id':p['run_id'],'prepared_sha256':sha((run/'prepared.json').read_bytes()),'reviewer':'','reviewer_kind':'agent','decisions':[{'candidate_key':c['candidate_key'],'display_sha256':c['display_sha256'],'recipe_sha256':c['recipe_sha256'],'decision':'pending','note':''}for c in out]}
+    prepared={'version':1,'run_id':p['run_id'],'source_review_sha256':sha((run/'source-review.json').read_bytes().replace(b'\r\n',b'\n')),'pillow_version':pillow_version,'changes':out};write(run/'prepared.json',prepared)
+    expected={'version':1,'run_id':p['run_id'],'prepared_sha256':sha((run/'prepared.json').read_bytes().replace(b'\r\n',b'\n')),'reviewer':'','reviewer_kind':'agent','decisions':[{'candidate_key':c['candidate_key'],'display_sha256':c['display_sha256'],'recipe_sha256':c['recipe_sha256'],'decision':'pending','note':''}for c in out]}
     if (run/'display-review.json').exists():require(read(run/'display-review.json')['prepared_sha256']==expected['prepared_sha256'],'prepared output changed; retain old display review separately and review new bytes')
     else:write(run/'display-review.json',expected)
     gallery(root,run,out,'prepared.html',True)

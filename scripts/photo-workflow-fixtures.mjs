@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import {digest,fingerprint,photoPath,preparationIndex} from './lib/photo-preparations.mjs';
-import {validateReview} from './lib/photo-maintenance.mjs';
+import {validateReview,stage} from './lib/photo-maintenance.mjs';
+import {execFileSync} from 'node:child_process';
 import {indexMediaRejections} from './lib/media-rejections.mjs';
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'undercast-photo-fixtures-'));
 let count=0;const test=(name,fn)=>{fn();count++;console.log('PASS '+name);};
@@ -48,6 +49,11 @@ try{
  test('duplicated preparation registry rows are refused',()=>assert.throws(()=>preparationIndex(temp)));
  write('data/PHOTO-PREPARATIONS.json',{version:1,ledgers:['data/review/../../secret/changes.json']});
  test('unsafe preparation registry is refused',()=>assert.throws(()=>preparationIndex(temp)));
+ test('review text uses canonical LF across Windows checkouts',()=>{const p=path.join(temp,'source-review.json'),b=fs.readFileSync(p);fs.writeFileSync(p,b.toString().replace(/\n/g,'\r\n'));assert.equal(validateReview(input).length,1);fs.writeFileSync(p,b);});
  test('fixed review frames cannot overflow like the discarded gallery',()=>{const s=fs.readFileSync('scripts/photo-maintenance.py','utf8');assert(s.includes('position:absolute;inset:0;width:100%;height:100%;max-width:none'));});
+ const locked=path.join(temp,'isolated-checkout');fs.mkdirSync(locked);execFileSync('git',['init','-q',locked]);
+ const lock=path.join(locked,'.git','photo-maintenance.lock');fs.writeFileSync(lock,'active fixture writer');
+ await assert.rejects(()=>stage(['--root',locked,'--run',temp]),/writer already holds/);count++;console.log('PASS competing staging writer is refused');
+ fs.unlinkSync(lock);await assert.rejects(()=>stage(['--root',locked,'--run',temp]));assert.equal(fs.existsSync(lock),false);count++;console.log('PASS failed staging releases its own writer lock');
  console.log(`photo workflow fixtures: PASS ${count}; no network, model calls or canonical writes`);
 }finally{fs.rmSync(temp,{recursive:true,force:true});}
