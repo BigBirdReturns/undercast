@@ -19,13 +19,13 @@ E-Hentai is an operating reference, not a product template. UnderCast adopts a m
 | Advanced discovery | Partial through shareable search and filters | Add exact, negative, OR, alias, and namespaced search only through a governed milestone |
 | Duplicate and replacement control | Partial through exact hashes and cross-card invariants | Add pre-intake similarity search after a measured escape |
 | Replacement chains | Partial through tombstones and audit journals | Expose correction and successor lineage |
-| Public corrections and appeals | Planned | Build record-specific intake and independent appeal before contributor accounts |
+| Public corrections and appeals | Correction form and private rights email shipped in #976; independent appeal remains pending | Preserve intake; implement and prove independent appeal before contributor accounts |
 | Rights reporting | Partial | Keep rights and legal intake separate from ordinary moderation and drill the response path |
 | Personal research memory | Intentionally absent server-side | Prefer private local saved views and notes before accounts |
 | Low-resource access | Proven through no-JS records, keyboard access, mobile layouts, and bounded initial loading | Maintain |
 | Distributed delivery | Preservation copies exist; live serving is centralized | Do not build distributed serving without measured availability or bandwidth failure |
 | Load control | Partial through collection-only mode, bounded leases, and capacity controls | Complete SLO, rollback, and incident work |
-| Public data interface | Partial through static contracts, schemas, shards, and JSON-LD | Stabilize versioned exports before demand-backed APIs |
+| Public data interface | Static contracts, schemas, shards and JSON-LD work headlessly; #981 configures multiple views over identical evidence | Maintain immutable evidence and release identity; a write/query service remains outside this boundary |
 | Community maintenance | Internal reviewer roles only | Introduce bounded proposers only after correction capacity and governance are proven |
 | Reputation and incentives | Deliberately non-authoritative | Do not allow reputation or volume to accept facts |
 | Continuity and succession | Partial through offsite snapshots and the canonical gate | Prove restore, rollback, owner-unavailable, and multiple-steward drills |

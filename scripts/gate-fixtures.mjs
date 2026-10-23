@@ -66,11 +66,16 @@ try {
   await runLockfileCheck(lockRoot);
   expect("real npm lockfile dry run preserves installed dependencies", await readFile(dependencySentinel, "utf8"), "installed dependency stays intact");
   await writeFile(path.join(lockRoot, "package-lock.json"), "{");
-  let invalidLockRefused = false;
-  try { await runLockfileCheck(lockRoot); } catch { invalidLockRefused = true; }
+  let invalidLockRefused = false, invalidLockDiagnostic = "";
+  // Expected adversarial failure belongs to this assertion, not the outer job stderr.
+  // Real lockfile checks retain inherited diagnostics and nonzero gate behavior.
+  try { await runLockfileCheck(lockRoot, { stdio: "pipe" }); }
+  catch (error) { invalidLockRefused = true; invalidLockDiagnostic = error.message; }
   expect("isolated lockfile check still rejects an invalid lock", invalidLockRefused, true);
+  expect("invalid lock retains captured npm diagnostics", /EUSAGE|package-lock|lockfile/i.test(invalidLockDiagnostic), true);
 
   const steps = listSteps();
+  expect("canonical gate includes configuration parity", steps.filter(step=>step.id==="website-profiles").length, 1);
   expect("canonical gate has one media-audit step", steps.filter((step) => step.id === "media-audit").length, 1);
   expect("canonical gate keeps rendered step explicit", steps.filter((step) => step.rendered).length, 1);
   expect("--from starts at exact step id", selectSteps({ from: "media-audit" })[0].id, "media-audit");
@@ -87,6 +92,8 @@ try {
     "scripts/gate.mjs",
     "scripts/publication-release.mjs",
     "scripts/publication.mjs",
+    "scripts/build-social-preview.mjs",
+    "scripts/lib/website-profile.mjs",
     "scripts/publication-routes.mjs",
     "scripts/lib/preservation.mjs",
     "scripts/lib/media-rejections.mjs",

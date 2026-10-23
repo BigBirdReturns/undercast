@@ -320,3 +320,10 @@ This is a narrow correctness, accessibility and rights-intake correction under
 DEC-0012 and DEC-0013. It changes no canonical specimen, credit, claim, image
 binding, reveal primitive or release-1.0 receipt. Return to collection mode after
 qualification; historical receipts and broader code pruning remain separate work.
+
+## Website configuration
+
+The released frontend reads its build-time settings from
+`config/sites/production.json`. Alternate root and nested-path views use the same
+archive and shared renderer. See [Website configuration](docs/WEBSITE-PROFILES.md)
+for commands, supported settings, evidence boundaries and release validation.

@@ -289,3 +289,37 @@ the authority for dense mobile evidence; this decision neither supersedes it nor
 changes its disclosure contracts. The correction adds no reveal mechanic, specimen
 field, schema concept, account layer, service, corpus interpretation or aesthetic
 system, and it does not reopen general product development under DEC-0012.
+
+---
+
+## DEC-0017 — Configured presentation over a fixed evidence archive
+
+**Status:** Active · Implemented by #981; effective on merge.
+**Authority:** owner direction to start website configuration, followed by direction
+on 2026-10-22 to finish it. The following is a scoped implementation decision, not
+a verbatim owner quotation.
+
+This supersedes DEC-0012's presentation freeze only for the configuration boundary
+and the demonstrated typography/social-preview defects. The owner reviewed actual
+desktop/mobile profile captures before directing completion. Canonical evidence,
+new reveal mechanics, accounts, services, collection growth and roadmap milestones
+remain under their existing authority.
+
+- `config/sites/production.json` is the maintained configuration for the released
+  website. The ordinary compiler applies it; rendered tests exercise that compiled
+  artifact. Configuration, compiler and artwork inputs are release-hash-bound.
+- Plain-text brand, labels/order of all five existing primary destinations, bounded
+  layout dimensions and isolated alternate base paths form the closed v1 surface.
+  Configuration cannot change records, claims, images, review states or tombstones.
+- Production reconciles the existing Fraunces/Space Mono typography across pages.
+  The social preview uses the existing casting-relief artwork and contains no
+  changing roster count. Source/output hash binding protects that artwork.
+- Both profile fixture and browser suites join the canonical release gate. Visual
+  baselines change only for inspected configured presentation, never for evidence.
+- The existing GitHub Pages origin remains the only authorized production deploy.
+  Alternate root/nested builds remain explicitly identified, non-indexed previews.
+  A build alone never issues `release.json`; complete release validation does.
+
+DEC-0001's flip, DEC-0005's character-first opening, scoped evidence, missing versus
+failed-image states, local fonts, keyboard access and no-JavaScript permanent
+records remain binding. No scheduled collection process resumes.

@@ -410,10 +410,14 @@ test("Recognition plates keep the character/person pair across breakpoints",asyn
   }
 });
 
-test("UC-035 comparison portrait is not a low-resolution sliver",async({page})=>{
+test("UC-035 deployed portrait resolves its declared delivery URL at full resolution",async({page})=>{
   await open(page,"recognition.html#UC-035");
   await expect(page.getByRole("heading",{name:"The Borg Queen",exact:true}).first()).toBeVisible();
-  const source=await page.evaluate(()=>RECORDS.get("UC-035").portrait.src);
+  // Test the delivered artifact, not a repository-only local release mirror.
+  const image=page.locator('#pair [data-plate="portrait"] img').first();
+  await expect(image).toBeVisible();
+  const source=await image.getAttribute("src");
+  expect(source).toBe(mediaLive.urls[specimens.find(record=>record.id==="UC-035").portrait.src]);
   const dimensions=await page.evaluate(src=>new Promise((resolve,reject)=>{
     const image=new Image();
     image.onload=()=>resolve({width:image.naturalWidth,height:image.naturalHeight});
@@ -813,4 +817,19 @@ test.describe('evidence without JavaScript',()=>{
     await expect(page.locator('#corrections a[href^="mailto:"]')).toHaveCount(1);
     await expect(page.locator('#corrections a[href*="template=correction.yml"]')).toHaveCount(1);
   });
+});
+
+test('released artifact applies production configuration and the approved fonts across all surfaces',async({page,request})=>{
+  const response=await request.get(sitePath('website-profile.json'));
+  expect(response.ok()).toBe(true);
+  const info=await response.json();expect(info.status).toBe('production');expect(info.profile.id).toBe('production');expect(info.release_authority).toBe(false);
+  for(const [route,ready] of [['index.html?q=Morn','#result-status'],['recognition.html#UC-001','#record-title'],['coverage.html','#rows tr'],['constellation.html','.person-row'],['records/UC-001/','#record-main'],['404.html','#recovery']]){
+    await open(page,route);await expect(page.locator(ready).first()).toBeVisible();await page.evaluate(()=>document.fonts.ready);
+    await expect(page.locator('.site-wordmark')).toHaveText(info.profile.brand.name);
+    expect(await page.locator('h1').first().evaluate(node=>getComputedStyle(node).fontFamily)).toContain('Fraunces');
+    expect(await page.locator('.site-wordmark').evaluate(node=>getComputedStyle(node).fontFamily)).toContain('Space Mono');
+    expect(await page.evaluate(()=>[...document.fonts].some(face=>face.family==='Fraunces'&&face.status==='loaded'))).toBe(true);
+    await expect(page.locator('.website-profile-notice')).toHaveCount(0);
+    await expect(page.locator('meta[name="robots"][content*="noindex"]')).toHaveCount(0);
+  }
 });

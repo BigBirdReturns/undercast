@@ -20,6 +20,7 @@ export default defineConfig({
     trace: "retain-on-failure"
   },
   projects: [
+    { name: "website-profiles-chromium", testMatch: /website-profiles\.spec\.mjs/, use: { ...devices["Desktop Chrome"], reducedMotion: "reduce" } },
     { name: "chromium-desktop", testMatch: /site\.spec\.mjs/, use: { ...devices["Desktop Chrome"] } },
     { name: "ux-chromium-desktop", ...uxDesktopJourney, use: { ...devices["Desktop Chrome"] } },
     { name: "ux-firefox-desktop", ...uxDesktopJourney, use: { ...devices["Desktop Firefox"] } },
@@ -32,6 +33,6 @@ export default defineConfig({
     command: "node scripts/build-record-pages.mjs && node scripts/serve-test.mjs",
     url: "http://127.0.0.1:4173/undercast/index.html",
     reuseExistingServer: !process.env.CI,
-    timeout: 15_000
+    timeout: 60_000
   }
 });
