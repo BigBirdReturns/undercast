@@ -188,8 +188,12 @@ def plan(args):
             facets.append({'id':r['id'],'side':side,'record_sha256':fingerprint(r),'before':a,'before_sha256':digest})
     allowed={'en.wikipedia.org','commons.wikimedia.org','upload.wikimedia.org','static.wikia.nocookie.net','images.wikia.nocookie.net'}
     allowed.update(h for c in registry for h in c['source_hosts'])
+    html_policy=read(root/'config/photo-sources.json')
+    for profile in html_policy['html_sources']:allowed.update(profile['page_hosts']+profile['image_hosts'])
     body={'version':1,'base_commit':git(root,'rev-parse','HEAD'),'canon':args.canon,'source_hosts':canon['source_hosts'] if canon else [],'allowed_hosts':sorted(allowed),'records':selected,'facets':facets,'max_candidates':args.max_candidates,'source_hints':read(args.sources) if args.sources else []}
     require(1<=args.max_candidates<=6,'max candidates must be 1..6')
+    if getattr(args,'require_composition',False):body['composition_review']=True
+    body['html_source_policy']=html_policy
     body['run_id']=fingerprint(body)[:20]; out=args.run.resolve(); require(not out.is_relative_to(root),'run directory must be outside checkout')
     if (out/'plan.json').exists():require(read(out/'plan.json')==body,'run already belongs to another input snapshot; choose a new run directory')
     else:write(out/'plan.json',body)
@@ -204,10 +208,19 @@ def collect(args):
     root=args.root.resolve(); run=args.run.resolve(); p=read(run/'plan.json')
     cache=Cache(args.cache,p['allowed_hosts'],args.offline,args.refresh,args.budget)
     candidates=[]; outcomes=[]; records={r['id']:r for r in p['records']}
+    retained={}
+    for ledger in read(root/'data/PHOTO-PREPARATIONS.json')['ledgers']:
+        for entry in read(root/ledger)['changes']:
+            if entry.get('after'):retained[(entry['id'],entry['side'])]={**entry,'ledger':ledger}
     for facet in p['facets']:
-        row=records[facet['id']]; side=facet['side']; requests=[]; errors=[]; pool=[]; docs=[]
+        row=records[facet['id']]; side=facet['side']; requests=[]; errors=[]; pool=[]; docs=[]; html_candidates=[]
         for hint in p.get('source_hints',[]):
             if hint.get('id')==row['id'] and hint.get('side')==side:
+                for html_hint in hint.get('html',[]):
+                    try:
+                        import photo_html
+                        html_candidates+=photo_html.candidates(sys.modules[__name__],cache,root,run,facet,row,html_hint,p.get('html_source_policy',{'html_sources':[]}))
+                    except (ValueError,RuntimeError,ue.URLError,OSError) as e:errors.append({'html_page':html_hint.get('page'),'error':str(e)})
                 for url in hint.get('urls',[]):
                     require(up.urlsplit(url).hostname in p['allowed_hosts'] and api_for(url) and page_title(url), 'source hint outside configured wiki sources')
                     requests.append((api_for(url),page_title(url)))
@@ -227,7 +240,13 @@ def collect(args):
                 if api and title:requests.append((api,title))
             for host in p['source_hosts']:
                 if host.endswith('.fandom.com'):requests.append(('https://'+host+'/api.php',row['character']))
-        for api,title in list(dict.fromkeys(requests))[:4]:
+        if side=='portrait':
+            try:
+                query=CO+'?'+up.urlencode(sorted({'action':'query','format':'json','formatversion':'2','list':'search','srnamespace':'6','srlimit':'5','srsearch':'"'+row['actor']+'"'}.items()))
+                body,meta=cache.get(query);search=json.loads(body)
+                for hit in search.get('query',{}).get('search',[]):requests.append((CO,hit['title']))
+            except (ValueError,RuntimeError,ue.URLError,OSError) as e:errors.append({'api':CO,'search':row['actor'],'error':str(e)})
+        for api,title in list(dict.fromkeys(requests))[:9]:
             try:
                 page,meta,raw=cache.page(api,title,title.startswith('File:')); doc=save_document(run,page,meta,raw);docs.append(doc)
                 if page.get('imageinfo'):pool.append((api,page['title'],doc))
@@ -238,7 +257,16 @@ def collect(args):
                 for name in dict.fromkeys(names):
                     if re.search(r'\.(?:jpe?g|png|webp|gif)$',name,re.I) and not re.search(r'(?:logo|signature|flag_of|icon)',name,re.I):pool.append((api,'File:'+name.strip().removeprefix('[[File:').removeprefix('File:'),doc))
             except (ValueError,RuntimeError,ue.URLError,OSError) as e: errors.append({'api':api,'title':title,'error':str(e)})
+        buckets={}
+        for candidate in pool:buckets.setdefault(candidate[2]['sha256'],[]).append(candidate)
+        pool=[]
+        while any(buckets.values()):
+            for group in buckets.values():
+                if group:pool.append(group.pop(0))
         seen=set(); accepted=[]
+        for candidate in html_candidates[:p['max_candidates']]:
+            denial=run_node(root,'classify',payload={'root':str(root),'candidates':[candidate]})[0]
+            if not denial.get('rejection'):accepted.append(candidate)
         for api,title,parent_doc in pool:
             if len(accepted)>=p['max_candidates']:break
             if (api,title) in seen:continue
@@ -259,6 +287,12 @@ def collect(args):
                 if denial.get('rejection'):errors.append({'origin':item['origin'],'rejection':denial['rejection']});continue
                 if not any(c['candidate_key']==item['candidate_key'] for c in accepted):accepted.append(item)
             except (ValueError,RuntimeError,ue.URLError,OSError) as e:errors.append({'api':api,'file':title,'error':str(e)})
+        for candidate in accepted:
+            prior=retained.get((candidate['id'],candidate['side']))
+            if prior and prior['after']==row.get(side) and prior['source_sha256']==candidate['source_sha256']:
+                candidate['retrieved_origin']=candidate['origin'];candidate['origin']=prior['after']['origin']
+                candidate['retained_preparation']={k:prior[k]for k in ['ledger','after','operations','display_sha256']}
+                candidate['candidate_key']=fingerprint({k:candidate[k]for k in ['id','side','record_sha256','source_sha256','origin']})
         candidates+=accepted;outcomes.append({'id':row['id'],'side':side,'candidates':len(accepted),'errors':errors})
         print(stable({'id':row['id'],'side':side,'candidates':len(accepted)}),flush=True)
     result={'version':1,'run_id':p['run_id'],'candidates':candidates,'outcomes':outcomes};write(run/'candidates.json',result)
@@ -319,10 +353,11 @@ def selected_inputs(root,run):
 
 def prepare(args):
     from PIL import Image,ImageOps,__version__ as pillow_version
-    from photo_pixels import replay
+    from photo_pixels import replay,compose_region
     root=args.root.resolve(); run=args.run.resolve();p,review,selected=selected_inputs(root,run);out=[]
     for c,s in selected:
-        raw=inside(run,c['source_path']).read_bytes();im=ImageOps.exif_transpose(Image.open(io.BytesIO(raw)))
+        raw=inside(run,c['source_path']).read_bytes();im=ImageOps.exif_transpose(Image.open(io.BytesIO(raw)));source_size=list(im.size)
+        require(not p.get('composition_review') or s.get('composition'),'protected-region and context review required')
         box=s.get('crop_box_px');ops=[]
         if box:
             require(len(box)==4 and all(type(n)is int for n in box) and 0<=box[0]<box[2]<=im.width and 0<=box[1]<box[3]<=im.height,'invalid crop bounds')
@@ -333,6 +368,10 @@ def prepare(args):
             if max(im.size)>1200:
                 factor=1200/max(im.size);size=[round(im.width*factor),round(im.height*factor)];ops.append({'operation':'lanczos-resize','size':size,'synthetic_detail':False})
             ops.append({'operation':'jpeg-encode','quality':92,'subsampling':0})
+        if s.get('retain_current'):
+            prior=c.get('retained_preparation');require(prior and prior['after']==c['before'],'retained-current review needs an exact existing preparation')
+            require(s['fit']==prior['after'].get('fit','cover') and s.get('focus',{'x':'center','y':'center'})==prior['after'].get('focus',{'x':'center','y':'center'}),'retained-current presentation changed')
+            ops=prior['operations']
         display=replay(raw,ops);ext=Path(c['source_path']).suffix if ops==[{'operation':'identity-copy'}] else '.jpg'
         digest=sha(display);relative='display/photo-'+digest[:16]+ext;dest=inside(run,relative);dest.parent.mkdir(exist_ok=True);dest.write_bytes(display)
         author=c['author'];license=c['license'];free=bool(re.search(r'cc[- ]?by|cc0|public domain',license,re.I))
@@ -340,15 +379,30 @@ def prepare(args):
         asset={'src':'images/'+dest.name,'kind':'still' if c['side']=='still' else ('free' if free else 'copyright'),'origin':c['origin'],'pin':True,'fit':s['fit'],'focus':s.get('focus',{'x':'center','y':'center'}),'processing':'Source image: '+(', '.join({'crop':'crop','lanczos-resize':'Lanczos resize','identity-copy':'unchanged original bytes','jpeg-encode':'display encoding'}[op['operation']] for op in ops))+'. No generated detail.'}
         if c['side']=='portrait' or author:asset['author']=author
         if c['side']=='portrait' or license:asset['license']=license or 'Copyright; source attribution retained'
+        if s.get('retain_current'):
+            require(digest==prior['display_sha256']==c['before_sha256'],'retained recipe no longer reproduces current image')
+            asset=prior['after']
         out.append({**c,'after':asset,'operations':ops,'recipe_sha256':fingerprint(ops),'display_path':relative,'display_sha256':digest,'display_dimensions':list(Image.open(io.BytesIO(display)).size),'source_review':s,'reviewer_kind':'agent'})
+        # Region custody supplements source identity; it does not infer a face.
+        composition=compose_region(s.get('composition'),source_size,ops)
+        if composition:out[-1]['composition']=composition
+        if p.get('composition_review'):out[-1]['composition_required']=True
     prepared={'version':1,'run_id':p['run_id'],'source_review_sha256':sha((run/'source-review.json').read_bytes().replace(b'\r\n',b'\n')),'pillow_version':pillow_version,'changes':out};write(run/'prepared.json',prepared)
     expected={'version':1,'run_id':p['run_id'],'prepared_sha256':sha((run/'prepared.json').read_bytes().replace(b'\r\n',b'\n')),'reviewer':'','reviewer_kind':'agent','decisions':[{'candidate_key':c['candidate_key'],'display_sha256':c['display_sha256'],'recipe_sha256':c['recipe_sha256'],'decision':'pending','note':''}for c in out]}
+    for decision,row in zip(expected['decisions'],out):
+        if row.get('composition'):decision['composition_sha256']=fingerprint(row['composition'])
     if (run/'display-review.json').exists():require(read(run/'display-review.json')['prepared_sha256']==expected['prepared_sha256'],'prepared output changed; retain old display review separately and review new bytes')
     else:write(run/'display-review.json',expected)
     gallery(root,run,out,'prepared.html',True)
     print(stable({'prepared':len(out),'source_review':review['reviewer'],'canonical_writes':0,'display_review':'required'}))
 
 def main():
+    if len(sys.argv)>1 and sys.argv[1]=='queue':
+        result=subprocess.run([sys.executable,str(ROOT/'scripts/photo-operations.py'),*sys.argv[2:]],env=os.environ)
+        sys.exit(result.returncode)
+    if len(sys.argv)>1 and sys.argv[1]=='variants':
+        from photo_variants import main as variants
+        return variants(sys.argv[2:])
     parser=argparse.ArgumentParser(description=__doc__,formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('command',choices=['plan','collect','prepare','stage','status'])
     parser.add_argument('--root',type=Path,default=ROOT);parser.add_argument('--run',type=Path,required=True)
@@ -356,6 +410,7 @@ def main():
     parser.add_argument('--sources',type=Path,help='Reviewed exact source-page hints, an array of {id,side,urls}')
     parser.add_argument('--side',choices=['still','portrait','both'],default='both');parser.add_argument('--limit',type=int,default=16)
     parser.add_argument('--max-candidates',type=int,default=3);parser.add_argument('--budget',type=int,default=120)
+    parser.add_argument('--require-composition',action='store_true',help='Require explicit protected-region and context review in both display frames')
     parser.add_argument('--recover',action='store_true',help='Recover a stopped local staging writer after verifying its process is dead');parser.add_argument('--offline',action='store_true');parser.add_argument('--refresh',action='store_true')
     args=parser.parse_args()
     if args.command=='plan':plan(args)

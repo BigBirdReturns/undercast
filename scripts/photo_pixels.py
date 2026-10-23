@@ -26,3 +26,23 @@ def replay(raw: bytes, operations: list[dict]) -> bytes:
         else:raise ValueError('unrecognized image operation: '+kind)
     if output is None:raise ValueError('missing display encoding')
     return output.getvalue()
+
+def compose_region(specification, source_size, operations):
+    """Map a reviewer-marked source region through exact non-generative operations."""
+    if not specification:return None
+    import math
+    region=specification.get('protected_region_px');w,h=source_size
+    if not(isinstance(region,list) and len(region)==4 and all(type(n) in (int,float) and math.isfinite(n) for n in region)):
+        raise ValueError('protected source region needs four finite coordinates')
+    x0,y0,x1,y1=region
+    if not(0<=x0<x1<=w and 0<=y0<y1<=h):raise ValueError('protected region outside source')
+    maximum=specification.get('max_height_fraction');margin=specification.get('min_margin_fraction')
+    if not(type(maximum) in (int,float) and .1<=maximum<=1 and type(margin) in (int,float) and 0<=margin<=.2):
+        raise ValueError('explicit bounded context limits required')
+    for op in operations:
+        if op['operation']=='crop':
+            l,t,r,b=op['box_px'];x0-=l;x1-=l;y0-=t;y1-=t;w,h=r-l,b-t
+            if not(0<=x0<x1<=w and 0<=y0<y1<=h):raise ValueError('crop removes protected source region')
+        elif op['operation']=='lanczos-resize':
+            nw,nh=op['size'];x0*=nw/w;x1*=nw/w;y0*=nh/h;y1*=nh/h;w,h=nw,nh
+    return {'version':1,'display_region_px':[x0,y0,x1,y1],'max_height_fraction':maximum,'min_margin_fraction':margin}

@@ -5,7 +5,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import {execFileSync,spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {digest,textDigest,fingerprint,photoPath,preparationIndex,validateActivePreparations,PHOTO_INDEX} from './photo-preparations.mjs';
+import {digest,textDigest,fingerprint,photoPath,preparationIndex,validateActivePreparations,validateComposition,PHOTO_INDEX} from './photo-preparations.mjs';
 import {indexMediaRejections,matchMediaRejection} from './media-rejections.mjs';
 import {withPhotoWriter,promotePhotoStage,hasPhotoTransaction} from './photo-stage-transaction.mjs';
 const ownRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
@@ -42,6 +42,7 @@ export function validateReview({plan,source,prepared,display,run,records,rejecti
   assert.equal(row.reviewer_kind,'agent');assert.equal(row.actor,current.actor);assert.equal(row.character,current.character);
   assert.equal(row.candidate_key,fingerprint(Object.fromEntries(['id','side','record_sha256','source_sha256','origin'].map(k=>[k,row[k]]))),'candidate binding changed');
   assert(row.operations.length&&row.operations.every(o=>['crop','lanczos-resize','jpeg-encode','identity-copy'].includes(o.operation)),'unreviewed operation');
+  if(review.retain_current){assert.deepEqual(row.after,current[row.side],'retained-current path may not replace the binding');assert.equal(row.display_sha256,row.before_sha256,'retained-current bytes changed');}
   assert.equal(row.after.origin,row.origin);assert.equal(row.after.fit,review.fit);assert.deepEqual(row.after.focus,review.focus);
   assert(['cover','contain'].includes(row.after.fit));assert(row.after.processing?.endsWith('No generated detail.'));
   for(const value of Object.values(row.after.focus))assert(['center','top','bottom','upper','lower','left','right'].includes(value)||(Number.isInteger(value)&&value>=0&&value<=100),'unsafe focus');
@@ -53,7 +54,7 @@ export function validateReview({plan,source,prepared,display,run,records,rejecti
    const bytes=fs.readFileSync(photoPath(run,doc.path));assert.equal(digest(bytes),doc.sha256);
    assert(ev.quote?.length>=12&&text(JSON.parse(bytes)).includes(ev.quote),'documentary quote does not exist in retained bytes');
   }
-  if(decision.decision==='approve')changes.push(row);
+  if(decision.decision==='approve'){validateComposition(row,decision,plan.composition_review===true);changes.push(row);}
  }
  return changes;
 }
@@ -95,7 +96,7 @@ async function stageLocked(argv,{sandbox=false}={}){
   const s=sources.find(r=>r.id===row.id);assert(s,'missing canonical source ledger');s[row.side]=structuredClone(row.after);s.fetched_at=new Date().toISOString().slice(0,10);
  }
  for(const name of ['plan.json','source-review.json','display-review.json'])retain(directory+'/'+name,Buffer.from(fs.readFileSync(photoPath(run,name),'utf8').replace(/\r\n/g,'\n')));
- const ledger={version:2,run_id:plan.run_id,base_commit:plan.base_commit,reviewer_kind:'agent',source_review:{path:directory+'/source-review.json',sha256:textDigest(fs.readFileSync(photoPath(run,'source-review.json')))},display_review:{path:directory+'/display-review.json',sha256:textDigest(fs.readFileSync(photoPath(run,'display-review.json')))},changes};
+ const ledger={version:2,composition_review:plan.composition_review===true,run_id:plan.run_id,base_commit:plan.base_commit,reviewer_kind:'agent',source_review:{path:directory+'/source-review.json',sha256:textDigest(fs.readFileSync(photoPath(run,'source-review.json')))},display_review:{path:directory+'/display-review.json',sha256:textDigest(fs.readFileSync(photoPath(run,'display-review.json')))},changes};
  write(photoPath(root,ledgerPath),ledger);index.ledgers.push(ledgerPath);write(photoPath(root,PHOTO_INDEX),index);
  const nonMedia=r=>Object.fromEntries(Object.entries(r).filter(([key])=>!['still','portrait'].includes(key)));
  assert.deepEqual(records.map(nonMedia),original.map(nonMedia),'photo work changed non-media fields');

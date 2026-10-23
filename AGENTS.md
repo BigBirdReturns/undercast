@@ -80,10 +80,11 @@ unresolved otherwise.
 ## Photo work — use the retained estate path
 
 For image acquisition, selection, preparation or framing on existing or staged
-records, use `npm run photos -- plan|collect|prepare|stage` and the workflow in
+records, use `npm run photos -- queue scan|flag|work|advance|apply|finish` and the workflow in
 `MEDIA.md`. Use bounded IDs/canon scope, shared retained source caches and separate
 source/display decisions; do not recreate dated session scripts, add a local-model
-approval prerequisite, or infer identity from facial resemblance. Canonical roster
+approval prerequisite, or infer identity from facial resemblance. The queue is the persistent attention surface; identity verification never closes
+a framing complaint. Canonical roster
 admission remains under GROW; photo staging never adds records or publishes itself.
 
 ## Default operating mode — collect, improve, expand

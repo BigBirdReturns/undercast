@@ -36,6 +36,7 @@ export function validateBatchReviews(document,source,display){
   const approved=display.decisions.filter(d=>d.candidate_key===row.candidate_key&&d.decision==='approve');
   assert.equal(approved.length,1,'prepared image lacks one exact display approval');assert.equal(approved[0].display_sha256,row.display_sha256);assert.equal(approved[0].recipe_sha256,fingerprint(row.operations),'approved recipe changed');
   assert(approved[0].note?.trim().length>=12,'display judgment missing');
+  validateComposition(row,approved[0],document.composition_review===true);
  }
 }
 export function preparationInputs(root){
@@ -71,4 +72,48 @@ export function validateActivePreparations(root,records){
   assert(row.operations?.length&&row.operations.every(op=>['crop','lanczos-resize','opencv-fastNlMeansDenoisingColored','jpeg-encode','identity-copy'].includes(op.operation)),'unrecognized preparation operation');
  }
  return entries;
+}
+
+// Source identity and visual composition have independent, hash-bound claims.
+// These constraints describe a reviewer-marked region, never a face detector vote.
+const namedPosition={left:0,top:0,upper:28,center:50,lower:72,right:100,bottom:100};
+const position=(a,axis,fallback)=>{
+ const value=a.focus?.[axis]??fallback;const number=typeof value==='number'?value:namedPosition[value];
+ assert(Number.isFinite(number)&&number>=0&&number<=100,'invalid composition focus');return number/100;
+};
+export function frameComposition(row,width,height,actual=null){
+ const c=row.composition;assert(c,'composition contract missing');
+ const [w,h]=row.display_dimensions;assert([w,h,width,height].every(n=>Number.isFinite(n)&&n>0),'invalid frame dimensions');
+ const asset=row.after,fit=actual?.fit||asset.fit||'cover';assert(['cover','contain'].includes(fit));
+ const p=actual?.position?.split(/\s+/).map(v=>Number.parseFloat(v)/100);
+ if(p)assert(p.length===2&&actual.position.split(/\s+/).every(v=>/^\d+(?:\.\d+)?%$/.test(v)),'unexpected actual focal position');
+ const fx=p?p[0]:position(asset,'x',50),fy=p?p[1]:position(asset,'y',28);
+ assert.equal(fit,asset.fit||'cover','actual fit differs from reviewed fit');
+ assert(Math.abs(fx-position(asset,'x',50))<1e-6&&Math.abs(fy-position(asset,'y',28))<1e-6,'actual focus differs from approved composition');
+ const scale=(fit==='contain'?Math.min:Math.max)(width/w,height/h),ox=(width-w*scale)*fx,oy=(height-h*scale)*fy;
+ const [x0,y0,x1,y1]=c.display_region_px;
+ const region=[ox+x0*scale,oy+y0*scale,ox+x1*scale,oy+y1*scale];
+ const margin=c.min_margin_fraction,max=c.max_height_fraction;
+ assert(region[0]>=width*margin-1e-6&&region[1]>=height*margin-1e-6&&region[2]<=width*(1-margin)+1e-6&&region[3]<=height*(1-margin)+1e-6,'protected subject region clipped or required margin lost');
+ assert((region[3]-region[1])/height<=max+1e-6,'protected region exceeds reviewed frame occupancy; image too tight');
+ return {frame:[width,height],region,region_height_fraction:(region[3]-region[1])/height,pass:true};
+}
+export function validateComposition(row,decision=null,required=false){
+ if(!required&&!row.composition_required&&!row.composition)return [];
+ assert(row.composition&&row.source_review?.composition,'explicit source and display composition required');
+ const c=row.composition,s=row.source_review.composition;
+ assert.equal(c.version,1);assert.equal(c.max_height_fraction,s.max_height_fraction);assert.equal(c.min_margin_fraction,s.min_margin_fraction);
+ assert(Number.isFinite(c.max_height_fraction)&&c.max_height_fraction>=.1&&c.max_height_fraction<=1);
+ assert(Number.isFinite(c.min_margin_fraction)&&c.min_margin_fraction>=0&&c.min_margin_fraction<=.2);
+ let [w,h]=row.source_dimensions;let r=s.protected_region_px?.slice();
+ assert(Array.isArray(r)&&r.length===4&&r.every(Number.isFinite),'four finite protected-region coordinates required');
+ const inside=()=>assert(r[0]>=0&&r[1]>=0&&r[2]>r[0]&&r[3]>r[1]&&r[2]<=w&&r[3]<=h,'protected region outside retained pixels');inside();
+ for(const op of row.operations){
+  if(op.operation==='crop'){const [l,t,right,b]=op.box_px;r=[r[0]-l,r[1]-t,r[2]-l,r[3]-t];w=right-l;h=b-t;inside();}
+  else if(op.operation==='lanczos-resize'){const [nw,nh]=op.size;r=r.map((v,i)=>v*(i%2?nh/h:nw/w));w=nw;h=nh;}
+ }
+ assert.deepEqual([w,h],row.display_dimensions,'composition dimensions differ from preparation');
+ assert(Array.isArray(c.display_region_px)&&c.display_region_px.length===4&&r.every((v,i)=>Math.abs(v-c.display_region_px[i])<1e-6),'source region transformed differently');
+ if(decision)assert.equal(decision.composition_sha256,fingerprint(c),'display approval is not bound to composition');
+ return [[320,240],[320,400]].map(([w,h])=>frameComposition(row,w,h));
 }

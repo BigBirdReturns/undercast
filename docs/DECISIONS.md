@@ -439,3 +439,18 @@ A retry reruns current audit/projection validation; registration alone never
 constitutes successful staging. Preserve intervening user edits and active
 writer locks. Inject actual worker termination as well as ordinary exceptions.
 No new scheduler, public surface, approval authority or canonical identity model.
+
+## DEC-0023 — Persistent photographic attention and bounded estate execution
+
+Status: effective on merge. Authority: the owner's instruction to make crawling,
+adjustment, replacement and improvement routine across current and future canons.
+
+Extend the maintained photo path with a durable, side-specific attention queue,
+bounded resumable workers, a private same-side composition desk, explicit source
+and display decisions, retained candidate holds and verified public completion.
+Identity acceptance and composition acceptance remain separate. New queue-adopted
+images bind reviewer-marked protected regions and context limits to source bytes,
+processing recipes and both real display frames. Existing images receive no
+retroactive composition certificate. No public reveal, layout, roster authority,
+scheduler or synthetic-photograph policy changes. Canon-specific semantic evidence
+and new source-host admission remain reviewed responsibilities.

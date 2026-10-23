@@ -253,3 +253,112 @@ append `--recover`; the lock is reclaimed only for a confirmed dead process on
 the same host. Live or foreign locks remain blocked. Successful retries rerun
 current audit and projection invariants before reporting `already-staged`. A
 staging receipt describes a validated local candidate, never deployment.
+
+## Photographic attention queue: ordinary operating path
+
+`npm run photos -- queue` connects feedback, screening, cached acquisition,
+composition work, source review, recoverable staging and public acceptance. It
+uses the existing photo commands rather than a second publisher or record store.
+The durable estate state lives outside the checkout, on the owning host. For this
+installation it is `UnderCast/photo-operations/` on W03; the shared cache, retained
+runs, review desk, SQLite online backup and portable `queue.json` live there.
+Workers on other estate seats invoke the owner's command through the existing SSH
+route. Do not place SQLite on SMB/NFS or pretend one local database is a distributed
+queue. The current demonstrated execution pool uses bounded W03 CPU workers.
+
+```bash
+export PHOTO_PYTHON=/path/to/qualified/photo-runtime/bin/python
+STATE=/path/to/UnderCast/photo-operations
+npm run photos -- queue scan --state "$STATE"
+npm run photos -- queue flag --state "$STATE" --task UC-001/portrait \
+  --reason 'Head is too tightly framed; preserve the whole head and shoulder context.'
+npm run photos -- queue work --state "$STATE" --jobs 4 --limit 16
+npm run photos -- queue desk --state "$STATE"
+```
+
+A scan accounts for both sides of every selected record (`--canon` or `--ids`
+restrict it). It separates missing sources, unresolved identity review,
+low-resolution sources, large frame crop loss and unrecorded composition review.
+These are attention signals, not automated aesthetic judgments. An identity badge
+never suppresses a composition complaint. Flagging a specific record side gives
+that complaint priority without treating the other side as defective. Repeated
+scans preserve feedback and review state instead of duplicating jobs.
+
+`work` takes expiring token-bound leases, renews active leases, shares the existing
+per-host request pacing/cache, and stops after its explicit task/request/time
+budget. It creates candidate sources and four framing alternatives in both the
+4:3 card and 4:5 record frames. It stops in `source-review`; successful download,
+identity review and display approval remain distinct. Failed work keeps its error
+and retry date. Expired claims can be resumed; stale workers cannot overwrite the
+new owner's result. No model is called by acquisition or pixel preparation.
+
+The private `desk.html` filters by record, subject, state and issue. Each run's
+`review.html` compares the same side, exposes exact source evidence, and supports
+candidate selection, source-pixel cropping, focus, contain/cover and a protected
+head/silhouette region. Drag marks that region; Shift-drag marks a crop. The desk
+exports ordinary source/display review JSON; assistants can write the identical
+format directly. `queue import-review --task ... --kind source|display --input ...`
+imports a form into its exact run. It grants no approval by itself.
+
+```bash
+npm run photos -- queue advance --state "$STATE" --task UC-001/portrait
+# Review prepared bytes and complete the named, hash-bound display decision.
+npm run photos -- queue advance --state "$STATE" --task UC-001/portrait
+# In a committed, clean, named implementation branch:
+npm run photos -- queue apply --state "$STATE" --task UC-001/portrait
+# Ordinary reviewed commit, complete gate, merge and deployment remain required.
+npm run photos -- queue finish --state "$STATE" --task UC-001/portrait \
+  --base-url https://bigbirdreturns.github.io/undercast/
+```
+
+Only `finish` can mark a changed task `published`, after real public acceptance
+matches the locally qualified artifact and the release stays stable. `apply`
+records `staged`, never published. It delegates to the existing crash-recoverable
+stage; `--recover` retains the dead-owner checks. The queue never commits, merges,
+force-pushes, changes roster authority or enables unattended collection schedules.
+
+New queue-selected images must carry a reviewer-marked protected source region,
+maximum head/silhouette height fraction and minimum margin. Preparation maps that
+region through the exact crop/resize recipe. Staging and publication independently
+reject lost protected pixels or excessive occupancy in either frame. The actual
+browser also checks real dimensions, fit and focal position against the contract.
+A reviewer still determines which features matter; this is not an inferred face
+identity or a claim that numerical geometry establishes good taste. Historical
+images without region decisions remain unassessed, not retrospectively approved.
+
+Source decisions can include `candidate_holds`: each names the candidate key,
+reason and exact document-hash/quote evidence. Holds persist for that record side,
+expected subject and exact source bytes. Subsequent workers retain their evidence
+but avoid reoffering the same rejected candidate. `--revisit-held` deliberately
+reopens them; a different subject or different source bytes gets fresh review.
+Canonical wrong-image rejection rules still apply separately and cannot be bypassed.
+
+MediaWiki, Commons and Wikipedia use the retained API adapter. Reviewed HTML
+source profiles live in `config/photo-sources.json`. Explicit HTML page hints can
+supply image URLs only when those URLs literally occur in the retained page;
+page and image hosts must be registered. The adapter reads ordinary HTML and
+literal gallery URLs, never executes source JavaScript, and retains exact response
+bytes alongside a hash-bound text projection. A gallery title is evidence to
+review, not automatic approval of every person in every photograph.
+
+Use `--offline` for reproducible cache-only work and `--refresh` for a deliberate
+upstream revisit. Source failure never becomes proof of absence. `retry` requires
+a task and reason and preserves previous run directories. Source/display review
+and staging remain explicit checkpoints. The queue is bounded and operator-run;
+this release installs no persistent daemon. `queue export` makes an online SQLite
+backup and portable JSON checkpoint. Retain the cache and runs with that backup.
+
+A source whose bytes exactly match the currently registered preparation exposes
+that retained preparation as a candidate. A source decision may explicitly set
+`retain_current: true` to add a new composition assessment while preserving the
+current display bytes, attribution and source locator exactly. Preparation replays
+the retained recipe; a different output hash or changed binding refuses this path.
+This avoids re-encoding good photographs merely to record a better review. A
+concurrently published correction invalidates the old queued snapshot; rescan and
+review its actual successor rather than overwrite another worker's accepted work.
+
+Featured images in the homepage use `data-uc-media="UC-…/still|portrait"` bindings.
+The normal publication compiler derives their source, fit and explicit focus from
+the same canonical record as the wall and permanent pages. Replacing a featured
+photograph therefore requires no second HTML edit. A missing source becomes the
+existing absence plate; unknown IDs and unsafe bindings refuse publication.
