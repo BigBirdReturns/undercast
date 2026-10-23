@@ -59,7 +59,9 @@ Release builds use the verified local WOFF2 subsets declared by
 ## 3. Image and crop rules — DEC-0003
 
 - Fixed frames default to an **upper-center crop**; optional per-image `focus`
-  (`{x,y}`) overrides it. `focus` is the only crop-tuning field and is retained.
+  (`{x,y}`) overrides it. Each axis accepts its retained named positions or a
+  integer percentage from 0 to 100 (DEC-0018). `focus` remains the only
+  crop-tuning field. It changes object-position, never image pixels or scale.
 - Do not re-introduce the retired `comparison` field or any `--compare-*` /
   `transform: scale()` alignment hack. The flip needs no per-pair matching.
 

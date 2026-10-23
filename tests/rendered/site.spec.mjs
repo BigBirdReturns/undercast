@@ -833,3 +833,31 @@ test('released artifact applies production configuration and the approved fonts 
     await expect(page.locator('meta[name="robots"][content*="noindex"]')).toHaveCount(0);
   }
 });
+
+test("Klingon framing uses named and precise focus on the wall, interactive and permanent records",async({page,browser})=>{
+  const x={left:20,center:50,right:80},y={top:0,upper:28,center:50,lower:72,bottom:100};
+  const percent=(value,names,fallback)=>typeof value==="number"?value:(names[value]??fallback);
+  const expected=image=>`${percent(image.focus?.x,x,50)}% ${percent(image.focus?.y,y,28)}%`;
+  const ids=new Set(JSON.parse(await readFile(new URL("../../data/species.json",import.meta.url),"utf8")).taxa.find(t=>t.label==="Klingon").wall_records.map(r=>r.id));
+  await open(page,"index.html?species=Klingon");await waitForWall(page);
+  await expect(page.locator("article.cast")).toHaveCount(ids.size);
+  const actual=await page.locator("article.cast").evaluateAll(cards=>Object.fromEntries(cards.map(card=>[card.dataset.uid,Object.fromEntries([['still','.front .shot'],['portrait','.back .shot']].map(([side,selector])=>[side,card.querySelector(selector)?getComputedStyle(card.querySelector(selector)).objectPosition:null]))])));
+  for(const record of specimens.filter(r=>ids.has(r.id))) for(const side of ['still','portrait']) if(record[side]) expect(actual[record.id][side],`${record.id}/${side}`).toBe(expected(record[side]));
+  const record=specimens.find(r=>r.id==="UC-1368");expect(record.portrait.focus.y).toBe(10);
+  await open(page,"recognition.html#UC-1368");
+  await expect(page.locator('.uc-image-node.is-portrait .uc-photo').first()).toHaveCSS('object-position',expected(record.portrait));
+  await open(page,"records/UC-1368/");
+  await expect(page.locator('.record-image.is-portrait .record-media')).toHaveCSS('object-position',expected(record.portrait));
+  const context=await browser.newContext({javaScriptEnabled:false});const nojs=await context.newPage();
+  try{await nojs.goto(new URL(sitePath('records/UC-1368/'),page.url()).href);await expect(nojs.locator('.record-image.is-portrait .record-media')).toHaveCSS('object-position',expected(record.portrait));}finally{await context.close();}
+});
+
+test("precise focus uses only the closed external stylesheet positions",async({page})=>{
+  await open(page,"index.html?species=Klingon");await waitForWall(page);
+  const results=await page.evaluate(()=>[0,13,100,-1,101,12.5,'0%;background:red'].map(value=>{
+    const frame=document.createElement('div');frame.className='record-image';frame.dataset.focusX='center';frame.dataset.focusY=String(value);document.body.append(frame);
+    const focus=getComputedStyle(frame).getPropertyValue('--focus-y').trim();frame.remove();return focus;
+  }));
+  expect(results.slice(0,3)).toEqual(['0%','13%','100%']);
+  for(const value of results.slice(3))expect(value).toBe('');
+});

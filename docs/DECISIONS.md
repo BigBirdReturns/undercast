@@ -323,3 +323,23 @@ remain under their existing authority.
 DEC-0001's flip, DEC-0005's character-first opening, scoped evidence, missing versus
 failed-image states, local fonts, keyboard access and no-JavaScript permanent
 records remain binding. No scheduled collection process resumes.
+
+---
+
+## DEC-0018 — Precise source-preserving photo focus
+
+**Status:** Active on merge.
+**Authority:** owner-directed estate-executed Klingon photo refinement. This is
+a bounded implementation decision, not a verbatim owner quotation.
+
+The full 80-record photo review demonstrated a concrete limitation: the named
+vertical positions can skip over a face in a tall source. Extend the existing
+`image.focus` axes with integer 0–100 object-position percentages. Named positions
+retain their exact behavior. The wall, interactive record, and no-JavaScript
+permanent record consume the same values. Invalid values never become CSS.
+
+This narrowly extends DEC-0003 and the DEC-0012 surface freeze for framing only.
+The flip, unsplit frame, character-first opening, source photographs, provenance,
+review votes, and record identities remain intact. No scale alignment, synthesized
+face, new reveal, local-model approval, or autonomous collection is introduced.
+Framing review is explicitly assistant review, not a new human identity attestation.
