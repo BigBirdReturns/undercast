@@ -852,9 +852,12 @@ test("Klingon framing uses named and precise focus on the wall, interactive and 
   try{await nojs.goto(new URL(sitePath('records/UC-1368/'),page.url()).href);await expect(nojs.locator('.record-image.is-portrait .record-media')).toHaveCSS('object-position',expected(record.portrait));}finally{await context.close();}
 });
 
-test("precise focus accepts bounded numbers without admitting CSS strings",async({page})=>{
+test("precise focus uses only the closed external stylesheet positions",async({page})=>{
   await open(page,"index.html?species=Klingon");await waitForWall(page);
-  const results=await page.evaluate(()=>[0,12.5,100,-1,101,'12.5',NaN,Infinity,'0%;background:red'].map(value=>focusAttrs({focus:{x:'center',y:value}})));
-  expect(results[0]).toContain('--focus-y:0%');expect(results[1]).toContain('--focus-y:12.5%');expect(results[2]).toContain('--focus-y:100%');
-  for(const result of results.slice(3)) expect(result).not.toContain(' style=');
+  const results=await page.evaluate(()=>[0,13,100,-1,101,12.5,'0%;background:red'].map(value=>{
+    const frame=document.createElement('div');frame.className='record-image';frame.dataset.focusX='center';frame.dataset.focusY=String(value);document.body.append(frame);
+    const focus=getComputedStyle(frame).getPropertyValue('--focus-y').trim();frame.remove();return focus;
+  }));
+  expect(results.slice(0,3)).toEqual(['0%','13%','100%']);
+  for(const value of results.slice(3))expect(value).toBe('');
 });

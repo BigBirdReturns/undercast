@@ -334,7 +334,7 @@ a bounded implementation decision, not a verbatim owner quotation.
 
 The full 80-record photo review demonstrated a concrete limitation: the named
 vertical positions can skip over a face in a tall source. Extend the existing
-`image.focus` axes with finite 0–100 object-position percentages. Named positions
+`image.focus` axes with integer 0–100 object-position percentages. Named positions
 retain their exact behavior. The wall, interactive record, and no-JavaScript
 permanent record consume the same values. Invalid values never become CSS.
 
