@@ -35,6 +35,7 @@ try{
  refuse('unknown source snapshot is refused',x=>x.source.selections[0].evidence[0].document_sha256='0'.repeat(64));
  refuse('changed display hash is refused',x=>x.display.decisions[0].display_sha256='0'.repeat(64));
  refuse('changed recipe is refused',x=>x.prepared.changes[0].operations=[{operation:'invent-face'}]);
+ refuse('retained-current mode cannot replace an existing binding',x=>x.source.selections[0].retain_current=true);
  refuse('candidate cannot move between image sides',x=>x.source.selections[0].side='still');
  refuse('duplicate approval is refused',x=>x.display.decisions.push(x.display.decisions[0]));
  refuse('unknown run identity is refused',x=>x.prepared.run_id='different');

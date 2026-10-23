@@ -208,6 +208,10 @@ def collect(args):
     root=args.root.resolve(); run=args.run.resolve(); p=read(run/'plan.json')
     cache=Cache(args.cache,p['allowed_hosts'],args.offline,args.refresh,args.budget)
     candidates=[]; outcomes=[]; records={r['id']:r for r in p['records']}
+    retained={}
+    for ledger in read(root/'data/PHOTO-PREPARATIONS.json')['ledgers']:
+        for entry in read(root/ledger)['changes']:
+            if entry.get('after'):retained[(entry['id'],entry['side'])]={**entry,'ledger':ledger}
     for facet in p['facets']:
         row=records[facet['id']]; side=facet['side']; requests=[]; errors=[]; pool=[]; docs=[]; html_candidates=[]
         for hint in p.get('source_hints',[]):
@@ -283,6 +287,12 @@ def collect(args):
                 if denial.get('rejection'):errors.append({'origin':item['origin'],'rejection':denial['rejection']});continue
                 if not any(c['candidate_key']==item['candidate_key'] for c in accepted):accepted.append(item)
             except (ValueError,RuntimeError,ue.URLError,OSError) as e:errors.append({'api':api,'file':title,'error':str(e)})
+        for candidate in accepted:
+            prior=retained.get((candidate['id'],candidate['side']))
+            if prior and prior['after']==row.get(side) and prior['source_sha256']==candidate['source_sha256']:
+                candidate['retrieved_origin']=candidate['origin'];candidate['origin']=prior['after']['origin']
+                candidate['retained_preparation']={k:prior[k]for k in ['ledger','after','operations','display_sha256']}
+                candidate['candidate_key']=fingerprint({k:candidate[k]for k in ['id','side','record_sha256','source_sha256','origin']})
         candidates+=accepted;outcomes.append({'id':row['id'],'side':side,'candidates':len(accepted),'errors':errors})
         print(stable({'id':row['id'],'side':side,'candidates':len(accepted)}),flush=True)
     result={'version':1,'run_id':p['run_id'],'candidates':candidates,'outcomes':outcomes};write(run/'candidates.json',result)
@@ -358,6 +368,10 @@ def prepare(args):
             if max(im.size)>1200:
                 factor=1200/max(im.size);size=[round(im.width*factor),round(im.height*factor)];ops.append({'operation':'lanczos-resize','size':size,'synthetic_detail':False})
             ops.append({'operation':'jpeg-encode','quality':92,'subsampling':0})
+        if s.get('retain_current'):
+            prior=c.get('retained_preparation');require(prior and prior['after']==c['before'],'retained-current review needs an exact existing preparation')
+            require(s['fit']==prior['after'].get('fit','cover') and s.get('focus',{'x':'center','y':'center'})==prior['after'].get('focus',{'x':'center','y':'center'}),'retained-current presentation changed')
+            ops=prior['operations']
         display=replay(raw,ops);ext=Path(c['source_path']).suffix if ops==[{'operation':'identity-copy'}] else '.jpg'
         digest=sha(display);relative='display/photo-'+digest[:16]+ext;dest=inside(run,relative);dest.parent.mkdir(exist_ok=True);dest.write_bytes(display)
         author=c['author'];license=c['license'];free=bool(re.search(r'cc[- ]?by|cc0|public domain',license,re.I))
@@ -365,6 +379,9 @@ def prepare(args):
         asset={'src':'images/'+dest.name,'kind':'still' if c['side']=='still' else ('free' if free else 'copyright'),'origin':c['origin'],'pin':True,'fit':s['fit'],'focus':s.get('focus',{'x':'center','y':'center'}),'processing':'Source image: '+(', '.join({'crop':'crop','lanczos-resize':'Lanczos resize','identity-copy':'unchanged original bytes','jpeg-encode':'display encoding'}[op['operation']] for op in ops))+'. No generated detail.'}
         if c['side']=='portrait' or author:asset['author']=author
         if c['side']=='portrait' or license:asset['license']=license or 'Copyright; source attribution retained'
+        if s.get('retain_current'):
+            require(digest==prior['display_sha256']==c['before_sha256'],'retained recipe no longer reproduces current image')
+            asset=prior['after']
         out.append({**c,'after':asset,'operations':ops,'recipe_sha256':fingerprint(ops),'display_path':relative,'display_sha256':digest,'display_dimensions':list(Image.open(io.BytesIO(display)).size),'source_review':s,'reviewer_kind':'agent'})
         # Region custody supplements source identity; it does not infer a face.
         composition=compose_region(s.get('composition'),source_size,ops)

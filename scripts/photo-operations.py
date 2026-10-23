@@ -79,7 +79,7 @@ class Queue:
                     self.event(c,key,'stale',{'old_binding':old['binding'],'new_binding':binding});return 'stale'
                 state='queued' if reasons else 'idle'
                 c.execute('UPDATE jobs SET binding=?,snapshot=?,reasons=?,priority=?,state=?,generation=generation+1,run=NULL,token=NULL,lease_until=NULL,next_at=0,updated=?,details=? WHERE key=?',
-                  (binding,pm.stable(record),pm.stable(reasons),priority,state,time.time(),'{}',key))
+                  (binding,pm.stable(record),pm.stable(reasons),priority,state,time.time(),pm.stable({**{k:v for k,v in old['details'].items()if k in ('feedback','source_hints','html_hints')},'superseded_run':old['run']}),key))
                 self.event(c,key,'source-changed',{'binding':binding,'state':state});return state
             # Rescanning never erases operator feedback, retries, or review state.
             combined=list(dict.fromkeys(old['reasons']+reasons))

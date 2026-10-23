@@ -42,6 +42,7 @@ export function validateReview({plan,source,prepared,display,run,records,rejecti
   assert.equal(row.reviewer_kind,'agent');assert.equal(row.actor,current.actor);assert.equal(row.character,current.character);
   assert.equal(row.candidate_key,fingerprint(Object.fromEntries(['id','side','record_sha256','source_sha256','origin'].map(k=>[k,row[k]]))),'candidate binding changed');
   assert(row.operations.length&&row.operations.every(o=>['crop','lanczos-resize','jpeg-encode','identity-copy'].includes(o.operation)),'unreviewed operation');
+  if(review.retain_current){assert.deepEqual(row.after,current[row.side],'retained-current path may not replace the binding');assert.equal(row.display_sha256,row.before_sha256,'retained-current bytes changed');}
   assert.equal(row.after.origin,row.origin);assert.equal(row.after.fit,review.fit);assert.deepEqual(row.after.focus,review.focus);
   assert(['cover','contain'].includes(row.after.fit));assert(row.after.processing?.endsWith('No generated detail.'));
   for(const value of Object.values(row.after.focus))assert(['center','top','bottom','upper','lower','left','right'].includes(value)||(Number.isInteger(value)&&value>=0&&value<=100),'unsafe focus');

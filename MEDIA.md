@@ -347,3 +347,12 @@ a task and reason and preserves previous run directories. Source/display review
 and staging remain explicit checkpoints. The queue is bounded and operator-run;
 this release installs no persistent daemon. `queue export` makes an online SQLite
 backup and portable JSON checkpoint. Retain the cache and runs with that backup.
+
+A source whose bytes exactly match the currently registered preparation exposes
+that retained preparation as a candidate. A source decision may explicitly set
+`retain_current: true` to add a new composition assessment while preserving the
+current display bytes, attribution and source locator exactly. Preparation replays
+the retained recipe; a different output hash or changed binding refuses this path.
+This avoids re-encoding good photographs merely to record a better review. A
+concurrently published correction invalidates the old queued snapshot; rescan and
+review its actual successor rather than overwrite another worker's accepted work.
