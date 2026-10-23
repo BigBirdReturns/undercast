@@ -890,7 +890,7 @@ test("Morn reveal retains the reviewed portrait headroom on every surface",async
   expect(record.portrait.fit).toBe('contain');
   await page.setViewportSize({width:390,height:1000});
   await page.emulateMedia({reducedMotion:'reduce'});
-  await open(page,'index.html?q=Morn#UC-001');await waitForWall(page);
+  await open(page,'index.html?q=Morn');await waitForWall(page);
   const card=page.locator('article.cast[data-uid="UC-001"]');
   await card.locator('.front [data-flip]').focus();await page.keyboard.press('Enter');
   const photo=card.locator('.back img.shot');await expect(photo).toHaveAttribute('src',record.portrait.src);
@@ -905,11 +905,12 @@ test("Morn reveal retains the reviewed portrait headroom on every surface",async
   expect((270-48)*scale/geometry.box[1]).toBeLessThan(.70);
   expect(48*scale).toBeGreaterThan(20);
   await expect(photo).toHaveScreenshot('morn-performer-390.png',{animations:'disabled',maxDiffPixelRatio:.001});
+  const hero=page.locator('.hero-back img');await expect(hero).toHaveAttribute('src','./'+record.portrait.src);await expect(hero).toHaveCSS('object-fit','contain');
   await open(page,'recognition.html#UC-001');
   await expect(page.locator('.uc-image-node.is-portrait .uc-photo').first()).toHaveCSS('object-fit','contain');
   for(const width of [390,1440]){
     const ctx=await browser.newContext({javaScriptEnabled:false,viewport:{width,height:1000}});const p=await ctx.newPage();
-    try{await p.goto(new URL(sitePath('records/UC-001/'),page.url()).href,{waitUntil:'domcontentloaded'});const im=p.locator('.record-image.is-portrait .record-media');await expect(im).toHaveCSS('object-fit','contain');await expect(im).toHaveAttribute('src',new RegExp('photo-d607f5fb5def97a7\\.jpg$'));}
+    try{await p.goto(new URL(sitePath('records/UC-001/'),page.url()).href,{waitUntil:'domcontentloaded'});const im=p.locator('.record-image.is-portrait .record-media');await expect(im).toHaveCSS('object-fit','contain');expect(await im.evaluate(e=>e.data||e.src)).toMatch(/photo-d607f5fb5def97a7\.jpg$/);}
     finally{await ctx.close();}
   }
 });
