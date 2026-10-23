@@ -869,9 +869,10 @@ test("prepared Klingon photographs retain fit and source disclosure without Java
   const card=page.locator('article.cast[data-uid="UC-1188"]');
   await expect(card.locator('.front .shot')).toHaveAttribute('src',record.still.src);
   await expect(card.locator('.front .shot')).toHaveCSS('object-fit','contain');
-  await expect(card.locator('.image-preparation')).toHaveCount(1);
-  await card.locator('.image-preparation summary').click();
-  await expect(card.locator('.image-preparation')).toContainText('No generated detail');
+  const preparation=page.locator('.cast-shell').filter({has:card}).locator('.image-preparation');
+  await expect(preparation).toHaveCount(1);
+  await preparation.locator('summary').click();
+  await expect(preparation).toContainText('No generated detail');
   const context=await browser.newContext({javaScriptEnabled:false});const nojs=await context.newPage();
   try{
     await nojs.goto(new URL(sitePath('records/UC-1188/'),page.url()).href);
