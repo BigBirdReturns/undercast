@@ -7,6 +7,7 @@ import {execFileSync,spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {digest,textDigest,fingerprint,photoPath,preparationIndex,validateActivePreparations,PHOTO_INDEX} from './photo-preparations.mjs';
 import {indexMediaRejections,matchMediaRejection} from './media-rejections.mjs';
+import {withPhotoWriter,promotePhotoStage,hasPhotoTransaction} from './photo-stage-transaction.mjs';
 const ownRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const read=p=>JSON.parse(fs.readFileSync(p));
 const json=v=>JSON.stringify(v,null,2)+'\n';
@@ -56,7 +57,7 @@ export function validateReview({plan,source,prepared,display,run,records,rejecti
  }
  return changes;
 }
-async function stageLocked(argv){
+async function stageLocked(argv,{sandbox=false}={}){
  const option=(k,defaultValue)=>{const i=argv.indexOf(k);return i<0?defaultValue:argv[i+1];};
  const root=path.resolve(option('--root',ownRoot)),run=path.resolve(option('--run',''));
  assert(root!==run&&!run.startsWith(root+path.sep),'run must be outside checkout');
@@ -69,9 +70,9 @@ async function stageLocked(argv){
   const prior=read(photoPath(root,ledgerPath));
   assert.equal(prior.source_review.sha256,textDigest(fs.readFileSync(photoPath(run,'source-review.json'))));assert.equal(prior.display_review.sha256,textDigest(fs.readFileSync(photoPath(run,'display-review.json'))));
   for(const row of prior.changes)assert.deepEqual(records.find(r=>r.id===row.id)?.[row.side],row.after,'staged batch was superseded; do not reapply it');
-  validateActivePreparations(root,records);return {state:'already-staged',run_id:plan.run_id,changes:0,canonical_writes:0};
+  validateStagedTree(root);return {state:'already-staged',run_id:plan.run_id,changes:0,canonical_writes:0};
  }
- const branch=git(root,'branch','--show-current');assert(branch&&!['main','master'].includes(branch),'stage only into a named isolated branch');
+ if(!sandbox){const branch=git(root,'branch','--show-current');assert(branch&&!['main','master'].includes(branch),'stage only into a named isolated branch');}
  assert.equal(git(root,'status','--porcelain','--untracked-files=all'),'','stage requires a clean isolated checkout');
  const rejectionIndex=indexMediaRejections(read(photoPath(root,'data/MEDIA-REJECTIONS.json')));
  const changes=validateReview({plan,source,prepared,display,run,records,rejections:rejectionIndex});
@@ -109,14 +110,28 @@ async function stageLocked(argv){
  execute('scripts/media-audit.mjs',['resolve','--input',directory+'/resolutions.json']);
  execute('scripts/shard.mjs');execute('scripts/validate.mjs');
  const result={state:'staged-not-published',run_id:plan.run_id,changes:changes.length,ledger:ledgerPath,originals_retained:true,non_media_parity:true,required_next:'Full canonical gate, actual-photo browser acceptance, reviewed merge and public readback'};
- write(photoPath(run,'staged.json'),result);return result;
+ if(!sandbox)write(photoPath(run,'staged.json'),result);return result;
+}
+
+function validateStagedTree(root){
+ const records=read(photoPath(root,'data/specimens.json'));
+ validateActivePreparations(root,records);
+ for(const [script,args] of [['scripts/media-audit.mjs',['validate']],['scripts/validate.mjs',[]]]){
+  const result=spawnSync(process.execPath,[path.join(root,script),...args],{cwd:root,encoding:'utf8',maxBuffer:64*1024*1024});
+  assert.equal(result.status,0,result.stderr||result.stdout||'staged-tree validation failed');
+ }
 }
 
 export async function stage(argv){
- const i=argv.indexOf('--root'),root=path.resolve(i<0?ownRoot:argv[i+1]);
+ const option=(name,fallback)=>{const i=argv.indexOf(name);return i<0?fallback:argv[i+1];};
+ const root=path.resolve(option('--root',ownRoot)),run=path.resolve(option('--run',''));
  assert.equal(path.resolve(git(root,'rev-parse','--show-toplevel')),root,'stage root must be the checkout root');
- const lock=path.resolve(root,git(root,'rev-parse','--git-path','photo-maintenance.lock'));
- let fd;try{fd=fs.openSync(lock,'wx');}catch(error){if(error.code==='EEXIST')throw new Error('Photo staging writer already holds this checkout; inspect the retained lock before retrying');throw error;}
- try{fs.writeFileSync(fd,JSON.stringify({pid:process.pid,started_at:new Date().toISOString()}));return await stageLocked(argv);}
- finally{fs.closeSync(fd);fs.unlinkSync(lock);}
+ assert(root!==run&&!run.startsWith(root+path.sep),'run must be outside checkout');
+ return withPhotoWriter(root,argv.includes('--recover'),async()=>{
+  const id=read(photoPath(run,'plan.json')).run_id;
+  assert(/^[a-f0-9]{20}$/.test(id),'invalid run ID');
+  if(!hasPhotoTransaction(root)&&preparationIndex(root).ledgers.includes(`data/review/photo-${id}/changes.json`))return stageLocked(argv);
+  const branch=git(root,'branch','--show-current');assert(branch&&!['main','master'].includes(branch),'stage only into a named isolated branch');
+  return promotePhotoStage({root,run,prepare:tree=>stageLocked(['--root',tree,'--run',run],{sandbox:true}),validate:validateStagedTree});
+ });
 }

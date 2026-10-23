@@ -356,7 +356,7 @@ def main():
     parser.add_argument('--sources',type=Path,help='Reviewed exact source-page hints, an array of {id,side,urls}')
     parser.add_argument('--side',choices=['still','portrait','both'],default='both');parser.add_argument('--limit',type=int,default=16)
     parser.add_argument('--max-candidates',type=int,default=3);parser.add_argument('--budget',type=int,default=120)
-    parser.add_argument('--offline',action='store_true');parser.add_argument('--refresh',action='store_true')
+    parser.add_argument('--recover',action='store_true',help='Recover a stopped local staging writer after verifying its process is dead');parser.add_argument('--offline',action='store_true');parser.add_argument('--refresh',action='store_true')
     args=parser.parse_args()
     if args.command=='plan':plan(args)
     elif args.command=='collect':
@@ -365,7 +365,7 @@ def main():
     elif args.command=='stage':
         os.environ.setdefault('PHOTO_PYTHON',sys.executable)
         selected_inputs(args.root.resolve(),args.run.resolve())
-        print(stable(run_node(args.root,'stage','--run',str(args.run.resolve()),'--root',str(args.root.resolve()))))
+        print(stable(run_node(args.root,'stage','--run',str(args.run.resolve()),'--root',str(args.root.resolve()),*(['--recover'] if args.recover else []))))
     else:
         p=read(args.run/'plan.json');print(stable({'run_id':p['run_id'],'records':len(p['records']),'facets':len(p['facets']),'collected':(args.run/'candidates.json').exists(),'prepared':(args.run/'prepared.json').exists(),'staged':(args.run/'staged.json').exists()}))
 if __name__=='__main__':
