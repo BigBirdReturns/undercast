@@ -230,3 +230,21 @@ and uses real network requests without replacement images. Historical source
 and release URLs are followed from their declared manifests, never guessed from
 local image paths. The lightweight gallery is a private review tool, not an
 alternative public reveal or a substitute for actual-site acceptance.
+
+### Interrupted staging
+
+Staging now prepares and validates the complete candidate in a disposable Git
+worktree beside the explicit run directory before changing the requested checkout.
+Temporary promotion objects are removed after successful validation; retained
+source originals and recipes stay in canonical custody. A failed acquisition, audit or
+projection leaves that checkout untouched. Promotion retains an exact per-file
+predecessor/successor journal under the checkout-specific Git directory before
+writing any canonical file. An interrupted promotion resumes only when HEAD,
+source/display decisions and every affected file still match that transaction.
+Intervening edits stop recovery rather than being overwritten.
+
+Rerun the same stage command after an ordinary failure. After a killed process,
+append `--recover`; the lock is reclaimed only for a confirmed dead process on
+the same host. Live or foreign locks remain blocked. Successful retries rerun
+current audit and projection invariants before reporting `already-staged`. A
+staging receipt describes a validated local candidate, never deployment.

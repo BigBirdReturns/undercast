@@ -19,8 +19,8 @@ const deferred=buildMediaPlan({specimens,sources:[],auditItems:[],attempts,now:"
 
 const document=JSON.parse(readFileSync("data/MEDIA-REJECTIONS.json","utf8"));
 validateMediaRejections(document);
-assert.equal(document.rules.length,283);
-assert.deepEqual(document.denominator,{rules:283,collect_001:71,uc_media_audit_1:73,uc_media_audit_2:96,klingon_photo_quality:2,catalog_photo_quality:41});
+assert(document.rules.length>=283,'historical rejection population was lost');
+for(const [key,value] of Object.entries({collect_001:71,uc_media_audit_1:73,uc_media_audit_2:96,klingon_photo_quality:2,catalog_photo_quality:41}))assert.equal(document.denominator[key],value,`historical decision ${key} changed`);
 assert.equal(document.rules.filter(row=>row.decision==="UC-MEDIA-AUDIT-2").length,96);
 for(const ledger of document.source_ledgers)assert.equal(digest(ledger.path),ledger.sha256,`${ledger.path} evidence hash drift`);
 const rejectionIndex=indexMediaRejections(document);
@@ -49,6 +49,13 @@ assert.equal(matchMediaRejection(rejectionIndex,{wallId:scopedRule.wall_id,side:
 assert.equal(matchMediaRejection(rejectionIndex,{wallId:"UC-1279",side:"still",sha256:scopedRule.asset_sha256}),null,"record-side hash scope leaked onto the verified Tosk still");
 assert.throws(()=>validateMediaRejections({...document,rules:document.rules.map((row,i)=>i===0?{...row,hash_scope:"everywhere"}:row)}),/hash_scope/);
 assert.throws(()=>validateMediaRejections({...document,rules:document.rules.map((row,i)=>i===0?{...row,hash_scope:"record-side"}:row)}),/scope_note/);
+
+// A correct subject in a later production is wrong for this original-series slot,
+// not globally unusable. Enforce that distinction in the retained rejection path.
+const periodRule=document.rules.find(row=>row.decision==='UC-SPOCK-SOURCE-CORRECTION');
+assert(periodRule&&periodRule.hash_scope==='record-side');
+assert.equal(matchMediaRejection(rejectionIndex,{wallId:periodRule.wall_id,side:periodRule.side,origin:periodRule.source_locator,sha256:periodRule.asset_sha256})?.rule.rule_id,periodRule.rule_id);
+assert.equal(matchMediaRejection(rejectionIndex,{wallId:'UC-999998',side:'still',origin:periodRule.source_locator,sha256:periodRule.asset_sha256}),null,'production mismatch must not prohibit the legitimate film image everywhere');
 
 const fixtureRoot=await mkdtemp(path.join(tmpdir(),"undercast-media-rejection-"));
 try{

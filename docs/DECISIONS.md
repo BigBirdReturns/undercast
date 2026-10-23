@@ -425,3 +425,17 @@ into evidence. Exact documentary source decisions and exact display-byte decisio
 remain explicit, agent-typed judgments. The ordinary release gate and actual live
 readback retain publication authority. No scheduler, new public surface, fabricated
 portrait, automatic approval, subscription or autonomous growth is introduced.
+
+## DEC-0022 — Recover interrupted photographic staging
+
+**Authority:** owner's instruction to continue the identified staging-recovery
+repair and collection work on 2026-10-23. This is an implementation record, not
+a claim of a separate owner design ruling.
+
+Keep DEC-0021's existing photo commands and separate source/display approval.
+Prepare changes in a disposable worktree, validate before promotion, retain a
+private hash-bound promotion journal, and resume only exact reviewed bytes.
+A retry reruns current audit/projection validation; registration alone never
+constitutes successful staging. Preserve intervening user edits and active
+writer locks. Inject actual worker termination as well as ordinary exceptions.
+No new scheduler, public surface, approval authority or canonical identity model.
