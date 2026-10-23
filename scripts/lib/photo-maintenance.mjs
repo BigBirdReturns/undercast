@@ -63,6 +63,7 @@ async function stageLocked(argv,{sandbox=false}={}){
  assert(root!==run&&!run.startsWith(root+path.sep),'run must be outside checkout');
  const plan=read(photoPath(run,'plan.json')),source=read(photoPath(run,'source-review.json')),prepared=read(photoPath(run,'prepared.json')),display=read(photoPath(run,'display-review.json'));
  assert(/^[a-f0-9]{20}$/.test(plan.run_id),'invalid run ID');
+ assert.equal(display.prepared_sha256,textDigest(fs.readFileSync(photoPath(run,'prepared.json'))),'display review is stale');
  const directory=`data/review/photo-${plan.run_id}`,ledgerPath=directory+'/changes.json';
  const records=read(photoPath(root,'data/specimens.json')),sources=read(photoPath(root,'data/SOURCES.json'));
  const index=preparationIndex(root);
