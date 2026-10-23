@@ -27,7 +27,7 @@ try{
  identity=build(root,output);
  if(supplied){
   const u=new URL(supplied);assert.equal(u.protocol,'https:');base=u.href.endsWith('/')?u.href:u.href+'/';
-  const r=await fetch(new URL('release.json',base));assert(r.ok);const release=await r.json();initialRelease=release;assert.equal(release.payload_sha256,identity.payload_sha256,'served release differs from qualified local payload');
+  const r=await fetch(new URL('release.json',base));assert(r.ok);const release=await r.json();initialRelease=release;assert.equal(release.gate,'complete','public release lacks the complete gate');assert.equal(release.input_sha256,identity.input_sha256,'public input custody differs');assert.equal(release.media_sha256,identity.media_sha256,'public media custody differs');assert.equal(release.payload_sha256,identity.payload_sha256,'served release differs from qualified local payload');
  }else{
   server=http.createServer((req,res)=>{try{let rel=decodeURIComponent(new URL(req.url,'http://localhost').pathname).replace(/^\/undercast(?=\/|$)/,'').replace(/^\//,'');if(!rel||rel.endsWith('/'))rel+='index.html';const p=photoPath(output,rel);res.writeHead(200,{'content-type':types[path.extname(p)]||'application/octet-stream'});res.end(fs.readFileSync(p));}catch{res.writeHead(404);res.end();}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base=`http://127.0.0.1:${server.address().port}/undercast/`;
@@ -73,4 +73,4 @@ try{
  if(supplied){const response=await fetch(new URL('release.json',base));assert(response.ok);assert.deepEqual(await response.json(),initialRelease,'release changed during acceptance');}
  const result={pass:true,composition_checks:compositionChecks,release_commit:initialRelease?.commit||null,release_stable:!!supplied,mode:supplied?'real-public-requests':'local-compiled-site-and-hash-checked-originals',payload_sha256:identity.payload_sha256,records:scope.map(r=>r.id),byte_checks:byteChecks,observations,nojs_records:scope.length,request_failures:errors,checked_at:new Date().toISOString()};
  fs.writeFileSync(path.join(run,supplied?'live-acceptance.json':'local-acceptance.json'),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
-}finally{if(browser)await browser.close();if(server)await new Promise(resolve=>server.close(resolve));}
+}finally{if(browser)await browser.close();if(server)await new Promise(resolve=>server.close(resolve));fs.rmSync(buildParent,{recursive:true,force:true});}
