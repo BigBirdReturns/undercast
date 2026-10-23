@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {preparationInputs} from './lib/photo-preparations.mjs';
 // Offline publication boundary. archive.json remains the public contract; this
 // module adds packaging policy, not another corpus or projection authority.
 import assert from 'node:assert/strict';
@@ -86,6 +87,8 @@ const EXTRA = [
 // artifact paths. This binds exact-subject rejection mechanics to the tested
 // commit while preserving private review evidence outside the Pages payload.
 export const PRIVATE_RELEASE_INPUTS = [
+  'scripts/lib/photo-preparations.mjs',
+  'data/PHOTO-PREPARATIONS.json',
   'data/review/operational-restore-git-object-set.json',
   'scripts/photo-maintenance-history.mjs',
   'data/review/catalog-photo-quality/changes.json',
@@ -321,6 +324,7 @@ export function inventory(root = ROOT) {
     assert.equal(sha256(bytes), ledger.sha256, `media rejection evidence hash mismatch: ${ledger.path}`);
     inputs.push(meta(ledger.path, bytes));
   }
+  for (const file of preparationInputs(root)) inputs.push(meta(file, read(root, file)));
   const uniqueInputs = new Map();
   for (const row of inputs) {
     const prior = uniqueInputs.get(row.path);

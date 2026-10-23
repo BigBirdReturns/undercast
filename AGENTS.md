@@ -77,6 +77,15 @@ and zero temporary cycle refs before another claim. Maker attribution is valuabl
 but nonblocking: add it only from exact source support and leave it explicitly
 unresolved otherwise.
 
+## Photo work — use the retained estate path
+
+For image acquisition, selection, preparation or framing on existing or staged
+records, use `npm run photos -- plan|collect|prepare|stage` and the workflow in
+`MEDIA.md`. Use bounded IDs/canon scope, shared retained source caches and separate
+source/display decisions; do not recreate dated session scripts, add a local-model
+approval prerequisite, or infer identity from facial resemblance. Canonical roster
+admission remains under GROW; photo staging never adds records or publishes itself.
+
 ## Default operating mode — collect, improve, expand
 
 The product surface is now frozen at v1 under DEC-0012. Before ordinary work run:

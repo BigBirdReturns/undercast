@@ -127,6 +127,103 @@ visual comparison: synthesized detail is not source evidence. An illustrated or
 reconstructed portrait must remain distinguishable from a sourced photograph and
 must not inherit its verification state. Missing source evidence remains missing.
 
-The Klingon proof is a framing run, not a new identity review: its ten reviewed
-focus changes preserve the original image bytes and their existing review claims.
-The experimental source crops remain outside that change.
+The Klingon and catalog releases are retained predecessors, not special-case
+execution paths. `data/PHOTO-PREPARATIONS.json` indexes their immutable ledgers
+and every later accepted batch. The generic commands below own new photo work.
+
+## Repeatable estate photo work
+
+Use `npm run photos -- …` in an isolated branch. The photo worker is ordinary
+Python and Pillow; the review/staging checks use the existing Node archive tools.
+Set `PHOTO_PYTHON` to an environment installed from `requirements-photo.txt`.
+Cache and run directories belong in the estate's scratch/cache locations, outside
+any checkout. There is no mandatory vision model, hosted inference call, scheduler,
+new database service, or automatic commit/push/deployment.
+
+```bash
+export PHOTO_PYTHON=/path/to/photo-venv/bin/python
+export RUN=/path/to/scratch/farscape-photo-batch
+export CACHE=/path/to/shared/photo-cache
+npm run photos -- plan --canon farscape --limit 16 --run "$RUN"
+npm run photos -- collect --run "$RUN" --cache "$CACHE"
+# A capable assistant examines candidates.html and exact source text,
+# then edits source-review.json. Generated decisions start pending.
+npm run photos -- prepare --run "$RUN"
+# Review prepared.html in both 4:3 and 4:5 frames; explicitly approve
+# the exact display hashes and recipes in display-review.json.
+npm run photos -- stage --run "$RUN"
+# Commit the reviewed candidate, then run the ordinary release gate.
+npm run gate
+npm run photos:acceptance -- --run "$RUN"
+# After reviewed merge and deployment, repeat against the actual public site.
+npm run photos:acceptance -- --run "$RUN" \
+  --base-url https://bigbirdreturns.github.io/undercast/
+```
+
+`--canon` selects records through the existing estate registry's exact label,
+production text and documented source hosts, never a broad generic Film/TV shelf.
+Use `--ids UC-…,...` for an exact work order, `--side still|portrait|both` for a
+specific side, and `--refresh` on **plan** to include already verified images.
+Mixed/franchise-spanning records may need explicit IDs. `--records FILE` permits
+research over an explicitly supplied staging array; **stage refuses a record that
+has not entered the canonical collection through the existing ingestion rules**.
+Register an unfamiliar canon as inventory through `data/ESTATE-REGISTRY.json`;
+photo preparation does not certify its role adapter or authorize roster growth.
+
+For ambiguous titles or a performer documented in another franchise, pass
+`--sources FILE` to **plan**. The file is an array of
+`{"id":"UC-664","side":"still","urls":["https://farscape.fandom.com/wiki/Pilot_(Moya)"]}`.
+These exact source-page hints are retained with the batch. They choose where to
+look, not what to believe. Supported automatic acquisition uses MediaWiki APIs
+on the registered wiki hosts, Wikipedia and Commons. A new source technology
+requires a bounded collector extension; arbitrary websites are not silently
+claimed as supported adapters.
+
+Collection preserves file-page revisions, attribution, source bodies, delivered
+bytes and upstream-versus-delivered hashes. Source pages and originals are
+content-addressed in the shared cache; downloads and failures have bounded
+budgets, timeouts and per-host pacing shared across workers. 401/403 are recorded,
+not bypassed. `collect --offline` must reproduce candidates without requests;
+`collect --refresh` deliberately reacquires current source snapshots. Reusing
+cached evidence does not claim that its upstream revision is still current.
+Parallel jobs use distinct run directories and may share the cache. An identical
+performer/source is fetched once; publication still uses the existing documented
+same-performer reuse rule, rather than treating a matching name as identity proof.
+
+The two review files separate documentary subject/production selection from
+visual composition. Exact quoted passages must exist in retained source bytes.
+A record change, changed source, unrecognized operation, rejected image, stale
+review or changed display hash refuses staging. A source or display decision may
+retain or defer a case, including a missing portrait. Agent decisions are typed
+as agent participation and use the existing delegated audit-resolution path;
+no generated form marks itself approved or claims human consensus.
+
+Preparation preserves the full source and produces non-destructive crop/resize
+recipes. GIF acquisition is supported only for a single static frame and is
+encoded as a supported display format; animated sources require a separately
+reviewed frame operation. Conventional resampling never claims recovered detail.
+Generative restoration and new source types need explicit retained operations
+and disclosure before admission; this command does not silently synthesize faces.
+
+Staging requires a clean named branch, checks that the selected canonical records
+have not changed, retains the source/display reviews and originals, updates the
+existing specimen/source/audit projections and runs their native validators.
+Running **stage** again is an exact no-op; a superseded batch refuses reapplication.
+It returns `staged-not-published` until the normal release and actual public
+readback finish. There is no separate photo publishing service.
+
+The regression commands are `npm run photos:fixtures` (also part of the canonical
+media gate) and `$PHOTO_PYTHON scripts/photo-pixel-tests.py`. Independent recipe
+replay is `$PHOTO_PYTHON scripts/replay-photo-preparations.py --run "$RUN"` before
+staging, or `--ledger data/review/photo-…/changes.json` afterward. Replay of the
+older explicitly denoised Klingon images additionally needs their retained
+OpenCV/Numpy runtime. A codec/version mismatch fails byte replay rather than
+upgrading a receipt or silently blessing different output.
+
+`photos:acceptance` checks the real compiled site, actual images and constrained
+crop boxes on desktop/mobile, keyboard reveal and no-JavaScript permanent routes.
+In public mode it first checks the served release against the qualified payload
+and uses real network requests without replacement images. Historical source
+and release URLs are followed from their declared manifests, never guessed from
+local image paths. The lightweight gallery is a private review tool, not an
+alternative public reveal or a substitute for actual-site acceptance.
