@@ -393,3 +393,11 @@ the new catalog batch. Identical source bytes may be copied unchanged without
 calling them restored or upscaled. No new scheduler, service, roster growth or
 generative reconstruction is introduced. Complete release gates and real-photo
 desktop/mobile readback remain required before delivery.
+
+The cycle-005 and cycle-007 checkers seal their original portrait absence. Their
+bytes and original receipts stay immutable; their existing package routes replay
+those checks at the exact pre-maintenance tree and separately check the approved
+current portrait, original source/display hashes, explicit agent review, retained
+character source, unchanged sealed task and historical events. Negative controls
+refuse changed identity, absent approval, different portrait and character media.
+The normal current-tree queue, corpus, audit and publication gates still run.
