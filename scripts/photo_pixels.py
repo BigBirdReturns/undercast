@@ -45,4 +45,8 @@ def compose_region(specification, source_size, operations):
             if not(0<=x0<x1<=w and 0<=y0<y1<=h):raise ValueError('crop removes protected source region')
         elif op['operation']=='lanczos-resize':
             nw,nh=op['size'];x0*=nw/w;x1*=nw/w;y0*=nh/h;y1*=nh/h;w,h=nw,nh
-    return {'version':1,'display_region_px':[x0,y0,x1,y1],'max_height_fraction':maximum,'min_margin_fraction':margin}
+    # JSON.stringify serializes integral numbers without '.0'. Preserve identical
+    # region fingerprints across Python preparation and JavaScript approval.
+    def canonical_number(value):
+        return int(value) if isinstance(value, float) and value.is_integer() else value
+    return {'version':1,'display_region_px':[canonical_number(v) for v in [x0,y0,x1,y1]],'max_height_fraction':canonical_number(maximum),'min_margin_fraction':canonical_number(margin)}

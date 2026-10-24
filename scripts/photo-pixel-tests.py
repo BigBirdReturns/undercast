@@ -2,11 +2,26 @@
 import hashlib,importlib.util,io,json,tempfile,unittest
 from pathlib import Path
 from PIL import Image
-from photo_pixels import replay
+from photo_pixels import replay, compose_region
 spec=importlib.util.spec_from_file_location('photo_maintenance',Path(__file__).with_name('photo-maintenance.py'));module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 class PhotoPixels(unittest.TestCase):
  def setUp(self):
   b=io.BytesIO();Image.new('RGB',(640,480),(117,83,49)).save(b,'PNG');self.raw=b.getvalue()
+ def test_composition_integral_numbers_share_javascript_digest(self):
+  import subprocess
+  source={'protected_region_px':[397,68,1349,1352],'max_height_fraction':.75,'min_margin_fraction':.02}
+  result=compose_region(source,[1984,2704],[{'operation':'lanczos-resize','size':[880,1200]}])
+  self.assertEqual(result['display_region_px'][-1],600)
+  self.assertIs(type(result['display_region_px'][-1]),int)
+  root=Path(__file__).resolve().parent.parent
+  command="import {fingerprint} from './scripts/lib/photo-preparations.mjs';import fs from 'node:fs';console.log(fingerprint(JSON.parse(fs.readFileSync(0,'utf8'))));"
+  other=subprocess.check_output(['node','--input-type=module','-e',command],cwd=root,input=json.dumps(result),text=True).strip()
+  self.assertEqual(module.fingerprint(result),other)
+ def test_composition_integral_policy_limits_normalize_without_geometry_change(self):
+  result=compose_region({'protected_region_px':[20.,30.,400.,300.],'max_height_fraction':1.,'min_margin_fraction':0.},[640,480],[])
+  self.assertEqual(result['display_region_px'],[20,30,400,300])
+  self.assertIs(type(result['max_height_fraction']),int)
+  self.assertIs(type(result['min_margin_fraction']),int)
  def test_copy(self):self.assertEqual(replay(self.raw,[{'operation':'identity-copy'}]),self.raw)
  def test_crop_resize_is_repeatable(self):
   ops=[{'operation':'crop','box_px':[20,10,420,410]},{'operation':'lanczos-resize','size':[300,300]},{'operation':'jpeg-encode','quality':92,'subsampling':0}]
