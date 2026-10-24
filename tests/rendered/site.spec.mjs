@@ -730,8 +730,19 @@ test("image review and claim-reference scope are visible before the reveal",asyn
   await open(page,'index.html?q=Darkness');await waitForWall(page);
   const darkness=page.locator('.cast-shell').filter({has:page.locator('[data-uid="UC-049"]')});
   await expect(darkness.locator('[data-evidence-side="still"]')).toHaveAttribute('data-evidence-state','absent');
-  await expect(darkness.locator('[data-evidence-side="portrait"]')).toHaveAttribute('data-evidence-state','unverified');
+  await expect(darkness.locator('[data-evidence-side="portrait"]')).toHaveAttribute('data-evidence-state','verified');
   await expect(darkness.locator('.evidence-references')).toHaveText('Claim references: not on file');
+  // Collection work may verify a previously pending image. Keep the distinction
+  // between image review and prose references, and test a genuinely pending side
+  // without freezing a named specimen's verification debt forever.
+  const audit=JSON.parse(await readFile(new URL('../../data/MEDIA-AUDIT.json',import.meta.url),'utf8'));
+  const pending=specimens.find(record=>record.portrait?.src&&!(record.references||[]).length&&audit.items.some(item=>item.wall_id===record.id&&item.side==='portrait'&&item.status==='review'&&item.asset?.src===record.portrait.src));
+  expect(pending,'a real unresolved-portrait fixture must remain available').toBeTruthy();
+  await open(page,'index.html?q='+encodeURIComponent(pending.actor));await waitForWall(page);
+  const unresolved=page.locator('.cast-shell').filter({has:page.locator(`[data-uid="${pending.id}"]`)});
+  await expect(unresolved.locator('[data-evidence-side="portrait"]')).toHaveAttribute('data-evidence-state','unverified');
+  await expect(unresolved.locator('.evidence-references')).toHaveText('Claim references: not on file');
+
   for(const theme of ['light','dark']){
     if(await page.locator('html').getAttribute('data-theme')!==theme) await page.locator('[data-theme-toggle]').click();
     await expectContrast(page,'.evidence-facet strong');
