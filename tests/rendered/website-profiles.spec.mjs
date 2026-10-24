@@ -83,11 +83,18 @@ for(const profile of profiles){
   test(`${profile.id}: absent, unverified, voice and failed-image states stay distinct`,async({page})=>{
     await open(page,profile,'index.html?q=Darkness');await waitWall(page);const shell=shellFor(page,'UC-049');
     await expect(shell.locator('[data-evidence-side="still"]')).toHaveAttribute('data-evidence-state','absent');
-    await expect(shell.locator('[data-evidence-side="portrait"]')).toHaveAttribute('data-evidence-state','unverified');
+    await expect(shell.locator('[data-evidence-side="portrait"]')).toHaveAttribute('data-evidence-state','verified');
     await expect(shell).toContainText('Claim references: not on file');
     await expect(shell.locator('picture.absence-plate')).toHaveCount(1);
     await page.locator('[data-theme-toggle]').click();await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
     await expect(shell.locator('picture.absence-plate source')).toHaveAttribute('media','all');
+    const audit=JSON.parse(fs.readFileSync('data/MEDIA-AUDIT.json'));
+    const pending=specimens.find(record=>record.portrait?.src&&!(record.references||[]).length&&audit.items.some(item=>item.wall_id===record.id&&item.side==='portrait'&&item.status==='review'&&item.asset?.src===record.portrait.src));
+    expect(pending,'a real unresolved-portrait fixture must remain available').toBeTruthy();
+    await open(page,profile,'index.html?q='+encodeURIComponent(pending.actor));await waitWall(page);
+    await expect(shellFor(page,pending.id).locator('[data-evidence-side="portrait"]')).toHaveAttribute('data-evidence-state','unverified');
+    await expect(shellFor(page,pending.id)).toContainText('Claim references: not on file');
+
     await open(page,profile,`records/${voice.id}/`);await expect(page.locator('.record-sub')).toHaveText('Voice performance');await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
     await page.route('**/images/uc-001-still.jpg',route=>route.abort());
     await page.route(mediaLive['images/uc-001-still.jpg'],route=>route.abort());
